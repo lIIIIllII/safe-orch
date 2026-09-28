@@ -65,26 +65,41 @@ def test_agent_graph_and_specs_do_not_import_store_or_commands():
 
 
 FORBIDDEN_NAMES = ("create_agent", "checkpointer", "interrupt")
+LANGGRAPH_TYPES = "langgraph.types"
+FORBIDDEN_TYPES = ("interrupt", "Command")
 
 
 def _forbidden_usages(rel: Path, tree: ast.AST) -> list[str]:
-    """금지 이름(create_agent·checkpointer·interrupt)과 Command(resume=...) 사용 위치."""
+    """금지 이름(create_agent·checkpointer·interrupt)과 langgraph.types의 interrupt·Command 사용 위치."""
     bad = []
+    type_modules: set[str] = set()  # langgraph.types 모듈을 가리키는 표현식
+    bound: set[str] = set()  # interrupt·Command에 바인딩된 로컬 이름 (별칭 포함)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == LANGGRAPH_TYPES:
+                    type_modules.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            for alias in node.names:
+                if node.module == "langgraph" and alias.name == "types":
+                    type_modules.add(alias.asname or alias.name)
+                elif node.module == LANGGRAPH_TYPES and alias.name in (*FORBIDDEN_TYPES, "*"):
+                    bound.add(alias.asname or alias.name)
+                    bad.append(f"{rel}:{node.lineno}: import {LANGGRAPH_TYPES}.{alias.name}")
     for node in ast.walk(tree):
         name = None
         if isinstance(node, ast.Name):
             name = node.id
+            if name in bound:
+                bad.append(f"{rel}:{node.lineno}: {name}")
         elif isinstance(node, ast.Attribute):
             name = node.attr
+            if name in FORBIDDEN_TYPES and ast.unparse(node.value) in type_modules:
+                bad.append(f"{rel}:{node.lineno}: {ast.unparse(node)}")
         elif isinstance(node, ast.alias):
             name = node.asname or node.name.rsplit(".", 1)[-1]
         elif isinstance(node, ast.keyword):
             name = node.arg
-        elif isinstance(node, ast.Call):
-            func = node.func
-            callee = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
-            if callee == "Command" and any(kw.arg == "resume" for kw in node.keywords):
-                bad.append(f"{rel}:{node.lineno}: Command(resume=...)")
         if name in FORBIDDEN_NAMES:
             bad.append(f"{rel}:{getattr(node, 'lineno', '?')}: {name}")
     return bad
@@ -110,21 +125,32 @@ def test_import_scanner_detects_relative_import():
     assert _hits(mods, "app.solver") == {"app.solver", "app.solver.model", "app.solver.cpsat"}
 
 
-def test_usage_scanner_detects_interrupt_and_command_resume():
-    """interrupt·Command(resume=...) 검사가 실제로 잡아내는지 확인."""
+def test_usage_scanner_detects_interrupt_and_command():
+    """langgraph.types의 interrupt·Command 검사가 별칭·모듈 경유까지 실제로 잡아내는지 확인."""
     src = (
-        "from langgraph.types import Command, interrupt\n"
-        "import langgraph.types as lt\n"
-        "answer = interrupt('ask')\n"
-        "lt.interrupt('ask')\n"
-        "graph.invoke(Command(resume='ok'))\n"
-        "graph.invoke(lt.Command(resume='ok'))\n"
-        "graph.invoke(Command(goto='next'))\n"
+        "from langgraph.types import interrupt as ask\n"  # 1
+        "from langgraph.types import Command as C\n"  # 2
+        "import langgraph.types as lt\n"  # 3
+        "import langgraph.types\n"  # 4
+        "from langgraph import types as T\n"  # 5
+        "answer = ask('q')\n"  # 6
+        "graph.invoke(C(**kwargs))\n"  # 7
+        "lt.interrupt('q')\n"  # 8
+        "graph.invoke(lt.Command(goto='next'))\n"  # 9
+        "graph.invoke(langgraph.types.Command(resume='ok'))\n"  # 10
+        "graph.invoke(T.Command(update={}))\n"  # 11
+        "from langgraph.types import *\n"  # 12
+        "from langgraph.types import StreamMode\n"  # 13: 허용
+        "other.Command()\n"  # 14: langgraph와 무관 → 허용
     )
     bad = _forbidden_usages(Path("fake.py"), ast.parse(src))
-    assert "fake.py:1: interrupt" in bad
-    assert "fake.py:3: interrupt" in bad
-    assert "fake.py:4: interrupt" in bad
-    assert "fake.py:5: Command(resume=...)" in bad
-    assert "fake.py:6: Command(resume=...)" in bad
-    assert not any(b.startswith("fake.py:7:") for b in bad)
+    assert "fake.py:1: import langgraph.types.interrupt" in bad
+    assert "fake.py:2: import langgraph.types.Command" in bad
+    assert "fake.py:6: ask" in bad
+    assert "fake.py:7: C" in bad
+    assert "fake.py:8: lt.interrupt" in bad
+    assert "fake.py:9: lt.Command" in bad
+    assert "fake.py:10: langgraph.types.Command" in bad
+    assert "fake.py:11: T.Command" in bad
+    assert "fake.py:12: import langgraph.types.*" in bad
+    assert not any(b.startswith(("fake.py:13:", "fake.py:14:")) for b in bad)
