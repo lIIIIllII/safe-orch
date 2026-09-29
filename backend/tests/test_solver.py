@@ -5,10 +5,11 @@ import json
 import pytest
 from conftest import add_task, make_task, take_snapshot, with_facts
 
+from app.domain.hashes import candidate_hash
 from app.domain.models import Conflict, FeedbackConstraint, Movable, SolverResult
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
-from app.solver.candidate import build_candidate, candidate_hash
+from app.solver.candidate import build_candidate
 from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store import db
 from app.store.repos.records import StaleError, insert_search_spec, register_solver_outcome

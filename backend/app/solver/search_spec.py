@@ -5,7 +5,7 @@ app.rules·app.validator를 import하지 않는다.
 
 from collections.abc import Mapping, Sequence
 
-from app.domain.canonical import canonical_hash
+from app.domain.hashes import search_spec_hash
 from app.domain.ids import new_id
 from app.domain.models import Conflict, Movable, ScopeLevel, SearchSpec, Snapshot
 
@@ -18,25 +18,6 @@ class SearchSpecError(Exception):
     def __init__(self, reason_code: str, detail: str = ""):
         self.reason_code = reason_code
         super().__init__(f"{reason_code}: {detail}" if detail else reason_code)
-
-
-def search_spec_hash(
-    snapshot_hash: str,
-    acting_unit_id: str,
-    axes: Mapping[str, Movable],
-    resource_alternatives: Mapping[str, Sequence[str]],
-    time_limit_s: int,
-) -> str:
-    """실효 내용의 hash. 두 축이 모두 false인 작업, ID, scope_level은 넣지 않는다."""
-    return canonical_hash(
-        {
-            "snapshot_hash": snapshot_hash,
-            "acting_unit_id": acting_unit_id,
-            "axes": {tid: ax.model_dump() for tid, ax in axes.items() if ax.time or ax.resource},
-            "resource_alternatives": {k: list(v) for k, v in resource_alternatives.items()},
-            "time_limit_s": time_limit_s,
-        }
-    )
 
 
 def build_search_spec(

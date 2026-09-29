@@ -1,11 +1,11 @@
-"""불변 객체 INSERT와 Solver 결과 등록 (부록 A.10·A.11).
+"""불변 객체 INSERT와 Solver 결과 등록 (부록 A.10·A.11·A.13).
 
-snapshot·search_spec·solver_result·candidate는 트리거로 UPDATE·DELETE가 막혀 있다.
+snapshot·search_spec·solver_result·candidate·validation은 트리거로 UPDATE·DELETE가 막혀 있다.
 """
 
 import sqlite3
 
-from app.domain.models import Candidate, SearchSpec, Snapshot, SolverResult
+from app.domain.models import Candidate, SearchSpec, Snapshot, SolverResult, Validation
 from app.store.repos._rows import dumps
 
 
@@ -72,6 +72,21 @@ def insert_candidate(tx: sqlite3.Connection, site_id: str, candidate: Candidate)
             dumps([a.model_dump() for a in candidate.assignments]),
             candidate.candidate_hash,
             candidate.kind,
+        ),
+    )
+
+
+def insert_validation(tx: sqlite3.Connection, site_id: str, validation: Validation) -> None:
+    """Validator 결과 등록 (부록 A.13). 버전은 다시 확인하지 않는다(STALE은 조회 시 계산)."""
+    tx.execute(
+        "INSERT INTO validation (validation_id, site_id, candidate_id, status, checks)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (
+            validation.validation_id,
+            site_id,
+            validation.candidate_id,
+            validation.status,
+            dumps([c.model_dump(mode="json") for c in validation.checks]),
         ),
     )
 

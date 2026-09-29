@@ -417,3 +417,39 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - SearchSpec 밖 작업에도 시간창·Horizon 제약을 건다. 고정 작업이 위반하면 INFEASIBLE(Validator C04와 같은 기준).
 - snapshot.constraints 항목은 FeedbackConstraint 모양(task_id, frozen_axes, …)이다. 제약 테이블이 생기기 전까지 빈 목록.
 - 존재하지 않는 자원 ID 배정은 RESOURCE_TYPE 충돌.
+
+### A.13 Validator (§8 보충)
+
+- 위치: `app/validator/`. `validate(snapshot, candidate, search_spec | None, pack) -> Validation`. DB를 읽지 않는 순수 함수이고, 어떤 후보가 들어와도 예외를 내지 않는다.
+- 입력: snapshot.tasks의 각 작업은 fields(critical field 확인 기록)를 포함한다. C11은 이 값으로 판정한다.
+- 의존: validator ↛ solver는 유지하고, validator → rules는 허용한다. C03–C05·C07–C10은 `detect_conflicts` 결과를 매핑한다.
+  - 기본 제약: DURATION→C03, WINDOW→C04, PRECEDENCE→C05, RESOURCE_MISSING·RESOURCE_TYPE→C07, RESOURCE_AUTH→C08, AVAILABILITY→C09.
+  - Pack Rule: rule_id 접두어가 아니라 rules.yaml의 type으로 매핑한다. CAPACITY→C09, SEPARATION→C10.
+- `candidate_hash`와 `search_spec_hash`는 `app/domain`에 두고 solver와 validator가 같이 쓴다. 정의는 A.11 그대로다.
+- 비정상 후보: 누락·초과·중복은 C02에서만 다룬다. 나머지 check는 snapshot에 있고 배정에 한 번만 나온 task의 배정만 쓴다.
+- C01 (task_ids는 빈 목록):
+  - snapshot_hash 재계산 ≠ 저장값 → `SNAPSHOT_HASH_MISMATCH`
+  - candidate_hash 재계산 ≠ 저장값 → `CANDIDATE_HASH_MISMATCH`
+  - candidate.snapshot_id ≠ snapshot_id → `SNAPSHOT_REF_MISMATCH`
+  - candidate.pack_hash, snapshot.pack_hash, pack.pack_hash가 다름 → `PACK_HASH_MISMATCH`
+  - candidate.context_version ≠ snapshot 값 → `CONTEXT_VERSION_MISMATCH`
+  - base_plan_revision ≠ snapshot 값 → `PLAN_REVISION_MISMATCH`
+  - REPLAN인데 search_spec 없음 → `SEARCH_SPEC_MISSING` / RECONFIRM인데 있음 → `SEARCH_SPEC_UNEXPECTED`
+  - search_spec id가 다르거나 spec.snapshot_id ≠ snapshot_id → `SEARCH_SPEC_REF_MISMATCH`
+  - candidate.search_spec_hash, spec.hash, 재계산 hash가 다름 → `SEARCH_SPEC_HASH_MISMATCH`
+- C02: 배정의 task 집합 = snapshot READY task 집합. `TASK_MISSING`, `TASK_UNKNOWN`(snapshot에 없음), `TASK_DUPLICATE`.
+- C06: 기준은 `snapshot.base_assignments()`.
+  - search_spec이 없거나(RECONFIRM) axes에 없는 작업은 시작·자원 모두 기준값이어야 한다.
+  - time 축이 false인데 시작 ≠ 기준 → `TIME_AXIS_NOT_ALLOWED`
+  - resource 축이 false인데 자원 ≠ 기준 → `RESOURCE_AXIS_NOT_ALLOWED`
+  - resource 축이 true인데 자원 ∉ {기준} ∪ resource_alternatives[t] → `RESOURCE_NOT_IN_SPEC`
+  - snapshot.constraints로 고정된 축이 기준값과 다름 → `FROZEN_BY_CONSTRAINT` (search_spec과 관계없이 따로 확인)
+  - axes에 있는 작업의 unit ≠ acting_unit_id → `OUTSIDE_ACTING_UNIT`
+- C11: snapshot의 READY 작업마다 work_type ∈ Pack, hazard_tags = Pack 도출값, work_type의 critical_fields가 모두 fields에 있고 CONFIRMED이며 value = 컬럼 값(A.8 모양). reason_code: `UNKNOWN_WORK_TYPE`, `HAZARD_TAGS_MISMATCH`, `FIELD_MISSING`, `FIELD_NOT_CONFIRMED`, `CONFIRMED_VALUE_MISMATCH`.
+- checks: C01–C11 순서. 위반이 없는 check는 PASS 1개, 위반이 있으면 위반마다 1개(C01–C10은 FAIL, C11은 INCOMPLETE). 각 항목은 `{check_id, status, task_ids(정렬), reason_code}`. C03–C05·C07–C10의 reason_code는 Conflict의 rule_id다.
+- 저장 status: INCOMPLETE 항목이 있으면 INCOMPLETE, 없고 FAIL이 있으면 FAIL, 둘 다 없으면 PASS. STALE은 저장하지 않는다.
+- 등록: repos `insert_validation(tx, site_id, validation)`. 버전은 다시 확인하지 않는다. validation_id 접두어는 `val_`.
+- D3에 넘기는 결정 (이번에는 기록만 하고 구현하지 않는다):
+  - RECONFIRM 후보 배정 = `snapshot.base_assignments()`. §10 "현재 Plan assignments 그대로"의 보충이다. Hold 해제 경우에는 두 값이 같고, Plan에 없는 신규 READY 작업이 충돌 없이 들어온 경우에만 다르다(Plan 배정을 그대로 쓰면 C02 FAIL).
+  - "Solver 후보 FAIL → Run ERROR"는 저장 status가 아니라 checks에 C01–C10 FAIL이 있는지로 판단한다(INCOMPLETE가 FAIL을 가릴 수 있음).
+  - 같은 후보의 중복 검증 방지는 D3 Coordinator VALIDATE 핸들러에서 한다.
