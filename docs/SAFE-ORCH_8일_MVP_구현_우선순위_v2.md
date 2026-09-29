@@ -286,6 +286,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - 시각은 정수 분으로만 쓴다. 따옴표 없는 `10:30`은 PyYAML이 630으로 읽는다. 사람이 읽는 시각은 주석으로 단다.
   - 날짜·시각 문자열은 따옴표로 감싼다. 따옴표가 없으면 datetime이 되어 canonical JSON이 깨진다.
 - 검증: §5.3 목록 + 정의 안 된 unit·actor·resource·work_type·task 참조, ID 중복, R0 배정의 end − start ≠ duration. 위반하면 `PackError`(사유 목록).
+  - resource.available_intervals: 각 구간 0 ≤ lo < hi ≤ horizon_minutes, 시작 순 정렬, 서로 겹치거나 맞닿지 않음. Rule Engine은 한 구간 포함으로, CP-SAT은 구간 합집합으로 판정하므로 두 판정이 같도록 구간 모양을 강제한다.
 - `rel(a, b)`: 같은 zone이면 SAME, ADJACENT는 양방향, BELOW는 rel(upper, lower)만, 선언이 없으면 None.
 - `pack_hash = sha256(canonical_json({파일명: safe_load 결과}))`, 5개 파일 전부. 줄바꿈·주석·공백만 다르면 같은 값이다.
 - 기동: main lifespan에서 init_db 후 `settings.pack`을 로드한다. site가 seed돼 있고 pack_hash가 다르면 기동을 거절한다(자동 reset 없음).
@@ -406,3 +407,13 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - L1 → changed 2, delay 90. A 60 A-CR-01, C 90 A-CR-01 (Alpha).
   - A를 movable.resource = true인 새 revision으로 바꾸고 try `{A: [SITE-CR-01]}`, L0 → changed 1, delay 60. A 60 SITE-CR-01 (Beta).
   - try `{A: [B-CR-01]}` → `RESOURCE_NOT_AUTHORIZED`, Solver 미호출.
+
+### A.12 구현 중 확정한 결정 (9/29 Rule Engine·Solver, 커밋 683b43f)
+
+- CP-SAT 자원 선택지 = 기준 자원 ∪ resource_alternatives[t](resource 축 허용일 때만). 저장하는 resource_alternatives에는 try 값만 넣는다.
+- time_limit_s 10은 한 호출 전체다. 1단계 10초, 2단계는 남은 시간(최소 0.1초).
+- num_workers 1, random_seed 0.
+- 가용 구간 밖은 자원별 NoOverlap에 고정 구간으로 넣는다.
+- SearchSpec 밖 작업에도 시간창·Horizon 제약을 건다. 고정 작업이 위반하면 INFEASIBLE(Validator C04와 같은 기준).
+- snapshot.constraints 항목은 FeedbackConstraint 모양(task_id, frozen_axes, …)이다. 제약 테이블이 생기기 전까지 빈 목록.
+- 존재하지 않는 자원 ID 배정은 RESOURCE_TYPE 충돌.

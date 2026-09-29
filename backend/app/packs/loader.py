@@ -313,6 +313,21 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         for u in (r.owner_unit_id, *r.allowed_unit_ids):
             if u not in unit_ids:
                 reasons.append(f"site.yaml.resources {r.resource_id}: undefined unit {u!r}")
+    # 가용 구간: 0 ≤ lo < hi ≤ horizon, 시작 순, 겹치거나 맞닿지 않음 (부록 A.4).
+    # Rule Engine은 한 구간 포함, CP-SAT은 합집합으로 판정하므로 두 판정이 같도록 강제한다.
+    horizon = site_doc.get("horizon_minutes")
+    for r in resources:
+        where = f"site.yaml.resources {r.resource_id}: available_intervals"
+        prev_hi = None
+        for lo, hi in r.available_intervals:
+            if not 0 <= lo < hi or (isinstance(horizon, int) and hi > horizon):
+                reasons.append(f"{where}: [{lo}, {hi}] must satisfy 0 <= lo < hi <= {horizon}")
+            if prev_hi is not None and lo <= prev_hi:
+                reasons.append(
+                    f"{where}: [{lo}, {hi}] must start after previous end {prev_hi}"
+                    " (sorted, no overlap or touching)"
+                )
+            prev_hi = hi
     resource_ids = {r.resource_id for r in resources}
 
     def check_task_refs(where: str, t: dict[str, Any]) -> None:

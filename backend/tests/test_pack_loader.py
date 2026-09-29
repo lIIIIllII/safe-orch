@@ -220,3 +220,30 @@ def test_scenario_requested_start_must_equal_earliest_start(pack_copy):
     """신규 작업의 기준 배정 = (earliest_start, 요청 자원) (부록 A.10)."""
     _edit(pack_copy, "scenario.yaml", lambda d: d["new_task"]["requested"].update(start=10, end=40))
     assert "requested.start 10 != earliest_start 0" in _reasons(pack_copy)
+
+
+@pytest.mark.parametrize(
+    ("intervals", "expected"),
+    [
+        ([[0, 90], [60, 180]], "must start after previous end 90"),  # 겹침
+        ([[0, 90], [90, 180]], "must start after previous end 90"),  # 맞닿음
+        ([[120, 180], [0, 60]], "must start after previous end 180"),  # 정렬 안 됨
+        ([[0, 181]], "0 <= lo < hi <= 180"),  # Horizon 밖
+        ([[-10, 60]], "0 <= lo < hi <= 180"),  # 0 미만
+        ([[60, 60]], "0 <= lo < hi <= 180"),  # lo = hi
+        ([[90, 60]], "0 <= lo < hi <= 180"),  # lo > hi
+    ],
+)
+def test_available_intervals_rejected(pack_copy, intervals, expected):
+    """Rule Engine(한 구간 포함)과 CP-SAT(합집합)의 판정이 같도록 구간 모양을 강제한다."""
+    _edit(pack_copy, "site.yaml", lambda d: d["resources"][0].update(available_intervals=intervals))
+    assert expected in _reasons(pack_copy)
+
+
+def test_available_intervals_disjoint_sorted_accepted(pack_copy):
+    _edit(
+        pack_copy,
+        "site.yaml",
+        lambda d: d["resources"][0].update(available_intervals=[[0, 60], [61, 180]]),
+    )
+    assert load_pack(pack_copy).resources[0].available_intervals == ((0, 60), (61, 180))
