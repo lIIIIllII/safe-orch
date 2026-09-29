@@ -347,7 +347,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - zone_id·duration: 스칼라 value.
   - window: `{"earliest_start", "latest_start", "latest_end"}`.
   - resource: `{"required_resource_type", "requested_resource_id"}`.
-- source_ref 형식: `fixture:plan_r0`, 이후 `form:<id>`, `message:<id>`.
+- source_ref 형식: `fixture:plan_r0`, `scenario:new_task`(테스트), 이후 `form:<id>`, `message:<id>`.
 - seed의 B~E는 모두 CONFIRMED, source_ref `fixture:plan_r0`. 예(C):
 
 ```json
@@ -360,3 +360,49 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
                "status": "CONFIRMED", "source_ref": "fixture:plan_r0"}
 }
 ```
+
+### A.9 구현 중 확정한 결정 (9/29 저장소·Pack, 커밋 ad7684b)
+
+- site.yaml 관계 형식: ADJACENT는 `{relation: ADJACENT, zones: [a, b]}`, BELOW는 `{relation: BELOW, upper, lower}`로만 쓴다. BELOW를 zones로 쓰면 방향이 없으므로 로더가 거절한다.
+- seed의 audit 행: command SEED, actor_id NULL, payload `{pack, pack_hash}`.
+- 빈 DB로 기동하면 자동 seed하지 않는다. seed는 reset_db(이후 `/dev/reset`)로만 한다.
+- schema_meta 없이 다른 테이블만 있는 DB는 기동을 거절한다.
+- solver_result.stage2는 NULL 허용(1단계가 OPTIMAL이 아니면 2단계를 돌리지 않는다). search_spec.scope_level ∈ (L0, L1, L2).
+- REPLAN 후보는 search_spec_id·search_spec_hash·solver_result_id가 모두 있어야 한다.
+
+### A.10 Snapshot과 Rule Engine (§6 보충)
+
+- **신규 작업의 기준 배정** = (earliest_start, requested_resource_id). task에 요청 시작 컬럼을 따로 두지 않는다. scenario.yaml의 `requested.start`는 earliest_start와 같아야 한다(로더가 검증).
+- **작업 추가·변경**은 새 task revision INSERT + context_version +1이다. 이번 단계에는 repos 함수(`insert_task_revision`, `bump_context_version`)만 두고, 폼 접수·MOVABILITY 확인 같은 명령은 D3에서 이 함수를 쓴다. 테스트에서 A를 추가할 때는 scenario 값으로 fields를 CONFIRMED(source_ref `scenario:new_task`)로 만든다.
+- **Snapshot content**(canonical JSON): site_id, pack_hash, horizon_minutes, context_version, plan_revision, tasks(현재 revision 중 READY, 도출한 hazard_tags 포함), resources, zones, zone_relations(저장된 방향 그대로), plan `{plan_revision, assignments}`, holds `[]`, constraints `[]`, consents `[]`. 빈 목록은 해당 테이블이 생기면 채운다. `snapshot_hash = canonical_hash(content)`.
+- **불변 객체 ID**: 접두어 + uuid4 hex(`snap_`, `ss_`, `sr_`, `cand_`, `val_`). 내용이 같은지는 hash 컬럼으로 본다.
+- **검사 대상 배정** = 현재 Plan 배정 + Plan에 없는 READY 작업의 기준 배정.
+- `app/rules/`: `detect_conflicts(snapshot, assignments, pack) -> list[Conflict]`.
+  - Conflict = `{rule_id, task_ids(정렬), resource_id | None, zone_ids, interval[start, end)}`. interval은 관련 작업 점유 구간을 모두 덮는 범위(표시용).
+  - rule_id: Pack Rule은 rule_id 그대로(SEP-…, CAP-RESOURCE). 기본 제약은 `DURATION`, `WINDOW`(시간창·Horizon), `PRECEDENCE`, `RESOURCE_MISSING`, `RESOURCE_TYPE`, `RESOURCE_AUTH`, `AVAILABILITY`.
+  - SEPARATION: 작업 x가 hazard_a, y가 hazard_b를 갖고 rel(zone_x, zone_y) ∈ relations이면 `e_x + gap ≤ s_y` 또는 `e_y + gap ≤ s_x`.
+- 확인 기준: R0만 검사하면 충돌 없음. R0 + A 기준 배정(0–30, A-CR-01)이면 `[SEP-LIFT-BELOW (A, B)]` 하나.
+
+### A.11 SearchSpec·Solver·Candidate (§7 보충)
+
+- 위치: `app/solver/search_spec.py`(서버가 생성), `app/solver/cpsat.py`. 의존: solver ↛ rules·validator, rules ↛ solver. Rule 데이터는 둘 다 Pack에서 읽고, 제약 생성과 검사 코드는 따로 둔다(전문가 피드백 C.6).
+- `build_search_spec(snapshot, conflict, acting_unit_id, scope_level, try_resources={})`
+  - L0 = 충돌 작업 중 acting_unit 작업. L1 = L0 + acting_unit 작업 중 L0 작업과 zone 또는 기준 자원이 같은 작업. L2 = snapshot의 acting_unit 작업 전부.
+  - `axes[t] = {time: movable.time ∧ TIME 제약 없음, resource: movable.resource ∧ RESOURCE 제약 없음}`. 제약 테이블이 생기기 전에는 제약 목록이 비어 있다.
+  - resource_alternatives는 try_resources로만 채운다. 조건: axes[t].resource, 유형 = required_resource_type, acting_unit ∈ allowed_unit_ids, 가용 구간 있음. 축이 막혀 있으면 `RESOURCE_AXIS_NOT_ALLOWED`, 필터 후 비면 `RESOURCE_NOT_AUTHORIZED` 예외이고 Solver를 호출하지 않는다.
+  - L0가 비면 `NO_ACTING_TASKS`. time_limit_s 10.
+  - **hash = 실효 내용의 canonical_hash**: `{snapshot_hash, acting_unit_id, axes, resource_alternatives, time_limit_s}`. axes에서는 두 축이 모두 false인 작업을 뺀다. search_spec_id·snapshot_id(무작위 ID)와 scope_level(이름표)은 넣지 않는다.
+    - 같은 사실 위에서 범위 이름만 다르고 실제 탐색이 같으면 hash가 같다. 예: C가 고정된 뒤의 L1·L2는 L0와 같은 hash다.
+    - §11.7 `SOLVE_WITH_SCOPE`의 "현재 Snapshot에서 같은 실효 SearchSpec 미시도" 판정을 이 hash로 한다. 그래서 같은 탐색을 이름만 바꿔 반복하지 않고, 대체 자원 확인 같은 다른 전략으로 넘어가게 된다.
+- CP-SAT: §7 모델 그대로. 모든 READY 작업을 넣고, SearchSpec 밖 작업·축은 기준값 상수로 둔다. 자원 대안별 optional interval + ExactlyOne, 자원별 NoOverlap(고정 작업 포함), 가용 구간, SEPARATION 순서 bool, 선후행.
+  - 1단계 `min Σ changed_t`(시작 또는 자원이 기준과 다르면 1). 1단계가 OPTIMAL이면 그 값을 고정하고 2단계 `min Σ max(0, s_t − base_t)`.
+  - 재현성: worker 1개, random_seed 고정.
+  - SolverResult: stage1 `{status, changed, solution | null}`, stage2 `{status, delay, solution | null} | null`, chosen_stage. 2단계가 해를 못 내면 1단계 해를 쓴다. 표시용 판정은 **저장하지 않고 status에서 계산**한다(SolverResult 모델 속성): `minimal_change = stage1.status == OPTIMAL`, `delay_optimality_unconfirmed = 해가 있음 ∧ stage2.status ≠ OPTIMAL`(stage2 NULL 포함). 불변 기록과 표시가 어긋나지 않게 하기 위해서다(Validation STALE과 같은 원칙). status는 CP-SAT 이름 그대로(OPTIMAL·FEASIBLE·INFEASIBLE·UNKNOWN·MODEL_INVALID).
+  - 운영 코드에 테스트용 주입 인자를 두지 않는다. UNKNOWN(T16·T32)은 테스트에서 단계 실행 함수를 monkeypatch한다.
+- Candidate: kind REPLAN, assignments = 모든 READY 작업(task_id순). `candidate_hash = canonical_hash({"assignments", "base_plan_revision", "context_version", "snapshot_hash", "search_spec_hash", "pack_hash"})`(§5.2).
+- 등록: Solver는 트랜잭션 밖에서 돈다. `register_solver_outcome(tx, …)`는 tx 안에서 site의 context_version·plan_revision이 snapshot과 같은지 다시 확인하고, 다르면 `StaleError`로 버린다. 같으면 SolverResult와(해가 있으면) Candidate를 INSERT한다.
+- 회귀 기대값(§15, 설계 검토 때 전수 계산으로 재확인):
+  - A 추가 후 L0 → INFEASIBLE, Candidate 없음.
+  - L1 → changed 2, delay 90. A 60 A-CR-01, C 90 A-CR-01 (Alpha).
+  - A를 movable.resource = true인 새 revision으로 바꾸고 try `{A: [SITE-CR-01]}`, L0 → changed 1, delay 60. A 60 SITE-CR-01 (Beta).
+  - try `{A: [B-CR-01]}` → `RESOURCE_NOT_AUTHORIZED`, Solver 미호출.

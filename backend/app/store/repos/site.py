@@ -37,3 +37,15 @@ def list_zone_relations(conn: sqlite3.Connection, site_id: str) -> list[ZoneRela
             (site_id,),
         )
     ]
+
+
+def bump_context_version(tx: sqlite3.Connection, site_id: str) -> int:
+    """context_version += 1 (§5.2). 새 값을 반환한다. write() 안에서만 호출한다."""
+    row = tx.execute(
+        "UPDATE site SET context_version = context_version + 1 WHERE site_id = ?"
+        " RETURNING context_version",
+        (site_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"site {site_id} not found")
+    return row[0]

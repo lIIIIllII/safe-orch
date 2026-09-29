@@ -161,8 +161,10 @@ def _duplicates(where: str, ids: list[Any], reasons: list[str]) -> None:
             reasons.append(f"{where}: duplicate id {key!r}")
 
 
-def _task_fields(task: dict[str, Any], critical: tuple[str, ...]) -> dict[str, FieldRecord]:
-    """critical field별 확인 기록 (부록 A.8). 값이 없는 필드는 키를 두지 않는다."""
+def confirmed_fields(
+    task: dict[str, Any], critical: tuple[str, ...], source_ref: str
+) -> dict[str, FieldRecord]:
+    """critical field별 CONFIRMED 확인 기록 (부록 A.8). 값이 없는 필드는 키를 두지 않는다."""
     values: dict[str, Any] = {
         "zone_id": task.get("zone_id"),
         "duration": task.get("duration"),
@@ -179,7 +181,7 @@ def _task_fields(task: dict[str, Any], critical: tuple[str, ...]) -> dict[str, F
         },
     }
     return {
-        name: FieldRecord(value=values[name], status="CONFIRMED", source_ref=FIXTURE_SOURCE_REF)
+        name: FieldRecord(value=values[name], status="CONFIRMED", source_ref=source_ref)
         for name in critical
         if values.get(name) is not None
     }
@@ -341,7 +343,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
                 "revision": 1,
                 "lifecycle": "READY",
                 "hazard_tags": wt.hazard_tags if wt else (),
-                "fields": _task_fields(t, wt.critical_fields if wt else ()),
+                "fields": confirmed_fields(t, wt.critical_fields if wt else (), FIXTURE_SOURCE_REF),
             },
             where,
             reasons,
@@ -385,6 +387,12 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         if isinstance(nt.get("requested"), dict):
             nt["requested"] = {"task_id": nt.get("task_id"), **nt["requested"]}
         new_task = _model(NewTaskRequest, nt, "scenario.yaml.new_task", reasons)
+        # 신규 작업의 기준 배정 = (earliest_start, requested_resource_id) (부록 A.10)
+        if new_task and new_task.requested.start != new_task.earliest_start:
+            reasons.append(
+                f"scenario.yaml.new_task: requested.start {new_task.requested.start}"
+                f" != earliest_start {new_task.earliest_start}"
+            )
     _duplicates(
         "tasks (plan_r0 + scenario)",
         [t.task_id for t in tasks] + ([new_task.task_id] if new_task else []),

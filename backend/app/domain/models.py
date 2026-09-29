@@ -159,10 +159,91 @@ class Plan(Frozen):
 # ── 계산·검증 기록 (불변) ──────────────────────────────────────
 
 
+class FeedbackConstraint(Frozen):
+    """확인된 작업·축 고정 (§5.1, §9.2). 테이블은 제약 기능과 함께 만든다."""
+
+    constraint_id: str
+    task_id: str
+    frozen_axes: tuple[Literal["TIME", "RESOURCE"], ...]
+    source_type: Literal["DECISION", "PROPOSAL"]
+    source_id: str
+
+
+class Conflict(Frozen):
+    """충돌 탐지 결과 (§6, 부록 A.10). interval은 관련 작업 점유를 모두 덮는 [start, end)."""
+
+    rule_id: str
+    task_ids: tuple[str, ...]  # 정렬
+    resource_id: str | None = None
+    zone_ids: tuple[str, ...]
+    interval: tuple[int, int]
+
+
+class PlanRef(Frozen):
+    plan_revision: int = Field(ge=0)
+    assignments: tuple[Assignment, ...]
+
+
+class SnapshotContent(Frozen):
+    """Snapshot.content의 구조 (부록 A.10). tasks는 현재 revision 중 READY만."""
+
+    site_id: str
+    pack_hash: str
+    horizon_minutes: int = Field(gt=0)
+    context_version: int = Field(ge=0)
+    plan_revision: int = Field(ge=0)
+    tasks: tuple[Task, ...]
+    resources: tuple[Resource, ...]
+    zones: tuple[str, ...]
+    zone_relations: tuple[ZoneRelation, ...]
+    plan: PlanRef
+    holds: tuple[dict[str, Any], ...] = ()
+    constraints: tuple[FeedbackConstraint, ...] = ()
+    consents: tuple[dict[str, Any], ...] = ()
+
+    def task_map(self) -> dict[str, Task]:
+        return {t.task_id: t for t in self.tasks}
+
+    def resource_map(self) -> dict[str, Resource]:
+        return {r.resource_id: r for r in self.resources}
+
+    def rel(self, zone_a: str, zone_b: str) -> Relation | None:
+        """저장된 방향 그대로. 같은 zone이면 SAME, 선언이 없으면 None (§5.3)."""
+        if zone_a == zone_b:
+            return "SAME"
+        for r in self.zone_relations:
+            if r.zone_a == zone_a and r.zone_b == zone_b:
+                return r.relation
+        return None
+
+    def base_assignments(self) -> dict[str, Assignment]:
+        """READY 작업의 기준 배정. Plan에 있으면 Plan 값, 없으면 (earliest_start, 요청 자원)."""
+        in_plan = {a.task_id: a for a in self.plan.assignments}
+        return {
+            t.task_id: in_plan.get(t.task_id)
+            or Assignment(
+                task_id=t.task_id,
+                start=t.earliest_start,
+                end=t.earliest_start + t.duration,
+                resource_id=t.requested_resource_id,
+            )
+            for t in sorted(self.tasks, key=lambda t: t.task_id)
+        }
+
+    def check_assignments(self) -> tuple[Assignment, ...]:
+        """검사 대상 배정 = 현재 Plan 배정 + Plan에 없는 READY 작업의 기준 배정."""
+        in_plan = {a.task_id for a in self.plan.assignments}
+        extra = [a for tid, a in self.base_assignments().items() if tid not in in_plan]
+        return tuple(sorted((*self.plan.assignments, *extra), key=lambda a: a.task_id))
+
+
 class Snapshot(Frozen):
     snapshot_id: str
     snapshot_hash: str
     content: dict[str, Any]
+
+    def facts(self) -> SnapshotContent:
+        return SnapshotContent.model_validate(self.content)
 
 
 class SearchSpec(Frozen):
@@ -182,6 +263,25 @@ class SolverResult(Frozen):
     stage1: dict[str, Any]
     stage2: dict[str, Any] | None
     chosen_stage: Literal[1, 2] | None
+
+    # 표시용 판정은 저장하지 않고 status에서 계산한다 (부록 A.11)
+    @property
+    def solution(self) -> list[dict[str, Any]] | None:
+        if self.chosen_stage == 1:
+            return self.stage1.get("solution")
+        if self.chosen_stage == 2 and self.stage2 is not None:
+            return self.stage2.get("solution")
+        return None
+
+    @property
+    def minimal_change(self) -> bool:
+        return self.stage1.get("status") == "OPTIMAL"
+
+    @property
+    def delay_optimality_unconfirmed(self) -> bool:
+        return self.solution is not None and (
+            self.stage2 is None or self.stage2.get("status") != "OPTIMAL"
+        )
 
 
 class Candidate(Frozen):

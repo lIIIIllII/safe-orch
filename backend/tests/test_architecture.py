@@ -89,6 +89,17 @@ def test_domain_and_packs_scanner_detects_violation():
     assert _hits(mods, "app.store") and _hits(mods, "app.packs")
 
 
+def test_solver_does_not_import_rules_or_validator():
+    """제약 생성(solver)과 검사(rules·validator) 코드를 나눈다 (부록 A.11)."""
+    files = _py_files(APP / "solver")
+    assert files and _violations(files, ["app.rules", "app.validator"]) == []
+
+
+def test_rules_do_not_import_solver():
+    files = _py_files(APP / "rules")
+    assert files and _violations(files, ["app.solver"]) == []
+
+
 FORBIDDEN_NAMES = ("create_agent", "checkpointer", "interrupt")
 LANGGRAPH_TYPES = "langgraph.types"
 FORBIDDEN_TYPES = ("interrupt", "Command")

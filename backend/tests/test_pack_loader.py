@@ -214,3 +214,9 @@ def test_t30_below_forward_only(pack_copy):
     loaded = load_pack(pack_copy)
     assert loaded.rel("C", "B") == "BELOW"  # 정방향: SEP-LIFT-BELOW 적용 대상
     assert loaded.rel("B", "C") is None  # 역방향: 미적용
+
+
+def test_scenario_requested_start_must_equal_earliest_start(pack_copy):
+    """신규 작업의 기준 배정 = (earliest_start, 요청 자원) (부록 A.10)."""
+    _edit(pack_copy, "scenario.yaml", lambda d: d["new_task"]["requested"].update(start=10, end=40))
+    assert "requested.start 10 != earliest_start 0" in _reasons(pack_copy)
