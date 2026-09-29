@@ -13,7 +13,7 @@ from pathlib import Path
 
 from app.config import get_settings
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
 _local = threading.local()
@@ -88,13 +88,36 @@ def get_schema_version(conn: sqlite3.Connection) -> int | None:
 
 
 def init_db() -> None:
-    """schema.sql을 적용하고 schema_version을 확인한다."""
+    """빈 DB면 schema.sql을 한 트랜잭션으로 적용하고, 아니면 schema_version만 확인한다 (부록 A.3).
+
+    버전이 다르면 아무것도 쓰지 않고 SchemaVersionMismatchError. 자동 초기화하지 않는다.
+    executescript는 열린 트랜잭션을 먼저 COMMIT하므로 write() 안에서 부르지 않는다.
+    """
     conn = connect()
-    conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
-    with write() as tx:
-        version = get_schema_version(tx)
-        if version is None:
-            tx.execute("INSERT INTO schema_meta (schema_version) VALUES (?)", (SCHEMA_VERSION,))
-            return
-    if version != SCHEMA_VERSION:
-        raise SchemaVersionMismatchError(f"DB schema_version={version}, expected {SCHEMA_VERSION}")
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    if "schema_meta" in tables:
+        version = get_schema_version(conn)
+        if version != SCHEMA_VERSION:
+            raise SchemaVersionMismatchError(
+                f"DB schema_version={version}, expected {SCHEMA_VERSION}"
+            )
+        return
+    if tables:
+        raise SchemaVersionMismatchError(f"DB has tables but no schema_meta: {sorted(tables)}")
+    script = (
+        "BEGIN IMMEDIATE;\n"
+        + SCHEMA_FILE.read_text(encoding="utf-8")
+        + f"\nINSERT INTO schema_meta (schema_version) VALUES ({SCHEMA_VERSION});\n"
+        + "COMMIT;\n"
+    )
+    try:
+        conn.executescript(script)
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise

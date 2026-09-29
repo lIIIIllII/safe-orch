@@ -64,6 +64,31 @@ def test_agent_graph_and_specs_do_not_import_store_or_commands():
     assert _violations(files, ["app.store", "app.commands"]) == []
 
 
+def test_domain_imports_no_app_modules():
+    """의존 방향 app.domain ← app.packs ← app.store.repos (부록 A.1)."""
+    files = _py_files(APP / "domain")
+    bad = []
+    for f in files:
+        mods = _imports(f, ast.parse(f.read_text(encoding="utf-8")))
+        bad += [
+            f"{f.relative_to(BACKEND)}: {m}"
+            for m in sorted(_hits(mods, "app"))
+            if not (m == "app.domain" or m.startswith("app.domain."))
+        ]
+    assert files and bad == []
+
+
+def test_packs_do_not_import_store():
+    files = _py_files(APP / "packs")
+    assert files and _violations(files, ["app.store"]) == []
+
+
+def test_domain_and_packs_scanner_detects_violation():
+    tree = ast.parse("from ..store import db\nfrom app.packs.loader import load_pack\n")
+    mods = _imports(APP / "domain" / "models.py", tree)
+    assert _hits(mods, "app.store") and _hits(mods, "app.packs")
+
+
 FORBIDDEN_NAMES = ("create_agent", "checkpointer", "interrupt")
 LANGGRAPH_TYPES = "langgraph.types"
 FORBIDDEN_TYPES = ("interrupt", "Command")

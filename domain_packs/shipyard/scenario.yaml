@@ -1,0 +1,17 @@
+# 데모 시나리오 입력 (설계서 §15, 부록 A.5). task로 seed하지 않는다.
+# 신규 작업 A: Planner A의 B구역 인양 요청. 시간은 09:00 기준 정수 분.
+new_task:
+  task_id: A
+  unit_id: UA
+  owner_actor_id: planner_a
+  work_type: LIFTING
+  zone_id: B
+  duration: 30
+  earliest_start: 0             # 09:00
+  latest_start: 60              # 10:00
+  latest_end: 90                # 10:30
+  required_resource_type: CRANE
+  requested_resource_id: A-CR-01
+  predecessors: []
+  movable: { time: true, resource: false }   # 자원 축 미확인
+  requested: { start: 0, end: 30 }           # 요청 일정 09:00–09:30

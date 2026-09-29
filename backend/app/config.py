@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr = SecretStr("")
     openai_model: str = ""
     demo_mode: bool = True
+    pack: str = "shipyard"  # domain_packs/<pack>/ (부록 A.4)
 
     @field_validator("db_path")
     @classmethod

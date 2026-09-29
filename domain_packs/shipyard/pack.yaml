@@ -1,0 +1,7 @@
+# shipyard Domain Pack (설계서 §5.3). work_type → hazard_tags, critical_fields.
+# hazard_tags는 서버가 work_type에서 도출한다(I-14). 작업 입력으로 받지 않는다.
+work_types:
+  LIFTING:    { hazard_tags: [LIFTING],    critical_fields: [zone_id, duration, window, resource] }
+  WORK_BELOW: { hazard_tags: [WORK_BELOW], critical_fields: [zone_id, duration, window] }
+  HOT_WORK:   { hazard_tags: [HOT_WORK],   critical_fields: [zone_id, duration, window] }
+  PAINTING:   { hazard_tags: [FLAMMABLE],  critical_fields: [zone_id, duration, window] }

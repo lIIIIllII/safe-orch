@@ -1,0 +1,31 @@
+# shipyard 현장 (설계서 §15, 부록 A.5).
+# 시간은 Horizon 원점(09:00) 기준 정수 분. 날짜·시각 문자열은 따옴표로 감싼다.
+site_id: YARD-01                            # 가정
+horizon_start_utc: "2026-10-12T00:00:00Z"   # = 09:00 KST, 가정
+horizon_minutes: 180                        # 09:00–12:00
+
+# name·unit_type은 가정(unit_type은 표시용 라벨)
+units:
+  - { unit_id: UA,   name: 협력사 A,  unit_type: SUBCONTRACTOR }
+  - { unit_id: UB,   name: 협력사 B,  unit_type: SUBCONTRACTOR }
+  - { unit_id: SITE, name: 현장 운영, unit_type: SITE_OFFICE }
+
+actors:
+  - { actor_id: planner_a,  name: Planner A,  unit_id: UA,   roles: [UNIT_PLANNER] }  # A 담당·요청자
+  - { actor_id: foreman_a2, name: Foreman A2, unit_id: UA,   roles: [] }              # C 담당. 권한은 담당 관계로만
+  - { actor_id: planner_b,  name: Planner B,  unit_id: UB,   roles: [UNIT_PLANNER] }  # B·D·E 담당
+  - { actor_id: reporter,   name: Reporter,   unit_id: SITE, roles: [REPORTER] }      # unit 가정
+  - { actor_id: supervisor, name: Supervisor, unit_id: SITE, roles: [SUPERVISOR] }    # unit 가정
+
+zones: [B, C, D, D2]
+
+# SAME은 선언하지 않는다(같은 zone이면 자동). ADJACENT는 zones: [a, b](대칭),
+# BELOW는 { relation: BELOW, upper: <zone>, lower: <zone> }로만 선언한다.
+zone_relations:
+  - { relation: ADJACENT, zones: [D, D2] }
+
+# available_intervals [[0, 180]]은 가정
+resources:
+  - { resource_id: A-CR-01,    resource_type: CRANE, owner_unit_id: UA,   allowed_unit_ids: [UA], capacity: 1, available_intervals: [[0, 180]] }
+  - { resource_id: SITE-CR-01, resource_type: CRANE, owner_unit_id: SITE, allowed_unit_ids: [UA], capacity: 1, available_intervals: [[0, 180]] }
+  - { resource_id: B-CR-01,    resource_type: CRANE, owner_unit_id: UB,   allowed_unit_ids: [UB], capacity: 1, available_intervals: [[0, 180]] }

@@ -1,6 +1,7 @@
 # SAFE-ORCH
 
 설계 기준: `docs/SAFE-ORCH_Project_Blueprint_v1.2.3.md` (저장소 §5.4, Agent 실행 계층 §11, 스택·구조 §14)
+실행 계획·보충 결정: `docs/SAFE-ORCH_8일_MVP_구현_우선순위_v2.md` 부록 A (블루프린트가 정하지 않은 값·구현 방식. 충돌하면 블루프린트 우선, 구현을 멈추고 확인)
 
 ## 작업 규칙
 - 패키지 설치 전 venv 먼저(`uv venv --python 3.12`), 설치는 `uv add`(개발용 `uv add --dev`). pip 직접 사용 금지.

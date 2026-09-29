@@ -1,0 +1,66 @@
+# 기존 작업과 Plan R0 (설계서 §15, 부록 A.5). 시간은 09:00 기준 정수 분.
+# 로더가 revision 1, lifecycle READY, critical field CONFIRMED(source_ref "fixture:plan_r0")로 만든다.
+# 가정: §15에 없는 latest_end는 latest_start + duration.
+# E의 "D 종료 후 15분"은 SEP-HOT-FLAM(gap 15)으로만 표현한다. predecessors는 모두 빈 배열.
+tasks:
+  - task_id: B                  # B구역 하부 작업, 고정
+    unit_id: UB
+    owner_actor_id: planner_b
+    work_type: WORK_BELOW
+    zone_id: B
+    duration: 60
+    earliest_start: 0           # 09:00
+    latest_start: 0             # 09:00
+    latest_end: 60              # 10:00
+    required_resource_type: null
+    requested_resource_id: null
+    predecessors: []
+    movable: { time: false, resource: false }
+
+  - task_id: C                  # C구역 크레인 작업, 시작 10:00–10:30 이동 가능
+    unit_id: UA
+    owner_actor_id: foreman_a2
+    work_type: LIFTING          # 가정
+    zone_id: C
+    duration: 30
+    earliest_start: 60          # 10:00
+    latest_start: 90            # 10:30
+    latest_end: 120             # 11:00, 가정
+    required_resource_type: CRANE
+    requested_resource_id: A-CR-01
+    predecessors: []
+    movable: { time: true, resource: false }
+
+  - task_id: D                  # D구역 화기, 고정
+    unit_id: UB
+    owner_actor_id: planner_b
+    work_type: HOT_WORK
+    zone_id: D
+    duration: 30
+    earliest_start: 0           # 09:00
+    latest_start: 0             # 09:00
+    latest_end: 30              # 09:30
+    required_resource_type: null
+    requested_resource_id: null
+    predecessors: []
+    movable: { time: false, resource: false }
+
+  - task_id: E                  # D2 도장, 시작 09:45–11:00
+    unit_id: UB
+    owner_actor_id: planner_b
+    work_type: PAINTING
+    zone_id: D2
+    duration: 30
+    earliest_start: 45          # 09:45
+    latest_start: 120           # 11:00
+    latest_end: 150             # 11:30, 가정
+    required_resource_type: null
+    requested_resource_id: null
+    predecessors: []
+    movable: { time: true, resource: false }
+
+assignments:
+  - { task_id: B, start: 0,  end: 60, resource_id: null }      # 09:00–10:00
+  - { task_id: C, start: 60, end: 90, resource_id: A-CR-01 }   # 10:00–10:30
+  - { task_id: D, start: 0,  end: 30, resource_id: null }      # 09:00–09:30
+  - { task_id: E, start: 45, end: 75, resource_id: null }      # 09:45–10:15
