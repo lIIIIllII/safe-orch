@@ -1,5 +1,7 @@
 """Independent Validator (설계서 §8, 부록 A.13). Scene 5와 T03–T07·T09·T29·T31."""
 
+import ast
+import inspect
 import json
 import sqlite3
 
@@ -16,6 +18,7 @@ from app.domain.models import (
     Predecessor,
 )
 from app.packs.loader import EVALUATORS, load_pack
+from app.rules import engine
 from app.rules.engine import BASIC_RULE_IDS, detect_conflicts
 from app.solver import cpsat
 from app.solver.candidate import build_candidate
@@ -175,7 +178,7 @@ def test_unknown_and_duplicate_task_only_c02(alpha):
     pack, snap, spec, cand = alpha
     bad = _reshape(cand, snap, extra=(_asg("Z", 0, 30), _asg("E", 45, 75)))
     v = validate(snap, bad, spec, pack)
-    assert _bad(v) == [("C02", "TASK_UNKNOWN", ("Z",)), ("C02", "TASK_DUPLICATE", ("E",))]
+    assert _bad(v) == [("C02", "TASK_DUPLICATE", ("E",)), ("C02", "TASK_UNKNOWN", ("Z",))]
 
 
 def test_t03_duplicate_conflicting_values_not_used_elsewhere(alpha):
@@ -331,7 +334,27 @@ def test_c01_references_and_hashes(alpha):
 def test_c01_reconfirm_with_spec_unexpected(alpha):
     pack, snap, spec, _ = alpha
     v = validate(snap, _reconfirm(snap), spec, pack)
-    assert ("C01", "SEARCH_SPEC_UNEXPECTED", ()) in _bad(v)
+    assert [c.reason_code for c in v.checks if c.check_id == "C01"] == ["SEARCH_SPEC_UNEXPECTED"]
+
+
+# ── check 안의 순서 ────────────────────────────────────────────
+
+
+def test_assignment_order_does_not_change_checks(with_a):
+    snap = take_snapshot(with_a)
+    moved = tuple(
+        _asg(a.task_id, a.start + 1, a.end + 1, a.resource_id)
+        for a in snap.facts().base_assignments().values()
+    )
+    forward = validate(snap, _reconfirm(snap, moved), None, with_a)
+    backward = validate(snap, _reconfirm(snap, moved[::-1]), None, with_a)
+    assert forward.checks == backward.checks
+    assert len([c for c in forward.checks if c.check_id == "C06"]) > 1
+    for check_id in {c.check_id for c in forward.checks}:
+        items = [
+            (c.task_ids, c.reason_code or "") for c in forward.checks if c.check_id == check_id
+        ]
+        assert items == sorted(items)
 
 
 # ── T29 ────────────────────────────────────────────────────────
@@ -480,6 +503,23 @@ def test_rule_mapping_uses_type_not_rule_id(with_a):
 def test_mapping_covers_engine_and_loader():
     assert set(BASIC_TO_CHECK) == BASIC_RULE_IDS
     assert set(RULE_TYPE_TO_CHECK) == EVALUATORS
+
+
+def test_basic_rule_ids_match_engine_literals():
+    """engine.py에서 _conflict에 문자열 리터럴로 넘기는 rule_id = BASIC_RULE_IDS."""
+    tree = ast.parse(inspect.getsource(engine))
+    literals = [
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_conflict"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    ]
+    assert set(literals) <= BASIC_RULE_IDS
+    assert BASIC_RULE_IDS <= set(literals)
 
 
 def test_unmapped_rule_fails_closed_c01(alpha, monkeypatch):

@@ -72,6 +72,7 @@ def _c01(
         out.append("SEARCH_SPEC_MISSING")
     if candidate.kind == "RECONFIRM" and spec is not None:
         out.append("SEARCH_SPEC_UNEXPECTED")
+        spec = None  # C06과 같이 spec이 없는 것으로 본다. 한 원인은 한 번만 보고한다.
     if spec is not None:
         if (
             candidate.search_spec_id != spec.search_spec_id
@@ -213,7 +214,14 @@ def validate(
 
     checks: list[ValidationCheck] = []
     for check_id in CHECK_IDS:
-        found = [v for v in violations if v[0] == check_id]
+        # 한 check 안은 (task_ids, reason_code) 순. 배정 순서만 다른 후보는 checks가 같다.
+        found = sorted(
+            (
+                (tuple(sorted(task_ids)), reason)
+                for c, task_ids, reason in violations
+                if c == check_id
+            )
+        )
         if not found:
             checks.append(ValidationCheck(check_id=check_id, status="PASS"))
             continue
@@ -222,10 +230,10 @@ def validate(
             ValidationCheck(
                 check_id=check_id,
                 status=status,
-                task_ids=tuple(sorted(task_ids)),
+                task_ids=task_ids,
                 reason_code=reason,
             )
-            for _, task_ids, reason in found
+            for task_ids, reason in found
         ]
 
     statuses = {c.status for c in checks}

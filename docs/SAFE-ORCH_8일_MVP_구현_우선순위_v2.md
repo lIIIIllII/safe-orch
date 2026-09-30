@@ -439,7 +439,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - search_spec id가 다르거나 spec.snapshot_id ≠ snapshot_id → `SEARCH_SPEC_REF_MISMATCH`
   - candidate.search_spec_hash, spec.hash, 재계산 hash가 다름 → `SEARCH_SPEC_HASH_MISMATCH`
   - fail-closed: `detect_conflicts` 결과 중 check로 매핑되지 않는 rule_id는 버리지 않는다. C01 FAIL, `UNMAPPED_RULE`, task_ids는 그 Conflict의 task_ids. Pack과 코드가 어긋난 무결성 문제로 보며, 예외는 내지 않는다. 매핑 표의 키는 테스트로 고정한다(BASIC_TO_CHECK = engine `BASIC_RULE_IDS`, RULE_TYPE_TO_CHECK = loader `EVALUATORS`).
-- RECONFIRM에 search_spec이 들어오면 C01 `SEARCH_SPEC_UNEXPECTED`를 기록하고, C06은 spec이 없는 것으로 판정한다.
+- RECONFIRM에 search_spec이 들어오면 C01은 `SEARCH_SPEC_UNEXPECTED`만 보고하고 `SEARCH_SPEC_REF_MISMATCH`·`SEARCH_SPEC_HASH_MISMATCH` 검사는 하지 않는다. C06과 같이 spec을 없는 것으로 본다. 한 원인은 한 번만 보고한다.
 - C02: 배정의 task 집합 = snapshot READY task 집합. `TASK_MISSING`, `TASK_UNKNOWN`(snapshot에 없음), `TASK_DUPLICATE`.
 - C06: 기준은 `snapshot.base_assignments()`.
   - search_spec이 없거나(RECONFIRM) axes에 없는 작업은 시작·자원 모두 기준값이어야 한다.
@@ -451,12 +451,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - C11: snapshot의 READY 작업마다 work_type ∈ Pack, hazard_tags = Pack 도출값, work_type의 critical_fields가 모두 fields에 있고 CONFIRMED이며 value = 컬럼 값(A.8 모양). reason_code: `UNKNOWN_WORK_TYPE`, `HAZARD_TAGS_MISMATCH`, `FIELD_MISSING`, `FIELD_NOT_CONFIRMED`, `CONFIRMED_VALUE_MISMATCH`.
   - work_type이 Pack에 없으면 `UNKNOWN_WORK_TYPE`만 보고하고, 그 작업의 나머지 C11 검사는 건너뛴다.
 - checks: C01–C11 순서. 위반이 없는 check는 PASS 1개, 위반이 있으면 위반마다 1개(C01–C10은 FAIL, C11은 INCOMPLETE). 각 항목은 `{check_id, status, task_ids(정렬), reason_code}`. C03–C05·C07–C10의 reason_code는 Conflict의 rule_id다.
-- 한 check 안의 항목 순서 (현재 구현):
-  - C01: 위 C01 목록 순서(SNAPSHOT_HASH → CANDIDATE_HASH → SNAPSHOT_REF → PACK_HASH → CONTEXT_VERSION → PLAN_REVISION → SEARCH_SPEC_MISSING/UNEXPECTED → SEARCH_SPEC_REF → SEARCH_SPEC_HASH), 그 뒤에 `UNMAPPED_RULE`(detect_conflicts 순서).
-  - C02: `TASK_MISSING` 전부 → `TASK_UNKNOWN` 전부 → `TASK_DUPLICATE` 전부. 각 묶음 안은 task_id 순.
-  - C03–C05·C07–C10: detect_conflicts 순서 = (rule_id, task_ids, resource_id) 정렬. C09는 AVAILABILITY와 CAPACITY Rule이 rule_id 순으로 섞인다.
-  - C06: 먼저 후보 assignments 순서(C02 제외분 뺀 것)로 작업마다 `TIME_AXIS_NOT_ALLOWED` → `RESOURCE_AXIS_NOT_ALLOWED` → `RESOURCE_NOT_IN_SPEC`, 다음 snapshot.constraints 순서로 `FROZEN_BY_CONSTRAINT`, 마지막 task_id 순으로 `OUTSIDE_ACTING_UNIT`.
-  - C11: task_id 순. 작업마다 `HAZARD_TAGS_MISMATCH` → Pack critical_fields 순서로 필드마다 `FIELD_MISSING`·`FIELD_NOT_CONFIRMED`·`CONFIRMED_VALUE_MISMATCH` 중 하나.
+- 한 check 안의 항목 순서: 모든 check에서 (task_ids, reason_code) 순으로 정렬한다(task_ids는 정렬된 튜플로 비교, C01처럼 빈 task_ids가 먼저). 배정 순서만 다른 같은 후보는 checks가 같다.
 - 저장 status: INCOMPLETE 항목이 있으면 INCOMPLETE, 없고 FAIL이 있으면 FAIL, 둘 다 없으면 PASS. STALE은 저장하지 않는다.
 - 등록: repos `insert_validation(tx, site_id, validation)`. 버전은 다시 확인하지 않는다. validation_id 접두어는 `val_`.
 - D3에 넘기는 결정 (이번에는 기록만 하고 구현하지 않는다):
