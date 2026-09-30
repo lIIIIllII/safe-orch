@@ -8,6 +8,9 @@ from app.domain.ids import new_id
 from app.domain.models import Snapshot, SnapshotContent
 from app.packs.loader import LoadedPack
 from app.store.repos._rows import rows
+from app.store.repos.consents import list_current_consents
+from app.store.repos.decisions import list_constraints
+from app.store.repos.events import list_active_holds
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import insert_snapshot
 from app.store.repos.resources import list_resources
@@ -39,9 +42,9 @@ def build_snapshot_content(
         zones=tuple(zones),
         zone_relations=tuple(list_zone_relations(conn, site_id)),
         plan={"plan_revision": plan.plan_revision, "assignments": plan.assignments},
-        holds=(),  # 해당 테이블이 생기면 채운다
-        constraints=(),
-        consents=(),
+        holds=tuple(list_active_holds(conn, site_id)),
+        constraints=tuple(list_constraints(conn, site_id)),
+        consents=tuple(list_current_consents(conn, site_id)),
     )
     return content.model_dump(mode="json")
 

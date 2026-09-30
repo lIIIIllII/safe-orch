@@ -2,9 +2,9 @@
 
 import sqlite3
 
-from app.domain.models import Site, ZoneRelation
+from app.domain.models import Actor, Site, ZoneRelation
 from app.packs.loader import LoadedPack
-from app.store.repos._rows import rows
+from app.store.repos._rows import loads, rows
 
 
 class PackMismatchError(RuntimeError):
@@ -49,3 +49,28 @@ def bump_context_version(tx: sqlite3.Connection, site_id: str) -> int:
     if row is None:
         raise LookupError(f"site {site_id} not found")
     return row[0]
+
+
+def bump_plan_revision(tx: sqlite3.Connection, site_id: str) -> int:
+    """plan_revision += 1 (§5.2, 확정 성공 시에만). 새 값을 반환한다."""
+    row = tx.execute(
+        "UPDATE site SET plan_revision = plan_revision + 1 WHERE site_id = ?"
+        " RETURNING plan_revision",
+        (site_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"site {site_id} not found")
+    return row[0]
+
+
+def get_actor(conn: sqlite3.Connection, site_id: str, actor_id: str) -> Actor | None:
+    found = rows(
+        conn,
+        "SELECT actor_id, name, unit_id, roles FROM actor WHERE site_id = ? AND actor_id = ?",
+        (site_id, actor_id),
+    )
+    if not found:
+        return None
+    r = found[0]
+    r["roles"] = loads(r["roles"])
+    return Actor(**r)

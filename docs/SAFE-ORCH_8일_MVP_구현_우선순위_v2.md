@@ -458,3 +458,104 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - RECONFIRM 후보 배정 = `snapshot.base_assignments()`. §10 "현재 Plan assignments 그대로"의 보충이다. Hold 해제 경우에는 두 값이 같고, Plan에 없는 신규 READY 작업이 충돌 없이 들어온 경우에만 다르다(Plan 배정을 그대로 쓰면 C02 FAIL).
   - "Solver 후보 FAIL → Run ERROR"는 저장 status가 아니라 checks에 C01–C10 FAIL이 있는지로 판단한다(INCOMPLETE가 FAIL을 가릴 수 있음).
   - 같은 후보의 중복 검증 방지는 D3 Coordinator VALIDATE 핸들러에서 한다.
+
+### A.14 D3 1단계: 도메인 명령과 Consultation (§5.1·§5.4·§9·§10·§11.5 보충, schema_version 3)
+
+범위: 작업 요청 폼, 승인, WAIVE, 구조화 거절, Event 접수·즉시 Hold, Hold 해제(NO_CHANGE), 멱등 키, Consultation 계산, dispatch_job 등록. Agent 없이 동작한다. dispatch 워커·핸들러는 2단계, AgentRun·그래프·Gateway는 3단계, 대기 후 재개·Message·Proposal·Coordination은 D5, Event Response·API·화면은 이번 범위가 아니다.
+
+**위치**
+- `app/commands/`: `service.py`(공통 실행), `task_request.py`, `approval.py`(승인·WAIVE·거절), `events.py`(Event·Hold 해제), `consultation.py`(`build_consultation`, 2단계 BUILD_CONSULTATION 핸들러가 호출).
+- `app/domain/consultation.py`: item·상태 계산(순수 함수).
+- repos: `commands`(command_result·audit), `decisions`(decision·feedback_constraint), `events`(event·hold), `consents`, `consultations`(후보 상태·Consultation 조회·검토 대기), `dispatch`.
+
+**공통: 멱등·응답**
+- 명령 1개 = `write()` 1개. 순서: 멱등 키 확인 → handler(검사 후 쓰기) → Audit(APPLIED만) → CommandResult.
+- 응답: `{status: APPLIED | REPLAYED | REJECTED | RETRYABLE_ERROR, reason_codes, context_version, plan_revision, result_refs}`.
+- `request_hash = canonical_hash({command_type, actor_id, body})`. body는 Pydantic으로 정규화한 값이고 모르는 필드는 거절한다.
+  - 같은 키에 다른 명령·본문·actor가 오면 `IDEMPOTENCY_MISMATCH`이며 저장하지 않는다.
+  - 같은 키·같은 요청이면 저장된 response를 돌려주고 status만 REPLAYED로 바꾼다.
+- REJECTED도 저장한다. `RETRYABLE_ERROR`(잠금 timeout)만 저장하지 않는다(롤백).
+- 멱등 키는 모든 명령의 필수 인자다.
+- handler는 거절 사유를 모두 모은 뒤에만 쓴다. `NOT_AUTHORIZED`·`CANDIDATE_NOT_FOUND`·`HOLD_NOT_FOUND`는 단독으로 반환한다. 나머지는 해당하는 것을 모두 검사 순서대로, 같은 코드는 한 번만 넣는다.
+- Audit: APPLIED만 남긴다. command 이름 = command_type = `SUBMIT_TASK_REQUEST`, `APPROVE_AND_COMMIT`, `WAIVE`, `REJECT_CANDIDATE`, `RECEIVE_EVENT`, `RELEASE_HOLD`. payload는 `{body, result_refs}`. 이미 적용된 효과를 돌려주는 경우(승인 2단계, 같은 source_event_id)는 REPLAYED로 응답하고 CommandResult는 APPLIED로 저장하며 Audit·Decision은 새로 만들지 않는다.
+- 시각: audit와 command_result에만 `created_at`(서버 시각, UTC ISO, SQLite `strftime('%Y-%m-%dT%H:%M:%fZ','now')`)을 둔다. 로직과 hash에는 쓰지 않는다. After 측정(요청 접수부터 확정까지)과 §16 "Event 접수부터 Hold 커밋까지의 시간" 기록에만 쓰며, 테스트는 값을 검사하지 않는다.
+
+**reason_code (블루프린트에 없는 것)**
+
+| 명령 | 코드 |
+| --- | --- |
+| 공통 | `CANDIDATE_NOT_FOUND`, `CANDIDATE_REJECTED`, `VALIDATION_NOT_PASS` |
+| 폼 | `TASK_ID_EXISTS`, `UNKNOWN_ZONE`, `UNKNOWN_RESOURCE`, `RESOURCE_TYPE_MISMATCH`, `INVALID_WINDOW`, `PREDECESSOR_NOT_FOUND` (+ `FIELD_MISSING`·`UNKNOWN_WORK_TYPE`·`RESOURCE_NOT_AUTHORIZED` 재사용) |
+| WAIVE | `CONSULTATION_NOT_FOUND`, `ITEM_NOT_FOUND`, `ITEM_NOT_WAIVABLE`, `COMMENT_REQUIRED` |
+| 거절 | `INVALID_REASON_CODE`, `TARGET_REQUIRED`, `TASK_NOT_FOUND` |
+| Hold 해제 | `HOLD_NOT_FOUND`, `HOLD_NOT_ACTIVE`, `RESOLUTION_NOT_SUPPORTED` |
+
+**작업 요청 폼**
+- UNIT_PLANNER만 가능하다. unit_id·owner_actor_id는 요청자로 채우고 입력으로 받지 않는다. 요청자 = 담당자여야 Consent가 성립한다.
+- 입력: task_id(클라이언트 지정, fixture "A" 재현용), work_type, zone_id, duration, 시간창 3개, required_resource_type, requested_resource_id, predecessors. hazard_tags는 받으면 버린다.
+- movable은 `{time: true, resource: false}`로 고정한다. 시간 축은 시작 범위 확인이 동의이고, 자원 축은 MOVABILITY로만 연다.
+- fields: work_type의 critical_fields 전부 CONFIRMED, value = 컬럼 값(A.8), source_ref `form:<form_id>`. form_id는 `form_<uuid hex>`이며 audit payload와 result_refs에 남는다.
+- 검증:
+  - critical field 값이 비면 명령 전체를 거절하고(`FIELD_MISSING`) 아무것도 저장하지 않는다. DRAFT·NEEDS_INFO는 폼에서 쓰지 않는다. `resource` 필드가 있는 work_type은 required_resource_type과 requested_resource_id가 모두 필요하다.
+  - zone·resource 존재, 요청 자원 유형 = required_resource_type, 요청 Unit ∈ allowed_unit_ids.
+  - 0 ≤ earliest_start ≤ latest_start, earliest_start + duration ≤ min(latest_end, horizon).
+  - predecessors는 존재하는 작업이고 min_lag ≥ 0이다.
+  - 가용 구간은 검사하지 않는다(Rule Engine).
+- 적용: revision 1, READY, context +1, Consent, Audit, `RECHECK` dispatch를 한 tx에서 한다. ACTIVE Hold가 있어도 접수한다.
+- Consent: TIME `{start_min: earliest_start, start_max: latest_start}`, RESOURCE `{resource_ids: [requested_resource_id]}`(요청 자원이 있을 때만). source_ref는 fields와 같다.
+
+**테이블 (schema_version 3)**
+- `command_result`: PK idempotency_key, site_id, command_type, actor_id, request_hash, status(APPLIED/REJECTED), reason_codes, result_refs, response, created_at. 불변.
+- `decision`: decision_id(`dec_`), type, candidate_id FK, validation_id FK(NOT NULL, 그 후보의 PASS), actor_id, reason_code(REJECT만, CHECK), target_task_ids, axes, comment, context_version(명령 시점). 불변.
+- `feedback_constraint`: constraint_id(`fc_`), task_id, frozen_axes(비어 있지 않음), source_type, source_id, created_context_version. task revision에 묶지 않고 FK도 없다(task PK에 revision 포함). 불변.
+- `event`: event_id(`evt_`), source_event_id, event_type(DELAY/OTHER), reporter_actor_id, text, target_task_id(입력 그대로), body_hash, context_version(접수 후), UNIQUE(site_id, source_event_id). 불변.
+- `hold`: hold_id(`hold_`), event_id FK, scope(TASK/SITE), task_id(CHECK scope=TASK ⇔ NOT NULL), status, created_context_version, resolution, released_by, released_context_version. 트리거로 ACTIVE → RELEASED 한 번만 허용하고 삭제는 금지한다.
+- `consent`: consent_id(`cns_`), task_id, task_revision(FK task), owner_actor_id, axis, scope, source_ref, created_context_version. 불변.
+- `consultation`: PK candidate_id(FK candidate), items `[{task_id, task_revision, owner_actor_id, before, after, change_hash, base_status}]`. 상태는 저장하지 않는다. 불변.
+- `dispatch_job`:
+  - 컬럼: job_id(INTEGER AUTOINCREMENT = 처리 순서), kind(START_RUN/RESUME_RUN/CONTINUE_RUN/VALIDATE/BUILD_CONSULTATION/RECHECK), run_id, wait_generation(RESUME_RUN이면 둘 다 필수), payload JSON, dedupe_key, status, attempts, last_error.
+  - UNIQUE(site_id, dedupe_key)와 PENDING RESUME 부분 UNIQUE. 등록은 `ON CONFLICT DO NOTHING`.
+  - dedupe_key: `RECHECK:ctx<context_version>`, `VALIDATE:<candidate_id>`, `BUILD_CONSULTATION:<candidate_id>`, `START_RUN:<agent>:<ref>`, `RESUME_RUN:<run_id>:<wait_generation>`.
+- 이번에 등록하는 job:
+  - 폼 → `RECHECK`
+  - 남은 ACTIVE Hold가 없는 Hold 해제 → `RECHECK`
+  - `register_solver_outcome`이 후보를 INSERT하는 tx → `VALIDATE:<candidate_id>`(I-18)
+  - Event·승인·거절·WAIVE는 등록하지 않는다.
+- Snapshot content: holds = ACTIVE Hold `{hold_id, scope, task_id}`, constraints = feedback_constraint 전부, consents = 각 작업 현재 revision의 consent(A.10의 빈 목록을 채운다).
+- Proposal 테이블은 D5에서 만든다. NO_CHANGE의 "대기 중 Proposal DISCARDED"는 이번에는 대상이 없다.
+
+**Consultation 계산**
+- item: 기준 `snapshot.base_assignments()` 대비 시작이나 자원이 바뀐 작업마다 1개. before·after = `{task_id, start, end, resource_id}`, `change_hash = canonical_hash({task_id, task_revision, before, after})`(candidate_id는 CHANGE_REQUEST에서 따로 결합).
+- COVERED: 바뀐 축마다 그 작업 현재 revision의 같은 축 Consent가 새 값을 덮어야 한다(TIME: start ∈ [start_min, start_max], RESOURCE: resource_id ∈ resource_ids). 바뀌지 않은 축은 동의가 필요 없다. 후보 snapshot의 consents로만 계산한다.
+- Consent와 새 revision: 값이 바뀌지 않은 축의 Consent는 새 revision으로 복사한다(같은 source_ref). 시간창이 바뀌는 사실 수정이면 TIME은 복사하지 않는다. §15 Beta "A COVERED(Intake + MOVABILITY 동의)"를 위한 규칙이며, 복사는 D5 MOVABILITY와 함께 구현한다(이번에는 기록만).
+- item 실효 상태: WAIVE decision이 덮으면 WAIVED, 아니면 base_status(ACCEPTED·OBJECTED 계열은 D5).
+- item 상태: OBJECTED·OBJECTION_DRAFT_PENDING이 있으면 BLOCKED, 모두 {COVERED, ACCEPTED, WAIVED}면 COMPLETE(item 0개 포함), 그 외 OPEN.
+- 표시 상태: COMMITTED(이 후보로 확정된 Plan 있음) → COMPLETE를 STALE보다 먼저 본다. 그다음 STALE·REJECTED → CANCELLED, 그다음 item 상태.
+- 후보 STALE = candidate.context_version ≠ site 값 또는 base_plan_revision ≠ site 값(조회 시 계산).
+- 검토 대기(저장하지 않고 계산) = PASS ∧ Consultation 있음 ∧ STALE·REJECTED·COMMITTED 아님(OPEN 포함). Coordination이 없는 동안 PENDING item은 Supervisor가 WAIVE하거나 후보를 거절하기 때문이다(구현 범위 마지막 문단). Coordination을 붙이면 다시 정한다.
+
+**승인 (§9.1)**
+- 2단계(이 후보로 확정된 Plan이 있으면 REPLAYED + 기존 plan_revision)는 actor 검사보다 먼저 한다.
+- 그 뒤 순서: SUPERVISOR → `CANDIDATE_REJECTED` → validation_id가 이 후보의 PASS(`VALIDATION_NOT_PASS`) → `STALE_PLAN` → `STALE_CONTEXT` → `HOLD_ACTIVE` → `CONSULTATION_INCOMPLETE`.
+- STALE은 `STALE_PLAN`·`STALE_CONTEXT`로만 보고한다. expected_context_version ≠ site 값도 `STALE_CONTEXT`(한 번만).
+- 8단계는 item만 본 상태로 판정한다. STALE 때문에 CANCELLED가 되어도 `CONSULTATION_INCOMPLETE`를 겹쳐 넣지 않는다(한 원인은 한 번). 그래서 Scene 4의 결과는 `[STALE_CONTEXT, HOLD_ACTIVE]`다. Consultation 행이 없으면 `CONSULTATION_INCOMPLETE`.
+- `HOLD_ACTIVE`는 TASK·SITE 구분 없이 ACTIVE Hold가 하나라도 있으면 해당한다(§9.5 Gate의 "관련 Hold"와 다름).
+- 적용: plan_revision +1, Plan(committed_context_version = 현재 context), Decision(APPROVE). Context는 그대로다.
+
+**구조화 거절 (§9.2)과 WAIVE (§9.3-4)**
+- 거절 대상: 그 후보의 PASS validation이 있고 STALE·거절·확정이 아닌 후보. Hold는 거절을 막지 않는다.
+- `TASK_IMMOVABLE`은 대상과 축이 모두 있어야 한다(없으면 `TARGET_REQUIRED`). 대상은 현재 READY 작업이어야 한다(`TASK_NOT_FOUND`).
+- `TASK_IMMOVABLE`이면 context +1, 대상 작업마다 FeedbackConstraint 1개(frozen_axes = axes, source DECISION, source_id = decision_id)를 만든다. 다른 reason_code는 대상·축이 있어도 기록만 하고 Context는 그대로다.
+- WAIVE 본문 `{candidate_id, task_ids, comment}`, comment 필수. 명령 1개 = Decision 1개(target_task_ids)이고 전부 적용하거나 전부 거절한다. 후보가 STALE·거절·확정이 아니고 item 실효 상태가 PENDING일 때만 가능하다. Context는 그대로다.
+
+**Event와 Hold (§10)**
+- 권한: REPORTER 또는 SUPERVISOR.
+- body_hash = `canonical_hash({event_type, text, target_task_id, reporter_actor_id})`. 멱등 키를 먼저 보고, 그다음 source_event_id 중복을 본다. 같은 본문이면 REPLAYED + 원래 `{event_id, hold_id}`, 다른 본문이면 `SOURCE_BODY_MISMATCH`.
+- event_type DELAY·OTHER 모두 접수하고 Hold를 건다. 대상이 현재 READY 작업이면 TASK Hold, 없거나 존재하지 않으면 SITE Hold(거절하지 않음).
+- Event + Hold로 context +1 한 번. Consultation CANCELLED는 계산으로 반영되므로 쓰지 않는다.
+- Hold 해제: `{hold_id, resolution, expected_context_version, comment}`. FACT_CONFIRMED는 `RESOLUTION_NOT_SUPPORTED`, 이미 해제된 Hold는 `HOLD_NOT_ACTIVE`, 버전이 다르면 `STALE_CONTEXT`. 해제하면 context +1, 남은 ACTIVE Hold가 없으면 `RECHECK` 등록.
+
+**3단계에서 추가할 것**
+- Event 접수 tx에서 열린 Case의 Run STALE 처리.
+- 승인 tx에서 Replanning Run SUCCEEDED 기록.
+- `dispatch_job.run_id` → agent_run FK.

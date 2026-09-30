@@ -5,8 +5,16 @@ snapshot·search_spec·solver_result·candidate·validation은 트리거로 UPDA
 
 import sqlite3
 
-from app.domain.models import Candidate, SearchSpec, Snapshot, SolverResult, Validation
-from app.store.repos._rows import dumps
+from app.domain.models import (
+    Candidate,
+    SearchSpec,
+    Snapshot,
+    SolverResult,
+    Validation,
+    ValidationCheck,
+)
+from app.store.repos._rows import dumps, loads, rows
+from app.store.repos.dispatch import register_job
 
 
 class StaleError(RuntimeError):
@@ -113,3 +121,51 @@ def register_solver_outcome(
     insert_solver_result(tx, facts.site_id, result)
     if candidate is not None:
         insert_candidate(tx, facts.site_id, candidate)
+        # 후속 검증은 후보를 등록한 tx에서 등록한다 (I-18, 부록 A.14)
+        register_job(
+            tx,
+            facts.site_id,
+            "VALIDATE",
+            f"VALIDATE:{candidate.candidate_id}",
+            {"candidate_id": candidate.candidate_id},
+        )
+
+
+def get_snapshot(conn: sqlite3.Connection, snapshot_id: str) -> Snapshot | None:
+    found = rows(conn, "SELECT * FROM snapshot WHERE snapshot_id = ?", (snapshot_id,))
+    if not found:
+        return None
+    r = found[0]
+    return Snapshot(
+        snapshot_id=r["snapshot_id"], snapshot_hash=r["snapshot_hash"], content=loads(r["content"])
+    )
+
+
+def get_candidate(conn: sqlite3.Connection, site_id: str, candidate_id: str) -> Candidate | None:
+    found = rows(
+        conn,
+        "SELECT * FROM candidate WHERE site_id = ? AND candidate_id = ?",
+        (site_id, candidate_id),
+    )
+    if not found:
+        return None
+    r = found[0]
+    r.pop("site_id")
+    r["assignments"] = loads(r["assignments"])
+    return Candidate(**r)
+
+
+def list_validations(conn: sqlite3.Connection, site_id: str, candidate_id: str) -> list[Validation]:
+    return [
+        Validation(
+            validation_id=r["validation_id"],
+            candidate_id=r["candidate_id"],
+            status=r["status"],
+            checks=tuple(ValidationCheck(**c) for c in loads(r["checks"])),
+        )
+        for r in rows(
+            conn,
+            "SELECT * FROM validation WHERE site_id = ? AND candidate_id = ? ORDER BY rowid",
+            (site_id, candidate_id),
+        )
+    ]

@@ -16,6 +16,7 @@ FieldStatus = Literal["PROPOSED", "CONFIRMED"]
 CandidateKind = Literal["REPLAN", "RECONFIRM"]
 ValidationStatus = Literal["PASS", "FAIL", "INCOMPLETE"]
 ScopeLevel = Literal["L0", "L1", "L2"]
+Axis = Literal["TIME", "RESOURCE"]
 
 
 class Frozen(BaseModel):
@@ -160,13 +161,54 @@ class Plan(Frozen):
 
 
 class FeedbackConstraint(Frozen):
-    """확인된 작업·축 고정 (§5.1, §9.2). 테이블은 제약 기능과 함께 만든다."""
+    """확인된 작업·축 고정 (§5.1, §9.2, 부록 A.14). task revision에 묶지 않는다(I-10)."""
 
     constraint_id: str
     task_id: str
-    frozen_axes: tuple[Literal["TIME", "RESOURCE"], ...]
+    frozen_axes: tuple[Axis, ...]
     source_type: Literal["DECISION", "PROPOSAL"]
     source_id: str
+
+
+class HoldRef(Frozen):
+    """Snapshot에 넣는 ACTIVE Hold (§10, 부록 A.14)."""
+
+    hold_id: str
+    scope: Literal["TASK", "SITE"]
+    task_id: str | None = None
+
+
+class Consent(Frozen):
+    """작업 담당자의 이동 동의 (§5.1, §9.3). scope는 TIME {start_min, start_max},
+    RESOURCE {resource_ids}. 해당 task revision에만 적용한다."""
+
+    consent_id: str
+    task_id: str
+    task_revision: int = Field(ge=1)
+    owner_actor_id: str
+    axis: Axis
+    scope: dict[str, Any]
+    source_ref: str
+
+    def covers(self, value: int | str | None) -> bool:
+        if self.axis == "TIME":
+            return (
+                isinstance(value, int)
+                and self.scope["start_min"] <= value <= self.scope["start_max"]
+            )
+        return value in self.scope["resource_ids"]
+
+
+class ConsultationItem(Frozen):
+    """기준 대비 바뀐 작업 1개 (§9.3). base_status만 저장하고 WAIVED 등은 조회 시 붙인다."""
+
+    task_id: str
+    task_revision: int = Field(ge=1)
+    owner_actor_id: str
+    before: Assignment
+    after: Assignment
+    change_hash: str
+    base_status: Literal["COVERED", "PENDING"]
 
 
 class Conflict(Frozen):
@@ -197,9 +239,9 @@ class SnapshotContent(Frozen):
     zones: tuple[str, ...]
     zone_relations: tuple[ZoneRelation, ...]
     plan: PlanRef
-    holds: tuple[dict[str, Any], ...] = ()
+    holds: tuple[HoldRef, ...] = ()
     constraints: tuple[FeedbackConstraint, ...] = ()
-    consents: tuple[dict[str, Any], ...] = ()
+    consents: tuple[Consent, ...] = ()
 
     def task_map(self) -> dict[str, Task]:
         return {t.task_id: t for t in self.tasks}
