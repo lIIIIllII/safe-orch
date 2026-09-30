@@ -126,7 +126,8 @@ def _release(tx: sqlite3.Connection, ctx: CommandContext, body: HoldRelease) -> 
     release_hold(tx, site_id, body.hold_id, body.resolution, ctx.actor_id, context_version)
     recheck = not list_active_holds(tx, site_id)
     if recheck:
-        register_job(tx, site_id, "RECHECK", f"RECHECK:ctx{context_version}", {})
+        cause = {"kind": "HOLD_RELEASE", "hold_id": body.hold_id, "task_id": hold["task_id"]}
+        register_job(tx, site_id, "RECHECK", f"RECHECK:ctx{context_version}", {"cause": cause})
     r.refs = {"hold_id": body.hold_id, "recheck": recheck}
     r.audit_reason = body.resolution
     return r

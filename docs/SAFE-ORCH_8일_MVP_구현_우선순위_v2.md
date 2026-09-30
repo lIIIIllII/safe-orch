@@ -472,11 +472,13 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - 명령 1개 = `write()` 1개. 순서: 멱등 키 확인 → handler(검사 후 쓰기) → Audit(APPLIED만) → CommandResult.
 - 응답: `{status: APPLIED | REPLAYED | REJECTED | RETRYABLE_ERROR, reason_codes, context_version, plan_revision, result_refs}`.
 - `request_hash = canonical_hash({command_type, actor_id, body})`. body는 Pydantic으로 정규화한 값이고 모르는 필드는 거절한다.
+  - 모르는 필드를 거절하는 것은 §3.2 "본문의 필드는 무시"보다 엄격한 선택이다. 본문 필드가 권한이 되지 않는다는 목적은 같다. 폼의 hazard_tags만 받아서 버린다.
   - 같은 키에 다른 명령·본문·actor가 오면 `IDEMPOTENCY_MISMATCH`이며 저장하지 않는다.
   - 같은 키·같은 요청이면 저장된 response를 돌려주고 status만 REPLAYED로 바꾼다.
 - REJECTED도 저장한다. `RETRYABLE_ERROR`(잠금 timeout)만 저장하지 않는다(롤백).
 - 멱등 키는 모든 명령의 필수 인자다.
-- handler는 거절 사유를 모두 모은 뒤에만 쓴다. `NOT_AUTHORIZED`·`CANDIDATE_NOT_FOUND`·`HOLD_NOT_FOUND`는 단독으로 반환한다. 나머지는 해당하는 것을 모두 검사 순서대로, 같은 코드는 한 번만 넣는다.
+- handler는 `SAVEPOINT` 안에서 돈다. 거절이면 `ROLLBACK TO`로 handler의 쓰기를 모두 되돌린 뒤 command_result만 쓴다. "거절이면 도메인 변경 없음"을 구조로 보장한다. SAVEPOINT는 같은 트랜잭션 안의 되돌림 지점이므로 트랜잭션 중첩이 아니다(§5.4).
+- `NOT_AUTHORIZED`·`CANDIDATE_NOT_FOUND`·`HOLD_NOT_FOUND`는 단독으로 반환한다. 나머지는 해당하는 것을 모두 검사 순서대로, 같은 코드는 한 번만 넣는다.
 - Audit: APPLIED만 남긴다. command 이름 = command_type = `SUBMIT_TASK_REQUEST`, `APPROVE_AND_COMMIT`, `WAIVE`, `REJECT_CANDIDATE`, `RECEIVE_EVENT`, `RELEASE_HOLD`. payload는 `{body, result_refs}`. 이미 적용된 효과를 돌려주는 경우(승인 2단계, 같은 source_event_id)는 REPLAYED로 응답하고 CommandResult는 APPLIED로 저장하며 Audit·Decision은 새로 만들지 않는다.
 - 시각: audit와 command_result에만 `created_at`(서버 시각, UTC ISO, SQLite `strftime('%Y-%m-%dT%H:%M:%fZ','now')`)을 둔다. 로직과 hash에는 쓰지 않는다. After 측정(요청 접수부터 확정까지)과 §16 "Event 접수부터 Hold 커밋까지의 시간" 기록에만 쓰며, 테스트는 값을 검사하지 않는다.
 
@@ -517,7 +519,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - UNIQUE(site_id, dedupe_key)와 PENDING RESUME 부분 UNIQUE. 등록은 `ON CONFLICT DO NOTHING`.
   - dedupe_key: `RECHECK:ctx<context_version>`, `VALIDATE:<candidate_id>`, `BUILD_CONSULTATION:<candidate_id>`, `START_RUN:<agent>:<ref>`, `RESUME_RUN:<run_id>:<wait_generation>`.
 - 이번에 등록하는 job:
-  - 폼 → `RECHECK`
+  - 폼 → `RECHECK` (payload `cause`는 A.15)
   - 남은 ACTIVE Hold가 없는 Hold 해제 → `RECHECK`
   - `register_solver_outcome`이 후보를 INSERT하는 tx → `VALIDATE:<candidate_id>`(I-18)
   - Event·승인·거절·WAIVE는 등록하지 않는다.
@@ -559,3 +561,52 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - Event 접수 tx에서 열린 Case의 Run STALE 처리.
 - 승인 tx에서 Replanning Run SUCCEEDED 기록.
 - `dispatch_job.run_id` → agent_run FK.
+
+### A.15 D3 2단계: dispatch 워커와 Coordinator 결정론 핸들러 (§8·§10·§11.4·§11.5 보충, 스키마 변경 없음)
+
+범위: dispatch 워커와 RECHECK·VALIDATE·BUILD_CONSULTATION 핸들러. START_RUN 처리·AgentRun·그래프·Gateway는 3단계, 대기 후 재개는 D5, 재시작 복구 전체와 워커 OS 배타 잠금은 '뒤로 미룸'이다. API와 화면은 이번 범위가 아니다.
+
+**위치**
+- `app/coordinator/transitions.py`: 핸들러 3개(§11.5 표의 결정론 부분).
+- `app/coordinator/dispatcher.py`: `process_next(pack)`(1건 동기 처리), `run_until_idle(pack)`, `requeue_claimed_jobs(pack)`, `DispatchWorker`(스레드 1개).
+- import: `coordinator ↛ solver`(아키텍처 테스트). Solver는 Replanning Run이 부른다. `coordinator ↛ agents`는 두지 않는다. 3단계에서 START_RUN 핸들러가 `agents.runtime`을 부르므로, 그때 "coordinator는 agents.runtime만 import"로 정한다.
+
+**워커**
+- 스레드 1개. 처리하는 kind(RECHECK, VALIDATE, BUILD_CONSULTATION) 중 job_id가 가장 작은 PENDING을 하나씩 처리한다.
+- START_RUN·RESUME_RUN·CONTINUE_RUN은 claim하지 않고 PENDING으로 두며 순서를 막지 않는다.
+- claim은 짧은 tx에서 `PENDING → CLAIMED, attempts += 1`로 한다. 효과와 `DONE`은 핸들러의 write tx 하나에서 같이 쓴다. 같은 job을 두 번 처리해도 효과는 1회다(dedupe와 기존 객체 재사용).
+- 실패: 핸들러 예외(StoreBusyError 포함)는 tx를 롤백한다. 별도 tx에서 `last_error = repr(예외)`를 기록하고, attempts < 3이면 PENDING, 3이면 FAILED로 바꾼다. 재시도하는 job은 job_id가 가장 작으므로 곧바로 다시 잡힌다(백오프 없음). FAILED는 자동으로 다시 시도하지 않는다(수동).
+- 기동 시 CLAIMED → PENDING 한 줄만 한다(§11.4 복구 표 1행, 핸들러가 멱등이므로 안전). 나머지 재시작 복구는 하지 않는다.
+- 앱: lifespan에서 `settings.dispatch_worker`(기본 True)이면 시작하고, 종료할 때 stop + join한다. 비어 있으면 `dispatch_poll_s`(0.5초)마다 다시 본다(UI는 1초 폴링).
+- 테스트: conftest가 `DISPATCH_WORKER=false`로 두고 `run_until_idle`을 직접 부른다. 스레드 경로는 스모크 테스트 1개로 확인한다.
+- 핸들러 동작에는 Audit·CommandResult를 남기지 않는다. 기록은 만들어진 객체와 job 행(status, attempts, last_error)이다. 결과 요약 컬럼은 두지 않고 logging만 한다.
+
+**RECHECK**
+- payload `cause`:
+  - 폼: `{kind: FORM, task_id, actor_id}`
+  - Hold 해제: `{kind: HOLD_RELEASE, hold_id, task_id}`(task_id는 TASK Hold일 때만, 아니면 null)
+- 처리 시점에 최신 상태를 다시 본다. 아래 둘 중 하나면 아무것도 하지 않고 DONE이다. 열린 Case 판정은 이번에 하지 않는다(3단계).
+  - ACTIVE Hold가 하나라도 있다(TASK·SITE 구분 없음).
+  - 현재 Plan의 committed_context_version = 현재 context_version이다.
+- 같은 (context, plan)의 RECONFIRM 후보가 있으면 새로 만들지 않고 VALIDATE 등록만 보장한다. `START_RUN:REPLANNING:ctx<n>`이 이미 있으면 아무것도 하지 않는다. 그 밖에는 Snapshot을 저장하고 detect_conflicts를 돌린다. 이 모두가 write tx 하나다(짧은 CPU 계산이고, 판정과 등록이 같은 버전 위에 있어야 한다).
+- 충돌이 있으면 START_RUN을 등록만 한다.
+  - dedupe `START_RUN:REPLANNING:ctx<context_version>`.
+  - payload `{agent_type: REPLANNING, acting_unit_id, acting_actor_id, snapshot_id, conflict: {rule_id, task_ids}, context_version, plan_revision, cause}`.
+  - acting_unit: cause 작업이 충돌에 있으면 그 작업의 Unit, 아니면 충돌 작업 중 task_id가 가장 작은 작업의 Unit. revision은 작업마다 따로 세는 번호라 최근 변경을 뜻하지 않으므로 기준으로 쓰지 않는다.
+  - 주 충돌 = detect_conflicts 순서에서 acting_unit 작업을 포함한 첫 충돌. RECHECK 1번에 START_RUN은 1개이고, 나머지 충돌은 Run이 observe에서 다시 본다.
+  - acting_actor: cause가 FORM이면 요청자, 아니면 acting_unit의 UNIT_PLANNER 중 actor_id가 가장 작은 사람.
+- 충돌이 없으면 RECONFIRM 후보를 만든다(배정 = `snapshot.base_assignments()`, search_spec·solver_result NULL, search_spec_hash None으로 candidate_hash 계산). 같은 tx에서 `VALIDATE`를 등록한다. 사실 변경 없는 Hold 해제든 충돌 없는 신규 작업이든 같다(§10, T34).
+
+**VALIDATE와 BUILD_CONSULTATION**
+- VALIDATE:
+  - read로 candidate·snapshot·search_spec을 읽는다.
+  - `validate()`는 **트랜잭션 밖**에서 돌린다(DB를 읽지 않는 순수 함수, A.13).
+  - write tx 하나에서 validation이 있는지 다시 보고, 없으면 INSERT, PASS면 `BUILD_CONSULTATION` 등록, DONE.
+  - 이미 validation이 있는 후보는 다시 검증하지 않는다(A.13 중복 검증 방지). STALE·거절된 후보도 검증한다. 버전은 다시 확인하지 않는다.
+- 비PASS: 기록만 하고 후속 job은 없다. Replanning wake는 D5, "Solver 후보 FAIL → Run ERROR"(checks 기준, A.13)는 3단계. Run이 없는 RECONFIRM 후보의 비PASS는 그대로 남고 검토 대기에도 나오지 않는다.
+- BUILD_CONSULTATION: write tx 하나에서 `build_consultation` + DONE. PENDING item이 있어도 Coordination START_RUN은 등록하지 않는다. 검토 대기는 조회로 계산한다(A.14).
+
+**3단계에서 할 것**
+- RECHECK의 열린 Case 판정(AgentRun 기준, §11.5 3행). 열린 Case 중에 폼이 들어왔을 때 Run에 wake를 보낼지도 이때 정한다.
+- START_RUN 핸들러: 처리 시점에 Hold·열린 Case·context를 다시 확인하고, 맞지 않으면 Run을 시작하지 않고 DONE. 2단계에는 START_RUN을 처리하는 쪽이 없으므로 여러 개가 등록돼도 영향이 없다.
+- coordinator import 규칙을 "agents.runtime만"으로 정한다.

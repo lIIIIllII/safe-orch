@@ -132,7 +132,8 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
         )
     for c in consents:
         insert_consent(tx, site_id, c, context_version)
-    register_job(tx, site_id, "RECHECK", f"RECHECK:ctx{context_version}", {})
+    cause = {"kind": "FORM", "task_id": task.task_id, "actor_id": actor.actor_id}
+    register_job(tx, site_id, "RECHECK", f"RECHECK:ctx{context_version}", {"cause": cause})
 
     r.refs = {
         "task_id": task.task_id,

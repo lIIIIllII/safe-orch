@@ -557,6 +557,30 @@ def test_t35_event_during_consultation_cancels(alpha):
     assert _waive(pack, cand).reason_codes == ("STALE_CONTEXT",)
 
 
+# ── 거절이면 도메인 변경 없음 (SAVEPOINT, 부록 A.14) ──────────
+
+
+def test_rejecting_handler_writes_are_rolled_back(seeded):
+    from app.commands.service import Body, Result, run_command
+    from app.store.repos.site import bump_context_version
+
+    class Fake(Body):
+        x: int = 1
+
+    def write_then_reject(tx, ctx, body):
+        bump_context_version(tx, ctx.site_id)
+        r = Result()
+        r.reject("FAKE_REASON")
+        return r
+
+    audit = _count("audit")
+    out = run_command(seeded, "FAKE", "planner_a", "k-fake", Fake(), write_then_reject)
+    assert (out.status, out.reason_codes, out.context_version) == ("REJECTED", ("FAKE_REASON",), 0)
+    assert _site(seeded).context_version == 0 and _count("audit") == audit
+    with db.read() as conn:
+        assert get_command_result(conn, "k-fake")["status"] == "REJECTED"
+
+
 # ── T45 멱등 키 ────────────────────────────────────────────────
 
 

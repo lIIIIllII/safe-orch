@@ -95,6 +95,12 @@ def test_solver_does_not_import_rules_or_validator():
     assert files and _violations(files, ["app.rules", "app.validator"]) == []
 
 
+def test_coordinator_does_not_import_solver():
+    """Solver는 Replanning Run이 부른다. Coordinator는 결정론 단계만 한다 (부록 A.15)."""
+    files = _py_files(APP / "coordinator")
+    assert files and _violations(files, ["app.solver"]) == []
+
+
 def test_rules_do_not_import_solver():
     files = _py_files(APP / "rules")
     assert files and _violations(files, ["app.solver"]) == []

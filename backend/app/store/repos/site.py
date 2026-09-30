@@ -74,3 +74,14 @@ def get_actor(conn: sqlite3.Connection, site_id: str, actor_id: str) -> Actor | 
     r = found[0]
     r["roles"] = loads(r["roles"])
     return Actor(**r)
+
+
+def list_actors(conn: sqlite3.Connection, site_id: str) -> list[Actor]:
+    found = rows(
+        conn,
+        "SELECT actor_id, name, unit_id, roles FROM actor WHERE site_id = ? ORDER BY actor_id",
+        (site_id,),
+    )
+    for r in found:
+        r["roles"] = loads(r["roles"])
+    return [Actor(**r) for r in found]

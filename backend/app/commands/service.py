@@ -41,7 +41,7 @@ class CommandOutcome(BaseModel):
 class Result:
     """handler 결과. reason_codes가 비어 있으면 APPLIED다.
 
-    handler는 거절 사유를 모두 모은 뒤에만 쓴다(거절이면 아무것도 쓰지 않는다).
+    거절이면 run_command가 SAVEPOINT로 handler의 쓰기를 모두 되돌린다.
     replayed: 이미 적용된 효과를 돌려준다(승인 2단계, 같은 source_event_id). Audit를 남기지 않는다.
     """
 
@@ -103,10 +103,15 @@ def run_command[B: Body](
                 return CommandOutcome(**{**stored["response"], "status": "REPLAYED"})
 
             ctx = CommandContext(pack, before, actor_id, get_actor(tx, site_id, actor_id))
+            # 거절이면 handler의 쓰기를 되돌린다. SAVEPOINT는 같은 트랜잭션 안의 지점이다(중첩 아님).
+            tx.execute("SAVEPOINT command_handler")
             result = handler(tx, ctx, body)
+            applied = not result.reason_codes
+            if not applied:
+                tx.execute("ROLLBACK TO command_handler")
+            tx.execute("RELEASE command_handler")
             after = get_site(tx, site_id)
             assert after is not None
-            applied = not result.reason_codes
             outcome = CommandOutcome(
                 status="REPLAYED"
                 if applied and result.replayed

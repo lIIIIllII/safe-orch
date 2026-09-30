@@ -169,3 +169,27 @@ def list_validations(conn: sqlite3.Connection, site_id: str, candidate_id: str) 
             (site_id, candidate_id),
         )
     ]
+
+
+def get_search_spec(conn: sqlite3.Connection, search_spec_id: str) -> SearchSpec | None:
+    found = rows(conn, "SELECT * FROM search_spec WHERE search_spec_id = ?", (search_spec_id,))
+    if not found:
+        return None
+    r = found[0]
+    r.pop("site_id")
+    r["axes"] = loads(r["axes"])
+    r["resource_alternatives"] = loads(r["resource_alternatives"])
+    return SearchSpec(**r)
+
+
+def find_reconfirm_candidate(
+    conn: sqlite3.Connection, site_id: str, context_version: int, plan_revision: int
+) -> Candidate | None:
+    """같은 (context_version, plan_revision)의 RECONFIRM 후보 (부록 A.15 재사용)."""
+    found = rows(
+        conn,
+        "SELECT candidate_id FROM candidate WHERE site_id = ? AND kind = 'RECONFIRM'"
+        " AND context_version = ? AND base_plan_revision = ? ORDER BY rowid LIMIT 1",
+        (site_id, context_version, plan_revision),
+    )
+    return get_candidate(conn, site_id, found[0]["candidate_id"]) if found else None

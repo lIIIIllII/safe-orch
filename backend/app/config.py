@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     openai_model: str = ""
     demo_mode: bool = True
     pack: str = "shipyard"  # domain_packs/<pack>/ (부록 A.4)
+    dispatch_worker: bool = True  # 기동 시 dispatch 워커 스레드 시작 (부록 A.15)
+    dispatch_poll_s: float = 0.5
 
     @field_validator("db_path")
     @classmethod

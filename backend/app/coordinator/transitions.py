@@ -1,0 +1,186 @@
+"""Coordinator 결정론 핸들러 (설계서 §11.5, 부록 A.15). RECHECK·VALIDATE·BUILD_CONSULTATION.
+
+핸들러는 job 1건을 처리하고, 효과와 job DONE을 같은 write 트랜잭션에서 기록한다. 같은 job을
+두 번 처리해도 효과는 1회다. app.solver를 import하지 않는다(Solver는 Replanning Run이 부른다).
+"""
+
+import sqlite3
+from typing import Any
+
+from app.commands.consultation import build_consultation
+from app.domain.hashes import candidate_hash
+from app.domain.ids import new_id
+from app.domain.models import Candidate, Conflict, SnapshotContent
+from app.packs.loader import LoadedPack
+from app.rules.engine import detect_conflicts
+from app.store import db
+from app.store.repos.dispatch import job_exists, mark_done, register_job
+from app.store.repos.events import list_active_holds
+from app.store.repos.plans import get_current_plan
+from app.store.repos.records import (
+    find_reconfirm_candidate,
+    get_candidate,
+    get_search_spec,
+    get_snapshot,
+    insert_candidate,
+    insert_validation,
+    list_validations,
+)
+from app.store.repos.site import get_site, list_actors
+from app.store.repos.snapshots import create_snapshot
+from app.validator.validator import validate
+
+Job = dict[str, Any]
+
+
+def choose_acting(
+    facts: SnapshotContent, conflicts: list[Conflict], cause: dict[str, Any]
+) -> tuple[str, Conflict]:
+    """acting_unit과 주 충돌 (부록 A.15).
+
+    cause 작업이 충돌에 있으면 그 Unit, 아니면 충돌 작업 중 task_id가 가장 작은 작업의 Unit.
+    주 충돌 = detect_conflicts 순서에서 acting_unit 작업을 포함한 첫 충돌.
+    """
+    tasks = facts.task_map()
+    in_conflict = sorted({tid for c in conflicts for tid in c.task_ids})
+    cause_task = cause.get("task_id")
+    acting_task = cause_task if cause_task in in_conflict else in_conflict[0]
+    unit = tasks[acting_task].unit_id
+    primary = next(c for c in conflicts if any(tasks[t].unit_id == unit for t in c.task_ids))
+    return unit, primary
+
+
+def _acting_actor(
+    tx: sqlite3.Connection, site_id: str, unit: str, cause: dict[str, Any]
+) -> str | None:
+    if cause.get("kind") == "FORM":
+        return cause.get("actor_id")
+    planners = [
+        a.actor_id
+        for a in list_actors(tx, site_id)
+        if a.unit_id == unit and "UNIT_PLANNER" in a.roles
+    ]
+    return planners[0] if planners else None
+
+
+def _reconfirm_candidate(snapshot_id: str, snapshot_hash: str, facts: SnapshotContent) -> Candidate:
+    """배정 = snapshot.base_assignments() (부록 A.14)."""
+    assignments = tuple(facts.base_assignments().values())
+    return Candidate(
+        candidate_id=new_id("cand"),
+        snapshot_id=snapshot_id,
+        search_spec_id=None,
+        search_spec_hash=None,
+        solver_result_id=None,
+        base_plan_revision=facts.plan_revision,
+        context_version=facts.context_version,
+        pack_hash=facts.pack_hash,
+        assignments=assignments,
+        candidate_hash=candidate_hash(
+            assignments,
+            facts.plan_revision,
+            facts.context_version,
+            snapshot_hash,
+            None,
+            facts.pack_hash,
+        ),
+        kind="RECONFIRM",
+    )
+
+
+def _register_validate(tx: sqlite3.Connection, site_id: str, candidate_id: str) -> None:
+    register_job(
+        tx, site_id, "VALIDATE", f"VALIDATE:{candidate_id}", {"candidate_id": candidate_id}
+    )
+
+
+def recheck(pack: LoadedPack, job: Job) -> None:
+    """ACTIVE Hold 없음 ∧ Plan이 현재 Context보다 뒤처짐일 때만: 충돌이면 START_RUN 등록,
+    없으면 RECONFIRM 후보 + VALIDATE. 한 write 트랜잭션 (부록 A.15)."""
+    site_id = pack.site_id
+    cause = job["payload"].get("cause") or {}
+    with db.write() as tx:
+        site = get_site(tx, site_id)
+        plan = get_current_plan(tx, site_id)
+        assert site is not None and plan is not None
+        ctx, rev = site.context_version, site.plan_revision
+        start_key = f"START_RUN:REPLANNING:ctx{ctx}"
+        if list_active_holds(tx, site_id) or plan.committed_context_version == ctx:
+            pass  # 재계획하지 않는다
+        elif (existing := find_reconfirm_candidate(tx, site_id, ctx, rev)) is not None:
+            _register_validate(tx, site_id, existing.candidate_id)
+        elif not job_exists(tx, site_id, start_key):
+            snapshot = create_snapshot(tx, site_id, pack)
+            facts = snapshot.facts()
+            conflicts = detect_conflicts(snapshot, facts.check_assignments(), pack)
+            if conflicts:
+                unit, primary = choose_acting(facts, conflicts, cause)
+                payload = {
+                    "agent_type": "REPLANNING",
+                    "acting_unit_id": unit,
+                    "acting_actor_id": _acting_actor(tx, site_id, unit, cause),
+                    "snapshot_id": snapshot.snapshot_id,
+                    "conflict": {"rule_id": primary.rule_id, "task_ids": list(primary.task_ids)},
+                    "context_version": ctx,
+                    "plan_revision": rev,
+                    "cause": cause,
+                }
+                register_job(tx, site_id, "START_RUN", start_key, payload)
+            else:
+                candidate = _reconfirm_candidate(
+                    snapshot.snapshot_id, snapshot.snapshot_hash, facts
+                )
+                insert_candidate(tx, site_id, candidate)
+                _register_validate(tx, site_id, candidate.candidate_id)
+        mark_done(tx, job["job_id"])
+
+
+def validate_candidate(pack: LoadedPack, job: Job) -> None:
+    """Validator는 트랜잭션 밖에서 돌리고, 등록·후속 job·DONE은 한 write 트랜잭션 (부록 A.15).
+
+    이미 validation이 있는 후보는 다시 검증하지 않는다. STALE 후보도 검증한다(A.13).
+    """
+    site_id = pack.site_id
+    candidate_id = job["payload"]["candidate_id"]
+    validation = None
+    with db.read() as conn:
+        if not list_validations(conn, site_id, candidate_id):
+            candidate = get_candidate(conn, site_id, candidate_id)
+            if candidate is None:
+                raise LookupError(f"candidate {candidate_id} not found")
+            snapshot = get_snapshot(conn, candidate.snapshot_id)
+            if snapshot is None:
+                raise LookupError(f"snapshot {candidate.snapshot_id} not found")
+            spec = None
+            if candidate.search_spec_id is not None:
+                spec = get_search_spec(conn, candidate.search_spec_id)
+                if spec is None:
+                    raise LookupError(f"search_spec {candidate.search_spec_id} not found")
+            validation = validate(snapshot, candidate, spec, pack)
+    with db.write() as tx:
+        stored = list_validations(tx, site_id, candidate_id)
+        if not stored and validation is not None:
+            insert_validation(tx, site_id, validation)
+            stored = [validation]
+        if any(v.status == "PASS" for v in stored):
+            register_job(
+                tx,
+                site_id,
+                "BUILD_CONSULTATION",
+                f"BUILD_CONSULTATION:{candidate_id}",
+                {"candidate_id": candidate_id},
+            )
+        mark_done(tx, job["job_id"])
+
+
+def build_consultation_job(pack: LoadedPack, job: Job) -> None:
+    with db.write() as tx:
+        build_consultation(tx, pack.site_id, job["payload"]["candidate_id"])
+        mark_done(tx, job["job_id"])
+
+
+HANDLERS = {
+    "RECHECK": recheck,
+    "VALIDATE": validate_candidate,
+    "BUILD_CONSULTATION": build_consultation_job,
+}
