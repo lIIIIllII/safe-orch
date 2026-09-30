@@ -352,3 +352,52 @@ class Validation(Frozen):
     candidate_id: str
     status: ValidationStatus
     checks: tuple[ValidationCheck, ...]
+
+
+# ── Agent 실행 상태 (§5.1·§11, 부록 A.16) ──────────────────────
+
+RunStatus = Literal[
+    "RUNNING",
+    "WAITING_HUMAN",
+    "SUCCEEDED",
+    "ESCALATED",
+    "BUDGET_EXHAUSTED",
+    "STALE",
+    "CANCELLED",
+    "ERROR",
+]
+AgentType = Literal["REPLANNING", "COORDINATION", "INTAKE", "EVENT_RESPONSE", "ASSISTANT"]
+
+
+class AgentRun(Frozen):
+    run_id: str
+    agent_type: AgentType
+    case_id: str
+    acting_actor_id: str | None
+    acting_unit_id: str
+    input_ref: dict[str, Any]
+    exec_contract_version: str
+    status: RunStatus
+    wait_kind: Literal["MESSAGE", "CONSULTATION", "CANDIDATE_OUTCOME"] | None = None
+    wait_ref: str | None = None
+    wait_generation: int = Field(default=0, ge=0)
+    wake_seq: int = Field(default=0, ge=0)
+    handled_wake_seq: int = Field(default=0, ge=0)
+    last_step_no: int = Field(default=0, ge=0)
+    end_reason: str | None = None
+    steps_used: int = Field(default=0, ge=0)
+    llm_attempts_used: int = Field(default=0, ge=0)
+    human_rounds_used: int = Field(default=0, ge=0)
+    solver_calls_used: int = Field(default=0, ge=0)
+    solver_seconds_used: float = Field(default=0, ge=0)
+    restart_count: int = Field(default=0, ge=0)
+
+    @property
+    def budget_used(self) -> dict[str, float]:
+        return {
+            "steps": self.steps_used,
+            "llm_attempts": self.llm_attempts_used,
+            "human_rounds": self.human_rounds_used,
+            "solver_calls": self.solver_calls_used,
+            "solver_seconds": self.solver_seconds_used,
+        }

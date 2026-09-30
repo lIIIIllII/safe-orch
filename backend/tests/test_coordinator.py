@@ -346,7 +346,10 @@ def test_requeue_claimed_on_start(seeded):
 
 
 def test_unhandled_kinds_are_not_claimed_and_do_not_block(seeded):
+    from conftest import add_run
+
     sid = seeded.site_id
+    add_run(seeded, "r")
     with db.write() as tx:
         register_job(tx, sid, "START_RUN", "START_RUN:x", {})
         register_job(tx, sid, "RESUME_RUN", "RESUME_RUN:r:1", run_id="r", wait_generation=1)

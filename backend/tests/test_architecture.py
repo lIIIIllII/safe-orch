@@ -95,6 +95,24 @@ def test_solver_does_not_import_rules_or_validator():
     assert files and _violations(files, ["app.rules", "app.validator"]) == []
 
 
+def test_agent_specs_do_not_import_solver():
+    """Solver는 Tool Gateway로만 부른다. AgentSpec은 순수 데이터다 (부록 A.16)."""
+    files = _py_files(APP / "agents" / "specs")
+    assert files and _violations(files, ["app.solver"]) == []
+
+
+def test_agent_graph_does_not_import_agent_store_modules():
+    """graph.py는 port로만 DB에 닿는다. store를 쓰는 agents 모듈도 import하지 않는다 (부록 A.16)."""
+    files = [APP / "agents" / "graph.py"]
+    forbidden = ["app.agents.runtime", "app.agents.tool_gateway", "app.agents.observe"]
+    assert _violations(files, forbidden) == []
+
+
+def test_commands_do_not_import_agents():
+    files = _py_files(APP / "commands")
+    assert files and _violations(files, ["app.agents"]) == []
+
+
 def test_coordinator_does_not_import_solver():
     """Solver는 Replanning Run이 부른다. Coordinator는 결정론 단계만 한다 (부록 A.15)."""
     files = _py_files(APP / "coordinator")

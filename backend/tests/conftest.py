@@ -4,9 +4,10 @@ import pytest
 
 from app.config import get_settings
 from app.domain.canonical import canonical_hash
-from app.domain.models import Snapshot, Task
+from app.domain.models import AgentRun, Snapshot, Task
 from app.packs.loader import confirmed_fields, load_pack, pack_dir
 from app.store import db
+from app.store.repos.runs import insert_run
 from app.store.repos.seed import seed_pack
 from app.store.repos.site import bump_context_version
 from app.store.repos.snapshots import create_snapshot
@@ -80,6 +81,24 @@ def add_task(pack, task):
     with db.write() as tx:
         insert_task_revision(tx, pack.site_id, task)
         return bump_context_version(tx, pack.site_id)
+
+
+def add_run(pack, run_id="run_test", **changes):
+    """테스트용 Replanning Run (RUNNING). 3b 전에는 START_RUN 핸들러 대신 이것으로 만든다."""
+    data = {
+        "run_id": run_id,
+        "agent_type": "REPLANNING",
+        "case_id": f"case_{run_id}",
+        "acting_actor_id": "planner_a",
+        "acting_unit_id": "UA",
+        "input_ref": {},
+        "exec_contract_version": "test",
+        "status": "RUNNING",
+        **changes,
+    }
+    with db.write() as tx:
+        insert_run(tx, pack.site_id, AgentRun(**data))
+    return run_id
 
 
 def take_snapshot(pack):

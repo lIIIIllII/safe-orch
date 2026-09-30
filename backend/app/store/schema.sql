@@ -1,4 +1,4 @@
--- SAFE-ORCH schema (설계서 §5.4, 우선순위 문서 부록 A.2·A.14). schema_version 3.
+-- SAFE-ORCH schema (설계서 §5.4, 우선순위 문서 부록 A.2·A.14·A.16). schema_version 4.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -286,13 +286,13 @@ CREATE TABLE consultation (
     items        TEXT NOT NULL CHECK (json_valid(items))
 );
 
--- 후속 작업 (§5.1, §11.3). run_id FK는 agent_run 테이블과 함께 3단계에서 추가한다.
+-- 후속 작업 (§5.1, §11.3). START_RUN은 Run보다 먼저 생기므로 run_id가 NULL일 수 있다.
 CREATE TABLE dispatch_job (
     job_id          INTEGER PRIMARY KEY AUTOINCREMENT,
     site_id         TEXT NOT NULL REFERENCES site (site_id),
     kind            TEXT NOT NULL CHECK (kind IN ('START_RUN', 'RESUME_RUN', 'CONTINUE_RUN',
                                                   'VALIDATE', 'BUILD_CONSULTATION', 'RECHECK')),
-    run_id          TEXT,
+    run_id          TEXT REFERENCES agent_run (run_id),
     wait_generation INTEGER CHECK (wait_generation >= 0),
     payload         TEXT NOT NULL CHECK (json_valid(payload)),
     dedupe_key      TEXT NOT NULL,
@@ -307,6 +307,112 @@ CREATE TABLE dispatch_job (
 -- Run당 PENDING RESUME 1개 (§5.1)
 CREATE UNIQUE INDEX dispatch_job_pending_resume ON dispatch_job (run_id)
     WHERE kind = 'RESUME_RUN' AND status = 'PENDING';
+
+-- ── Agent 실행 상태 (§5.1·§11, 부록 A.16) ──────────────────────
+
+-- 종료 상태(ERROR 제외)에서 다른 상태로 가지 않는다. ERROR는 §12 continue로 RUNNING이 될 수 있다.
+CREATE TABLE agent_run (
+    run_id                TEXT PRIMARY KEY,
+    site_id               TEXT NOT NULL REFERENCES site (site_id),
+    agent_type            TEXT NOT NULL CHECK (agent_type IN ('REPLANNING', 'COORDINATION',
+                                                              'INTAKE', 'EVENT_RESPONSE',
+                                                              'ASSISTANT')),
+    case_id               TEXT NOT NULL,
+    acting_actor_id       TEXT,
+    acting_unit_id        TEXT NOT NULL,
+    input_ref             TEXT NOT NULL CHECK (json_valid(input_ref)),
+    exec_contract_version TEXT NOT NULL,
+    status                TEXT NOT NULL CHECK (status IN ('RUNNING', 'WAITING_HUMAN', 'SUCCEEDED',
+                                                          'ESCALATED', 'BUDGET_EXHAUSTED', 'STALE',
+                                                          'CANCELLED', 'ERROR')),
+    wait_kind             TEXT CHECK (wait_kind IS NULL
+                                      OR wait_kind IN ('MESSAGE', 'CONSULTATION', 'CANDIDATE_OUTCOME')),
+    wait_ref              TEXT,
+    wait_generation       INTEGER NOT NULL DEFAULT 0 CHECK (wait_generation >= 0),
+    wake_seq              INTEGER NOT NULL DEFAULT 0 CHECK (wake_seq >= 0),
+    handled_wake_seq      INTEGER NOT NULL DEFAULT 0 CHECK (handled_wake_seq >= 0),
+    last_step_no          INTEGER NOT NULL DEFAULT 0 CHECK (last_step_no >= 0),
+    end_reason            TEXT,
+    steps_used            INTEGER NOT NULL DEFAULT 0 CHECK (steps_used >= 0),
+    llm_attempts_used     INTEGER NOT NULL DEFAULT 0 CHECK (llm_attempts_used >= 0),
+    human_rounds_used     INTEGER NOT NULL DEFAULT 0 CHECK (human_rounds_used >= 0),
+    solver_calls_used     INTEGER NOT NULL DEFAULT 0 CHECK (solver_calls_used >= 0),
+    solver_seconds_used   REAL NOT NULL DEFAULT 0 CHECK (solver_seconds_used >= 0),
+    restart_count         INTEGER NOT NULL DEFAULT 0 CHECK (restart_count >= 0),
+    CHECK ((status = 'WAITING_HUMAN') = (wait_kind IS NOT NULL)),
+    FOREIGN KEY (site_id, acting_unit_id) REFERENCES work_unit (site_id, unit_id)
+);
+
+-- step은 LLM 호출 전에 예약하고(RESERVED), COMPLETED 또는 ABORTED로 한 번만 끝난다 (§11.2, §11.4).
+CREATE TABLE agent_step (
+    run_id                  TEXT NOT NULL REFERENCES agent_run (run_id),
+    step_no                 INTEGER NOT NULL CHECK (step_no >= 1),
+    site_id                 TEXT NOT NULL REFERENCES site (site_id),
+    status                  TEXT NOT NULL CHECK (status IN ('RESERVED', 'COMPLETED', 'ABORTED')),
+    observed_context_version INTEGER NOT NULL CHECK (observed_context_version >= 0),
+    observed_plan_revision  INTEGER NOT NULL CHECK (observed_plan_revision >= 0),
+    observed_wake_seq       INTEGER NOT NULL CHECK (observed_wake_seq >= 0),
+    goal                    TEXT NOT NULL,
+    observation             TEXT NOT NULL CHECK (json_valid(observation)),
+    available_actions       TEXT NOT NULL CHECK (json_valid(available_actions)),
+    action                  TEXT CHECK (action IS NULL OR json_valid(action)),
+    decision_summary        TEXT,
+    tool_result             TEXT CHECK (tool_result IS NULL OR json_valid(tool_result)),
+    guard                   TEXT CHECK (guard IS NULL OR json_valid(guard)),
+    state_changes           TEXT CHECK (state_changes IS NULL OR json_valid(state_changes)),
+    result_kind             TEXT CHECK (result_kind IS NULL
+                                        OR result_kind IN ('CONTINUE', 'WAIT', 'DONE', 'REJECTED')),
+    budget_remaining        TEXT CHECK (budget_remaining IS NULL OR json_valid(budget_remaining)),
+    model_id                TEXT,
+    prompt_version          TEXT,
+    llm_attempts            INTEGER CHECK (llm_attempts IS NULL OR llm_attempts >= 0),
+    abort_reason            TEXT,
+    created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (run_id, step_no)
+);
+
+-- Solver step의 예약·등록 연결 (§11.4). Run ↔ 후보는 solver_result_id로 찾는다 (A.16).
+CREATE TABLE solver_job (
+    run_id           TEXT NOT NULL,
+    step_no          INTEGER NOT NULL,
+    site_id          TEXT NOT NULL REFERENCES site (site_id),
+    search_spec_id   TEXT NOT NULL REFERENCES search_spec (search_spec_id),
+    reserved_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    status           TEXT NOT NULL CHECK (status IN ('RESERVED', 'REGISTERED', 'STALE', 'ABORTED')),
+    solver_result_id TEXT REFERENCES solver_result (solver_result_id),
+    PRIMARY KEY (run_id, step_no),
+    FOREIGN KEY (run_id, step_no) REFERENCES agent_step (run_id, step_no),
+    CHECK ((status = 'REGISTERED') = (solver_result_id IS NOT NULL))
+);
+
+CREATE TRIGGER agent_run_no_revive BEFORE UPDATE ON agent_run
+WHEN OLD.status IN ('SUCCEEDED', 'ESCALATED', 'BUDGET_EXHAUSTED', 'STALE', 'CANCELLED')
+     AND NEW.status <> OLD.status
+BEGIN SELECT RAISE(ABORT, 'agent_run: terminal status'); END;
+CREATE TRIGGER agent_run_no_decrease BEFORE UPDATE ON agent_run
+WHEN NEW.steps_used < OLD.steps_used OR NEW.llm_attempts_used < OLD.llm_attempts_used
+     OR NEW.human_rounds_used < OLD.human_rounds_used
+     OR NEW.solver_calls_used < OLD.solver_calls_used
+     OR NEW.solver_seconds_used < OLD.solver_seconds_used
+     OR NEW.wait_generation < OLD.wait_generation OR NEW.wake_seq < OLD.wake_seq
+     OR NEW.handled_wake_seq < OLD.handled_wake_seq OR NEW.last_step_no < OLD.last_step_no
+     OR NEW.restart_count < OLD.restart_count
+     OR NEW.run_id <> OLD.run_id OR NEW.case_id <> OLD.case_id
+BEGIN SELECT RAISE(ABORT, 'agent_run: counters must not decrease'); END;
+CREATE TRIGGER agent_run_no_delete BEFORE DELETE ON agent_run
+BEGIN SELECT RAISE(ABORT, 'agent_run: no delete'); END;
+
+CREATE TRIGGER agent_step_final BEFORE UPDATE ON agent_step
+WHEN OLD.status <> 'RESERVED' OR NEW.run_id <> OLD.run_id OR NEW.step_no <> OLD.step_no
+BEGIN SELECT RAISE(ABORT, 'agent_step: only RESERVED can change'); END;
+CREATE TRIGGER agent_step_no_delete BEFORE DELETE ON agent_step
+BEGIN SELECT RAISE(ABORT, 'agent_step: no delete'); END;
+
+CREATE TRIGGER solver_job_final BEFORE UPDATE ON solver_job
+WHEN OLD.status <> 'RESERVED'
+BEGIN SELECT RAISE(ABORT, 'solver_job: only RESERVED can change'); END;
+CREATE TRIGGER solver_job_no_delete BEFORE DELETE ON solver_job
+BEGIN SELECT RAISE(ABORT, 'solver_job: no delete'); END;
 
 -- ── Hold 전이 트리거 (§5.4 "Hold는 개별 해제만") ────────────────
 

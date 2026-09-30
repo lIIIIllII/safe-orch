@@ -634,9 +634,12 @@ def test_t51_hold_only_active_to_released(seeded):
 
 
 def test_dispatch_dedupe_and_pending_resume_unique(seeded):
+    from conftest import add_run
+
     from app.store.repos.dispatch import register_job
 
     sid = seeded.site_id
+    add_run(seeded, "r1")
     with db.write() as tx:
         assert register_job(tx, sid, "RECHECK", "RECHECK:ctx9") is True
         assert register_job(tx, sid, "RECHECK", "RECHECK:ctx9") is False

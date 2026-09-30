@@ -610,3 +610,84 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - RECHECK의 열린 Case 판정(AgentRun 기준, §11.5 3행). 열린 Case 중에 폼이 들어왔을 때 Run에 wake를 보낼지도 이때 정한다.
 - START_RUN 핸들러: 처리 시점에 Hold·열린 Case·context를 다시 확인하고, 맞지 않으면 Run을 시작하지 않고 DONE. 2단계에는 START_RUN을 처리하는 쪽이 없으므로 여러 개가 등록돼도 영향이 없다.
 - coordinator import 규칙을 "agents.runtime만"으로 정한다.
+
+### A.16 D3 3단계: Agent 실행 계층 (§4 I-15–I-20·§5.1·§11·§14 보충, schema_version 4)
+
+범위: AgentRun·AgentStep·SolverJob, 공통 그래프, Tool Gateway, Budget, Replanning AgentSpec(SOLVE_WITH_SCOPE·ESCALATE_NO_SOLUTION), START_RUN 핸들러, A.14·A.15에서 넘긴 것. 두 번에 나눠 구현한다. **3a**는 실행 계층 단독(이번 구현), **3b**는 START_RUN 핸들러와 Run 연결이다(다음 구현). 이번 범위가 아닌 것: 실제 LLM 호출(D4), 대기 후 재개(wake_seq 재확인·RESUME_RUN·CONTINUE_RUN, D5), LIST·TRY·ASK Action(D5), 다른 Agent, 재시작 복구(§11.4)와 exec_contract_version 검사, API, 화면.
+
+**테이블 (schema_version 4)**
+- `agent_run`:
+  - 컬럼: §5.1 필드 그대로(run_id `run_`, agent_type 5종, case_id, acting_actor_id, acting_unit_id, input_ref JSON, exec_contract_version, status 8종, wait_kind, wait_ref, wait_generation, wake_seq, handled_wake_seq, last_step_no, end_reason, restart_count).
+  - Budget 카운터는 컬럼으로 둔다(`steps_used`, `llm_attempts_used`, `human_rounds_used`, `solver_calls_used`, `solver_seconds_used`, `≥ 0`). 모델에서는 `budget_used` dict로 보여 준다.
+  - CHECK `(status = 'WAITING_HUMAN') = (wait_kind IS NOT NULL)`.
+  - 트리거: 종료 상태(SUCCEEDED, ESCALATED, BUDGET_EXHAUSTED, STALE, CANCELLED)에서 다른 상태로 가는 것, 카운터·wait_generation·wake_seq·last_step_no·restart_count 감소, run_id·case_id 변경, 삭제를 막는다. **ERROR는 종료 상태에 넣지 않는다.** §12 continue가 ERROR Run을 다시 호출하기 때문이다.
+  - 이번에 쓰는 대기 필드는 status·wait_kind·wait_ref·wait_generation뿐이다. wake_seq 재확인은 D5.
+- `agent_step`:
+  - PK(run_id, step_no), FK run. site_id, status(RESERVED/COMPLETED/ABORTED), 관찰 버전 3개, goal, observation JSON, available_actions JSON(bind한 도구 스키마), action JSON(`{name, args}`, MALFORMED면 `{name, raw}`), decision_summary, tool_result JSON, guard JSON(`{verdict: ACCEPTED|REJECTED, reason_code}`), state_changes JSON(만든 객체 id), result_kind(CONTINUE/WAIT/DONE/REJECTED), budget_remaining JSON, model_id, prompt_version, llm_attempts, abort_reason, created_at.
+  - 트리거: RESERVED에서 한 번만 바뀐다. 삭제는 금지한다.
+- `solver_job`: PK(run_id, step_no), FK agent_step. site_id, search_spec_id FK, reserved_at(서버 시각), status(RESERVED/REGISTERED/STALE/ABORTED), solver_result_id(REGISTERED ⇔ NOT NULL). RESERVED에서 한 번만 바뀌고 삭제는 금지한다.
+- `dispatch_job.run_id` → agent_run FK. START_RUN job은 Run보다 먼저 생기므로 NULL일 수 있다. 3b의 START_RUN 핸들러가 Run을 만드는 tx에서 채운다.
+- Gateway의 CommandResult: 키 `run_id:step_no`, command_type `AGENT:<ACTION>`(MALFORMED면 `AGENT:MALFORMED`), actor_id `run:<run_id>`. Audit은 남기지 않는다(기록은 AgentStep).
+- exec_contract_version: 상수 `replanning-3a`를 기록만 한다.
+
+**Case와 Run 수명**
+- Run ↔ 후보 연결: `candidate.solver_result_id → solver_job.solver_result_id → run_id`. candidate는 불변이라 컬럼을 추가하지 않는다. RECONFIRM 후보에는 Run이 없다.
+- case_id: START_RUN 핸들러가 `case_<uuid hex>`로 만든다. Case 테이블은 두지 않는다. §12 restart의 새 Run은 같은 case_id를 이어받는다(미구현).
+- (3b) 열린 Case = agent_type REPLANNING이고 status ∈ {RUNNING, WAITING_HUMAN}인 Run이 있음. RECHECK는 열린 Case가 있으면 아무것도 하지 않고 DONE이다. 열린 Case 중에 폼이 들어왔을 때 wake를 보낼지는 D5에서 정한다.
+- (3b) START_RUN 처리 시점 재확인: ① ACTIVE Hold 없음 ② 열린 Case 없음 ③ payload의 (context, plan) = 현재 site 값. 하나라도 어긋나면 Run을 만들지 않고 DONE이다.
+- (3b) START_RUN tx: Run(RUNNING, input_ref = payload + job_id) 생성, job.run_id 기록, job DONE을 tx 하나에서 한다. 그래프는 커밋 후 tx 밖에서 같은 워커 스레드로 호출한다. 그래프가 도는 동안 다른 job은 기다린다.
+- (3b) Event tx: 모든 agent_type의 RUNNING·WAITING_HUMAN Run을 조건부 UPDATE로 STALE(`EVENT:<event_id>`)로 바꾼다. 실행 중인 그래프는 다음 reserve_step이나 Gateway tx의 RUNNING 확인에서 멈춘다(step ABORTED `RUN_INACTIVE`).
+- (3b) 승인 tx: 후보에 연결된 Run이 RUNNING·WAITING_HUMAN이면 SUCCEEDED(`COMMITTED:<plan_revision>`). RECONFIRM 후보를 승인할 때는 할 일이 없다.
+- (3b) Solver 후보 FAIL → Run ERROR: VALIDATE 핸들러가 REPLAN 후보이고 checks에 C01–C10 FAIL이 있으면 연결된 Run을 RUNNING·WAITING_HUMAN에서 ERROR(`MODEL_VALIDATION_MISMATCH`)로 바꾼다. validation 등록과 같은 tx다. C11만 걸린 INCOMPLETE는 ERROR가 아니다(wake는 D5).
+- ESCALATED·BUDGET_EXHAUSTED로 끝난 뒤에는 후속 job이 없다. Context가 그대로이므로 RECHECK도 없다.
+
+**Observation과 Available Actions (Replanning)**
+- observe는 쓰지 않는다. Snapshot content를 메모리에서 만들어 hash만 계산하고(`snapshot_id = "observe"`), Snapshot 행 저장은 Solver 예약 tx에서 한다.
+- Observation JSON: `run {run_id, agent_type, goal, acting_unit_id}`, `versions {context_version, plan_revision, wake_seq}`, `conflicts`, `primary_conflict`, `acting_tasks [{task_id, zone_id, duration, window, movable, base}]`, `constraints`, acting_unit 작업의 `consents`, `untried_levels`, `attempts [{step_no, job_status, scope_level, spec_hash, stage1{status, changed}, stage2{status, delay}, candidate_id}]`, `latest_validation {candidate_id, status, failed_checks}`, `last_guard`(직전 step이 REJECTED면 그 guard), `recent_steps`(최근 5개), `budget_remaining`. decide의 HumanMessage는 이 JSON이다(최근 step 요약 포함).
+- 주 충돌: `input_ref.conflict`와 rule_id·task_ids가 같은 현재 충돌, 없으면 acting_unit 작업을 포함한 첫 충돌.
+- SOLVE_WITH_SCOPE 사용 조건:
+  - 충돌이 있고 solver_calls가 남아 있어야 한다.
+  - L0·L1·L2 중 현재 사실로 계산한 실효 SearchSpec hash가 시도 목록에 없는 level만 인자 enum에 넣는다. 남는 level이 없으면 Action을 뺀다. `NO_ACTING_TASKS` 등으로 만들 수 없는 level도 뺀다.
+  - 시도 목록 = **site 전체** solver_job(RESERVED·REGISTERED)이 가리키는 search_spec hash. hash에 snapshot_hash가 들어가므로, 같은 사실 위에서 같은 탐색이면 어느 Run이 했든 결과가 같다.
+- ESCALATE_NO_SOLUTION(reason)은 항상 사용할 수 있다.
+- Gateway는 실행 직전 예약 tx 안에서 최신 DB로 Available Actions를 다시 계산한다. 선택이 그 안에 없으면 `REJECTED(ACTION_NOT_AVAILABLE)`.
+
+**step·Gateway·트랜잭션**
+- reserve_step tx: Run RUNNING 확인 → `last_step_no + 1`로 AgentStep(RESERVED, 관찰 버전, goal, observation, 도구 스키마) → steps·llm_attempts +1. RUNNING이 아니면 step 없이 finish.
+- decide: SystemMessage(Goal·규칙) + HumanMessage(Observation JSON). `bind_tools(tools, tool_choice="any", parallel_tool_calls=False)`이고 도구는 현재 Available Actions 스키마만 준다.
+- 모든 Action에 필수 인자 `decision_summary`가 있다. 없으면 스키마 위반(MALFORMED)이다. 200자를 넘으면 **거절하지 않고 저장할 때 200자로 자른다.** 안전과 관계없는 설명 필드라 재질문 비용을 쓰지 않는다. 저장할 때 args에서 떼어 decision_summary 컬럼에 넣는다.
+- MALFORMED: invalid_tool_calls가 있거나, tool_call이 1개가 아니거나, 모르는 이름이거나, 스키마 위반. step은 COMPLETED(guard REJECTED)이고 결과는 REJECTED → 다시 관찰한다. 직전 COMPLETED step도 MALFORMED면(연속 2회) DONE → Run ESCALATED(`MALFORMED_TWICE`). `ACTION_NOT_AVAILABLE`·`STALE_OBSERVATION`은 연속 횟수에 넣지 않는다(step Budget으로 제한).
+- SOLVE_WITH_SCOPE:
+  - **예약 tx:** run RUNNING ∧ step RESERVED 확인 → **site의 (context, plan) ≠ step의 관찰 버전이면 도구를 실행하지 않고 `REJECTED(STALE_OBSERVATION)`, 다시 관찰한다**(모델이 옛 관찰로 고른 행동을 새 사실 위에서 실행하지 않는다) → Available 재계산 → Snapshot·SearchSpec 저장 → solver_job RESERVED → solver_calls +1, solver_seconds += time_limit_s(10, 미리 차감하고 돌려주지 않음). SearchSpecError는 그 reason_code로 REJECTED.
+  - **계산:** tx 밖에서 `cpsat.solve`.
+  - **등록 tx:** run RUNNING ∧ step RESERVED 확인 → `register_solver_outcome`(버전 재확인, SolverResult·Candidate·VALIDATE 등록) → solver_job REGISTERED → step COMPLETED + CommandResult. 후보가 있으면 WAIT(`WAITING_HUMAN`, wait_kind CANDIDATE_OUTCOME, wait_ref = candidate_id, wait_generation +1), 없으면(INFEASIBLE·UNKNOWN) CONTINUE, MODEL_INVALID면 DONE → Run ERROR.
+  - 등록 때 버전이 다르면(StaleError): solver_job STALE, step COMPLETED(guard ACCEPTED, reason `STALE_SNAPSHOT`), CONTINUE.
+  - Run이 RUNNING이 아니면: step ABORTED(`RUN_INACTIVE`), solver_job ABORTED, 결과 INACTIVE → finish(이미 종료 상태이므로 아무것도 바꾸지 않음).
+- ESCALATE_NO_SOLUTION: gateway tx 하나(step COMPLETED, CommandResult). 결과 DONE → finish가 조건부 UPDATE로 ESCALATED(`ESCALATE_NO_SOLUTION`, reason은 tool_result)를 기록한다.
+- finish: Agent 행동에 의한 종료만 기록한다(ESCALATED, BUDGET_EXHAUSTED, ERROR). `WHERE status = 'RUNNING'`.
+- Budget (Replanning): max steps 15, LLM 시도 30(step × 2, 블루프린트에 없는 값), 사람 라운드 2(D5), Solver 6회. observe에서 steps나 LLM 시도가 소진됐으면 finish(BUDGET_EXHAUSTED). Solver만 소진되면 SOLVE를 빼고 ESCALATE만 남긴다. `recursion_limit = 15 × 5 + 10 = 85`.
+- LLM 시도 수: 모델 호출이 돌려준 시도 수에서 1을 뺀 만큼 Gateway가 더 차감한다. 3a의 StepMeta.llm_attempts는 1로 고정이고, 전송 재시도 계상은 D4에서 실제 모델과 함께 연결한다.
+- 그래프 입력은 `{run_id}`만 받는다. runtime.invoke가 다른 키를 `ValueError`로 거절하고(T43), 그래프는 `input_schema`도 run_id 하나다. 그래프 상태는 호출 동안만 존재한다.
+- `GraphRecursionError`나 예상하지 못한 예외(모델 예외 포함)는 runtime이 잡아 Run ERROR(`RECURSION_LIMIT` 또는 `EXCEPTION: <형식>`)로 기록하고, 남은 RESERVED step·solver_job은 ABORTED로 둔다.
+
+**구조와 주입**
+- `agents/graph.py`: `build_graph(port, model, spec, prompt)`. DB에는 port(`observe`, `reserve_step`, `execute`, `finish` 프로토콜)로만 닿는다. `store`·`commands`와, store를 쓰는 agents 모듈(runtime, tool_gateway, observe)을 import하지 않는다.
+- `agents/runtime.py`: `StoreRunPort`(observe 읽기, reserve·finish 쓰기)와 `invoke(pack, {"run_id"}, model)`.
+- `agents/tool_gateway.py`: 유일한 도구 실행 경로. store·solver import 허용. 승인·확정·Hold 해제·Proposal 확인·Validation 등록 함수는 없다.
+- `agents/observe.py`: Observation·Available 계산. observe 노드와 Gateway 예약 tx가 같이 쓴다.
+- `agents/specs/replanning.py`: 순수 데이터(Goal, Action Pydantic 스키마, Budget, 사용 조건, 도구 스키마). store·commands·solver를 import하지 않는다.
+- `agents/prompts/replanning.py`: SYSTEM, `PROMPT_VERSION = "replanning-p1"`.
+- `agents/llm.py`: `ChatModel` 프로토콜(bind_tools + invoke), `bind`, `model_id`, 운영용 `openai_model(settings)`(ChatOpenAI, temperature 0, timeout 30, max_retries 1; 키가 없으면 예외 → Run ERROR).
+- 스크립트 LLM 주입: `runtime.invoke(..., model)`. (3b) `process_next(pack, model_factory)`, `DispatchWorker(pack, model_factory)`. 테스트는 `tests/scripted.py`의 `ScriptedChatModel`(bind_tools는 자기 자신, invoke는 준비한 AIMessage를 순서대로 반환, 응답 대신 함수를 넣어 호출 순간의 부수 효과를 주입)을 쓴다. 운영 코드에 테스트용 분기는 없다.
+- import 경계(아키텍처 테스트):
+  - 기존 규칙 유지: `graph·specs ↛ store·commands`, prebuilt·create_agent·checkpointer·interrupt 금지.
+  - 추가: `specs ↛ solver`, `graph.py ↛ agents.runtime·tool_gateway·observe`, `commands ↛ agents`.
+  - (3b) coordinator는 `agents.runtime`만 import한다.
+
+**3a·3b 경계**
+- 3a(이번): 스키마 v4, repos `runs`, agents(llm, specs, prompts, observe, tool_gateway, graph, runtime). 테스트는 Run을 repos로 직접 만들고 스크립트 모델로 확인한다.
+- 3b(다음): START_RUN 핸들러, RECHECK의 열린 Case 판정, Event tx의 Run STALE, 승인 tx의 SUCCEEDED, VALIDATE의 ERROR, `DispatchWorker(model_factory)`와 lifespan 연결. 게이트 경로를 자동화한다(폼 → 워커 → START_RUN → 스크립트 L0·L1 → WAIT → VALIDATE → Consultation → WAIVE → 승인 → Run SUCCEEDED).
+
+**한계와 D4 할 일**
+- 그래프 실행 중 프로세스가 죽으면 Run이 RUNNING으로 남는다. 그 Run은 열린 Case가 되어 이후 RECHECK가 모두 건너뛰어진다(재시작 복구 §11.4는 '뒤로 미룸').
+- D4 API에 §12 `POST /runs/{rid}/cancel`을 최소 구현으로 넣는다(SUPERVISOR, 조건부 UPDATE로 CANCELLED). 그 전에는 reset으로 복구한다.
