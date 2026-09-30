@@ -62,6 +62,10 @@ def claim_next(
     return r
 
 
+def set_job_run(tx: sqlite3.Connection, job_id: int, run_id: str) -> None:
+    tx.execute("UPDATE dispatch_job SET run_id = ? WHERE job_id = ?", (run_id, job_id))
+
+
 def mark_done(tx: sqlite3.Connection, job_id: int) -> None:
     tx.execute("UPDATE dispatch_job SET status = 'DONE' WHERE job_id = ?", (job_id,))
 

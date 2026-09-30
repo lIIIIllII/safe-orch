@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
+from app.agents.llm import openai_model
 from app.api import health
 from app.config import get_settings
 from app.coordinator.dispatcher import DispatchWorker
@@ -18,7 +19,11 @@ async def lifespan(app: FastAPI):
         ensure_pack_matches(conn, pack)  # 다르면 기동 거절, 자동 reset 없음 (부록 A.4)
     app.state.pack = pack
     settings = get_settings()
-    worker = DispatchWorker(pack, settings.dispatch_poll_s) if settings.dispatch_worker else None
+    worker = (
+        DispatchWorker(pack, settings.dispatch_poll_s, lambda: openai_model(settings))
+        if settings.dispatch_worker
+        else None
+    )
     if worker is not None:
         worker.start()
     try:

@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage
 from langgraph.errors import GraphRecursionError
 
 from app.agents import graph as graph_module
-from app.agents.llm import ChatModel
+from app.agents.llm import ChatModel, ModelFactory
 from app.agents.observe import Observation, build_observation
 from app.agents.prompts import replanning as replanning_prompt
 from app.agents.specs import replanning as replanning_spec
@@ -25,6 +25,7 @@ from app.store.repos.runs import end_run, get_run, reserve_step
 log = logging.getLogger(__name__)
 
 EXEC_CONTRACT_VERSION = "replanning-3a"
+__all__ = ["EXEC_CONTRACT_VERSION", "ModelFactory", "StoreRunPort", "invoke"]
 GRAPH_INPUT_KEYS = frozenset({"run_id"})
 
 

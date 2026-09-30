@@ -276,3 +276,27 @@ def run_for_solver_result(conn: sqlite3.Connection, solver_result_id: str) -> st
         "SELECT run_id FROM solver_job WHERE solver_result_id = ?", (solver_result_id,)
     ).fetchone()
     return None if row is None else row[0]
+
+
+def has_open_case(conn: sqlite3.Connection, site_id: str) -> bool:
+    """열린 Case = REPLANNING Run이 RUNNING 또는 WAITING_HUMAN (부록 A.16)."""
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM agent_run WHERE site_id = ? AND agent_type = 'REPLANNING'"
+            " AND status IN ('RUNNING', 'WAITING_HUMAN') LIMIT 1",
+            (site_id,),
+        ).fetchone()
+    )
+
+
+def stale_active_runs(tx: sqlite3.Connection, site_id: str, end_reason: str) -> list[str]:
+    """RUNNING·WAITING_HUMAN Run을 모두 STALE로 (Event 접수, §10). 바꾼 run_id 목록."""
+    return [
+        r[0]
+        for r in tx.execute(
+            "UPDATE agent_run SET status = 'STALE', end_reason = ?, wait_kind = NULL,"
+            " wait_ref = NULL WHERE site_id = ? AND status IN ('RUNNING', 'WAITING_HUMAN')"
+            " RETURNING run_id",
+            (end_reason, site_id),
+        ).fetchall()
+    ]

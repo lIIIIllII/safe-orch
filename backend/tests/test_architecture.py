@@ -113,6 +113,20 @@ def test_commands_do_not_import_agents():
     assert files and _violations(files, ["app.agents"]) == []
 
 
+def test_coordinator_imports_only_agents_runtime():
+    """Coordinator는 Run 호출에 agents.runtime만 쓴다 (부록 A.15·A.16)."""
+    bad = []
+    for f in _py_files(APP / "coordinator"):
+        mods = _imports(f, ast.parse(f.read_text(encoding="utf-8")))
+        bad += [
+            f"{f.relative_to(BACKEND)}: {m}"
+            for m in sorted(_hits(mods, "app.agents"))
+            if m not in ("app.agents", "app.agents.runtime")
+            and not m.startswith("app.agents.runtime.")
+        ]
+    assert bad == []
+
+
 def test_coordinator_does_not_import_solver():
     """Solver는 Replanning Run이 부른다. Coordinator는 결정론 단계만 한다 (부록 A.15)."""
     files = _py_files(APP / "coordinator")

@@ -577,6 +577,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - claim은 짧은 tx에서 `PENDING → CLAIMED, attempts += 1`로 한다. 효과와 `DONE`은 핸들러의 write tx 하나에서 같이 쓴다. 같은 job을 두 번 처리해도 효과는 1회다(dedupe와 기존 객체 재사용).
 - 실패: 핸들러 예외(StoreBusyError 포함)는 tx를 롤백한다. 별도 tx에서 `last_error = repr(예외)`를 기록하고, attempts < 3이면 PENDING, 3이면 FAILED로 바꾼다. 재시도하는 job은 job_id가 가장 작으므로 곧바로 다시 잡힌다(백오프 없음). FAILED는 자동으로 다시 시도하지 않는다(수동).
 - 기동 시 CLAIMED → PENDING 한 줄만 한다(§11.4 복구 표 1행, 핸들러가 멱등이므로 안전). 나머지 재시작 복구는 하지 않는다.
+- 워커 루프는 claim·핸들러·실패 기록 중 어디서 예외가 나도 스레드를 끝내지 않는다. 로그를 남기고 poll_s만큼 쉰 뒤 계속 돈다(A.16에서 추가).
 - 앱: lifespan에서 `settings.dispatch_worker`(기본 True)이면 시작하고, 종료할 때 stop + join한다. 비어 있으면 `dispatch_poll_s`(0.5초)마다 다시 본다(UI는 1초 폴링).
 - 테스트: conftest가 `DISPATCH_WORKER=false`로 두고 `run_until_idle`을 직접 부른다. 스레드 경로는 스모크 테스트 1개로 확인한다.
 - 핸들러 동작에는 Audit·CommandResult를 남기지 않는다. 기록은 만들어진 객체와 job 행(status, attempts, last_error)이다. 결과 요약 컬럼은 두지 않고 logging만 한다.
@@ -613,7 +614,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 
 ### A.16 D3 3단계: Agent 실행 계층 (§4 I-15–I-20·§5.1·§11·§14 보충, schema_version 4)
 
-범위: AgentRun·AgentStep·SolverJob, 공통 그래프, Tool Gateway, Budget, Replanning AgentSpec(SOLVE_WITH_SCOPE·ESCALATE_NO_SOLUTION), START_RUN 핸들러, A.14·A.15에서 넘긴 것. 두 번에 나눠 구현한다. **3a**는 실행 계층 단독(이번 구현), **3b**는 START_RUN 핸들러와 Run 연결이다(다음 구현). 이번 범위가 아닌 것: 실제 LLM 호출(D4), 대기 후 재개(wake_seq 재확인·RESUME_RUN·CONTINUE_RUN, D5), LIST·TRY·ASK Action(D5), 다른 Agent, 재시작 복구(§11.4)와 exec_contract_version 검사, API, 화면.
+범위: AgentRun·AgentStep·SolverJob, 공통 그래프, Tool Gateway, Budget, Replanning AgentSpec(SOLVE_WITH_SCOPE·ESCALATE_NO_SOLUTION), START_RUN 핸들러, A.14·A.15에서 넘긴 것. 두 번에 나눠 구현한다. **3a**는 실행 계층 단독(커밋 79d98ec), **3b**는 START_RUN 핸들러와 Run 연결이다. 이번 범위가 아닌 것: 실제 LLM 호출(D4), 대기 후 재개(wake_seq 재확인·RESUME_RUN·CONTINUE_RUN, D5), LIST·TRY·ASK Action(D5), 다른 Agent, 재시작 복구(§11.4)와 exec_contract_version 검사, API, 화면.
 
 **테이블 (schema_version 4)**
 - `agent_run`:
@@ -656,14 +657,15 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - reserve_step tx: Run RUNNING 확인 → `last_step_no + 1`로 AgentStep(RESERVED, 관찰 버전, goal, observation, 도구 스키마) → steps·llm_attempts +1. RUNNING이 아니면 step 없이 finish.
 - decide: SystemMessage(Goal·규칙) + HumanMessage(Observation JSON). `bind_tools(tools, tool_choice="any", parallel_tool_calls=False)`이고 도구는 현재 Available Actions 스키마만 준다.
 - 모든 Action에 필수 인자 `decision_summary`가 있다. 없으면 스키마 위반(MALFORMED)이다. 200자를 넘으면 **거절하지 않고 저장할 때 200자로 자른다.** 안전과 관계없는 설명 필드라 재질문 비용을 쓰지 않는다. 저장할 때 args에서 떼어 decision_summary 컬럼에 넣는다.
+- **STALE_OBSERVATION은 모든 Action에 같은 규칙이다.** Gateway가 Action을 실행하는 첫 tx에서 site의 (context, plan)이 step의 관찰 버전과 다르면 도구를 실행하지 않고 `REJECTED(STALE_OBSERVATION)`로 끝내고 다시 관찰한다. 모델이 옛 관찰로 고른 행동을 새 사실 위에서 실행하지 않기 위해서다. ESCALATE_NO_SOLUTION의 사유("해가 없다")도 사실 판단이고, D5의 ASK_TASK_OWNER·TRY_ALTERNATIVE_RESOURCE도 사실에 묶인다. MALFORMED는 Action이 아니므로 이 검사 전에 판정한다.
 - MALFORMED: invalid_tool_calls가 있거나, tool_call이 1개가 아니거나, 모르는 이름이거나, 스키마 위반. step은 COMPLETED(guard REJECTED)이고 결과는 REJECTED → 다시 관찰한다. 직전 COMPLETED step도 MALFORMED면(연속 2회) DONE → Run ESCALATED(`MALFORMED_TWICE`). `ACTION_NOT_AVAILABLE`·`STALE_OBSERVATION`은 연속 횟수에 넣지 않는다(step Budget으로 제한).
 - SOLVE_WITH_SCOPE:
-  - **예약 tx:** run RUNNING ∧ step RESERVED 확인 → **site의 (context, plan) ≠ step의 관찰 버전이면 도구를 실행하지 않고 `REJECTED(STALE_OBSERVATION)`, 다시 관찰한다**(모델이 옛 관찰로 고른 행동을 새 사실 위에서 실행하지 않는다) → Available 재계산 → Snapshot·SearchSpec 저장 → solver_job RESERVED → solver_calls +1, solver_seconds += time_limit_s(10, 미리 차감하고 돌려주지 않음). SearchSpecError는 그 reason_code로 REJECTED.
+  - **예약 tx:** run RUNNING ∧ step RESERVED 확인 → STALE_OBSERVATION 검사(위 규칙) → Available 재계산 → Snapshot·SearchSpec 저장 → solver_job RESERVED → solver_calls +1, solver_seconds += time_limit_s(10, 미리 차감하고 돌려주지 않음). SearchSpecError는 그 reason_code로 REJECTED.
   - **계산:** tx 밖에서 `cpsat.solve`.
   - **등록 tx:** run RUNNING ∧ step RESERVED 확인 → `register_solver_outcome`(버전 재확인, SolverResult·Candidate·VALIDATE 등록) → solver_job REGISTERED → step COMPLETED + CommandResult. 후보가 있으면 WAIT(`WAITING_HUMAN`, wait_kind CANDIDATE_OUTCOME, wait_ref = candidate_id, wait_generation +1), 없으면(INFEASIBLE·UNKNOWN) CONTINUE, MODEL_INVALID면 DONE → Run ERROR.
   - 등록 때 버전이 다르면(StaleError): solver_job STALE, step COMPLETED(guard ACCEPTED, reason `STALE_SNAPSHOT`), CONTINUE.
   - Run이 RUNNING이 아니면: step ABORTED(`RUN_INACTIVE`), solver_job ABORTED, 결과 INACTIVE → finish(이미 종료 상태이므로 아무것도 바꾸지 않음).
-- ESCALATE_NO_SOLUTION: gateway tx 하나(step COMPLETED, CommandResult). 결과 DONE → finish가 조건부 UPDATE로 ESCALATED(`ESCALATE_NO_SOLUTION`, reason은 tool_result)를 기록한다.
+- ESCALATE_NO_SOLUTION: gateway tx 하나(STALE_OBSERVATION 검사, step COMPLETED, CommandResult). 결과 DONE → finish가 조건부 UPDATE로 ESCALATED(`ESCALATE_NO_SOLUTION`, reason은 tool_result)를 기록한다.
 - finish: Agent 행동에 의한 종료만 기록한다(ESCALATED, BUDGET_EXHAUSTED, ERROR). `WHERE status = 'RUNNING'`.
 - Budget (Replanning): max steps 15, LLM 시도 30(step × 2, 블루프린트에 없는 값), 사람 라운드 2(D5), Solver 6회. observe에서 steps나 LLM 시도가 소진됐으면 finish(BUDGET_EXHAUSTED). Solver만 소진되면 SOLVE를 빼고 ESCALATE만 남긴다. `recursion_limit = 15 × 5 + 10 = 85`.
 - LLM 시도 수: 모델 호출이 돌려준 시도 수에서 1을 뺀 만큼 Gateway가 더 차감한다. 3a의 StepMeta.llm_attempts는 1로 고정이고, 전송 재시도 계상은 D4에서 실제 모델과 함께 연결한다.
@@ -686,7 +688,15 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 
 **3a·3b 경계**
 - 3a(이번): 스키마 v4, repos `runs`, agents(llm, specs, prompts, observe, tool_gateway, graph, runtime). 테스트는 Run을 repos로 직접 만들고 스크립트 모델로 확인한다.
-- 3b(다음): START_RUN 핸들러, RECHECK의 열린 Case 판정, Event tx의 Run STALE, 승인 tx의 SUCCEEDED, VALIDATE의 ERROR, `DispatchWorker(model_factory)`와 lifespan 연결. 게이트 경로를 자동화한다(폼 → 워커 → START_RUN → 스크립트 L0·L1 → WAIT → VALIDATE → Consultation → WAIVE → 승인 → Run SUCCEEDED).
+- 3b: START_RUN 핸들러, RECHECK의 열린 Case 판정, Event tx의 Run STALE, 승인 tx의 SUCCEEDED, VALIDATE의 ERROR, `DispatchWorker(model_factory)`와 lifespan 연결. 게이트 경로를 자동화한다(폼 → 워커 → START_RUN → 스크립트 L0·L1 → WAIT → VALIDATE → Consultation → WAIVE → 승인 → Run SUCCEEDED).
+
+**3b 구현 중 정한 것**
+- `process_next(pack, model_factory=None)`: model_factory가 있을 때만 START_RUN을 claim한다. 없으면 2단계처럼 PENDING으로 둔다. 앱은 lifespan에서 `lambda: openai_model(settings)`를 넘긴다.
+- START_RUN 핸들러의 model_factory 호출이 실패하면(키 없음 등) 방금 만든 Run을 ERROR(`MODEL_UNAVAILABLE: <형식>`)로 바꾼다. job은 이미 DONE이다. 그래프 안의 예외는 runtime이 ERROR로 기록한다(3a).
+- Event 응답(result_refs)에는 STALE로 바꾼 run_id를 넣지 않는다. 같은 source_event_id 재전송의 응답과 같아야 하기 때문이다. 어느 Event가 끝냈는지는 `end_reason = EVENT:<event_id>`로 찾는다.
+- 승인 응답의 result_refs에 `succeeded_run_id`(없으면 null)를 넣는다.
+- VALIDATE의 ERROR 판정은 저장된 validation의 checks에 `FAIL` 항목이 있는지로 본다(C01–C10만 FAIL, C11은 INCOMPLETE). 이미 validation이 있어 다시 검증하지 않은 경우에도 같은 판정을 한다(조건부 UPDATE라 멱등).
+- import: coordinator는 `app.agents`에서 `agents.runtime`만 import한다(`ModelFactory`·`EXEC_CONTRACT_VERSION`은 runtime이 다시 내보낸다). 아키텍처 테스트로 확인한다.
 
 **한계와 D4 할 일**
 - 그래프 실행 중 프로세스가 죽으면 Run이 RUNNING으로 남는다. 그 Run은 열린 Case가 되어 이후 RECHECK가 모두 건너뛰어진다(재시작 복구 §11.4는 '뒤로 미룸').

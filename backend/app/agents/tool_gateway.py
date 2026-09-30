@@ -180,6 +180,16 @@ class ToolGateway:
         )
         return GatewayResult("REJECTED", reason)
 
+    def _stale_observation(self, tx: sqlite3.Connection, run_id: str, step_no: int) -> bool:
+        """site의 (context, plan)이 step의 관찰 버전과 다르면 True. 모든 Action에 같은 규칙 (A.16)."""
+        step = get_step(tx, run_id, step_no)
+        site = get_site(tx, self.pack.site_id)
+        assert step is not None and site is not None
+        return (site.context_version, site.plan_revision) != (
+            step["observed_context_version"],
+            step["observed_plan_revision"],
+        )
+
     # ── 실행 ────────────────────────────────────────────────
 
     def execute(
@@ -203,6 +213,8 @@ class ToolGateway:
             if not self._active(tx, run_id, step_no):
                 return GatewayResult("INACTIVE")
             charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
+            if self._stale_observation(tx, run_id, step_no):
+                return self._reject(tx, run_id, step_no, meta, parsed, "STALE_OBSERVATION")
             assert isinstance(parsed.action, spec.EscalateNoSolution)
             self._complete(
                 tx,
@@ -226,13 +238,7 @@ class ToolGateway:
             if not self._active(tx, run_id, step_no):
                 return GatewayResult("INACTIVE")
             charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
-            step = get_step(tx, run_id, step_no)
-            site = get_site(tx, site_id)
-            assert step is not None and site is not None
-            if (site.context_version, site.plan_revision) != (
-                step["observed_context_version"],
-                step["observed_plan_revision"],
-            ):
+            if self._stale_observation(tx, run_id, step_no):
                 return self._reject(tx, run_id, step_no, meta, parsed, "STALE_OBSERVATION")
             obs = build_observation(tx, self.pack, run_id)
             allowed = obs.available.get("SOLVE_WITH_SCOPE", {}).get("level", [])

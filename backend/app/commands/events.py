@@ -22,6 +22,7 @@ from app.store.repos.events import (
     list_active_holds,
     release_hold,
 )
+from app.store.repos.runs import stale_active_runs
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import list_current_tasks
 
@@ -93,6 +94,9 @@ def _receive(tx: sqlite3.Connection, ctx: CommandContext, body: EventReport) -> 
         body.target_task_id if task_scoped else None,
         context_version,
     )
+    # 열린 Case의 Run을 STALE로 (§10, §11.5). 실행 중인 그래프는 다음 RUNNING 확인에서 멈춘다.
+    # 응답은 재전송 때와 같아야 하므로 run_id는 넣지 않는다(end_reason EVENT:<event_id>로 찾는다).
+    stale_active_runs(tx, site_id, f"EVENT:{event_id}")
     r.refs = {"event_id": event_id, "hold_id": hold_id, "event_context_version": context_version}
     return r
 

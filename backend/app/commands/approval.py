@@ -17,6 +17,7 @@ from app.store.repos.decisions import insert_constraint, insert_decision
 from app.store.repos.events import list_active_holds
 from app.store.repos.plans import get_plan_by_candidate, insert_plan
 from app.store.repos.records import get_candidate, list_validations
+from app.store.repos.runs import ACTIVE, end_run, run_for_solver_result
 from app.store.repos.site import bump_context_version, bump_plan_revision
 from app.store.repos.tasks import list_current_tasks
 
@@ -139,7 +140,19 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
         ctx.actor_id,
         site.context_version,
     )
-    r.refs = {"plan_revision": plan_revision, "decision_id": decision_id}
+    # 후보를 만든 Replanning Run을 SUCCEEDED로 (§11.3(7), A.16). RECONFIRM 후보에는 Run이 없다.
+    run_id = None
+    if candidate.solver_result_id is not None:
+        run_id = run_for_solver_result(tx, candidate.solver_result_id)
+        if run_id is not None and not end_run(
+            tx, run_id, "SUCCEEDED", f"COMMITTED:{plan_revision}", ACTIVE
+        ):
+            run_id = None
+    r.refs = {
+        "plan_revision": plan_revision,
+        "decision_id": decision_id,
+        "succeeded_run_id": run_id,
+    }
     return r
 
 

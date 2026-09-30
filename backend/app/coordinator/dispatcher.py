@@ -1,14 +1,16 @@
-"""dispatch 워커 (설계서 §3.2·§11.4, 부록 A.15). 스레드 1개, job_id 순서.
+"""dispatch 워커 (설계서 §3.2·§11.4, 부록 A.15·A.16). 스레드 1개, job_id 순서.
 
-처리하는 kind는 RECHECK·VALIDATE·BUILD_CONSULTATION뿐이다. START_RUN·RESUME_RUN·CONTINUE_RUN은
-claim하지 않고 PENDING으로 두며 순서를 막지 않는다(3단계·D5).
+처리하는 kind는 RECHECK·VALIDATE·BUILD_CONSULTATION, 그리고 model_factory가 있으면 START_RUN이다.
+RESUME_RUN·CONTINUE_RUN(과 model_factory가 없을 때의 START_RUN)은 claim하지 않고 PENDING으로
+두며 순서를 막지 않는다(D5).
 실패하면 롤백하고 attempts < 3이면 PENDING, 3이면 FAILED. 재시작 복구는 CLAIMED → PENDING만 한다.
 """
 
 import logging
 import threading
 
-from app.coordinator.transitions import HANDLERS
+from app.agents.runtime import ModelFactory
+from app.coordinator.transitions import HANDLERS, start_run
 from app.packs.loader import LoadedPack
 from app.store import db
 from app.store.repos.dispatch import claim_next, mark_failed_attempt, requeue_claimed
@@ -19,14 +21,19 @@ MAX_ATTEMPTS = 3
 HANDLED_KINDS = tuple(HANDLERS)
 
 
-def process_next(pack: LoadedPack) -> int | None:
+def process_next(pack: LoadedPack, model_factory: ModelFactory | None = None) -> int | None:
     """job 1건을 처리하고 job_id를 반환한다. 처리할 job이 없으면 None."""
+    kinds = HANDLED_KINDS + (("START_RUN",) if model_factory is not None else ())
     with db.write() as tx:
-        job = claim_next(tx, pack.site_id, HANDLED_KINDS)
+        job = claim_next(tx, pack.site_id, kinds)
     if job is None:
         return None
     try:
-        HANDLERS[job["kind"]](pack, job)
+        if job["kind"] == "START_RUN":
+            assert model_factory is not None
+            start_run(pack, job, model_factory)
+        else:
+            HANDLERS[job["kind"]](pack, job)
     except Exception as e:  # noqa: BLE001 — 핸들러 예외는 job 실패로 기록한다
         with db.write() as tx:
             status = mark_failed_attempt(tx, job["job_id"], repr(e), MAX_ATTEMPTS)
@@ -34,11 +41,13 @@ def process_next(pack: LoadedPack) -> int | None:
     return job["job_id"]
 
 
-def run_until_idle(pack: LoadedPack, max_jobs: int = 100) -> list[int]:
+def run_until_idle(
+    pack: LoadedPack, max_jobs: int = 100, model_factory: ModelFactory | None = None
+) -> list[int]:
     """처리할 job이 없을 때까지 돌린다(테스트용). 처리한 job_id 목록."""
     done = []
     while len(done) < max_jobs:
-        job_id = process_next(pack)
+        job_id = process_next(pack, model_factory)
         if job_id is None:
             break
         done.append(job_id)
@@ -53,9 +62,12 @@ def requeue_claimed_jobs(pack: LoadedPack) -> int:
 class DispatchWorker:
     """워커 스레드 1개. 비어 있으면 poll_s마다 다시 본다."""
 
-    def __init__(self, pack: LoadedPack, poll_s: float = 0.5):
+    def __init__(
+        self, pack: LoadedPack, poll_s: float = 0.5, model_factory: ModelFactory | None = None
+    ):
         self.pack = pack
         self.poll_s = poll_s
+        self.model_factory = model_factory
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="dispatch-worker", daemon=True)
 
@@ -67,16 +79,19 @@ class DispatchWorker:
         self._thread.join(timeout)
 
     def _run(self) -> None:
+        """예외가 나도 스레드를 끝내지 않는다. 로그를 남기고 poll_s만큼 쉰 뒤 계속 돈다."""
+        requeued = False
         try:
-            requeue_claimed_jobs(self.pack)
             while not self._stop.is_set():
                 try:
-                    job_id = process_next(self.pack)
-                except db.StoreBusyError:
+                    if not requeued:
+                        requeue_claimed_jobs(self.pack)
+                        requeued = True
+                    job_id = process_next(self.pack, self.model_factory)
+                except Exception:
+                    log.exception("dispatch worker loop error")
                     job_id = None
                 if job_id is None:
                     self._stop.wait(self.poll_s)
-        except Exception:
-            log.exception("dispatch worker stopped")
         finally:
             db.close()

@@ -200,6 +200,21 @@ def test_stale_observation_is_not_executed(with_a):
     assert run.solver_calls_used == 0 and _count("solver_job") == 0
 
 
+def test_stale_observation_applies_to_escalate(with_a):
+    def event_during_llm():
+        with db.write() as tx:
+            bump_context_version(tx, with_a.site_id)
+        return escalate("해가 없다")
+
+    run, steps, _ = _run(with_a, [event_during_llm, escalate("다시 보고도 해가 없다")])
+    assert _guards(steps) == [
+        ("COMPLETED", "REJECTED", "STALE_OBSERVATION"),
+        ("COMPLETED", "DONE", None),
+    ]
+    assert steps[1]["tool_result"] == {"reason": "다시 보고도 해가 없다"}
+    assert run.status == "ESCALATED"
+
+
 def test_stale_snapshot_at_registration(with_a, monkeypatch):
     real = tool_gateway.cpsat.solve
 
