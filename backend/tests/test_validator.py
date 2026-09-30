@@ -7,9 +7,16 @@ import pytest
 from conftest import add_task, make_task, take_snapshot, with_facts
 
 from app.domain.hashes import candidate_hash
-from app.domain.models import Assignment, Candidate, FeedbackConstraint, FieldRecord, Predecessor
-from app.packs.loader import load_pack
-from app.rules.engine import detect_conflicts
+from app.domain.models import (
+    Assignment,
+    Candidate,
+    Conflict,
+    FeedbackConstraint,
+    FieldRecord,
+    Predecessor,
+)
+from app.packs.loader import EVALUATORS, load_pack
+from app.rules.engine import BASIC_RULE_IDS, detect_conflicts
 from app.solver import cpsat
 from app.solver.candidate import build_candidate
 from app.solver.search_spec import build_search_spec
@@ -19,7 +26,8 @@ from app.store.repos.records import (
     insert_validation,
     register_solver_outcome,
 )
-from app.validator.validator import validate
+from app.validator import validator as validator_module
+from app.validator.validator import BASIC_TO_CHECK, RULE_TYPE_TO_CHECK, validate
 
 # ── 도우미 ─────────────────────────────────────────────────────
 
@@ -467,6 +475,22 @@ def test_rule_mapping_uses_type_not_rule_id(with_a):
     bad = _bad(validate(snap, _reconfirm(snap, overlap), None, pack))
     assert ("C10", "ZZ-LIFT", ("A", "B")) in bad
     assert ("C09", "SEP-NOT-REALLY", ("A", "C")) in bad
+
+
+def test_mapping_covers_engine_and_loader():
+    assert set(BASIC_TO_CHECK) == BASIC_RULE_IDS
+    assert set(RULE_TYPE_TO_CHECK) == EVALUATORS
+
+
+def test_unmapped_rule_fails_closed_c01(alpha, monkeypatch):
+    pack, snap, spec, cand = alpha
+    unknown = Conflict(
+        rule_id="NEW-RULE", task_ids=("A", "C"), resource_id=None, zone_ids=(), interval=(0, 10)
+    )
+    monkeypatch.setattr(validator_module, "detect_conflicts", lambda *_: [unknown])
+    v = validate(snap, cand, spec, pack)
+    assert v.status == "FAIL"
+    assert _bad(v) == [("C01", "UNMAPPED_RULE", ("A", "C"))]
 
 
 # ── 등록·불변 ──────────────────────────────────────────────────

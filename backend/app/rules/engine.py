@@ -33,6 +33,20 @@ def _conflict(
     )
 
 
+# _basic이 내는 rule_id. 이 밖의 값은 내지 않는다.
+BASIC_RULE_IDS = frozenset(
+    {
+        "DURATION",
+        "WINDOW",
+        "PRECEDENCE",
+        "RESOURCE_MISSING",
+        "RESOURCE_TYPE",
+        "RESOURCE_AUTH",
+        "AVAILABILITY",
+    }
+)
+
+
 def _basic(facts: SnapshotContent, pairs: list[tuple[Task, Assignment]]) -> list[Conflict]:
     """기본 제약: duration, 시간창·Horizon, 선후행, 필요 자원, 유형, 권한, 가용 구간."""
     out: list[Conflict] = []

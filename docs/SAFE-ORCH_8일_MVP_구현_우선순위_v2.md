@@ -426,8 +426,9 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - 기본 제약: DURATION→C03, WINDOW→C04, PRECEDENCE→C05, RESOURCE_MISSING·RESOURCE_TYPE→C07, RESOURCE_AUTH→C08, AVAILABILITY→C09.
   - Pack Rule: rule_id 접두어가 아니라 rules.yaml의 type으로 매핑한다. CAPACITY→C09, SEPARATION→C10.
 - `candidate_hash`와 `search_spec_hash`는 `app/domain`에 두고 solver와 validator가 같이 쓴다. 정의는 A.11 그대로다.
+- 해시 원칙: candidate_hash와 search_spec_hash를 다시 계산할 때 입력으로 쓰는 다른 해시(snapshot_hash, search_spec_hash, pack_hash)는 저장된 값을 쓴다. 각 해시의 재계산 일치는 해당 검사에서 따로 한다(`SNAPSHOT_HASH_MISMATCH`, `SEARCH_SPEC_HASH_MISMATCH`).
 - 비정상 후보: 누락·초과·중복은 C02에서만 다룬다. 나머지 check는 snapshot에 있고 배정에 한 번만 나온 task의 배정만 쓴다.
-- C01 (task_ids는 빈 목록):
+- C01 (task_ids는 빈 목록. `UNMAPPED_RULE`만 예외):
   - snapshot_hash 재계산 ≠ 저장값 → `SNAPSHOT_HASH_MISMATCH`
   - candidate_hash 재계산 ≠ 저장값 → `CANDIDATE_HASH_MISMATCH`
   - candidate.snapshot_id ≠ snapshot_id → `SNAPSHOT_REF_MISMATCH`
@@ -437,6 +438,8 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - REPLAN인데 search_spec 없음 → `SEARCH_SPEC_MISSING` / RECONFIRM인데 있음 → `SEARCH_SPEC_UNEXPECTED`
   - search_spec id가 다르거나 spec.snapshot_id ≠ snapshot_id → `SEARCH_SPEC_REF_MISMATCH`
   - candidate.search_spec_hash, spec.hash, 재계산 hash가 다름 → `SEARCH_SPEC_HASH_MISMATCH`
+  - fail-closed: `detect_conflicts` 결과 중 check로 매핑되지 않는 rule_id는 버리지 않는다. C01 FAIL, `UNMAPPED_RULE`, task_ids는 그 Conflict의 task_ids. Pack과 코드가 어긋난 무결성 문제로 보며, 예외는 내지 않는다. 매핑 표의 키는 테스트로 고정한다(BASIC_TO_CHECK = engine `BASIC_RULE_IDS`, RULE_TYPE_TO_CHECK = loader `EVALUATORS`).
+- RECONFIRM에 search_spec이 들어오면 C01 `SEARCH_SPEC_UNEXPECTED`를 기록하고, C06은 spec이 없는 것으로 판정한다.
 - C02: 배정의 task 집합 = snapshot READY task 집합. `TASK_MISSING`, `TASK_UNKNOWN`(snapshot에 없음), `TASK_DUPLICATE`.
 - C06: 기준은 `snapshot.base_assignments()`.
   - search_spec이 없거나(RECONFIRM) axes에 없는 작업은 시작·자원 모두 기준값이어야 한다.
@@ -444,9 +447,16 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - resource 축이 false인데 자원 ≠ 기준 → `RESOURCE_AXIS_NOT_ALLOWED`
   - resource 축이 true인데 자원 ∉ {기준} ∪ resource_alternatives[t] → `RESOURCE_NOT_IN_SPEC`
   - snapshot.constraints로 고정된 축이 기준값과 다름 → `FROZEN_BY_CONSTRAINT` (search_spec과 관계없이 따로 확인)
-  - axes에 있는 작업의 unit ≠ acting_unit_id → `OUTSIDE_ACTING_UNIT`
+  - axes에 있는 작업의 unit ≠ acting_unit_id → `OUTSIDE_ACTING_UNIT`. 배정이 바뀌었는지와 관계없이 보고한다.
 - C11: snapshot의 READY 작업마다 work_type ∈ Pack, hazard_tags = Pack 도출값, work_type의 critical_fields가 모두 fields에 있고 CONFIRMED이며 value = 컬럼 값(A.8 모양). reason_code: `UNKNOWN_WORK_TYPE`, `HAZARD_TAGS_MISMATCH`, `FIELD_MISSING`, `FIELD_NOT_CONFIRMED`, `CONFIRMED_VALUE_MISMATCH`.
+  - work_type이 Pack에 없으면 `UNKNOWN_WORK_TYPE`만 보고하고, 그 작업의 나머지 C11 검사는 건너뛴다.
 - checks: C01–C11 순서. 위반이 없는 check는 PASS 1개, 위반이 있으면 위반마다 1개(C01–C10은 FAIL, C11은 INCOMPLETE). 각 항목은 `{check_id, status, task_ids(정렬), reason_code}`. C03–C05·C07–C10의 reason_code는 Conflict의 rule_id다.
+- 한 check 안의 항목 순서 (현재 구현):
+  - C01: 위 C01 목록 순서(SNAPSHOT_HASH → CANDIDATE_HASH → SNAPSHOT_REF → PACK_HASH → CONTEXT_VERSION → PLAN_REVISION → SEARCH_SPEC_MISSING/UNEXPECTED → SEARCH_SPEC_REF → SEARCH_SPEC_HASH), 그 뒤에 `UNMAPPED_RULE`(detect_conflicts 순서).
+  - C02: `TASK_MISSING` 전부 → `TASK_UNKNOWN` 전부 → `TASK_DUPLICATE` 전부. 각 묶음 안은 task_id 순.
+  - C03–C05·C07–C10: detect_conflicts 순서 = (rule_id, task_ids, resource_id) 정렬. C09는 AVAILABILITY와 CAPACITY Rule이 rule_id 순으로 섞인다.
+  - C06: 먼저 후보 assignments 순서(C02 제외분 뺀 것)로 작업마다 `TIME_AXIS_NOT_ALLOWED` → `RESOURCE_AXIS_NOT_ALLOWED` → `RESOURCE_NOT_IN_SPEC`, 다음 snapshot.constraints 순서로 `FROZEN_BY_CONSTRAINT`, 마지막 task_id 순으로 `OUTSIDE_ACTING_UNIT`.
+  - C11: task_id 순. 작업마다 `HAZARD_TAGS_MISMATCH` → Pack critical_fields 순서로 필드마다 `FIELD_MISSING`·`FIELD_NOT_CONFIRMED`·`CONFIRMED_VALUE_MISMATCH` 중 하나.
 - 저장 status: INCOMPLETE 항목이 있으면 INCOMPLETE, 없고 FAIL이 있으면 FAIL, 둘 다 없으면 PASS. STALE은 저장하지 않는다.
 - 등록: repos `insert_validation(tx, site_id, validation)`. 버전은 다시 확인하지 않는다. validation_id 접두어는 `val_`.
 - D3에 넘기는 결정 (이번에는 기록만 하고 구현하지 않는다):

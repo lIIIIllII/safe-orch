@@ -186,6 +186,9 @@ def _conflict_checks(
         )
         if check is not None:
             out.append((check, c.task_ids, c.rule_id))
+        else:
+            # fail-closed: 매핑되지 않는 rule_id는 Pack·코드 무결성 문제로 C01에 보고한다
+            out.append(("C01", c.task_ids, "UNMAPPED_RULE"))
     return out
 
 
