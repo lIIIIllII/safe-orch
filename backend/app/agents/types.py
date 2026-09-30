@@ -8,9 +8,13 @@ GatewayKind = Literal["CONTINUE", "WAIT", "DONE", "REJECTED", "INACTIVE"]
 
 @dataclass(frozen=True)
 class StepMeta:
+    """step마다 decide가 채운다. error_kind가 있으면 모델 응답이 없다(LLM_ERROR·LLM_CONFIG, A.17)."""
+
     model_id: str
     prompt_version: str
     llm_attempts: int = 1
+    error_kind: str | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)

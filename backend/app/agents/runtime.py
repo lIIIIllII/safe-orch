@@ -52,7 +52,7 @@ class StoreRunPort:
             )
 
     def execute(
-        self, run_id: str, step_no: int, message: AIMessage, meta: StepMeta
+        self, run_id: str, step_no: int, message: AIMessage | None, meta: StepMeta
     ) -> GatewayResult:
         return self.gateway.execute(run_id, step_no, message, meta)
 

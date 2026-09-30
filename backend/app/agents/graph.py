@@ -5,14 +5,13 @@ port.execute(= Tool Gateway)뿐이다. store·commands를 import하지 않는다
 그래프 상태는 호출 동안만 존재한다. edge는 Gateway 결과 종류와 Run 활성·Budget으로만 분기한다.
 """
 
-import json
 from types import ModuleType
 from typing import Any, Protocol, TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from app.agents.llm import ChatModel, bind, model_id
+from app.agents.llm import ChatModel, bind, invoke_with_retry, model_id
 from app.agents.types import GatewayResult, StepMeta
 
 
@@ -34,7 +33,7 @@ class RunPort(Protocol):
     def reserve_step(self, run_id: str, obs: ObservationLike) -> int | None: ...
 
     def execute(
-        self, run_id: str, step_no: int, message: AIMessage, meta: StepMeta
+        self, run_id: str, step_no: int, message: AIMessage | None, meta: StepMeta
     ) -> GatewayResult: ...
 
     def finish(self, run_id: str, status: str, reason: str) -> None: ...
@@ -49,14 +48,14 @@ class State(TypedDict, total=False):
     obs: Any
     step_no: int | None
     message: Any
+    meta: Any
     result: Any
     end: tuple[str, str] | None
 
 
 def build_graph(port: RunPort, model: ChatModel, spec: ModuleType, prompt: ModuleType) -> Any:
-    """spec: AgentSpec 모듈(GOAL, tool_schemas), prompt: SYSTEM·PROMPT_VERSION."""
+    """spec: AgentSpec 모듈(GOAL, tool_schemas), prompt: SYSTEM·PROMPT_VERSION·render_observation."""
     system = SystemMessage(prompt.SYSTEM.format(goal=spec.GOAL))
-    meta = StepMeta(model_id=model_id(model), prompt_version=prompt.PROMPT_VERSION)
 
     def observe(state: State) -> State:
         obs = port.observe(state["run_id"])
@@ -77,13 +76,21 @@ def build_graph(port: RunPort, model: ChatModel, spec: ModuleType, prompt: Modul
         return "finish" if state["step_no"] is None else "decide"
 
     def decide(state: State) -> State:
+        """모델 1회 호출(전송 재시도 1회 포함). 실패도 step 결과로 Gateway에 넘긴다."""
         obs = state["obs"]
-        human = HumanMessage(json.dumps(obs.data, ensure_ascii=False, sort_keys=True))
-        message = bind(model, spec.tool_schemas(obs.available)).invoke([system, human])
-        return {"message": message}
+        human = prompt.render_observation(obs.data)
+        call = invoke_with_retry(bind(model, spec.tool_schemas(obs.available)), [system, human])
+        meta = StepMeta(
+            model_id=model_id(model, call.message),
+            prompt_version=prompt.PROMPT_VERSION,
+            llm_attempts=call.attempts,
+            error_kind=call.error_kind,
+            error=call.error,
+        )
+        return {"message": call.message, "meta": meta}
 
     def gateway(state: State) -> State:
-        result = port.execute(state["run_id"], state["step_no"], state["message"], meta)
+        result = port.execute(state["run_id"], state["step_no"], state["message"], state["meta"])
         end = (result.end_status, result.end_reason) if result.kind == "DONE" else None
         return {"result": result, "end": end}
 

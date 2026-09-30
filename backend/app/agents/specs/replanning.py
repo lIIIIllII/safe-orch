@@ -9,7 +9,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 AGENT_TYPE = "REPLANNING"
-GOAL = "Hard 제약과 확인된 조건을 지키며 충돌을 해소하는 검증 가능한 최소 변경 대안을 찾는다."
+GOAL = (
+    "Hard 제약과 확인된 조건을 지키면서 충돌을 해소하는 검증 가능한 대안을 찾는다. "
+    "변경 작업 수를 먼저, 총 지연을 그다음으로 최소화한다."
+)
 
 MAX_STEPS = 15
 MAX_LLM_ATTEMPTS = 30  # step × 2 (전송 재시도 1회 계상, 블루프린트에 없는 값)
@@ -26,21 +29,24 @@ class Action(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    decision_summary: str = Field(description="이 행동을 고른 이유와 다음 예정 단계 (200자 이내)")
+    decision_summary: str = Field(
+        description="이유: …/다음: … 형식. 이 행동을 고른 이유와 다음 예정 단계 (200자 이내)"
+    )
 
 
 class SolveWithScope(Action):
-    """현재 Snapshot에서 범위를 정해 CP-SAT로 대안을 계산한다."""
+    """현재 사실에서 탐색 범위를 정해 CP-SAT로 대안을 계산한다. 해가 있으면 후보가 등록되고 검증을
+    기다린다. 해가 없으면(INFEASIBLE·UNKNOWN) 결과를 관찰하고 다음 전략을 고른다."""
 
     level: Literal["L0", "L1", "L2"] = Field(
-        description="L0 충돌 당사자, L1 + 같은 구역·자원 작업, L2 acting_unit 작업 전부"
+        description="탐색 범위. L0 충돌 당사자만, L1 같은 구역·같은 자원 작업까지, L2 acting_unit 작업 전부"
     )
 
 
 class EscalateNoSolution(Action):
-    """더 시도할 전략이 없을 때 사유를 붙여 사람에게 넘긴다."""
+    """더 시도할 전략이 없을 때 사유를 붙여 사람에게 넘기고 Run을 끝낸다."""
 
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, description="해가 없다고 판단한 근거(시도한 범위와 결과)")
 
 
 ACTIONS: dict[str, type[Action]] = {

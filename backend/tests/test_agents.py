@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage
 from scripted import ScriptedChatModel, call, escalate, solve
 
 from app.agents import runtime, tool_gateway
+from app.agents.prompts.replanning import OBS_HEADER
 from app.agents.specs import replanning as spec
 from app.store import db
 from app.store.repos.commands import get_command_result
@@ -63,7 +64,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p1",
+        "replanning-p2",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -78,7 +79,10 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     ]
     assert "L0" not in solve_tool["function"]["parameters"]["properties"]["level"]["enum"]
     assert model.calls[0]["kwargs"] == {"tool_choice": "any", "parallel_tool_calls": False}
-    human = json.loads(model.calls[1]["messages"][1].content)
+    header, body = model.calls[1]["messages"][1].content.split("\n", 1)
+    assert header == OBS_HEADER
+    human = json.loads(body)
+    assert human == s2["observation"]  # 모델이 본 것 = 기록한 것
     assert human["attempts"][0]["stage1"]["status"] == "INFEASIBLE"
 
     cid = s2["state_changes"]["candidate_id"]

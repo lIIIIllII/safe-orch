@@ -40,6 +40,8 @@ from app.store.repos.snapshots import create_snapshot
 
 ACCEPTED = "ACCEPTED"
 REJECTED = "REJECTED"
+# 연속 2회면 이관하는 실패: 형식 오류와 전송 실패 (§11.2, Test Case API 오류, A.17)
+RETRY_ONCE = {"MALFORMED", "LLM_ERROR"}
 
 
 class _Parsed:
@@ -133,7 +135,7 @@ class ToolGateway:
             tx,
             self.pack.site_id,
             f"{run_id}:{step_no}",
-            f"AGENT:{parsed.name or 'MALFORMED'}",
+            f"AGENT:{parsed.name or reason or 'MALFORMED'}",
             f"run:{run_id}",
             canonical_hash({"action": parsed.record}),
             "APPLIED" if verdict == ACCEPTED else "REJECTED",
@@ -151,10 +153,10 @@ class ToolGateway:
         parsed: _Parsed,
         reason: str,
     ) -> GatewayResult:
-        """REJECTED 결과. MALFORMED가 연속 2회면 이관(DONE → ESCALATED)."""
-        if reason == "MALFORMED":
+        """REJECTED 결과. MALFORMED·LLM_ERROR가 연속 2회면 이관(DONE → ESCALATED <사유>_TWICE)."""
+        if reason in RETRY_ONCE:
             done = [s for s in list_steps(tx, run_id) if s["status"] == "COMPLETED"]
-            if done and (done[-1]["guard"] or {}).get("reason_code") == "MALFORMED":
+            if done and (done[-1]["guard"] or {}).get("reason_code") in RETRY_ONCE:
                 self._complete(
                     tx,
                     run_id,
@@ -166,7 +168,7 @@ class ToolGateway:
                     result_kind="DONE",
                     tool_result={"error": parsed.error},
                 )
-                return GatewayResult("DONE", reason, "ESCALATED", "MALFORMED_TWICE")
+                return GatewayResult("DONE", reason, "ESCALATED", f"{reason}_TWICE")
         self._complete(
             tx,
             run_id,
@@ -193,8 +195,10 @@ class ToolGateway:
     # ── 실행 ────────────────────────────────────────────────
 
     def execute(
-        self, run_id: str, step_no: int, message: AIMessage, meta: StepMeta
+        self, run_id: str, step_no: int, message: AIMessage | None, meta: StepMeta
     ) -> GatewayResult:
+        if message is None:
+            return self._llm_failure(run_id, step_no, meta)
         parsed = _parse(message)
         if parsed.action is None or parsed.name is None:
             with db.write() as tx:
@@ -205,6 +209,29 @@ class ToolGateway:
         if parsed.name == "SOLVE_WITH_SCOPE":
             return self._solve(run_id, step_no, meta, parsed)
         return self._escalate(run_id, step_no, meta, parsed)
+
+    def _llm_failure(self, run_id: str, step_no: int, meta: StepMeta) -> GatewayResult:
+        """모델 응답 없음. LLM_ERROR(전송 2회 실패)는 다시 관찰, LLM_CONFIG는 Run ERROR (A.17)."""
+        parsed = _Parsed(None, None, {"error": meta.error}, meta.error)
+        reason = meta.error_kind or "LLM_ERROR"
+        with db.write() as tx:
+            if not self._active(tx, run_id, step_no):
+                return GatewayResult("INACTIVE")
+            charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
+            if reason == "LLM_CONFIG":
+                self._complete(
+                    tx,
+                    run_id,
+                    step_no,
+                    meta,
+                    parsed,
+                    verdict=REJECTED,
+                    reason=reason,
+                    result_kind="DONE",
+                    tool_result={"error": meta.error},
+                )
+                return GatewayResult("DONE", reason, "ERROR", f"LLM_CONFIG: {meta.error}")
+            return self._reject(tx, run_id, step_no, meta, parsed, reason)
 
     def _escalate(
         self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed

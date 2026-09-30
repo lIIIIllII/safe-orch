@@ -1,5 +1,6 @@
 import shutil
 
+import httpx
 import pytest
 
 from app.config import get_settings
@@ -12,6 +13,35 @@ from app.store.repos.seed import seed_pack
 from app.store.repos.site import bump_context_version
 from app.store.repos.snapshots import create_snapshot
 from app.store.repos.tasks import insert_task_revision
+
+OPENAI_ENV = (
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+    "OPENAI_TEMPERATURE",
+    "OPENAI_SEED",
+    "OPENAI_REASONING_EFFORT",
+)
+
+
+@pytest.fixture(autouse=True)
+def no_real_llm(monkeypatch):
+    """테스트는 실제 API를 부르지 않는다 (부록 A.17).
+
+    1) 환경변수가 .env보다 우선하므로 OpenAI 설정을 모두 비운다.
+    2) 실제 네트워크 전송 계층만 막는다. TestClient는 자체 transport를 쓰므로 막히지 않는다.
+    """
+    for name in OPENAI_ENV:
+        monkeypatch.setenv(name, "")
+
+    def blocked(*args, **kwargs):
+        raise RuntimeError("network disabled in tests")
+
+    async def blocked_async(*args, **kwargs):
+        raise RuntimeError("network disabled in tests")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", blocked)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", blocked_async)
+    get_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)

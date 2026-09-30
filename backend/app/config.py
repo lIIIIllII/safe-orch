@@ -19,11 +19,22 @@ class Settings(BaseSettings):
 
     db_path: Path = Path("data/safe_orch.db")
     openai_api_key: SecretStr = SecretStr("")
-    openai_model: str = ""
+    openai_model: str = ""  # 필수. 날짜가 붙은 스냅샷 ID (부록 A.17)
+    # 값이 있을 때만 ChatOpenAI에 넘긴다. 비추론 모델: TEMPERATURE=0·SEED=0,
+    # 추론 모델: 두 값을 비우고 REASONING_EFFORT를 가장 낮게 (A.17)
+    openai_temperature: float | None = None
+    openai_seed: int | None = None
+    openai_reasoning_effort: str | None = None
     demo_mode: bool = True
     pack: str = "shipyard"  # domain_packs/<pack>/ (부록 A.4)
     dispatch_worker: bool = True  # 기동 시 dispatch 워커 스레드 시작 (부록 A.15)
     dispatch_poll_s: float = 0.5
+
+    @field_validator("openai_temperature", "openai_seed", "openai_reasoning_effort", mode="before")
+    @classmethod
+    def _blank_is_none(cls, v: object) -> object:
+        """.env의 빈 값은 '넘기지 않음'이다."""
+        return None if isinstance(v, str) and not v.strip() else v
 
     @field_validator("db_path")
     @classmethod

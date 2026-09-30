@@ -159,7 +159,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "constraints": [c.model_dump(mode="json") for c in facts.constraints],
         "consents": [c.model_dump(mode="json") for c in facts.consents if c.task_id in acting_ids],
         "untried_levels": untried,
-        "attempts": attempts,
+        # spec_hash는 내부 계산(시도 여부)에만 쓰고 모델에는 보이지 않는다 (A.17)
+        "attempts": [{k: v for k, v in a.items() if k != "spec_hash"} for a in attempts],
         "latest_validation": latest_validation,
         "last_guard": last_guard,
         "recent_steps": recent,
