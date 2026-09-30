@@ -1,0 +1,219 @@
+// GET /api/sites/{id}/state 응답 타입 (부록 A.18). 서버가 dict를 돌려주므로 직접 쓴다 (부록 A.19).
+
+export type Role = 'UNIT_PLANNER' | 'REPORTER' | 'SUPERVISOR'
+
+export interface Site {
+  site_id: string
+  pack_hash: string
+  horizon_start_utc: string
+  horizon_minutes: number
+  context_version: number
+  plan_revision: number
+  pack: string
+}
+
+export interface Actor {
+  actor_id: string
+  name: string
+  unit_id: string
+  roles: Role[]
+}
+
+export interface Unit {
+  unit_id: string
+  name: string
+  unit_type: string
+}
+
+export interface Resource {
+  resource_id: string
+  resource_type: string
+  owner_unit_id: string
+  allowed_unit_ids: string[]
+  available_intervals: [number, number][]
+}
+
+export interface Task {
+  task_id: string
+  revision: number
+  unit_id: string
+  owner_actor_id: string
+  work_type: string
+  hazard_tags: string[]
+  zone_id: string
+  duration: number
+  earliest_start: number
+  latest_start: number
+  latest_end: number
+  required_resource_type: string | null
+  requested_resource_id: string | null
+  movable: { time: boolean; resource: boolean }
+  lifecycle: string
+  gate: 'ALLOW' | 'HOLD' | 'STALE'
+  reasons: string[]
+}
+
+export interface Assignment {
+  task_id: string
+  start: number
+  end: number
+  resource_id: string | null
+}
+
+export interface Plan {
+  plan_revision: number
+  assignments: Assignment[]
+  candidate_id: string | null
+  committed_context_version: number
+}
+
+export interface Conflict {
+  rule_id: string
+  task_ids: string[]
+  resource_id: string | null
+  zone_ids: string[]
+  interval: [number, number]
+}
+
+export interface SolverView {
+  scope_level: string
+  stage1: { status: string; changed: number | null }
+  stage2: { status: string; delay: number | null } | null
+  chosen_stage: number | null
+  minimal_change: boolean
+  delay_optimality_unconfirmed: boolean
+}
+
+export interface ValidationCheck {
+  check_id: string
+  status: string
+  task_ids: string[]
+  reason_code: string | null
+}
+
+export interface ConsultationItem {
+  task_id: string
+  task_revision: number
+  owner_actor_id: string
+  before: Assignment
+  after: Assignment
+  change_hash: string
+  base_status: string
+  item_status: string
+}
+
+export interface CandidateView {
+  candidate_id: string
+  kind: 'REPLAN' | 'RECONFIRM'
+  run_id: string | null
+  context_version: number
+  base_plan_revision: number
+  display_status: 'COMMITTED' | 'REJECTED' | 'STALE' | 'OPEN'
+  assignments: Assignment[]
+  changes: { task_id: string; before: Assignment; after: Assignment }[]
+  solver: SolverView | null
+  validation: {
+    validation_id: string
+    status: string
+    display_status: string
+    checks: ValidationCheck[]
+  } | null
+  consultation: { status: string; items: ConsultationItem[] } | null
+}
+
+export interface HoldView {
+  hold_id: string
+  scope: 'TASK' | 'SITE'
+  task_id: string | null
+  created_context_version: number
+  event_id: string
+  event_type: string
+  text: string
+  reporter_actor_id: string
+  target_task_id: string | null
+}
+
+export interface EventView {
+  event_id: string
+  source_event_id: string
+  event_type: string
+  text: string
+  reporter_actor_id: string
+  target_task_id: string | null
+  context_version: number
+  hold_id: string
+  hold_status: string
+}
+
+export interface RunSummary {
+  run_id: string
+  agent_type: string
+  case_id: string
+  acting_unit_id: string
+  status: string
+  wait_kind: string | null
+  wait_ref: string | null
+  wait_generation: number
+  last_step_no: number
+  current_step_status: string | null
+  end_reason: string | null
+  budget_used: Record<string, number>
+}
+
+export interface SiteState {
+  server_time: string
+  site: Site
+  actors: Actor[]
+  units: Unit[]
+  zones: string[]
+  resources: Resource[]
+  tasks: Task[]
+  plan: Plan
+  conflicts: Conflict[]
+  candidates: CandidateView[]
+  review_queue: string[]
+  holds: HoldView[]
+  events: EventView[]
+  runs: RunSummary[]
+  dispatch: { pending: number; failed: number }
+}
+
+export interface AgentStep {
+  run_id: string
+  step_no: number
+  status: 'RESERVED' | 'COMPLETED' | 'ABORTED'
+  observed_context_version: number
+  observed_plan_revision: number
+  goal: string | null
+  observation: unknown
+  available_actions: unknown
+  action: { name: string; args?: Record<string, unknown>; raw?: unknown } | null
+  decision_summary: string | null
+  tool_result: Record<string, unknown> | null
+  guard: { verdict: string; reason_code: string | null } | null
+  state_changes: unknown
+  result_kind: string | null
+  budget_remaining: Record<string, number> | null
+  model_id: string | null
+  prompt_version: string | null
+  llm_attempts: number | null
+  abort_reason: string | null
+  created_at: string | null
+}
+
+/** §12 명령 응답. HTTP 코드와 네트워크 실패를 함께 담는다. */
+export interface CommandResponse {
+  status: 'APPLIED' | 'REPLAYED' | 'REJECTED' | 'RETRYABLE_ERROR' | 'NETWORK_ERROR'
+  reason_codes: string[]
+  context_version: number | null
+  plan_revision: number | null
+  result_refs: Record<string, unknown>
+  detail?: unknown
+  http: number | null
+}
+
+export interface CommandOutcome {
+  label: string
+  actor_id: string
+  response: CommandResponse
+}

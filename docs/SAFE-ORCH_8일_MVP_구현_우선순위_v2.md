@@ -839,3 +839,93 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - **제자리 재생성**(`db.rebuild_schema`): 한 write tx 안에서 한다. 순서는 `PRAGMA defer_foreign_keys = ON` → 모든 테이블 DROP(생성 역순; 암묵적 삭제는 불변 트리거를 실행하지 않음) → schema.sql을 `sqlite3.complete_statement`로 문장 단위로 나눠 `execute` → schema_meta → seed. 파일을 지우지 않으므로 다른 스레드가 연결을 열어 두어도(Windows 파일 잠금) 된다. 중간에 실패하면 롤백되어 기존 DB가 그대로 남는다. `scripts/reset_db`(파일 삭제)는 서버가 꺼져 있을 때 쓰는 그대로 둔다.
 - 워커: `DispatchWorker`는 job 1건을 처리하는 동안 잠금을 잡는다. reset은 `quiesce(30초)`로 그 잠금을 기다린 뒤 새 job을 막고 멈춤을 예약한다. 못 얻으면 409 `WORKER_BUSY`이고 아무것도 바꾸지 않는다(워커도 그대로). 재생성 뒤 잠금을 풀어 옛 워커를 끝내고, 새 워커를 시작해 `app.state.worker`에 둔다. lifespan 종료는 `app.state.worker`의 현재 워커를 멈춘다.
 - 응답 `{status: APPLIED, context_version: 0, plan_revision: 0, result_refs: {pack, pack_hash, site_id}}`. CommandResult는 남기지 않고, 새 SEED audit 행이 기록이다.
+
+### A.19 D4 3단계: 최소 UI (§9.5·§11.6·§12·§13 보충, 백엔드·스키마 변경 없음)
+
+범위: 상태바(Actor 전환·시연 초기화), 타임라인, 검토 패널(변경점·Solver·Validation·Consultation·승인/거절/WAIVE), Activity(Run 목록·AgentStep 카드), 작업 요청 폼, 지연 신고, Hold 목록. 이번 범위가 아닌 것: Inbox·메시지(D5), 협업 레인 시각화, Assistant, 중간 시작점 (2)·(3)(D6), Scene 5 주입 화면.
+
+**공통 원칙**
+- 버튼은 **Actor 역할만** 보고 켠다. 후보가 STALE이거나 Hold가 있어도 승인 버튼을 막지 않는다. 판정은 서버가 하고, 화면은 거절 사유를 보여 준다(안전 경계 장면). 권한이 없으면 숨기지 않고 비활성 + "… 권한 필요" 안내.
+  - 역할 매핑: 승인·거절·WAIVE·Hold 해제·Run 취소 = SUPERVISOR, 작업 요청 = UNIT_PLANNER, 지연 신고 = REPORTER 또는 SUPERVISOR. 역할은 state의 `actors[].roles`로 본다.
+  - 예외: 요청을 보내는 동안 같은 버튼을 잠근다(이중 클릭 방지, 권한 판단이 아님).
+- 클라이언트 검사는 형식(숫자·시각 변환)만 한다. 사유 필수·시간창 같은 업무 규칙은 서버 판정을 보여 준다.
+- 모델 문장(Decision Summary)은 Activity 카드에만 "모델 설명 (LLM 작성, 판정 근거 아님)"으로 두고, 검토 패널은 "서버 계산 결과"만 보여 준다(§11.6).
+- 외부 CDN·웹 폰트 없음(오프라인 시연). 화면 문구는 한국어. 추가 npm 라이브러리 없음(React state·hook, 평범한 CSS 변수, 시스템 글꼴).
+
+**배치 (1920×1080 녹화 기준)**
+- 상태바 48px: Pack·site, Plan R#, Context v#, ACTIVE Hold 수, dispatch 대기/실패, Actor 선택, 조회 상태. 오른쪽 끝에 다른 버튼과 떨어뜨려 "시연 초기화"(확인 창 → `/dev/reset` `{confirm: "RESET safe_orch", start: "R0"}`).
+- 본문: 좌 약 1140px(위 타임라인, 아래 Activity | 입력·Hold 목록), 우 약 780px(검토 패널). 페이지 스크롤 없이 패널 안에서 스크롤한다. 기본 글자 15px.
+- Hold 목록은 탭 밖에 항상 보인다. 입력 탭은 [작업 요청 | 지연 신고].
+- Actor를 바꿔도 선택한 후보·Run·입력 중인 폼을 유지한다. `?actor=<actor_id>` URL 인자로 첫 Actor를 정할 수 있다(창 두 개를 다른 Actor로). 기본 Actor는 `supervisor`, site_id는 `VITE_SITE_ID`(기본 `YARD-01`).
+
+**타임라인**
+- 09:00–12:00, 1분 = CSS grid 1칸(`horizon_minutes`칸). 15분 눈금, 30분 라벨. 시각은 `horizon_start_utc + 분`을 `Asia/Seoul`로 변환한다. 가상 시각이므로 현재 시각 선은 없다.
+- 행: 구역(B·C·D·D2) + 구분선 + 자원(A-CR-01·SITE-CR-01·B-CR-01). 자원을 쓰는 작업은 두 곳에 모두 나온다.
+- 현재 Plan 배정은 Unit 색 실선 막대, Plan 밖 READY 작업(신규 A)은 점선 "요청" 막대(기준 = earliest_start + 요청 자원, `base_assignments`와 같음).
+- 선택한 후보의 `changes`만 겹쳐 그린다: 기존 막대는 흐리게, 후보 위치는 굵은 테두리 빈 막대. "후보 겹쳐 보기" 토글 기본 켬. STALE 후보도 계속 겹쳐 보이고 범례에 상태를 적는다.
+- 충돌: `state.conflicts`의 interval에 빨간 빗금 띠(zone_ids의 구역 행, resource_id가 있으면 그 자원 행) + rule_id 한국어 라벨. 현재 Plan 기준 충돌만이다.
+- Gate: 막대에 배지(ALLOW 생략, HOLD "보류", STALE "재확정 필요"), 제목(title)에 reasons 한국어. SITE Hold는 타임라인 전체 주황 사선 + 상단 띠("현장 Hold 중 — 신고: …"), TASK Hold는 해당 막대만 사선.
+
+**검토 패널**
+- 선택은 고정(sticky)한다. 선택이 없거나 선택한 후보가 사라졌을 때 이전 내용을 유지하고, 선택이 없을 때만 `review_queue[0]`를 자동 선택한다. 선택한 후보가 STALE·REJECTED·COMMITTED가 되어도 바꾸지 않고, 다른 검토 대기 후보가 있으면 "새 검토 대기 후보 [보기]" 알림만 띄운다.
+- 선택한 후보가 `candidates`에서 빠지면 마지막으로 받은 내용을 두고 "목록에서 제외됨(갱신 중단)"을 표시한다(A.18 후보 선정 규칙: 최근 5 ∪ 현재 버전 ∪ 검토 대기).
+- 후보 칩: 짧은 id, kind(재계획/재확정), 후보 표시 상태.
+- 배지 두 층: 후보 상태(`display_status`)와 Validation 대표 상태(`validation.display_status`). Validation 배지: PASS 초록 ✓ "정의된 규칙 검사 통과", FAIL 빨강 ✕ "규칙 위반", INCOMPLETE 호박 ? "입력 미확인", STALE 회색 ↻ "기준 변경됨(STALE)". STALE이면 작은 글씨로 "검사 당시 결과: …"를 덧붙이되 초록 스타일은 쓰지 않는다.
+- Solver: `minimal_change`면 "최소 변경(이 탐색 범위 안)", FEASIBLE이면 "최소 변경" 표기 없음, `delay_optimality_unconfirmed`면 "지연 최적성 미확정", UNKNOWN은 "판정 못 함(불가능 아님)"(§7, T16·T32).
+- Validation: C01–C11 한국어 이름(§8 표)과 상태, 실패 줄에 task_ids·reason_code.
+- 협의 항목: 작업, 담당자 이름, 변경 전 → 후(시각·자원), 상태 한국어. 모든 항목에 체크박스, PENDING만 미리 체크. 수용 사유 입력.
+- 승인 본문: `validation_id` = 후보의 Validation id(없으면 빈 문자열 → 서버 `VALIDATION_NOT_PASS`), `expected_context_version` = **후보의 context_version**. 폴링 시점에 따라 결과가 달라지지 않는다.
+- 거절 폼: reason_code 5종, 대상 작업(현재 작업 전체에서 다중 선택), 축 TIME/RESOURCE, 사유. 기본값은 비우고 "시연값 채우기" 버튼 = `TASK_IMMOVABLE`, 대상 C, 축 TIME·RESOURCE, 사유 "작업발판 연계 공정 확정"(D5 기본안 B 장면).
+- 결과 영역: 마지막 명령의 status, 한국어 사유, 원래 코드, HTTP 코드. 자동으로 사라지지 않고 다음 명령·Actor 전환 때만 바뀐다(Scene 4-4 `[STALE_CONTEXT, HOLD_ACTIVE]` 녹화).
+
+**입력**
+- 작업 요청 폼: 기본값 비움 + "시연값 A 채우기"(A, LIFTING, B, 30분, 시작 09:00–10:00, 종료 ≤ 10:30, CRANE, A-CR-01). 빈 칸은 보낼 때 null이 된다. 자원을 비우고 제출하면 `FIELD_MISSING`(대표 Test Case 부정확한 입력 (a)), 숫자·시각을 비우면 본문 검증 실패 `INVALID_BODY`(422)다. 시각은 HH:MM 입력 → 분 변환. work_type 목록은 state에 Pack work_type이 없으므로 state.tasks의 work_type과 A의 LIFTING을 합친 목록을 쓴다. hazard_tags·predecessors 입력은 두지 않는다(빈 배열).
+- 지연 신고: event_type DELAY 기본, 대상 작업 "지정 안 함"(→ SITE Hold), 본문 비움 + "시연 문구" 버튼("도장 준비 15분 늦어져 10시부터"). `source_event_id`는 제출마다 `ui-<uuid>`, 재시도에는 같은 값.
+- Hold 목록: ACTIVE Hold마다 범위, 대상, 신고 문구, 신고자, 생성 Context, [해제]. 해제는 NO_CHANGE만(FACT_CONFIRMED는 비활성 "D5 이후"), `expected_context_version` = 최근 조회한 site 값. 아래에 최근 신고 10건과 Hold 상태를 접어 둔다.
+
+**Activity**
+- Run 목록(`state.runs`): Agent 한국어 이름, 상태, 대기 사유, 현재 step 상태, 종료 사유 한국어, Budget(step n/15, Solver n/6), SUPERVISOR용 [취소]. 기본 선택은 가장 최근 Run.
+- step은 `GET /api/runs/{rid}/steps`를 선택한 Run의 `last_step_no`·`current_step_status`·`status`가 바뀔 때만 다시 가져온다.
+- 카드: 머리(`#step_no`, step 상태, Action 한국어 이름 + 인자), 모델 설명 블록(decision_summary를 "이유/다음"으로), 서버 결과 블록(Solver 요약·candidate_id, guard 판정 + reason_code, result_kind, state_changes), 바닥 줄(관찰 버전, Budget 잔여, model_id·prompt_version·LLM 시도 수, 시각), 접힘(Observation JSON, Available Actions). Goal은 Run 머리에 한 번. RESERVED는 "모델 판단 중", ABORTED는 abort_reason.
+
+**통신**
+- 폴링: `GET /api/sites/{id}/state`를 `setTimeout` 연쇄로 1초마다. 명령을 보낸 직후 바로 한 번 더. 요청 번호로 늦게 온 옛 응답은 버린다. 실패가 이어지면 "서버 연결 끊김, 마지막 성공 hh:mm:ss"를 표시하고 마지막 화면을 유지한다. 탭이 숨겨져도 멈추지 않는다.
+- X-Actor는 Actor 전환 값. Idempotency-Key는 사용자 조작마다 `ui-<crypto.randomUUID()>`. 503과 응답을 받지 못한 네트워크 오류는 같은 키로 `Retry-After`(기본 1초) 간격 최대 3회 재시도한다(§12 "응답을 받지 못한 클라이언트").
+- state 응답 타입은 직접 쓴다(`src/types.ts`). 서버가 `dict[str, Any]`를 돌려주므로 OpenAPI 타입 생성은 쓰지 않는다.
+
+**reason_codes 한국어 표**
+- `src/labels.ts` 한 곳에 둔다. 한국어 문구와 원래 코드를 함께 보여 주고, 표에 없는 코드는 코드만 보여 준다. 대상: 응답 status, 승인·WAIVE·거절·Event·Hold·폼·Run·API 층 코드(A.14·A.18), Gate reasons, step guard 코드, end_reason 접두어(`COMMITTED:`, `EVENT:`, `CANCELLED_BY:`, `MODEL_UNAVAILABLE:`, `EXCEPTION:`, `LLM_CONFIG:`), Validator check 사유, Run·Solver·Consultation 상태값.
+
+**파일과 예외**
+- `frontend/src/`: `api.ts`(fetch·키·재시도), `types.ts`, `labels.ts`, `time.ts`, `App.tsx`, `index.css`, `components/`(`common`, `StatusBar`, `Timeline`, `ReviewPanel`, `Activity`, `InputPanel`). 작업 요청·지연 신고·Hold 목록은 `InputPanel` 한 파일에 둔다.
+- Vite 기본 템플릿(`App.tsx`·`App.css`·`index.css`·`assets/`)은 프로젝트 코드가 아니므로 교체·삭제한다. CLAUDE.md의 "파일 전체 재작성 금지"는 우리가 쓴 코드에 대한 규칙이다.
+- 프런트 테스트 러너는 두지 않는다. 화면은 판정을 하지 않고 안전 로직은 pytest가 맡는다. 검사는 `npm run build`(tsc 포함)·`npm run lint`(oxlint)와 백엔드 `uv run pytest`다.
+
+**실행 방법**
+- 백엔드: `backend/.env`에 `OPENAI_API_KEY`, `OPENAI_MODEL`(날짜 붙은 스냅샷 ID), 모델 종류에 맞는 `OPENAI_TEMPERATURE`·`OPENAI_SEED` 또는 `OPENAI_REASONING_EFFORT`(A.17). `DEMO_MODE`·`DISPATCH_WORKER`는 기본 true.
+  - `cd backend && uv run uvicorn app.main:app --port 8000` (녹화·수동 확인 때는 `--reload` 없이. 재시작하면 워커 스레드가 실행 중인 그래프를 끊는다)
+- DB가 비어 있으면(처음 한 번) 서버를 끈 채 `cd backend && uv run python -m scripts.reset_db`로 seed한다. "시연 초기화"(`/dev/reset`)는 X-Actor가 actor 테이블에 있어야 하므로 seed된 DB에서만 동작한다.
+- 프런트: `cd frontend && npm install`(처음 한 번) → `npm run dev` → http://localhost:5173 (Vite proxy `/api` → 8000).
+- 브라우저 확대 100%, 창 1920×1080.
+
+**수동 확인 순서 (실제 모델)**
+1. 게이트 경로
+   1. 상태바 "시연 초기화" → 확인. Plan R0, Context v0, Hold 0.
+   2. Actor = Planner A → 작업 요청 탭 → "시연값 A 채우기" → 제출. 결과 APPLIED, 타임라인 B 구역 행에 A 점선 "요청" 막대와 SEP-LIFT-BELOW 빨간 띠.
+   3. Activity에 재계획 Agent Run이 생기고 step 카드가 쌓인다. L0 카드(서버 결과 1단계 INFEASIBLE) → L1 카드(OPTIMAL, candidate_id) → Run "사람 대기(후보 결과 대기)". 각 카드에 모델 설명 블록과 서버 결과 블록이 나뉘어 보인다.
+   4. 검토 패널이 Alpha를 자동 선택: 배지 "정의된 규칙 검사 통과", 변경 A·C, Solver "최소 변경(이 탐색 범위 안)", 협의 A 기존 동의 범위 / C 담당자 동의 필요. 타임라인에 A·C 후보 위치가 겹쳐 보인다.
+   5. Actor = Supervisor → 승인 → `CONSULTATION_INCOMPLETE`(담당자 협의 미완료) 표시 확인(대표 Test Case 승인 조건 (a)).
+   6. C 체크 + 사유 입력 → 수용 → APPLIED, C "Supervisor 수용", 협의 COMPLETE.
+   7. 승인 → APPLIED, 상태바 Plan R1, 후보 "확정됨", Run 성공(`COMMITTED:1`), 타임라인이 새 Plan.
+2. 안전 경계
+   1. "시연 초기화" 후 1.1–1.4를 반복해 Alpha 검토 대기까지 간다. C를 수용하고 승인은 하지 않는다(검토 화면을 연 채).
+   2. Actor = Reporter → 지연 신고 탭 → "시연 문구" → 제출. 즉시 Hold 목록에 SITE Hold, 타임라인 주황 사선과 상단 띠, 상태바 ACTIVE Hold 1, Context +1.
+   3. 검토 패널은 계속 Alpha를 보여 주고 배지가 "기준 변경됨(STALE)"으로 바뀐다. Run은 STALE(`EVENT:…`).
+   4. Actor = Supervisor → 승인 버튼이 켜져 있다 → 승인 → 결과 영역 `[STALE_CONTEXT, HOLD_ACTIVE]`(HTTP 409). Plan R0 그대로.
+   5. (선택) Hold 해제(변경 없음) → Context +1 → 재검사로 새 재계획 Run 또는 재확정 후보가 생기는지 확인.
+   - 참고: 2.1에서 C를 수용하지 않으면 사유에 `CONSULTATION_INCOMPLETE`가 더해진다(A.14 8단계는 item 상태로 판정). 녹화는 C를 수용한 상태에서 한다.
+
+**구현 중 정한 것**
+- 새로 고침 직후처럼 선택이 없고 검토 대기도 없으면(예: STALE 후보만 있음) 자동 선택하지 않는다. 후보 칩을 눌러 본다. 안전 경계 장면은 화면을 열어 둔 채 진행하므로 선택이 유지된다.
+- 협의 정보가 늦게 도착하면 후보 상세를 다시 그려 PENDING 체크를 채운다(후보 id + 협의 유무를 key로 쓴다).
+- 확인: 임시 DB + 워커 끔 + 스크립트 모델(L0·L1)로 Alpha를 만든 뒤 1920×1080 headless Chrome 화면으로 배치·타임라인 겹쳐 보기·step 카드·SITE Hold·STALE Run을 확인했다. 클릭 조작(승인 결과 영역 등)은 수동 확인 순서로 확인한다.
