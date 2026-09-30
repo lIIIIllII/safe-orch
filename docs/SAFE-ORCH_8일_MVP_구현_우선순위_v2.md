@@ -720,6 +720,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - 전송 재시도는 SDK가 아니라 `llm.invoke_with_retry`가 1회 한다. SDK 내부 재시도는 밖에서 보이지 않아 §11.2 "시도 2회로 계상"을 할 수 없기 때문이다. 동작은 `max_retries=1`과 같다.
   - 다시 시도하는 오류: `APIConnectionError`(`APITimeoutError` 포함), `RateLimitError`, `InternalServerError`.
   - 설정 오류(`AuthenticationError`, `PermissionDeniedError`, `NotFoundError`, `BadRequestError`)는 다시 시도하지 않는다.
+  - (A.18에서 보완) 429 중 code가 `insufficient_quota`인 것은 다시 시도하지 않고 설정 오류로 본다(Run ERROR `LLM_CONFIG: insufficient_quota`). 크레딧 부족은 기다려도 풀리지 않는다. 다른 429는 지금처럼 다시 시도한다.
   - 그 밖의 예외는 그대로 올라가 runtime이 Run ERROR로 기록한다(A.16).
 - decide가 step마다 `StepMeta(model_id, prompt_version, llm_attempts, error_kind, error)`를 만든다. Gateway는 `(시도 수 − 1)`을 더 차감하고 AgentStep.llm_attempts에 기록한다.
 - 전송 오류로 두 번 다 실패하면 모델 응답 없이 step이 COMPLETED(guard REJECTED `LLM_ERROR`)가 되고 다시 관찰한다. `LLM_ERROR`와 `MALFORMED`는 합쳐서 연속 2회면 이관한다(ESCALATED `<마지막 사유>_TWICE`). Test Case "API 오류: 1회 재질문 후 이관, Budget 차감"과 같다.
@@ -757,3 +758,84 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - `--raw`면 prompt·응답 원문을 더한다(§11.6 "진단 원문 선택").
 - 성공 = PASS 후보 도달 ∧ 금지 Action 0 ∧ Budget 안(시연 안정성). 승인 결과는 `committed`로 따로 남긴다.
 - 콘솔: run별 한 줄(success, l0_first, 종료 상태, 소요 시간, step 흐름)과 N회 요약(성공 수, L0 먼저 고른 비율, 토큰 합계). 금액은 계산하지 않는다.
+
+### A.18 D4 2단계: FastAPI API (§3.2·§9.5·§12·§13 보충, 스키마 변경 없음)
+
+범위: 데모 인증, Idempotency-Key, 상태 조회(Gate 포함), 명령 엔드포인트(폼·승인·WAIVE·거절·Event·Hold 해제), Run 조회, `/runs/{rid}/cancel`, `/dev/reset`. 화면, Inbox·메시지·Proposal(D5), Assistant, `/dev/inject-corrupted-candidate`(Scene 5는 pytest 증거로 대체), 중간 시작점 (2)·(3)(D6)은 이번 범위가 아니다.
+
+**설계됨, MVP 제외**
+- `/runs/{rid}/continue`, CONTINUE_RUN 처리, exec_contract_version 검사. 재시작 복구(§11.4, '뒤로 미룸')와 함께 한다.
+- ERROR Run은 `/runs/{rid}/cancel`이나 `/dev/reset`으로 정리한다.
+
+**공통**
+- 모든 경로에 `/api` 접두어를 붙이고, 그 뒤는 §12 경로 그대로 쓴다. 엔드포인트는 sync `def`다(§5.4). 경로의 site_id가 현재 Pack의 site와 다르면 404 `SITE_NOT_FOUND`.
+- X-Actor(`app/api/deps.py`): health 말고 읽기·쓰기 모두 필요하다.
+  - 없으면 401 `ACTOR_REQUIRED`, actor 테이블에 없으면 401 `UNKNOWN_ACTOR`. 둘 다 명령 함수를 부르지 않는다(CommandResult 없음).
+  - 역할·담당 관계 검사는 명령 함수가 한다.
+- Idempotency-Key: 모든 변경 API에서 필수다. 없으면 400 `IDEMPOTENCY_KEY_REQUIRED`, 형식(`[A-Za-z0-9._:-]{1,128}`)이 틀리면 400 `INVALID_IDEMPOTENCY_KEY`. 예외는 `/dev/reset`뿐이다.
+- 응답 본문은 언제나 §12 모양 `{status, reason_codes, context_version, plan_revision, result_refs}`이다. API 층의 거절에도 현재 site 버전을 채운다.
+- HTTP 상태 코드:
+
+  | 경우 | HTTP |
+  |---|---|
+  | APPLIED, REPLAYED | 200 |
+  | reason_codes가 `NOT_AUTHORIZED` 하나뿐 | 403 |
+  | reason_codes가 `*_NOT_FOUND` 하나뿐 | 404 |
+  | 그 밖의 거절(`IDEMPOTENCY_MISMATCH` 포함) | 409 |
+  | 본문 검증 실패 | 422 |
+  | RETRYABLE_ERROR | 503 + `Retry-After: 1` |
+
+  REPLAYED도 저장된 reason_codes로 코드를 정하므로, 같은 키로 재시도하면 원래 응답과 같은 코드가 나온다.
+- 본문 검증 실패(모르는 필드·형식)는 `{status: REJECTED, reason_codes: [INVALID_BODY], detail}` 422이고, 명령 함수는 부르지 않는다. 모르는 필드를 거절하므로 본문의 `role`·`approved`는 권한이 되지 않는다(A.14).
+- 경로의 id(candidate_id, hold_id, run_id)는 API 요청 모델에 두지 않는다. API가 합쳐 명령 Body를 만든다(request_hash에 포함).
+- CORS 미들웨어는 두지 않는다. 개발 환경은 Vite proxy(`/api` → 8000)로 같은 출처다.
+
+**명령 엔드포인트** (`app/api/commands.py`)
+- `POST /api/sites/{id}/task-requests`(TaskRequestForm). `/intakes`는 Intake Agent 시작용으로 남긴다.
+- `POST /api/candidates/{cid}/approve` `{validation_id, expected_context_version}`
+- `POST /api/candidates/{cid}/reject` `{validation_id, reason_code, target_task_ids, axes, comment}`
+- `POST /api/consultations/{cid}/waive` `{task_ids, comment}`(cid = candidate_id)
+- `POST /api/sites/{id}/events` `{source_event_id, event_type, text, target_task_id}`
+- `POST /api/holds/{hid}/release` `{resolution, expected_context_version, comment}`
+- `POST /api/runs/{rid}/cancel`(본문 없음)
+
+**상태 조회 `GET /api/sites/{id}/state`** (`app/api/state.py`)
+- `db.read_tx()`(BEGIN ~ COMMIT, 쓰기 없음) 한 번 안에서 계산한다. 1초 폴링용이다.
+- 응답:
+  - `server_time`, `site{…, pack}`, `actors`, `units`, `zones`, `zone_relations`, `resources`
+  - `tasks`: 현재 revision 전부, `gate`와 `reasons` 포함
+  - `plan`
+  - `conflicts`: 현재 Plan + Plan 밖 READY 작업의 기준 배정
+  - `candidates`, `review_queue`
+  - `holds`: ACTIVE 전부 + Event의 type·text·reporter·target
+  - `events`: 최근 10건 + hold 상태
+  - `runs`: 최근 10건 요약
+  - `dispatch{pending, failed}`
+- Gate(§9.5): ALLOW = 현재 Plan에 있음 ∧ context = plan.committed_context_version ∧ 관련 ACTIVE Hold 없음.
+  - 관련 Hold: SITE Hold는 모든 작업, TASK Hold는 그 작업.
+  - reasons: `HOLD:<hold_id>`, `NOT_IN_PLAN`, `CONTEXT_CHANGED`.
+  - HOLD 사유가 있으면 HOLD, 그 밖의 사유가 있으면 STALE이다(겹치면 HOLD, reasons에는 둘 다 남긴다).
+- candidates = 현재 (context, plan)의 후보 ∪ 최근 후보 5개 ∪ 검토 대기(최근순). 항목:
+  - `candidate_id, kind, run_id, context_version, base_plan_revision, display_status(COMMITTED > REJECTED > STALE > OPEN), assignments`
+  - `changes[{task_id, before, after}]`: 후보 snapshot의 기준 대비
+  - `solver{scope_level, stage1, stage2, chosen_stage, minimal_change, delay_optimality_unconfirmed}`: REPLAN만
+  - `validation{validation_id, status, display_status, checks}`: display_status는 STALE > INCOMPLETE > FAIL > PASS(§8). 확정된 후보는 STALE로 보지 않는다.
+  - `consultation{status, items[{…, item_status}]}`
+- runs 요약: `{run_id, agent_type, case_id, acting_unit_id, status, wait_kind, wait_ref, wait_generation, last_step_no, current_step_status, end_reason, budget_used}`.
+
+**Run 조회와 cancel**
+- `GET /api/runs/{rid}`: 요약 + acting_actor_id, input_ref, exec_contract_version, restart_count, last_step.
+- `GET /api/runs/{rid}/steps`: AgentStep 전체(§11.6 필드). 없으면 404 `RUN_NOT_FOUND`. 읽기는 site Actor 누구나(§3.2).
+- cancel(`app/commands/runs.py`, command_type `CANCEL_RUN`, CommandResult·Audit 있음):
+  - SUPERVISOR만 가능하다.
+  - RUNNING·WAITING_HUMAN·ERROR → CANCELLED(`CANCELLED_BY:<actor>`). 같은 tx에서 RESERVED step·solver_job을 ABORTED(`CANCELLED`)로 둔다. 실행 중인 그래프는 다음 RUNNING 확인에서 멈춘다.
+  - 끝난 Run은 409 `RUN_NOT_ACTIVE`, 없으면 404 `RUN_NOT_FOUND`.
+  - 취소 뒤 RECHECK는 등록하지 않는다(사람이 멈춘 것).
+  - A.16 한계(죽은 RUNNING Run이 열린 Case로 남는 문제)를 이것으로 정리한다.
+
+**`/dev/reset`** (`app/api/dev.py`)
+- DEMO_MODE가 아니면 404. 본문 `{confirm: "RESET safe_orch", start: "R0"}`이고, 문구가 다르면 400 `CONFIRM_REQUIRED`. X-Actor는 필요하지만 역할은 보지 않는다.
+- `?pack=`은 현재 Pack만 받고, 다른 값은 400 `PACK_NOT_SUPPORTED`. Pack 교체는 두 번째 Pack('뒤로 미룸')과 함께 한다.
+- **제자리 재생성**(`db.rebuild_schema`): 한 write tx 안에서 한다. 순서는 `PRAGMA defer_foreign_keys = ON` → 모든 테이블 DROP(생성 역순; 암묵적 삭제는 불변 트리거를 실행하지 않음) → schema.sql을 `sqlite3.complete_statement`로 문장 단위로 나눠 `execute` → schema_meta → seed. 파일을 지우지 않으므로 다른 스레드가 연결을 열어 두어도(Windows 파일 잠금) 된다. 중간에 실패하면 롤백되어 기존 DB가 그대로 남는다. `scripts/reset_db`(파일 삭제)는 서버가 꺼져 있을 때 쓰는 그대로 둔다.
+- 워커: `DispatchWorker`는 job 1건을 처리하는 동안 잠금을 잡는다. reset은 `quiesce(30초)`로 그 잠금을 기다린 뒤 새 job을 막고 멈춤을 예약한다. 못 얻으면 409 `WORKER_BUSY`이고 아무것도 바꾸지 않는다(워커도 그대로). 재생성 뒤 잠금을 풀어 옛 워커를 끝내고, 새 워커를 시작해 `app.state.worker`에 둔다. lifespan 종료는 `app.state.worker`의 현재 워커를 멈춘다.
+- 응답 `{status: APPLIED, context_version: 0, plan_revision: 0, result_refs: {pack, pack_hash, site_id}}`. CommandResult는 남기지 않고, 새 SEED audit 행이 기록이다.

@@ -97,5 +97,8 @@ def invoke_with_retry(runnable: Runnable, messages: Sequence[BaseMessage]) -> LL
         except CONFIG_ERRORS as e:
             return LLMCall(None, attempts, "LLM_CONFIG", type(e).__name__)
         except RETRYABLE as e:
+            # 크레딧 부족은 기다려도 풀리지 않는 설정 문제다 (A.18에서 A.17 보완)
+            if getattr(e, "code", None) == "insufficient_quota":
+                return LLMCall(None, attempts, "LLM_CONFIG", "insufficient_quota")
             if attempts > TRANSPORT_RETRIES:
                 return LLMCall(None, attempts, "LLM_ERROR", type(e).__name__)

@@ -82,9 +82,61 @@ def read() -> Iterator[sqlite3.Connection]:
     yield connect()
 
 
+@contextmanager
+def read_tx() -> Iterator[sqlite3.Connection]:
+    """단일 읽기 트랜잭션(BEGIN ~ COMMIT). 여러 조회가 같은 시점을 본다 (§12 state, 부록 A.18)."""
+    conn = connect()
+    if conn.in_transaction:
+        raise NestedTransactionError("read_tx() called inside an open transaction")
+    conn.execute("BEGIN")
+    try:
+        yield conn
+    finally:
+        if conn.in_transaction:
+            conn.execute("COMMIT")
+
+
 def get_schema_version(conn: sqlite3.Connection) -> int | None:
     row = conn.execute("SELECT schema_version FROM schema_meta").fetchone()
     return None if row is None else row[0]
+
+
+def schema_statements() -> list[str]:
+    """schema.sql을 문장 단위로 나눈다(트리거의 BEGIN…END 안 세미콜론 포함)."""
+    out: list[str] = []
+    buf = ""
+    for line in SCHEMA_FILE.read_text(encoding="utf-8").splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            out.append(buf.strip())
+            buf = ""
+    if buf.strip() and not all(
+        s.strip().startswith("--") or not s.strip() for s in buf.splitlines()
+    ):
+        raise ValueError(f"incomplete statement at end of schema.sql: {buf[:80]!r}")
+    return out
+
+
+def rebuild_schema(tx: sqlite3.Connection) -> None:
+    """write() 안에서 모든 테이블을 지우고 schema.sql을 다시 적용한다 (/dev/reset, 부록 A.18).
+
+    파일을 지우지 않으므로 다른 스레드가 연결을 열어 두어도(Windows 파일 잠금) 된다.
+    DROP TABLE의 암묵적 삭제는 트리거를 실행하지 않는다. FK는 커밋 때까지 미룬다.
+    executescript는 열린 tx를 먼저 커밋하므로 쓰지 않는다(A.3).
+    """
+    tx.execute("PRAGMA defer_foreign_keys = ON")
+    names = [
+        r[0]
+        for r in tx.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            " ORDER BY rowid DESC"
+        )
+    ]
+    for name in names:
+        tx.execute(f'DROP TABLE "{name}"')
+    for stmt in schema_statements():
+        tx.execute(stmt)
+    tx.execute("INSERT INTO schema_meta (schema_version) VALUES (?)", (SCHEMA_VERSION,))
 
 
 def init_db() -> None:

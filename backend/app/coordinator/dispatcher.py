@@ -69,6 +69,7 @@ class DispatchWorker:
         self.poll_s = poll_s
         self.model_factory = model_factory
         self._stop = threading.Event()
+        self._lock = threading.Lock()  # job 1건을 처리하는 동안 잡는다 (/dev/reset이 기다린다)
         self._thread = threading.Thread(target=self._run, name="dispatch-worker", daemon=True)
 
     def start(self) -> None:
@@ -78,16 +79,38 @@ class DispatchWorker:
         self._stop.set()
         self._thread.join(timeout)
 
+    @property
+    def alive(self) -> bool:
+        return self._thread.is_alive()
+
+    def quiesce(self, timeout: float) -> bool:
+        """처리 중인 job이 끝나길 timeout까지 기다린 뒤 새 job을 막고 멈춤을 예약한다 (A.18).
+
+        True면 호출한 쪽이 release_and_join()을 불러야 한다. False면 아무것도 바꾸지 않았다.
+        """
+        if not self._lock.acquire(timeout=timeout):
+            return False
+        self._stop.set()
+        return True
+
+    def release_and_join(self, timeout: float = 10) -> None:
+        self._lock.release()
+        if self._thread.is_alive():
+            self._thread.join(timeout)
+
     def _run(self) -> None:
         """예외가 나도 스레드를 끝내지 않는다. 로그를 남기고 poll_s만큼 쉰 뒤 계속 돈다."""
         requeued = False
         try:
             while not self._stop.is_set():
                 try:
-                    if not requeued:
-                        requeue_claimed_jobs(self.pack)
-                        requeued = True
-                    job_id = process_next(self.pack, self.model_factory)
+                    with self._lock:
+                        if self._stop.is_set():
+                            break
+                        if not requeued:
+                            requeue_claimed_jobs(self.pack)
+                            requeued = True
+                        job_id = process_next(self.pack, self.model_factory)
                 except Exception:
                     log.exception("dispatch worker loop error")
                     job_id = None

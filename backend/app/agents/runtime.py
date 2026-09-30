@@ -20,7 +20,7 @@ from app.agents.types import GatewayResult, StepMeta
 from app.domain.models import AgentRun
 from app.packs.loader import LoadedPack
 from app.store import db
-from app.store.repos.runs import end_run, get_run, reserve_step
+from app.store.repos.runs import abort_reserved, end_run, get_run, reserve_step
 
 log = logging.getLogger(__name__)
 
@@ -63,15 +63,7 @@ class StoreRunPort:
 
 def _fail(run_id: str, reason: str) -> None:
     with db.write() as tx:
-        tx.execute(
-            "UPDATE agent_step SET status = 'ABORTED', abort_reason = ?"
-            " WHERE run_id = ? AND status = 'RESERVED'",
-            (reason, run_id),
-        )
-        tx.execute(
-            "UPDATE solver_job SET status = 'ABORTED' WHERE run_id = ? AND status = 'RESERVED'",
-            (run_id,),
-        )
+        abort_reserved(tx, run_id, reason)
         end_run(tx, run_id, "ERROR", reason)
 
 

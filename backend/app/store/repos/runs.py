@@ -300,3 +300,16 @@ def stale_active_runs(tx: sqlite3.Connection, site_id: str, end_reason: str) -> 
             (end_reason, site_id),
         ).fetchall()
     ]
+
+
+def abort_reserved(tx: sqlite3.Connection, run_id: str, reason: str) -> None:
+    """RESERVED step과 solver_job을 ABORTED로 (Run ERROR·취소)."""
+    tx.execute(
+        "UPDATE agent_step SET status = 'ABORTED', abort_reason = ?"
+        " WHERE run_id = ? AND status = 'RESERVED'",
+        (reason, run_id),
+    )
+    tx.execute(
+        "UPDATE solver_job SET status = 'ABORTED' WHERE run_id = ? AND status = 'RESERVED'",
+        (run_id,),
+    )

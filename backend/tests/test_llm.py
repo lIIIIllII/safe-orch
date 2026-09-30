@@ -87,6 +87,33 @@ def test_auth_error_is_llm_config_without_retry():
     )
 
 
+def _rate_limit(code):
+    body = {"message": "m", "type": code, "code": code}
+    return openai.RateLimitError("429", response=httpx.Response(429, request=REQ), body=body)
+
+
+def test_insufficient_quota_is_llm_config_without_retry():
+    r = FakeRunnable([_rate_limit("insufficient_quota"), AIMessage(content="")])
+    call = llm.invoke_with_retry(r, [])
+    assert (call.attempts, call.error_kind, call.error, r.calls) == (
+        1,
+        "LLM_CONFIG",
+        "insufficient_quota",
+        1,
+    )
+
+
+def test_other_rate_limit_is_retried():
+    ok = AIMessage(content="", tool_calls=[])
+    r = FakeRunnable([_rate_limit("rate_limit_exceeded"), ok])
+    assert llm.invoke_with_retry(r, []).attempts == 2
+
+
+def test_insufficient_quota_ends_run_as_llm_config(with_a):
+    run, _ = _invoke(with_a, [_raise(lambda: _rate_limit("insufficient_quota"))])
+    assert (run.status, run.end_reason) == ("ERROR", "LLM_CONFIG: insufficient_quota")
+
+
 def test_other_exceptions_propagate():
     with pytest.raises(ValueError):
         llm.invoke_with_retry(FakeRunnable([ValueError("bug")]), [])
