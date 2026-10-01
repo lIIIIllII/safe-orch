@@ -193,7 +193,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "lookups": lookups,
         "analyses": analyses,
         "proposals": proposals,
-        # 신고자에게 되물은 질문과 답(quoted_answer, 인용). 서버는 답에서 값을 뽑지 않는다 (A.25 S4)
+        # 신고자에게 되물은 질문과 답(quoted_answer, 인용). 서버는 답에서 값을 뽑지 않는다 (A.25 S4).
+        # 질문 문장은 넣지 않는다: 보이면 답이 안 온 항목을 같은 질문으로 다시 묻는다 (A.27)
         "reporter_replies": [
             {
                 "message_id": m["message_id"],

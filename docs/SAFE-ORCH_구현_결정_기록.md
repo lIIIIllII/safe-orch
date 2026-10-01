@@ -1343,6 +1343,8 @@
 - live run 기록에 `lookup_args`(ER 조회 조건 전부)와 `er_steps`를 더했다.
 - 재실행(2026-10-01 18:21 UTC, `data/live_runs/20261001T182133Z.jsonl`, `--path event --coord`): **3/3 성공**. 회차별 LOOKUP_TASKS 1회(PAINTING), ER 3 step(LOOKUP → ANALYZE → PROPOSE), 전체 9 step, 토큰 약 20,000, 19.7–27.4초. 같은 조건 조회 3회 이상인 회차가 없어 ASK_REPORTER 앞당김 판단은 하지 않았다(S4 그대로).
 
+**사람에게 묻는 시점**: ASK_REPORTER는 이 Run에서 LOOKUP_TASKS를 한 뒤에만 열린다. ER 관찰에는 질문 문장을 넣지 않는다(이유와 live run 신고자 답 규칙은 A.27).
+
 ### A.26 Work Intake Agent — 최소 경로 (§2 F1·§5.1·§9.4·§9.6·§10·§11.3·§18.2.1·§18.2.4·§19 D01 보충, 스키마 변경 없음)
 
 목표 흐름: Planner A가 자연어로 작업을 요청한다("B구역 인양 30분, A-CR-01, 첫날 9시~10시 사이 시작, 10시 반까지 끝나야 함") → Intake Run: 자원 조회 → 빠진 값이 있으면 확인 질문(자유 텍스트 답) → 값 확인 요청 → Planner A 확인 → COMPLETE_TASKSPEC → critical field CONFIRMED(source `message:<mid>`) + Consent → READY(열린 Case·대기열이 있으면 QUEUED) → RECHECK → 이후 기존과 같다. 같은 값이면 폼으로 낸 A와 source_ref만 다르고 같은 작업·같은 Replanning 경로가 나온다. 폼 경로, D01, I-14, 기본안 A·B·Event 경로, 골든 테스트는 그대로다. 우선순위 v2 표에서 Work Intake는 "여유 있으면 · D6 이후 · 폼 유지"이며 시연 경로를 바꾸지 않는 추가 경로다.
@@ -1433,3 +1435,66 @@
 - 화면: 신고자에게 가는 질문도 제안 없는 질문 카드(답 입력)로 보인다. 카드 제목 문구를 "작업 요청 확인 질문" → "확인 질문(답 입력)"으로 일반화했다.
 - 테스트 498 → 501: 모호 신고 → LOOKUP → ASK_REPORTER(신고자, ACCEPT는 `INVALID_DECISION`) → ANSWER → ANALYZE(E, 10:15) → PROPOSE(E, 75), 질문 대기·수정안 대기 중 ASK_REPORTER 닫힘, live run 스크립트(`--ambiguous`).
 - live run `--path event --coord --ambiguous` 3회(2026-10-01 19:06 UTC, `data/live_runs/20261001T190620Z.jsonl`, `event-response-p3`): **2/3 성공**. #1·#3: ASK_REPORTER 2회(시각 → 대상) → LOOKUP(PAINTING) → ANALYZE(E, 10:15) → PROPOSE(E, 75) → 확정·해제 → Gamma(E 10:15, 변경 1·지연 30) → 협의(Planner B 수락) → R2 → 통지, ER 5 step, 약 25,000 토큰. #2 실패: ASK_REPORTER 2회(시각+구역 → 구역) 뒤 ESCALATE("10시 15분은 확인됐지만 구역을 특정할 수 없음"), 조회 0회, ER 3 step. 스크립트 신고자는 두 번째 질문에도 같은 답 문장을 보냈다. 금지 Action·MALFORMED·LLM 오류 0. 이 실행의 기록 `events[].reply`는 로그 버그로 "ACCEPT"로 적혔다(실제 답은 ANSWER였고 판정에 영향 없음, 실행 뒤 고침).
+
+**사람에게 묻는 시점**: ASK_CLARIFICATION은 남은 사람 라운드가 2 이상일 때만 열린다(마지막 라운드는 값 확인 요청용). 질문 문장 노출과 live run 요청자 답 규칙은 A.27.
+
+### A.27 사람에게 묻는 시점 (Agent 공통) (§1·§11.6·§11.7·§18.2.1·§18.2.3·§18.2.4 보충, 스키마 변경 없음)
+
+live run에 남은 실패 두 유형 대응. 모호 신고(A.26 S4 #2)는 LOOKUP_TASKS 없이 ASK_REPORTER로 구역을 두 번 묻고 이관했다(성공 회차도 조회 전에 대상을 물었다). 모호 요청(A.26 intake-p2 #3)은 문장에 있던 시간을 다시 물어 사람 라운드 3을 다 쓰고, 값 확인 요청을 한 번도 내지 못한 채 이관했다.
+
+**원칙**: §1 "사람에게는 조회로 알 수 없는 것만 묻는다"와 §11.7 "사람에게 묻는 시점(서버 정책)"을 Replanning 밖 Agent에도 적용한다. Budget처럼 서버가 Available Actions에서 지키는 정책이며, 행동 순서를 지시하는 스크립트나 prompt 지시가 아니다. 모델은 열린 Action 안에서 고른다.
+
+| Agent | 정책 (Available Actions에서 판정) | 위치 |
+|---|---|---|
+| Replanning | `ASK_TASK_OWNER`는 미시도 범위(`untried_levels`)가 비었을 때만 (A.21 0-2, 그대로) | `specs/replanning.py` |
+| Event Response | `ASK_REPORTER`는 **이 Run에서 받아들여진 LOOKUP_TASKS가 1회 이상** 있을 때만. Context 조건은 없고, 조회 결과가 0건이어도 조회한 것으로 본다(대상을 조회로 알 수 없을 때 묻는 것은 허용) | `specs/event_response.py` `choices` |
+| Work Intake | `ASK_CLARIFICATION`은 **남은 사람 라운드가 2 이상**일 때만. 마지막 라운드는 `REQUEST_CONFIRMATION`용이다. REQUEST 조건은 그대로(라운드 1 이상), 사람 라운드 3·질문과 확인의 라운드 공유도 그대로 | `specs/intake.py` `choices` |
+
+- **질문 문장 노출 (Intake만)**: 모델이 자기가 한 질문을 볼 수 없어(관찰에 상태·답만, `recent_steps`는 Action 이름만) 같은 질문을 반복할 수 있었다. Intake `questions[].question`에 그 질문 메시지의 agent_text(모델이 쓴 문장, 인용 데이터)를 넣는다. `list_run_messages`가 agent_text도 읽는다.
+  - **ER에는 넣지 않는다.** 처음에는 ER `reporter_replies[].question`도 넣었으나(1e), live run에서 모호·명확 신고가 모두 0/3이 되었다. 질문 문장을 보면 모델이 답이 오지 않은 항목(구역·날짜)을 같은 질문으로 다시 물어 사람 라운드 2를 다 쓰고 이관했다(아래 live run과 비교 실행). Intake는 같은 노출로 좋아졌다(값 확인 요청이라는 다음 수단이 열려 있다).
+- prompt: `event-response-p4`(ASK_REPORTER 열리는 조건 문구만), `intake-p3`(ASK_CLARIFICATION 열리는 조건 문구, 확인 질문 줄에 question). 행동 순서를 지시하는 문장은 넣지 않았다. 템플릿 fingerprint `43842c8b…`·`057c1ac7…`. exec_contract_version은 그대로(`event-response-a25`·`intake-a26`).
+- **live run 사람 역할(신고자·요청자)**: 첫 질문에는 scenario 답 문장(FIRST), 두 번째 질문부터는 "앞에서 답한 것이 전부입니다: <답>. 나머지는 처음 문장 그대로입니다: <원문>"(REPEAT). 질문별 답 종류를 기록 `answer_kinds`와 `events[].answer_kind`에 남긴다. 성공 기준은 그대로다. scenario.yaml은 바꾸지 않았다(pack_hash 그대로).
+
+**블루프린트와 달라지는 점** (v1.2.4 본문은 다음 개정 때 반영한다)
+1. §18.2.1: "사람에게 묻는 시점(서버 정책)"을 Agent 공통 원칙으로 적는다(지금은 §11.7 Replanning 명세에만 있다).
+2. §18.2.3: ASK_REPORTER 사용 조건에 "이 Run에서 LOOKUP_TASKS 1회 이상"을 더한다. 관찰 신고자 답에는 질문 문장을 넣지 않는다.
+3. §18.2.4: ASK_CLARIFICATION 사용 조건에 "남은 사람 라운드 2 이상(마지막 라운드는 값 확인용)"을 더하고, 관찰 확인 질문에 질문 문장을 더한다.
+
+**테스트** 501 → 505
+- ① `test_ask_reporter_opens_only_after_lookup`: 조회 전 ASK_REPORTER → `ACTION_NOT_AVAILABLE`, 조회 뒤 열림, 0건 조회도 열림, lookups가 비면 닫힘.
+- ② `test_last_round_is_for_confirmation`: 남은 라운드 3·2면 ASK 열림, 1이면 닫힘, REQUEST는 모두 열림.
+- ③ `test_ask_closed_after_two_questions`: 질문 2회 뒤 세 번째 ASK → `ACTION_NOT_AVAILABLE`, REQUEST는 받아들여짐, 관찰 `questions[].question`에 물은 문장.
+- 정책을 끄면(조건을 이전으로 되돌리면) ①②③ 모두 실패하는 것을 확인했다.
+- 고친 테스트: 스크립트 모델 live run 테스트(`--path event --ambiguous`)의 순서 ASK → LOOKUP을 LOOKUP → ASK로 바꾸고 `answer_kinds == ["FIRST"]` 확인, 사람 역할 답 함수 테스트 1개. 골든·기존 테스트 그대로, `verify_demo_values` 통과.
+
+**live run** (model `gpt-6-luna`, reasoning_effort none, `replanning-p8`·`coordination-p1`·`intake-p3`. 아래 첫 표의 ER은 질문 문장을 노출한 첫 버전)
+
+| 경로 | 결과 | 기록 |
+|---|---|---|
+| 모호 요청 `--path intake --ambiguous` | **3/3** (이전 2/3). ASK [1, 2, 2], 모든 회차 REQUEST 1회 → COMPLETE → Alpha 기대값 일치. 두 번째 질문을 받은 회차는 REPEAT 답 뒤 바로 값 확인 요청을 냈다 | `data/live_runs/20261001T192058Z.jsonl` |
+| 명확 요청 `--path intake` | **3/3** (회귀 없음). ASK [0, 1, 0] | `20261001T192249Z.jsonl` |
+| 모호 신고 `--path event --coord --ambiguous` | **0/3** (이전 2/3). 세 회차 모두 LOOKUP(PAINTING) → ASK_REPORTER → ASK_REPORTER → ESCALATE("구역을 특정할 수 없음") | `20261001T192027Z.jsonl` |
+| 명확 신고 `--path event --coord` | **0/3** (이전 3/3). LOOKUP → ASK ×2 → ESCALATE("대상·날짜가 특정되지 않음"), #2는 LOOKUP을 한 번 더 함 | `20261001T192215Z.jsonl` |
+
+모든 회차 금지 Action·MALFORMED·LLM 오류 0, Budget 소진 없음(이관은 모델의 ESCALATE).
+
+**1e 적용 시 ER 실패 원인** (질문 문장 노출을 ER에서 뺀 근거)
+- 비교 실행 1. 이 변경 전 코드(HEAD `35f8e1a`, `event-response-p3`)로 명확 신고 3회: **3/3**(`20261001T192351Z.jsonl`). 다만 세 회차 모두 신고 문장에 시각이 있는데도 ASK_REPORTER를 1회 했다(ASK → LOOKUP 2회, LOOKUP → ASK 1회). S4 이후 명확 신고 live run은 이번이 처음이라 이 "불필요한 1회 질문"은 S4부터 있던 것이다.
+- 비교 실행 2. 이 변경에서 **ER 질문 문장 노출(`reporter_replies[].question`)만 임시로 뺀** 코드(조회 뒤 질문 정책은 유지)로 명확 신고 **2/3**(`20261001T192524Z.jsonl`, 실패 1회는 ASK 1회 뒤 이관), 모호 신고 **3/3**(`20261001T192627Z.jsonl`, 세 회차 모두 LOOKUP → ASK 1회 → ANALYZE(E, 10:15) → PROPOSE, ER 4 step). 비교 뒤 코드는 결정대로(노출 있음) 되돌렸다.
+- 원인 ① (주원인, 비교 실행 2로 확인): **ER에서 질문 문장을 보이게 하자 모델이 "내 질문(구역·날짜)에 답이 없다"를 보고 남은 라운드로 같은 내용을 다시 물었다.** 두 번째 답은 REPEAT라 새 정보가 없고, 라운드 2를 다 쓴 뒤 이관했다. 노출이 없을 때는 답 하나를 받고 조회 결과의 시각과 맞춰 E를 골랐다.
+- 원인 ② (배경): LOOKUP_TASKS(PAINTING)는 E·P·W 세 작업을 돌려준다. 신고에서 대상을 고르는 근거는 시각(E의 현재 시작 09:45 + 15분 = 10:00, 모호 신고는 답의 10:15)뿐이고, 모델은 구역·날짜를 신고자에게 물으려 한다. 신고자(스크립트)는 구역을 모른다. 조회 뒤 질문 정책 때문에 모델이 후보 3건을 본 상태에서 묻게 되어, 질문이 "어느 구역/작업인가"로 쏠렸다.
+- 원인 ③ (보조): REPEAT 답은 의도대로 새 정보를 주지 않는다. 첫 질문이 신고자가 알 수 없는 것(구역)이면 두 번째 질문으로도 풀리지 않는다.
+- Intake는 같은 질문 문장 노출에서 오히려 좋아졌다(물은 필드·문장과 REPEAT 답을 보고 바로 값 확인 요청). 차이는 Intake에는 "확인 요청"이라는 다음 수단이 열려 있고, ER에서는 신고자에게 묻는 것 외에 대상을 좁히는 수단이 분석뿐이라는 점으로 보인다(추정).
+- 결정: ER에서는 질문 문장 노출을 뺀다. Intake는 유지한다.
+
+**ER 노출을 뺀 최종 코드** (`event-response-p4` = 조회 뒤 질문만)
+
+| 경로 | 결과 | 기록 |
+|---|---|---|
+| 모호 신고 `--path event --coord --ambiguous` | **2/3**. #2·#3: LOOKUP(PAINTING) → ASK 1회 → ANALYZE(E, 10:15) → PROPOSE(E, 75) → Gamma(지연 30) → R2, ER 4 step. #1 실패: 첫 step에서 ESCALATE("신고만으로는 대상·시각을 특정할 수 없음/다음: 신고자에게 확인"). 묻고 싶었지만 조회 전이라 ASK_REPORTER가 닫혀 있었고, 조회 대신 이관을 골랐다 | `data/live_runs/20261001T193436Z.jsonl` |
+| 명확 신고 `--path event --coord` | **3/3**. 세 회차 모두 PROPOSE(E, 60) → Gamma(지연 15) → R2. 다만 모두 ASK_REPORTER를 했다(#1은 2회: FIRST·REPEAT, #2·#3은 1회) | `20261001T193528Z.jsonl` |
+
+**남은 문제 (대응은 결정 뒤)**
+- 조회 뒤 질문 정책의 새 실패 형태: 조회 전에 묻고 싶은 모델이 닫힌 ASK 대신 ESCALATE를 고를 수 있다(모호 신고 #1, 1/6 회차).
+- 명확 신고의 불필요한 질문(S4부터, HEAD에서도 3/3 회차): 조회 결과에 도장 작업 E(10/12 09:45 시작)·P(10/13 10:00)·W(10/13 13:00)가 나온다. 신고 "도장 준비 15분 늦어져 10시부터"에는 날짜·구역이 없어서 "09:45 + 15분 = 10:00"으로 E를 골라야 하는데, 모델이 이 비교를 하지 못하고 신고자에게 날짜·구역을 묻는다. 신고자 답은 정보가 없지만, 결국 E를 고르는 데는 성공한다.
+

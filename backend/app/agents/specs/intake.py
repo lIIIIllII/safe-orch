@@ -64,7 +64,7 @@ class LookupResource(Action):
 class AskClarification(Action):
     """빠지거나 모호한 값을 요청자에게 묻는다. 답은 자유 텍스트로 온다."""
 
-    OPENS = "사람 확인 라운드가 남았고 답을 기다리는 질문·확인 요청이 없을 때"
+    OPENS = "사람 확인 라운드가 2 이상 남았고(마지막 라운드는 값 확인 요청용) 답을 기다리는 질문·확인 요청이 없을 때"
 
     field_ids: list[Literal["zone_id", "duration", "window", "resource"]] = Field(
         min_length=1, description="물을 critical field"
@@ -116,14 +116,16 @@ FLOW = {
 
 
 def choices(obs: dict[str, Any]) -> dict[str, Any]:
-    """Action별 열림 (A.26 2). 답을 기다리는 메시지가 있으면 묻거나 확인을 요청하지 않는다."""
+    """Action별 열림 (A.26 2·A.27). 답을 기다리는 메시지가 있으면 묻거나 확인을 요청하지 않는다."""
     waiting = any(q["status"] == "OPEN" for q in obs["questions"]) or any(
         c["status"] == "OPEN" for c in obs["confirmations"]
     )
-    rounds = obs["budget_remaining"].get("human_rounds", 0) > 0
+    left = obs["budget_remaining"].get("human_rounds", 0)
+    rounds = left > 0
     last = obs["confirmations"][-1] if obs["confirmations"] else None
     return {
-        "ASK": rounds and not waiting,
+        # 마지막 사람 라운드는 값 확인 요청(REQUEST_CONFIRMATION)용으로 남긴다 (A.27)
+        "ASK": left >= 2 and not waiting,
         "REQUEST": rounds and not waiting,
         "COMPLETE": not waiting
         and last is not None

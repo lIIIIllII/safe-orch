@@ -64,6 +64,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 {
                     "message_id": m["message_id"],
                     "field_ids": ((step.get("action") or {}).get("args") or {}).get("field_ids"),
+                    # 이 Run이 물은 문장(모델 작성, 인용). 같은 질문 반복을 알아볼 수 있게 (A.27)
+                    "question": m["agent_text"],
                     "status": m["status"],
                     # 요청자가 쓴 답은 인용 데이터다. 서버는 값을 뽑지 않는다 (A.26 3)
                     "quoted_answer": reply.get("comment")

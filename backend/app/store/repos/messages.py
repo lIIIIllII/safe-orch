@@ -279,11 +279,11 @@ def change_answers(requests: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def list_run_messages(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
-    """이 Run이 보낸 메시지(유형·수신자·상태·답·결합 값)."""
+    """이 Run이 보낸 메시지(유형·수신자·상태·답·결합 값·모델 문장)."""
     found = rows(
         conn,
         "SELECT message_id, step_no, to_actor_id, type, status, reply, proposal_id,"
-        " candidate_id, change_hash FROM message WHERE run_id = ? ORDER BY rowid",
+        " candidate_id, change_hash, agent_text FROM message WHERE run_id = ? ORDER BY rowid",
         (run_id,),
     )
     for r in found:

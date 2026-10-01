@@ -639,12 +639,12 @@ def test_live_run_path_intake_with_scripted_model(monkeypatch, ambiguous):
 
 
 def test_live_run_path_event_ambiguous_with_scripted_model(monkeypatch):
-    """--path event --ambiguous (A.25 S4): 모호 신고 → ASK_REPORTER → 답 → E 10:15 수정안 → Gamma(지연 30) → R2."""
+    """--path event --ambiguous (A.25 S4·A.27): 모호 신고 → 조회 → ASK_REPORTER → 답 → E 10:15 수정안 → Gamma(지연 30) → R2."""
     router = Router(
         replanning=[solve("L0")],
         event_response=[
-            call("ASK_REPORTER", "되묻기", question="몇 시부터?"),
             call("LOOKUP_TASKS", "조회", work_type="PAINTING"),
+            call("ASK_REPORTER", "되묻기", question="몇 시부터?"),
             call("ANALYZE_IMPACT", "분석", task_id="E", new_earliest_start=75),
             call(
                 "PROPOSE_FACT_UPDATE", "제안", task_id="E", new_earliest_start=75, evidence="10:15"
@@ -660,3 +660,13 @@ def test_live_run_path_event_ambiguous_with_scripted_model(monkeypatch):
     assert r["success"], c
     assert (c["asks"], c["gamma_changed_delay"]) == (1, [1, 30])
     assert next(e["reply"] for e in r["events"] if "reply" in e) == "ANSWER"
+    assert r["answer_kinds"] == ["FIRST"]
+
+
+def test_live_run_human_answer_repeats_after_first():
+    """사람 역할 답 (A.27): 첫 질문은 scenario 답, 두 번째부터는 앞의 답이 전부라는 답."""
+    assert live_run._human_answer(0, "B구역입니다.", "원문") == ("FIRST", "B구역입니다.")
+    assert live_run._human_answer(1, "B구역입니다.", "원문") == (
+        "REPEAT",
+        "앞에서 답한 것이 전부입니다: B구역입니다. 나머지는 처음 문장 그대로입니다: 원문",
+    )

@@ -18,7 +18,7 @@ from app.agents.specs import intake as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "intake-p2"
+PROMPT_VERSION = "intake-p3"
 
 
 def tool_catalog() -> str:
@@ -58,7 +58,7 @@ Goal: {goal}
 - 자원 유형(resource_types): 자원 유형 코드·현장 표시 이름·그 유형의 자원 ID다. 값과 조회의 코드는 이 목록과 work_types·zones의 코드만 쓴다.
 - 자원 조회 결과(resource_lookups): 자원 유형, 요청자 Unit이 쓸 수 있는지(usable_by_requester), 가용 구간이다. \
 같은 Context에서 같은 조건의 조회는 같은 결과를 돌려준다. 지금까지의 조회 결과는 resource_lookups에 모두 있다.
-- 확인 질문(questions): 물은 필드와 상태, 요청자의 답(quoted_answer, 인용)이다.
+- 확인 질문(questions): 물은 필드(field_ids)와 질문(question, 네가 쓴 문장), 상태, 요청자의 답(quoted_answer, 인용)이다.
 - 값 확인 요청(confirmations): 확인을 요청한 값(values)과 상태·결정(ACCEPT 확인, DECLINE 거절)·거절 사유(quoted_comment, 인용)다.
 - 요청 문장과 확인 질문의 답은 확인 값이 아니다. 값 확인 요청에 요청자가 확인하면 그 values 전체가 확인된다.
 - 마지막 검증(last_check): 검증 실패(TASKSPEC_INVALID)나 확인 값과 다른 완료(CONFIRMED_VALUE_MISMATCH)의 사유다.
@@ -122,4 +122,5 @@ def fingerprint() -> str:
 PROMPT_FINGERPRINTS = {
     "intake-p1": "95a9073706ea385c75f36c873aa2f6e5b2ceaa862cc4b055a249d51344725675",
     "intake-p2": "fcfca39ebb9411cefaea0362c474a14c0a86414ddf61d8f04c3d1d4ba75a1062",  # 자원 유형 코드·표시 이름, 코드 인자 실행 시 enum, 확인 의미 사실 설명 (A.26)
+    "intake-p3": "057c1ac721076deac49fc6b8854256119f800f2a55920e30811c723f56cbfe1e",  # 마지막 라운드는 값 확인용(ASK 열리는 조건), 질문 문장 노출 (A.27)
 }

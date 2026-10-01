@@ -38,6 +38,10 @@ VALUES_A = {
 }
 
 
+def _tool_names(step):
+    return {t["function"]["name"] for t in step["available_actions"]}
+
+
 def _key():
     return uuid.uuid4().hex
 
@@ -427,3 +431,50 @@ def test_runtime_enums_on_code_arguments_and_static_schema_has_no_pack_values(se
     static = json.dumps(spec.tool_schemas({name: {} for name in spec.ACTIONS}), ensure_ascii=False)
     for value in ("A-CR-01", "CRANE", "LIFTING", "크레인"):
         assert value not in static
+
+
+# ── 사람에게 묻는 시점 (A.27) ──────────────────────────────────
+
+
+def test_last_round_is_for_confirmation(seeded):
+    """② 남은 사람 라운드가 1이면 ASK_CLARIFICATION은 닫히고 REQUEST_CONFIRMATION은 열린다."""
+    pack = seeded
+    assert _intake(pack, pack.demo_intakes[1].text).status == "APPLIED"
+    run_until_idle(pack, model_factory=Router(intake=[_lookup(), _ask()]).factory())
+    [run] = _runs("INTAKE")
+    obs = _steps(run.run_id)[0]["observation"]
+    for left, ask_open in ((3, True), (2, True), (1, False)):
+        o = {**obs, "budget_remaining": {**obs["budget_remaining"], "human_rounds": left}}
+        available = spec.available_actions(o)
+        assert ("ASK_CLARIFICATION" in available) is ask_open, left
+        assert "REQUEST_CONFIRMATION" in available, left
+
+
+def test_ask_closed_after_two_questions(seeded):
+    """③ 질문 2회 뒤(남은 라운드 1)에는 ASK_CLARIFICATION이 닫혀 값 확인 요청만 낼 수 있다.
+
+    두 번째 관찰부터 questions[].question에 이 Run이 물은 문장이 보인다.
+    """
+    pack = seeded
+    demo = pack.demo_intakes[1]
+    assert _intake(pack, demo.text).status == "APPLIED"
+    for _ in range(2):
+        run_until_idle(pack, model_factory=Router(intake=[_ask()]).factory())
+        [q] = [m for m in _messages("QUESTION") if m["status"] == "OPEN"]
+        assert _reply(pack, q["message_id"], "ANSWER", demo.answer).status == "APPLIED"
+    run_until_idle(pack, model_factory=Router(intake=[_ask(), _request()]).factory())
+    [run] = _runs("INTAKE")
+    steps = _steps(run.run_id)
+    assert [(s["action"]["name"], s["guard"]["reason_code"]) for s in steps] == [
+        ("ASK_CLARIFICATION", None),
+        ("ASK_CLARIFICATION", None),
+        ("ASK_CLARIFICATION", "ACTION_NOT_AVAILABLE"),
+        ("REQUEST_CONFIRMATION", None),
+    ]
+    assert "ASK_CLARIFICATION" not in _tool_names(steps[2])
+    assert "REQUEST_CONFIRMATION" in _tool_names(steps[2])
+    assert [q["question"] for q in steps[2]["observation"]["questions"]] == [
+        "어느 구역에서, 어떤 크레인으로 하나요?"
+    ] * 2
+    run = _runs("INTAKE")[0]
+    assert (run.status, run.human_rounds_used) == ("WAITING_HUMAN", 3)

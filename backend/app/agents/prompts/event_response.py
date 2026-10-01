@@ -18,7 +18,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p3"
+PROMPT_VERSION = "event-response-p4"
 
 
 def tool_catalog() -> str:
@@ -122,4 +122,5 @@ PROMPT_FINGERPRINTS = {
     "event-response-p1": "c6380d9812ce55b41c79236af188272c3f902cd1e2bd52335941863e0f4a6c38",
     "event-response-p2": "6a8e75b88172a52abaa66793f2d1dbaae62d6a56c8683c0be1d4c948a09b7259",  # 같은 조건 조회는 같은 결과, lookups에 모두 있음(사실 설명, A.25 S2 뒤)
     "event-response-p3": "67c93218658b928bfe0c31ce80874eb8b1e91177c1192e0d7aaf1553b16f8529",  # ASK_REPORTER와 신고자 답(reporter_replies) (A.25 S4)
+    "event-response-p4": "43842c8b5c1304b33874fae5c1d74ce241097029989f2b24036983a6cdb55053",  # 조회 뒤 질문(ASK_REPORTER 열리는 조건) (A.27)
 }

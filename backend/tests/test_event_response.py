@@ -42,6 +42,10 @@ from app.store.repos.tasks import insert_task_revision, list_current_tasks
 DELAY = "도장 준비 15분 늦어져 10시부터"  # scenario demo_events[0]과 같은 문장
 
 
+def _tool_names(step):
+    return {t["function"]["name"] for t in step["available_actions"]}
+
+
 def _key():
     return uuid.uuid4().hex
 
@@ -539,3 +543,34 @@ def test_ask_reporter_closed_while_question_open_or_proposal_pending(seeded, eve
     assert "ASK_REPORTER" not in spec.available_actions(asking)
     free = {**obs, "proposals": [], "reporter_replies": []}
     assert "ASK_REPORTER" in spec.available_actions(free)
+
+
+def test_ask_reporter_opens_only_after_lookup(seeded, event_response_on):
+    """① 사람에게 묻는 시점 (A.27): 이 Run에서 LOOKUP_TASKS를 하기 전에는 ASK_REPORTER가 닫혀 있다.
+
+    조회 결과가 0건이어도 조회는 한 것이라 열린다(대상을 조회로 알 수 없을 때 묻는 것은 허용).
+    """
+    pack = seeded
+    _r1(pack)
+    _report(pack, pack.demo_events[1].text)
+    ask = call(
+        "ASK_REPORTER", "이유: 대상·시각이 없다/다음: 답을 본다", question="어느 작업인가요?"
+    )
+    run_until_idle(pack, model_factory=Router(event_response=[ask, _lookup(), ask]).factory())
+    [er] = _runs("EVENT_RESPONSE")
+    steps = _steps(er.run_id)
+    assert [
+        (s["action"]["name"], s["guard"]["verdict"], s["guard"]["reason_code"]) for s in steps
+    ] == [
+        ("ASK_REPORTER", "REJECTED", "ACTION_NOT_AVAILABLE"),
+        ("LOOKUP_TASKS", "ACCEPTED", None),
+        ("ASK_REPORTER", "ACCEPTED", None),
+    ]
+    assert "ASK_REPORTER" not in _tool_names(steps[0])
+    assert "ASK_REPORTER" in _tool_names(steps[2])
+    assert (er.status, er.human_rounds_used) == ("WAITING_HUMAN", 1)
+    # 0건 조회도 조회다
+    obs = steps[2]["observation"]
+    empty = {**obs, "lookups": [{"filters": {"work_type": None, "zone_id": "X"}, "tasks": []}]}
+    assert "ASK_REPORTER" in spec.available_actions(empty)
+    assert "ASK_REPORTER" not in spec.available_actions({**obs, "lookups": []})

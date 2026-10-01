@@ -28,13 +28,16 @@
   수정안을 확정하고 FACT_CONFIRMED로 해제, (--coord면 COORDINATION_ENABLED를 켜고 변경 요청에 담당자 수락, 아니면
   Supervisor WAIVE) → 승인. 성공 = PROPOSE(E, 60) ∧ 제안 CONFIRMED ∧ Hold FACT_CONFIRMED ∧ Gamma PASS(E 60,
   변경 1, 지연 15) ∧ R2 ∧ ER Run SUCCEEDED ∧ (--coord면 통지 대상 전원 통지) ∧ 신고 뒤 Run에서 금지 Action·
-  MALFORMED 0 ∧ Budget 안.
+  MALFORMED 0 ∧ Budget 안. --ambiguous면 demo_events[1]을 신고하고, 신고자 질문에 ANSWER로 답한다.
 - --path intake [--ambiguous] (Work Intake, 부록 A.26): 요청 A를 demo_intakes[0](명확) 또는 [1](모호) 문장으로
   자연어 요청한다. 사람 역할(요청자): 확인 질문에는 scenario의 answer 문장으로 ANSWER, 값 확인 요청에는 확인.
   완료 뒤 Replanning을 실제 모델로 Alpha 후보까지. 성공 = Intake SUCCEEDED ∧ 작업 값 = new_task ∧ fields 모두
   CONFIRMED·source message: ∧ Consent(TIME 시작 범위, RESOURCE 요청 자원, source message:) ∧ Alpha PASS·기대값(L1)
   일치 ∧ 금지 Action·MALFORMED 0 ∧ Budget 안 (∧ --ambiguous면 확인 질문 1회 이상). 명확한 요청의 질문 횟수는
   기록만 한다(성공 기준 아님).
+- 자유 텍스트 답(신고자·요청자, A.27): 첫 질문에는 scenario 답 문장, 두 번째 질문부터는 "앞에서 답한 것이
+  전부입니다: <답>. 나머지는 처음 문장 그대로입니다: <원문>". 질문별 답 종류(FIRST·REPEAT)를 answer_kinds와
+  events[].answer_kind에 남긴다. 성공 기준은 바꾸지 않는다.
 """
 
 import argparse
@@ -141,6 +144,19 @@ class _RecordingModel:
 
     def bind_tools(self, tools: Sequence[dict[str, Any]], **kwargs: Any) -> _RecordingRunnable:
         return _RecordingRunnable(self.inner.bind_tools(tools, **kwargs), self.rec)
+
+
+def _human_answer(asked: int, first: str, original: str) -> tuple[str, str]:
+    """사람 역할의 자유 텍스트 답 (A.27). (답 종류, 답 문장).
+
+    첫 질문에는 시나리오 답(FIRST), 두 번째 질문부터는 더 아는 것이 없다는 답(REPEAT)을 보낸다.
+    """
+    if asked == 0:
+        return "FIRST", first
+    return (
+        "REPEAT",
+        f"앞에서 답한 것이 전부입니다: {first.rstrip('.')}. 나머지는 처음 문장 그대로입니다: {original}",
+    )
 
 
 def _key() -> str:
@@ -901,6 +917,7 @@ def _path_event(
     )
     hold_id = out.result_refs["hold_id"]
     events: list[dict[str, Any]] = [{"report": report.text, "status": out.status}]
+    answer_kinds: list[str] = []  # 질문별로 보낸 답 종류 (A.27)
     committed = gamma = None
     released = None
     for _ in range(MAX_HUMAN_TURNS * 2):
@@ -926,18 +943,25 @@ def _path_event(
             ctx = get_site(conn, site_id).context_version
         if opened:
             m = opened[0]
-            # 신고자 되묻기(제안 없는 질문)에는 scenario의 답 문장으로 ANSWER, 나머지는 수락
-            answer = report.answer or f"신고 문장 그대로입니다: {report.text}"
-            decision, comment = (
-                ("ANSWER", answer) if m["type"] == "QUESTION" else ("ACCEPT", "live run 자동 수락")
-            )
+            # 신고자 되묻기(제안 없는 질문)에는 ANSWER: 첫 질문은 scenario 답 문장, 두 번째부터는
+            # "앞에서 답한 것이 전부" (A.27). 나머지는 수락
+            kind = None
+            if m["type"] == "QUESTION":
+                first = report.answer or f"신고 문장 그대로입니다: {report.text}"
+                kind, comment = _human_answer(len(answer_kinds), first, report.text)
+                answer_kinds.append(kind)
+                decision = "ANSWER"
+            else:
+                decision, comment = "ACCEPT", "live run 자동 수락"
             out = reply_message(
                 pack,
                 m["to_actor_id"],
                 _key(),
                 ReplyRequest(message_id=m["message_id"], decision=decision, comment=comment),
             )
-            events.append({"reply": decision, "type": m["type"], "status": out.status})
+            events.append(
+                {"reply": decision, "type": m["type"], "answer_kind": kind, "status": out.status}
+            )
             continue
         if hold == "ACTIVE" and confirmed:
             out = release_hold_command(
@@ -1096,6 +1120,7 @@ def _path_event(
             s["action"]["args"] for s in steps if (s["action"] or {}).get("name") == "LOOKUP_TASKS"
         ],
         er_steps=sum(1 for row in rows if row["agent"] == "EVENT_RESPONSE"),
+        answer_kinds=answer_kinds,
         released=released,
         actions=[f"{row['agent'][0]}:{row['action'] or '-'}" for row in rows],
         events=events,
@@ -1169,6 +1194,7 @@ def _path_intake(
     demo = pack.demo_intakes[1 if ambiguous else 0]
     # 명확한 요청에 질문이 오면 요청 문장 그대로 답한다(값은 문장에 다 있다)
     answer = demo.answer or f"요청 문장에 적은 대로입니다: {demo.text}"
+    answer_kinds: list[str] = []  # 질문별로 보낸 답 종류 (A.27)
     out = submit_intake(
         pack, demo.requester, _key(), IntakeRequest(task_id=demo.task_id, text=demo.text)
     )
@@ -1180,14 +1206,23 @@ def _path_intake(
         if not opened:
             break
         m = opened[0]
-        decision, comment = ("ANSWER", answer) if m["type"] == "QUESTION" else ("ACCEPT", "")
+        kind = None
+        if m["type"] == "QUESTION":
+            # 첫 질문은 scenario 답, 두 번째부터는 "앞에서 답한 것이 전부" (A.27)
+            kind, comment = _human_answer(len(answer_kinds), answer, demo.text)
+            answer_kinds.append(kind)
+            decision = "ANSWER"
+        else:
+            decision, comment = "ACCEPT", ""
         out = reply_message(
             pack,
             m["to_actor_id"],
             _key(),
             ReplyRequest(message_id=m["message_id"], decision=decision, comment=comment),
         )
-        events.append({"reply": decision, "type": m["type"], "status": out.status})
+        events.append(
+            {"reply": decision, "type": m["type"], "answer_kind": kind, "status": out.status}
+        )
 
     with db.read() as conn:
         runs = [
@@ -1280,6 +1315,7 @@ def _path_intake(
         intake_steps=len(names),
         intake_actions=names,
         asks=asks,
+        answer_kinds=answer_kinds,
         # 값 확인 요청이 막힌 사유(TASKSPEC_INVALID의 폼 사유 코드) (A.26 intake-p2)
         request_rejections=[
             (s["tool_result"] or {}).get("reason_codes")

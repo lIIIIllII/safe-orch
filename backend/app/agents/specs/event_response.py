@@ -78,7 +78,8 @@ class AskReporter(Action):
     """신고 내용이 모호할 때(대상·새 시작 가능 시각 등) 신고자에게 되묻는다. 답은 자유 텍스트로 온다."""
 
     OPENS = (
-        "사람 확인 라운드가 남았고, 답을 기다리는 질문이나 확인을 기다리는 사실 수정안이 없을 때"
+        "이 Run에서 LOOKUP_TASKS를 한 번 이상 했고, 사람 확인 라운드가 남았고,"
+        " 답을 기다리는 질문이나 확인을 기다리는 사실 수정안이 없을 때"
     )
 
     question: str = Field(min_length=1, max_length=TEXT_MAX, description="신고자에게 보이는 질문")
@@ -128,12 +129,14 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
                 values.append(a["new_earliest_start"])
     asking = any(q["status"] == "OPEN" for q in obs["reporter_replies"])
     rounds = obs["budget_remaining"].get("human_rounds", 0) > 0
+    # 조회로 알 수 있는 것(대상 작업)은 먼저 조회한다. 결과가 0건이어도 조회는 한 것이다 (A.27)
+    looked_up = bool(obs["lookups"])
     return {
         "LOOKUP": not pending,
         "ANALYZE": [] if pending else looked,
         "PROPOSE": {} if pending else propose,
-        # 신고자 되묻기: 답을 기다리는 질문·확인 대기 수정안이 없고 사람 라운드가 남을 때 (A.25 S4)
-        "ASK": rounds and not pending and not asking,
+        # 신고자 되묻기: 조회 뒤, 답을 기다리는 질문·확인 대기 수정안이 없고 사람 라운드가 남을 때 (A.25 S4·A.27)
+        "ASK": looked_up and rounds and not pending and not asking,
     }
 
 
