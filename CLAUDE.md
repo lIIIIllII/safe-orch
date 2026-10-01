@@ -26,3 +26,4 @@ cd backend && uv run uvicorn app.main:app --reload --port 8000
 cd backend && uv run pytest
 cd frontend && npm run dev
 ```
+- Agent 자동 시작 스위치: `COORDINATION_ENABLED`·`EVENT_RESPONSE_ENABLED`(기본 true, A.28). 테스트는 .env를 읽지 않고 conftest가 둘 다 끈다.

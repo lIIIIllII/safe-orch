@@ -4,6 +4,17 @@
 
 2026-10-02 개정: 부록 A를 `SAFE-ORCH_구현_결정_기록.md`로 옮겼다(항목 번호 그대로). 이 문서에는 대회 일정·시연·제출 계획만 남는다. 현재 구현 기준은 블루프린트 v1.2.4(구현된 범위)다.
 
+## 10/2 결정: Agent 자동 시작 기본 on, 시연 기본안 A
+
+Coordination·Event Response는 기본으로 자동 시작한다(설정 `COORDINATION_ENABLED`·`EVENT_RESPONSE_ENABLED`는 끄는 스위치, 결정 기록 A.28). 시연 기본안은 A다. 아래 본문의 "기본안 B가 시연 기본안", "Coordination·Event Response는 여유 있으면" 같은 문장은 이 결정 이전 계획이며, 시연 표 전체는 시연 안정화 단계에서 다시 쓴다.
+
+바뀐 장면:
+- Alpha PASS 직후 협의 Run이 C 담당자(A2)에게 변경 요청을 보낸다. A2 이견 → 제약 초안 → 확인 → 재탐색이 기본안 A다. Supervisor가 먼저 구조화 거절하면 기본안 B로 간다(협의 Run STALE).
+- 확정(R1) 뒤 통지 Run이 Planner A·B에게 통지한다("통지 없음(D03 문구 조정)"은 해당 없음).
+- Scene 4 지연 신고는 Event Response가 사실 수정안을 만들고, Supervisor 확인 → FACT_CONFIRMED 해제 → Gamma → 협의 → R2 → 통지로 이어진다. Hold만으로 끝내려면 NO_CHANGE 해제를 쓴다.
+- 안전 경계 장면(검토 중 신고 → 승인 `[STALE_CONTEXT, HOLD_ACTIVE]`)은 그대로이고, 신고로 Event Response Run이 함께 시작한다(장면 뒤 정리 필요).
+- D4 게이트(WAIVE) 장면에서도 협의 Run의 변경 요청 카드가 함께 보인다.
+
 ## 목적과 블루프린트와의 관계
 
 이 문서는 10/6 12:00 제출까지 무엇을 어떤 순서로 만들지 정한 실행 계획이다. 설계 기준은 SAFE-ORCH Project Blueprint v1.2.3이며, 이 문서는 블루프린트를 수정하지 않는다.

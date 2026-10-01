@@ -1172,6 +1172,7 @@
 
 **블루프린트와 달라지는 점** (v1.2.4 본문은 다음 개정 때 반영한다)
 1. §11.5·§18.2.2: Validation PASS + PENDING item이면 Coordination Run을 시작한다. **설정 `COORDINATION_ENABLED`(기본 false)가 켜졌을 때만**이다. 꺼져 있으면 지금처럼 검토 대기(기본안 B). 확정 뒤 통지 Run도 설정이 켜졌을 때만 시작한다.
+   - 기본값은 A.28에서 true로 바꿨다. 설정은 Agent를 끄는 스위치로 남는다.
 2. §18.2.2 Action은 6종만 구현한다: `SEND_CHANGE_REQUEST`, `WAIT_FOR_REPLIES`, `DRAFT_CONSTRAINT`, `SEND_NOTICE`, `REPORT_TO_SUPERVISOR`, `ESCALATE`. `GET_CHANGE_IMPACT`는 Action이 아니라 Observation에 서버가 넣는다(item·통지 대상). `SEND_REMINDER`와 NOTICE의 `requires_ack`는 구현하지 않는다(§18.1 한계로 남긴다).
 3. §5.1·§9.3: item 상태 ACCEPTED·OBJECTED·OBJECTION_DRAFT_PENDING과 Consultation BLOCKED를 구현한다. 저장하지 않고 메시지·제안에서 계산한다. NOTICE 메시지는 답이 없으므로 OPEN으로 남기고, Run 종료 시 요청 정리(`cancel_requests`)에서 뺀다.
 4. §11.3 wake 표에 행을 더한다(아래 6). §11.5 START_RUN 재확인은 agent_type별로 나뉜다(아래 2).
@@ -1274,6 +1275,7 @@
 
 **블루프린트와 달라지는 점** (v1.2.4 본문은 다음 개정 때 반영한다)
 1. §10 "Event Response Agent는 없으므로 Run을 시작하지 않는다" → **설정 `EVENT_RESPONSE_ENABLED`(기본 false)가 켜졌고 event_type이 DELAY일 때** 접수 tx에서 START_RUN을 등록한다. OTHER는 Run 없이 Hold만 유지한다(Supervisor가 처리. §18.2.3 "다른 유형은 Hold를 유지한 채 이관"을 Agent 없이 해석).
+   - 기본값은 A.28에서 true로 바꿨다. 설정은 Agent를 끄는 스위치로 남는다.
 2. §10 Hold 해제: `FACT_CONFIRMED`를 지원한다(`RESOLUTION_NOT_SUPPORTED`를 없애고 `FACT_NOT_CONFIRMED`를 더한다).
 3. §18.2.3 Action은 4종만: `LOOKUP_TASKS`, `ANALYZE_IMPACT`, `PROPOSE_FACT_UPDATE`, `ESCALATE`. `ASK_REPORTER`·두 번째 신고(→ Delta)는 S4다.
 4. §18.2.3 `PROPOSE_FACT_UPDATE`의 흐름은 DONE이 아니라 **WAIT(MESSAGE)**다. Supervisor에게 확인 메시지(CONFIRMATION)를 보내고 기다린다. DONE이면 Run 종료 정리(`cancel_requests`)가 제안을 STALE로 만든다. 확정 tx가 ER Run을 SUCCEEDED로 끝낸다(도메인 사실에 의한 종료, §11.1 경계 규칙 3).
@@ -1513,4 +1515,35 @@ live run에 남은 실패 두 유형 대응. 모호 신고(A.26 S4 #2)는 LOOKUP
 
   - 모든 회차 금지 Action·MALFORMED·LLM 오류 0, Budget 안. 조회 전 이관(p4 모호 #1)은 이번 6회에 없었다.
 - **남은 문제 (명확 신고 질문 0회 목표 미달)**: 명확 신고는 성공했지만 세 회차 모두 신고자에게 1–2회 물었다. ASK의 decision_summary는 모두 "도장 작업이 D2·G2에 여러 건, 구역·날짜(‘10시’가 첫날인지) 불명확"이었고 start_slack이나 E의 09:45 + 15분을 언급하지 않았다. 조회 결과에 P·W의 start_slack 0이 보였는데도 모델은 후보를 줄이지 않고 물었다. 신고자 답(신고 문장 그대로·REPEAT)은 정보가 없었지만 모델은 그 뒤 E(10:00)를 골랐다. 대응은 결정 뒤에 한다.
+
+### A.28 Agent 자동 시작 기본값 켜짐 (§18.2.2·§18.2.3 보충, A.24·A.25 1 변경, 스키마 변경 없음)
+
+**결정**: `COORDINATION_ENABLED`·`EVENT_RESPONSE_ENABLED`의 기본값을 true로 바꾼다. 설정은 Agent를 끄는 스위치로 남긴다. 시연 기본안은 A다(Coordination 협의 → 이견 → 제약 초안 → 재탐색 → Beta → R1 → 통지).
+
+**근거**: 블루프린트 §18.2.2(Validation PASS + PENDING → Coordination Run 시작, 확정 → 통지 Run)와 §18.2.3(Event 접수 tx에서 Event Response START_RUN)은 자동 시작이 설계다. 기본값 false는 A.24·A.25에서 대회 컷오프와 기존 테스트 보호를 위해 둔 임시 조치였고, 두 Agent 모두 live run으로 완주를 확인했다(A.24 S2 `--path coord` 3/3, A.25·A.27 `--path event --coord` 3/3).
+
+**블루프린트와 달라지는 점**: §18.2.2·§18.2.3과의 차이는 "설정으로 끌 수 있다"만 남는다. §10의 "Event Response Agent는 없으므로 Run을 시작하지 않는다"는 A.25 1 그대로 다음 개정 반영 항목이다.
+
+**S1 테스트 격리** (동작 변화 0, 따로 커밋)
+- 발견: 개발자 `.env`가 두 설정을 true로 두자 pytest가 46개 실패했다(Coordination 43, ER 5, 겹침 2). 테스트가 `.env`를 그대로 읽고, conftest는 OpenAI 설정만 비우고 있었다. 실패는 대부분 Alpha PASS(C PENDING)에서 협의 Run이 생겨 Run 개수 가정(`[run] = _runs()`)이 깨진 것이다.
+- `tests/conftest.py`: 테스트는 `.env`를 읽지 않는다(`Settings.model_config["env_file"] = None`). 테스트 기준 설정 `TEST_ENV`(OpenAI 설정 비움, DEMO_MODE true, PACK shipyard, DISPATCH_WORKER false, LANGSMITH_TRACING false, Agent 자동 시작 둘 다 false)를 autouse `test_env`가 환경변수로 고정한다. 셸 환경변수도 덮는다. DB_PATH는 `temp_db`가 정한다. `coordination_on`·`event_response_on`의 teardown은 `delenv` 대신 캐시만 비운다(값은 monkeypatch가 기준값으로 되돌린다).
+- 기준값이 "Agent 끔"인 이유: 골든·기본안 B E2E가 Replanning만의 결정론 회귀로 남는다. Agent를 켠 흐름은 기존 테스트(협의 중 Supervisor 거절 → 기본안 B 완주, ER + Coordination → R2 → 통지)가 본다.
+- 확인: pytest 506이 `.env` 그대로·둘 다 false 환경변수·둘 다 true 환경변수에서 같다.
+
+**S2 기본값 변경**
+- `config.py`: 두 기본값 true, 주석에 "끄면 기본안 B 검토 대기·통지 없음 / Hold만(Scene 4)".
+- 운영 기본값 테스트 `test_agent_auto_start_is_on_by_default`(환경변수를 지우면 둘 다 true, false로 끌 수 있음).
+- live_run: 경로마다 두 설정을 명시한다(`_flag_env`·`_set_env`·`_restore_env`). A·B·B-decline·intake = 둘 다 끔, coord = Coordination만, event = Event Response(`--coord`면 Coordination도). 기록에 `agent_flags`. 지금까지의 live run 증거와 같은 조건이고 `.env`와 무관하다(테스트 `test_live_run_path_b_fixes_agent_flags_regardless_of_env`: 환경변수가 둘 다 true여도 --path B는 Replanning Run 하나).
+- `--path B --coord`(path `B-coord`): Coordination을 켠 기본안 B. Alpha PASS 뒤 협의 Run이 C 담당자에게 변경 요청을 보내고, 스크립트는 그 요청에 답하지 않고 Supervisor로 거절한다. 성공 = 기본안 B 성공 기준 ∧ 협의 Run STALE(`REJECTED:`) ∧ 통지 대상 전원 통지(∧ 모든 Run Budget 안). 기록에 `runs`·`actions_all`. 금지 Action·MALFORMED는 모든 Run의 step에서 센다. `--coord`는 event·B에서만 쓴다. 스크립트 모델 테스트 1개.
+- 확인: pytest 509(세 조건 같음), `verify_demo_values` 통과.
+
+**시연 흐름에서 달라지는 곳** (운영 기본값 = 둘 다 켜짐)
+- Alpha PASS 직후 협의 Run이 자동 시작되어 C 담당자(A2) 받은 요청에 변경 요청 카드가 뜬다. A2가 이견을 내면 기본안 A, Supervisor가 먼저 구조화 거절하면 기본안 B(협의 Run STALE, 변경 요청 CANCELLED)다. 검토 대기 정의는 그대로라 협의 중에도 Supervisor가 거절·WAIVE할 수 있다(A.24 4).
+- 확정 뒤 통지 Run이 돌아 통지 대상(Planner A·B)에게 NOTICE가 간다.
+- 지연 신고는 Hold만이 아니라 Event Response Run → 사실 수정 확인 카드 → FACT_CONFIRMED 해제 → Gamma → (협의) → R2 → 통지로 이어진다. NO_CHANGE 해제도 그대로 쓸 수 있다(ER STALE, 수정안 DISCARDED).
+- 안전 경계 장면(검토 중 신고 → 승인 `[STALE_CONTEXT, HOLD_ACTIVE]`)은 그대로다. ER Run이 수정안을 내므로 장면 뒤 정리(NO_CHANGE 해제 등)가 필요하다.
+- API 키 없는 환경에서는 협의·ER Run이 시작하자마자 ERROR(LLM_CONFIG)가 된다(Replanning도 같다).
+- 우선순위 v2 맨 위에 "10/2 결정" 절과 바뀐 장면 목록을 더했다. 시연 표 전체를 다시 쓰는 일은 시연 안정화 단계에서 한다.
+
+**S3 문서**: 이 항목, A.24·A.25 1의 가리키는 줄, `.env.example`(두 키, 기본 true와 끌 때의 동작), CLAUDE.md 실행 절(Agent 스위치, 테스트는 conftest가 끈다), 우선순위 v2 맨 위 절.
 
