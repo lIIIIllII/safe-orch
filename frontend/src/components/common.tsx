@@ -36,6 +36,12 @@ export function OutcomeBox({ outcome }: { outcome: CommandOutcome | null }) {
           {outcome.actor_id} · <Code code={r.status} /> · HTTP {r.http ?? '—'}
         </span>
       </div>
+      {/* 폼 응답이 queued면 대기열 접수로 알린다 (A.21 0-1·7). 폼 응답만 form_id를 갖는다. */}
+      {ok && 'form_id' in r.result_refs && r.result_refs.queued === true && (
+        <p className="queued-note">
+          대기열에 접수됨 — 앞 Case가 끝나면 접수 순서대로 재검사됩니다 ({String(r.result_refs.task_id)})
+        </p>
+      )}
       {r.reason_codes.length > 0 && (
         <ul className="outcome-reasons">
           {r.reason_codes.map((c) => (

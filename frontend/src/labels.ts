@@ -44,6 +44,12 @@ export const REASON: Record<string, string> = {
   INVALID_WINDOW: '시간창 모순',
   WINDOW_OUTSIDE_WORK_HOURS: '시간창 안에 근무시간 시작 자리가 없음',
   PREDECESSOR_NOT_FOUND: '선행 작업 없음',
+  // 답변·확인 (A.21 2)
+  MESSAGE_NOT_FOUND: '메시지 없음',
+  PROPOSAL_NOT_FOUND: '제안 없음',
+  ALREADY_ANSWERED: '이미 다른 결정으로 답함',
+  STALE_PROPOSAL: '질문 뒤 작업이 바뀜(오래된 제안)',
+  INVALID_VALUES: '허용 값 밖',
   // Run
   RUN_NOT_FOUND: 'Run 없음',
   RUN_NOT_ACTIVE: '이미 끝난 Run',
@@ -69,6 +75,8 @@ export const REASON: Record<string, string> = {
   LLM_ERROR: '모델 호출 실패',
   LLM_CONFIG: '모델 설정 오류',
   STALE_SNAPSHOT: '계산 중 상태 변경, 결과 폐기',
+  DUPLICATE_REJECTED: '거절된 배정과 같아 후보 만들지 않음',
+  NEW_CHANGE_BEFORE_WAIT: '대기 직전 새 변화, 다시 관찰',
   RUN_INACTIVE: 'Run 종료됨',
   NO_ACTING_TASKS: '움직일 수 있는 작업 없음',
   RESOURCE_AXIS_NOT_ALLOWED: '자원 축 이동 불가',
@@ -80,6 +88,7 @@ export const REASON: Record<string, string> = {
   MODEL_VALIDATION_MISMATCH: 'Solver·검증 불일치(오류)',
   RECURSION_LIMIT: '반복 한도 초과(오류)',
   CANCELLED: '취소됨',
+  REJECTED_TWICE: '제약 없는 거절 2회로 이관',
   // Validator check 사유
   CANDIDATE_HASH_MISMATCH: '후보 hash 불일치',
   SNAPSHOT_REF_MISMATCH: 'Snapshot 참조 불일치',
@@ -286,4 +295,34 @@ export const GATE: Record<string, string> = {
   ALLOW: '시작 가능',
   HOLD: '보류',
   STALE: '재확정 필요',
+}
+
+export const MESSAGE_STATUS: Record<string, string> = {
+  OPEN: '답변 대기',
+  ANSWERED: '답함',
+  CANCELLED: '취소됨(Run 종료)',
+  LATE: '늦은 답(효력 없음)',
+}
+
+export const PROPOSAL_STATUS: Record<string, string> = {
+  PENDING: '확인 대기',
+  CONFIRMED: '확인됨',
+  DISCARDED: '폐기됨',
+  STALE: '효력 잃음',
+}
+
+export const DECISION: Record<string, string> = {
+  ACCEPT: '수락',
+  DECLINE: '거절',
+}
+
+export const AXIS: Record<string, string> = {
+  TIME: '시간',
+  RESOURCE: '자원',
+}
+
+/** 자원 조회 제외 사유 (A.21 5) */
+export const EXCLUDE_REASON: Record<string, string> = {
+  NOT_ALLOWED: '이 Unit 사용 권한 없음',
+  NO_AVAILABILITY: '가용 구간 없음',
 }

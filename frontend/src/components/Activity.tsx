@@ -7,6 +7,8 @@ import type { AgentStep, RunSummary, SiteState } from '../types'
 import {
   ACTION_NAME,
   AGENT_TYPE,
+  AXIS,
+  EXCLUDE_REASON,
   RESULT_KIND,
   RUN_STATUS,
   SCOPE_LEVEL,
@@ -31,7 +33,7 @@ interface Props {
 }
 
 const BUDGET_MAX: Record<string, Record<string, number>> = {
-  REPLANNING: { steps: 15, solver_calls: 6 },
+  REPLANNING: { steps: 15, solver_calls: 6, human_rounds: 2 },
 }
 
 export function Activity({ state, actorId, selectedRunId, onSelectRun, isSupervisor, busy, run, refreshKey }: Props) {
@@ -88,6 +90,7 @@ function RunRow({
     <div className={`run-row ${on ? 'run-on' : ''}`} onClick={onClick}>
       <span className="strong">{AGENT_TYPE[r.agent_type] ?? r.agent_type}</span>
       <span className={`badge run-${r.status.toLowerCase()}`}>{RUN_STATUS[r.status] ?? r.status}</span>
+      {r.resume_count > 0 && <span className="badge badge-resume">재개 {r.resume_count}회</span>}
       {r.wait_kind && (
         <span className="small">
           {WAIT_KIND[r.wait_kind] ?? r.wait_kind}
@@ -99,6 +102,8 @@ function RunRow({
         {r.current_step_status && ` · ${STEP_STATUS[r.current_step_status] ?? r.current_step_status}`}
         {' · '}Budget step {r.budget_used.steps ?? 0}/{max.steps ?? '—'} · Solver {r.budget_used.solver_calls ?? 0}/
         {max.solver_calls ?? '—'}
+        {(r.budget_used.human_rounds ?? 0) > 0 &&
+          ` · 사람 확인 ${r.budget_used.human_rounds}/${max.human_rounds ?? '—'}`}
       </span>
       {r.end_reason && <span className="small">{endReason(r.end_reason)}</span>}
       {active && (
@@ -146,6 +151,7 @@ function Steps({ run, actorId, refreshKey }: { run: RunSummary; actorId: string;
     <>
       <div className="run-goal">
         <span className="muted small">{run.run_id}</span>
+        {run.resume_count > 0 && <span className="badge badge-resume">재개 {run.resume_count}회</span>}
         {goal && (
           <p>
             <b>Goal</b> {goal}
@@ -173,9 +179,80 @@ function splitSummary(text: string): { why: string; next: string | null } {
   return m ? { why: m[1], next: m[2] } : { why: text, next: null }
 }
 
+function isRecord(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null && !Array.isArray(x)
+}
+
+type Rid = { resource_id: string; reason?: string }
+
+/** 자원 조회 결과: 배정 가능 자원과 제외 자원·이유 (A.21 5·7). */
+function ListResult({ tr }: { tr: Record<string, unknown> }) {
+  const assignable = (tr.assignable as Rid[]) ?? []
+  const excluded = (tr.excluded as Rid[]) ?? []
+  return (
+    <table className="tbl small">
+      <tbody>
+        <tr>
+          <th>조회 작업</th>
+          <td>
+            {String(tr.task_id)} · 필요 유형 {String(tr.required_type ?? '—')} · 현재 {String(tr.current ?? '없음')}
+          </td>
+        </tr>
+        <tr>
+          <th>배정 가능</th>
+          <td>
+            {assignable.length === 0
+              ? '없음'
+              : assignable.map((a) => (
+                  <span key={a.resource_id} className="tag">
+                    {a.resource_id}
+                    {a.resource_id === tr.current ? ' (현재)' : ''}
+                  </span>
+                ))}
+          </td>
+        </tr>
+        <tr>
+          <th>제외</th>
+          <td>
+            {excluded.length === 0
+              ? '없음'
+              : excluded.map((a) => (
+                  <span key={a.resource_id} className="tag tag-warn">
+                    {a.resource_id} — {EXCLUDE_REASON[a.reason ?? ''] ?? a.reason} <code>{a.reason}</code>
+                  </span>
+                ))}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  )
+}
+
+/** 담당자 확인 요청: 메시지와 서버 문구. 모델의 question은 모델 블록으로 따로 둔다 (A.21 5·7). */
+function AskResult({ tr, args }: { tr: Record<string, unknown>; args: Record<string, unknown> }) {
+  const values = Array.isArray(args.allowed_values) ? (args.allowed_values as string[]) : []
+  return (
+    <>
+      <p>
+        메시지 <code>{String(tr.message_id)}</code> → {String(tr.to_actor_id)} · 작업 {String(args.task_id)} ·{' '}
+        {AXIS[String(args.axis)] ?? String(args.axis)} 축 · 허용 값 {values.join(', ')}
+      </p>
+      <p className="ask-body">서버 문구: {String(tr.body)}</p>
+      {typeof args.question === 'string' && (
+        <div className="model-block">
+          <div className="block-label">Agent 설명(모델 작성)</div>
+          <p>{args.question}</p>
+        </div>
+      )}
+    </>
+  )
+}
+
 function StepCard({ s }: { s: AgentStep }) {
   const args = { ...(s.action?.args ?? {}) }
   delete args.decision_summary
+  const headArgs = { ...args }
+  delete headArgs.question
   const name = s.action?.name ?? '—'
   const level = typeof args.level === 'string' ? args.level : null
   const tr = s.tool_result ?? {}
@@ -196,6 +273,18 @@ function StepCard({ s }: { s: AgentStep }) {
           'minimal_change',
           'delay_optimality_unconfirmed',
           'candidate_id',
+          // LIST·ASK·TRY는 아래 전용 블록으로 보여 준다 (A.21 7)
+          'task_id',
+          'required_type',
+          'current',
+          'assignable',
+          'excluded',
+          'resources_hash',
+          'proposal_id',
+          'message_id',
+          'to_actor_id',
+          'body',
+          'try_resources',
         ].includes(k),
     ),
   )
@@ -207,7 +296,7 @@ function StepCard({ s }: { s: AgentStep }) {
         <span className="strong">{ACTION_NAME[name] ?? name}</span>
         <code>{name}</code>
         {level && <span className="small">{SCOPE_LEVEL[level] ?? level}</span>}
-        {Object.keys(args).length > 0 && !level && <code className="small">{JSON.stringify(args)}</code>}
+        {Object.keys(headArgs).length > 0 && !level && <code className="small">{JSON.stringify(headArgs)}</code>}
       </header>
 
       {s.status === 'RESERVED' && <p className="muted">모델 판단 중</p>}
@@ -244,6 +333,17 @@ function StepCard({ s }: { s: AgentStep }) {
                 </>
               )}
               {tr.delay_optimality_unconfirmed === true && <span className="tag tag-warn">지연 최적성 미확정</span>}
+            </p>
+          )}
+          {name === 'LIST_ASSIGNABLE_RESOURCES' && 'assignable' in tr && <ListResult tr={tr} />}
+          {name === 'ASK_TASK_OWNER' && 'message_id' in tr && <AskResult tr={tr} args={args} />}
+          {name === 'TRY_ALTERNATIVE_RESOURCE' && isRecord(tr.try_resources) && (
+            <p>
+              대체 자원 시도{' '}
+              {Object.entries(tr.try_resources)
+                .map(([t, rs]) => `${t} → ${(rs as string[]).join(', ')}`)
+                .join(' · ')}{' '}
+              <span className="muted small">(범위 L0 + 대체 자원)</span>
             </p>
           )}
           {'candidate_id' in tr && (

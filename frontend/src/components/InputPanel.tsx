@@ -1,4 +1,4 @@
-// 입력: 작업 요청 폼, 지연 신고, Hold 목록 (§13, 부록 A.14·A.19).
+// 입력: 작업 요청 폼, 지연 신고, 받은 요청(Inbox), 요청·대기열·Hold 목록 (§13, 부록 A.14·A.19·A.21).
 // 클라이언트는 형식(시각·숫자 변환)만 확인하고 업무 규칙은 서버 판정을 보여 준다.
 
 import { useState } from 'react'
@@ -6,6 +6,8 @@ import { newKey } from '../api'
 import type { SiteState } from '../types'
 import { useEnv, workTypeName } from '../context'
 import type { Run } from './ReviewPanel'
+import { Inbox } from './Inbox'
+import { openInbox } from '../inbox'
 
 interface Props {
   state: SiteState
@@ -16,7 +18,8 @@ interface Props {
 }
 
 export function InputPanel(props: Props) {
-  const [tab, setTab] = useState<'task' | 'event'>('task')
+  const [tab, setTab] = useState<'task' | 'event' | 'inbox'>('task')
+  const unread = openInbox(props.state)
   return (
     <section className="panel inputs">
       <div className="tabs">
@@ -25,6 +28,9 @@ export function InputPanel(props: Props) {
         </button>
         <button className={tab === 'event' ? 'tab-on' : ''} onClick={() => setTab('event')}>
           지연 신고
+        </button>
+        <button className={tab === 'inbox' ? 'tab-on' : ''} onClick={() => setTab('inbox')}>
+          받은 요청 {unread > 0 ? <span className="tab-badge">{unread}</span> : <span className="muted">0</span>}
         </button>
       </div>
       <div className="panel-body">
@@ -35,8 +41,14 @@ export function InputPanel(props: Props) {
         <div hidden={tab !== 'event'}>
           <EventForm {...props} />
         </div>
-        <RequestList {...props} />
-        <HoldList {...props} />
+        {tab === 'inbox' ? (
+          <Inbox state={props.state} busy={props.busy} run={props.run} />
+        ) : (
+          <>
+            <RequestList {...props} />
+            <HoldList {...props} />
+          </>
+        )}
       </div>
     </section>
   )
@@ -141,6 +153,7 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
   const openRun = state.runs.some(
     (r) => r.agent_type === 'REPLANNING' && (r.status === 'RUNNING' || r.status === 'WAITING_HUMAN'),
   )
+  const queued = state.task_queue.length
   const es = minute('es')
   const dur = f.duration.trim() ? Number(f.duration) : null
   const outside = es !== null && dur !== null && Number.isFinite(dur) && !clock.inWork(es, es + dur)
@@ -248,9 +261,10 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
           Actor의 작업이 됩니다(경고만).
         </p>
       )}
-      {openRun && (
+      {(openRun || queued > 0) && (
         <p className="warn small span2">
-          열린 재계획 Run이 있어 지금 요청을 보내도 재검사되지 않습니다. 먼저 후보를 확정하거나 Run을 취소하세요.
+          {openRun ? '열린 재계획 Run이 있어' : `대기열에 요청 ${queued}건이 있어`} 지금 보내는 요청은 대기열에
+          접수됩니다. 앞 Case가 끝나면 접수 순서대로 재검사됩니다.
         </p>
       )}
       <div className="row span2">
@@ -278,22 +292,32 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
   )
 }
 
-/** Plan 밖 READY 작업(해결 전 요청)과 철회 (A.20 F-2). 작업 담당자나 SUPERVISOR만 버튼이 켜진다. */
+/** Plan 밖 READY 작업(해결 전 요청)·대기열(QUEUED)과 철회 (A.20 F-2, A.21 7).
+ * 작업 담당자나 SUPERVISOR만 버튼이 켜진다. 대기열은 접수 순서(state.task_queue)로 "대기 n번째". */
 function RequestList({ state, actorId, roles, busy, run }: Props) {
   const { meta, clock } = useEnv()
   const inPlan = new Set(state.plan.assignments.map((a) => a.task_id))
-  const pending = state.tasks.filter((t) => t.lifecycle === 'READY' && !inPlan.has(t.task_id))
+  const byId = new Map(state.tasks.map((t) => [t.task_id, t]))
+  const pending = [
+    ...state.tasks.filter((t) => t.lifecycle === 'READY' && !inPlan.has(t.task_id)),
+    ...state.task_queue.flatMap((id) => byId.get(id) ?? []),
+  ]
   const name = new Map(state.actors.map((a) => [a.actor_id, a.name]))
   const isSup = roles.includes('SUPERVISOR')
   return (
     <div className="requests">
-      <h3>요청 (Plan 밖) {pending.length}건</h3>
+      <h3>
+        요청 (Plan 밖) {pending.length}건
+        {state.task_queue.length > 0 && <span className="muted small"> · 대기열 {state.task_queue.length}건</span>}
+      </h3>
       {pending.length === 0 && <p className="muted">없음</p>}
       {pending.map((t) => {
         const can = isSup || t.owner_actor_id === actorId
+        const place = state.task_queue.indexOf(t.task_id)
         return (
           <div key={t.task_id} className="row request">
             <span className="grow">
+              {place >= 0 && <span className="badge badge-queued">대기 {place + 1}번째</span>}{' '}
               <b>{t.task_id}</b> {workTypeName(meta, t.work_type)} · {t.zone_id} ·{' '}
               {clock.span(t.earliest_start, t.earliest_start + t.duration)}
               <span className="muted small"> — {name.get(t.owner_actor_id) ?? t.owner_actor_id}</span>

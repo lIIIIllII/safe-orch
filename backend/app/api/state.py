@@ -17,11 +17,13 @@ from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.store import db
 from app.store.repos._rows import loads, rows
+from app.store.repos.cases import queued_task_ids
 from app.store.repos.consultations import (
     candidate_state,
     consultation_view,
     list_review_queue,
 )
+from app.store.repos.decisions import list_decisions
 from app.store.repos.messages import list_inbox
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import get_candidate, get_snapshot, list_validations
@@ -170,6 +172,7 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
     return {
         "candidate_id": cand.candidate_id,
         "kind": cand.kind,
+        "rejection": _rejection(conn, site_id, cand.candidate_id),
         "run_id": run_for_solver_result(conn, cand.solver_result_id)
         if cand.solver_result_id
         else None,
@@ -181,6 +184,30 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "solver": _solver(conn, cand.solver_result_id, facts),
         "validation": validation,
         "consultation": consultation,
+    }
+
+
+def _rejection(conn: sqlite3.Connection, site_id: str, candidate_id: str) -> dict[str, Any] | None:
+    """거절된 후보의 거절 사유와 그 거절로 생긴 제약 (§9.2, A.21 7). 거절이 없으면 None."""
+    found = list_decisions(conn, site_id, candidate_id, "REJECT")
+    if not found:
+        return None
+    d = found[-1]
+    constraints = rows(
+        conn,
+        "SELECT constraint_id, task_id, frozen_axes, created_context_version"
+        " FROM feedback_constraint WHERE source_type = 'DECISION' AND source_id = ? ORDER BY rowid",
+        (d["decision_id"],),
+    )
+    return {
+        "decision_id": d["decision_id"],
+        "actor_id": d["actor_id"],
+        "reason_code": d["reason_code"],
+        "target_task_ids": d["target_task_ids"],
+        "axes": d["axes"],
+        "comment": d["comment"],
+        "context_version": d["context_version"],
+        "constraints": [{**c, "frozen_axes": loads(c["frozen_axes"])} for c in constraints],
     }
 
 
@@ -220,6 +247,12 @@ def run_summary(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
     last = conn.execute(
         "SELECT status FROM agent_step WHERE run_id = ? ORDER BY step_no DESC LIMIT 1", (run_id,)
     ).fetchone()
+    # 재개 횟수 = 대기(WAIT)에 들어간 step 중 뒤에 step이 이어진 것 (A.21 7, 조회 시 계산)
+    resumes = conn.execute(
+        "SELECT COUNT(*) FROM agent_step WHERE run_id = ? AND result_kind = 'WAIT'"
+        " AND step_no < (SELECT MAX(step_no) FROM agent_step WHERE run_id = ?)",
+        (run_id, run_id),
+    ).fetchone()[0]
     return {
         "run_id": run.run_id,
         "agent_type": run.agent_type,
@@ -229,6 +262,7 @@ def run_summary(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
         "wait_kind": run.wait_kind,
         "wait_ref": run.wait_ref,
         "wait_generation": run.wait_generation,
+        "resume_count": resumes,
         "last_step_no": run.last_step_no,
         "current_step_status": None if last is None else last[0],
         "end_reason": run.end_reason,
@@ -321,6 +355,8 @@ def build_state(
         "conflicts": [c.model_dump(mode="json") for c in conflicts],
         "candidates": [candidate_view(conn, site_id, cid) for cid in ids],
         "review_queue": queue,
+        # 대기열(QUEUED) 접수 순서 (A.21 0-1·7)
+        "task_queue": queued_task_ids(conn, site_id),
         "holds": holds,
         "events": events,
         "runs": [run_summary(conn, rid) for rid in run_ids],

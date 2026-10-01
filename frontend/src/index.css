@@ -1063,3 +1063,97 @@ input.time {
 .request {
   font-size: 13px;
 }
+
+/* ── 받은 요청·대기열·재개 (부록 A.21 7) ───────────────────── */
+
+.tab-badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--conflict);
+  color: #fff;
+  font-size: 12px;
+}
+
+.statusbar .stat-inbox {
+  background: #fde4e4;
+  color: var(--fail);
+  border-radius: 4px;
+  padding: 0 6px;
+}
+
+.inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.inbox-open {
+  border-color: var(--primary);
+  box-shadow: inset 4px 0 0 var(--primary);
+}
+
+.inbox-done {
+  opacity: 0.55;
+  background: #f4f5f7;
+}
+
+.inbox-item .tbl {
+  margin: 6px 0;
+}
+
+.badge.inbox-open {
+  background: #dbe7fb;
+  color: var(--primary);
+}
+
+.badge.inbox-late,
+.badge.inbox-cancelled {
+  background: var(--stale-bg);
+  color: var(--stale);
+}
+
+.badge-queued {
+  background: var(--incomplete-bg);
+  color: var(--incomplete);
+}
+
+.badge-resume {
+  background: #efe3fa;
+  color: #6a45b8;
+}
+
+.ask-body {
+  padding: 4px 8px;
+  background: #fff;
+  border: 1px dashed var(--border);
+}
+
+.rejection {
+  margin: 6px 0;
+  padding: 6px 10px;
+  background: var(--fail-bg);
+  border-left: 4px solid var(--fail);
+}
+
+.rejection h3 {
+  margin-top: 0;
+}
+
+.queued-note {
+  margin: 4px 0;
+  font-weight: 600;
+  color: var(--incomplete);
+}
+
+.statusbar .stat-inbox b {
+  color: var(--fail);
+}

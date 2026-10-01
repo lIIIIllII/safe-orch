@@ -159,10 +159,14 @@ def _joined(r: dict[str, Any]) -> dict[str, Any]:
     return r
 
 
-def list_run_replies(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
-    """이 Run이 보낸 질문과 답 (Observation human_replies). comment는 인용 필드로만 (A.17·A.21)."""
+def list_case_replies(conn: sqlite3.Connection, case_id: str) -> list[dict[str, Any]]:
+    """이 Case의 Run이 보낸 질문과 답 (Observation human_replies). comment는 인용 필드로만 (A.17·A.21)."""
     out = []
-    for r in rows(conn, _JOINED + " WHERE m.run_id = ? ORDER BY m.step_no", (run_id,)):
+    for r in rows(
+        conn,
+        _JOINED + " JOIN agent_run r ON r.run_id = m.run_id WHERE r.case_id = ? ORDER BY m.rowid",
+        (case_id,),
+    ):
         r = _joined(r)
         reply = r["reply"] or {}
         out.append(

@@ -1,5 +1,6 @@
 import type { SiteState } from '../types'
 import { ROLE } from '../labels'
+import { openInbox } from '../inbox'
 
 interface Props {
   state: SiteState | null
@@ -31,6 +32,9 @@ export function StatusBar({ state, actorId, onActor, lastOk, connected, onReset,
       </span>
       <span className={`stat ${holds > 0 ? 'stat-hold' : ''}`}>
         ACTIVE Hold <b>{holds}</b>
+      </span>
+      <span className={`stat ${openInbox(state) > 0 ? 'stat-inbox' : ''}`} title="현재 Actor에게 온 답변 대기 질문">
+        받은 요청 <b>{openInbox(state)}</b>
       </span>
       <span className={`stat ${state && state.dispatch.failed > 0 ? 'stat-bad' : ''}`}>
         작업 대기 {state?.dispatch.pending ?? '—'} / 실패 {state?.dispatch.failed ?? '—'}

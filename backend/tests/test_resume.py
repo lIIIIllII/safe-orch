@@ -820,11 +820,38 @@ def test_decline_discards_and_wakes_without_context_change(seeded):
         "ANSWERED",
         1,
     )
-    run_until_idle(pack, model_factory=_factory(escalate()))
-    last = _steps(waiting.run_id)[-1]
+    # 거절당한 질문은 다시 보내지 않는다: SITE-CR-01을 거절했으므로 ASK 미노출 → 이관 (A.21 3단계)
+    run_until_idle(
+        pack, model_factory=_factory(_ask_a(), escalate("담당자가 대체 자원을 거절했다"))
+    )
+    retry, last = _steps(waiting.run_id)[-2:]
+    assert "ASK_TASK_OWNER" not in _names(retry) and "ASK_TASK_OWNER" not in _names(last)
+    assert retry["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
     [reply] = last["observation"]["human_replies"]
     assert (reply["decision"], reply["quoted_comment"]) == ("DECLINE", "크레인 일정이 없다")
-    assert _run(waiting.run_id).status == "ESCALATED"
+    ended = _run(waiting.run_id)
+    assert (ended.status, ended.end_reason, ended.human_rounds_used) == (
+        "ESCALATED",
+        "ESCALATE_NO_SOLUTION",
+        1,
+    )
+    with db.read() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM message").fetchone()[0] == 1
+
+
+def test_declined_values_are_removed_from_ask_choices(seeded):
+    """DECLINE한 (작업, 축, 값)만 빠진다. 남는 값이 있으면 ASK는 그 값으로만 열린다."""
+    pack = seeded
+    waiting = _ask_waiting(pack)
+    _reply(pack, waiting.wait_ref, "DECLINE")
+    run_until_idle(pack, model_factory=_factory(escalate()))
+    obs = _steps(waiting.run_id)[-1]["observation"]
+    assert spec.choices(obs)["ASK"] == {}
+    listing = obs["assignable_resources"][0]
+    extra = {**listing, "assignable": [*listing["assignable"], {"resource_id": "X-1"}]}
+    widened = {**obs, "assignable_resources": [extra]}
+    assert spec.choices(widened)["ASK"] == {"A": ["X-1"]}
+    assert spec.available_actions(widened)["ASK_TASK_OWNER"]["allowed_values"] == ["X-1"]
 
 
 def test_t02_injected_comment_cannot_trigger_approval(seeded):
@@ -918,7 +945,13 @@ def test_ask_conditions_rounds_fixed_axis_and_values(seeded):
     assert "ASK_TASK_OWNER" in spec.available_actions(obs)
     obs["budget_remaining"] = {**obs["budget_remaining"], "human_rounds": 0}
     assert "ASK_TASK_OWNER" not in spec.available_actions(obs)
-    open_ask = {"task_id": "A", "axis": "RESOURCE", "status": "OPEN"}
+    open_ask = {
+        "task_id": "A",
+        "axis": "RESOURCE",
+        "status": "OPEN",
+        "decision": None,
+        "allowed_values": ["SITE-CR-01"],
+    }
     obs = {**s_ask_bad["observation"], "human_replies": [open_ask]}
     assert "ASK_TASK_OWNER" not in spec.available_actions(obs)  # 같은 작업·축 열린 질문
     assert _run(run.run_id).human_rounds_used == 0
@@ -1021,3 +1054,40 @@ def test_reply_api_route(seeded):
         headers = {"X-Actor": "planner_a", "Idempotency-Key": _key()}
         res = client.post("/api/proposals/prop_none/discard", json={}, headers=headers)
         assert res.status_code == 404
+
+
+# ── state: 화면용 값 (A.21 7) ──────────────────────────────────
+
+
+def test_state_shows_rejection_resume_count_and_queue(seeded):
+    pack = seeded
+    run = _alpha_waiting(pack)
+    alpha = run.wait_ref
+    assert _submit(pack, "N2").result_refs["queued"] is True
+    assert _submit(pack, "N1").result_refs["queued"] is True
+    _reject_demo(pack, alpha)
+    run_until_idle(
+        pack,
+        model_factory=_factory(
+            solve("L0", "C 고정 반영"),
+            call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
+            _ask_a(),
+        ),
+    )
+    with db.read() as conn:
+        state = build_state(conn, pack, "supervisor")
+    view = next(c for c in state["candidates"] if c["candidate_id"] == alpha)
+    rej = view["rejection"]
+    assert (rej["reason_code"], rej["target_task_ids"], rej["axes"], rej["actor_id"]) == (
+        "TASK_IMMOVABLE",
+        ["C"],
+        ["RESOURCE", "TIME"],
+        "supervisor",
+    )
+    assert [(c["task_id"], c["frozen_axes"]) for c in rej["constraints"]] == [
+        ("C", ["RESOURCE", "TIME"])
+    ]
+    [summary] = state["runs"]
+    assert (summary["wait_generation"], summary["resume_count"]) == (2, 1)
+    assert state["task_queue"] == ["N2", "N1"]
+    assert all(c["rejection"] is None for c in state["candidates"] if c["candidate_id"] != alpha)

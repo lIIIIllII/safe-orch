@@ -1,6 +1,7 @@
 """실제 모델로 시연 요청을 돌린다 (설계서 §16 Agent 평가, 우선순위 문서 시연 안정성, 부록 A.17).
 
     cd backend && uv run python -m scripts.live_run [--runs 1] [--request A|N1,N2,...] [--raw]
+    cd backend && uv run python -m scripts.live_run --path B|B-decline [--runs 1] [--raw]
 
 - .env의 OPENAI_API_KEY·OPENAI_MODEL이 없으면 바로 종료한다(API를 부르지 않음).
 - run마다 임시 DB를 만든다. 개발 DB(data/safe_orch.db)는 건드리지 않는다.
@@ -11,6 +12,12 @@
 - 결과: 콘솔 요약 + data/live_runs/<UTC시각>.jsonl (gitignore). --raw일 때만 prompt·응답 원문을 넣는다.
 - 성공 = PASS 후보 도달 ∧ 금지 Action(ACTION_NOT_AVAILABLE) 0 ∧ Budget 안. 기대값이 모든 범위 INFEASIBLE인
   요청(N5)은 "후보 없음 ∧ ESCALATE_NO_SOLUTION으로 종료"가 성공이다. 기대 결과와 같은지는 matches_expected로 따로 남긴다.
+- --path B(기본안 B, 부록 A.21 9): 요청 A만. 스크립트가 사람 역할을 한다: Alpha PASS 뒤 Supervisor로
+  demo_rejections[0] 거절 → OPEN 메시지가 생기면 그 수신자로 ACCEPT(comment "live run 자동 수락")
+  → Beta PASS ∧ 협의 완료면 승인(WAIVE 없음). 성공 = Beta PASS ∧ Consultation COMPLETE ∧ 확정 R1 ∧ Run SUCCEEDED
+  ∧ 금지 Action 0 ∧ Budget 안(사람 라운드 ≤ 2) ∧ ASK가 LIST 결과의 대체 자원을 담음 ∧ 수락 전 TRY 없음.
+- --path B-decline: 같은 흐름에서 ACCEPT 대신 DECLINE(comment "live run 자동 거절"). 성공 = Alpha PASS ∧ ASK
+  1회 ∧ DECLINE 적용 ∧ 거절 뒤 ASK·TRY 없음 ∧ Run ESCALATED ∧ 금지 Action 0 ∧ Budget 안.
 """
 
 import argparse
@@ -29,7 +36,16 @@ from langchain_core.messages import AIMessage, BaseMessage
 
 from app.agents.llm import model_settings, openai_model
 from app.agents.prompts.replanning import PROMPT_VERSION
-from app.commands.approval import ApproveRequest, WaiveRequest, approve_and_commit, waive
+from app.agents.specs.replanning import MAX_HUMAN_ROUNDS
+from app.commands.approval import (
+    ApproveRequest,
+    RejectRequest,
+    WaiveRequest,
+    approve_and_commit,
+    reject_candidate,
+    waive,
+)
+from app.commands.messages import ReplyRequest, reply_message
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.config import REPO_ROOT, Settings, get_settings
 from app.coordinator.dispatcher import run_until_idle
@@ -38,6 +54,7 @@ from app.packs.loader import load_pack, pack_dir
 from app.solver import cpsat
 from app.store import db
 from app.store.repos.consultations import consultation_view
+from app.store.repos.messages import get_message
 from app.store.repos.records import get_candidate, get_snapshot, list_validations
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.seed import seed_pack
@@ -47,6 +64,8 @@ from scripts import verify_demo_values as verify
 OUT_DIR = REPO_ROOT / "data" / "live_runs"
 RUN_DEADLINE_S = 300
 MAX_RUNS = 10
+PATHS = ("A", "B", "B-decline")
+MAX_HUMAN_TURNS = 6  # 기본안 B에서 사람 응답 반복 상한(무한 반복 방지)
 
 
 class _Recorder:
@@ -243,6 +262,239 @@ def run_once(
     return records
 
 
+# ── 기본안 B (부록 A.21 9) ─────────────────────────────────────
+
+
+def _pass_validation(conn: Any, site_id: str, cid: str | None) -> Any:
+    passes = [v for v in list_validations(conn, site_id, cid) if v.status == "PASS"] if cid else []
+    return passes[-1] if passes else None
+
+
+def _waiting(conn: Any, run_id: str) -> tuple[Any, str | None]:
+    run = get_run(conn, run_id)
+    ref = run.wait_ref if run.status == "WAITING_HUMAN" else None
+    return run, ref
+
+
+def run_path_b(index: int, settings: Settings, pack_name: str, raw: bool, decline: bool) -> dict:
+    """임시 DB에서 요청 A로 기본안 B(또는 B-decline)를 끝까지 돌린다. 기록 1개."""
+    tmp = tempfile.TemporaryDirectory(prefix="live_run_")
+    old_db = os.environ.get("DB_PATH")
+    os.environ["DB_PATH"] = str(Path(tmp.name) / "live.db")
+    get_settings.cache_clear()
+    db.close()
+    real_solve = cpsat.solve
+    path = "B-decline" if decline else "B"
+    record: dict[str, Any] = {"index": index, "request": "A", "path": path}
+    t0 = time.perf_counter()
+    try:
+        db.init_db()
+        pack = load_pack(pack_dir(pack_name))
+        with db.write() as tx:
+            seed_pack(tx, pack)
+        _path_b(record, settings, pack, pack_name, raw, decline, real_solve)
+    except Exception as e:  # noqa: BLE001 — 실패도 기록한다
+        record.update(success=False, error=f"{type(e).__name__}: {e}")
+    finally:
+        cpsat.solve = real_solve
+        db.close()
+        if old_db is None:
+            os.environ.pop("DB_PATH", None)
+        else:
+            os.environ["DB_PATH"] = old_db
+        get_settings.cache_clear()
+        tmp.cleanup()
+    record["total_seconds"] = round(time.perf_counter() - t0, 2)
+    return record
+
+
+def _path_b(
+    record: dict[str, Any],
+    settings: Settings,
+    pack: Any,
+    pack_name: str,
+    raw: bool,
+    decline: bool,
+    real_solve: Any,
+) -> None:
+    rec = _Recorder(time.monotonic() + RUN_DEADLINE_S * 2, raw)
+    site_id = pack.site_id
+    factory = lambda: _RecordingModel(openai_model(settings), rec)
+    form, requester = _form_and_requester(pack, pack.new_task.task_id)
+    record["submitted"] = submit_task_request(pack, requester, _key(), form).status
+    run_until_idle(pack, model_factory=factory)
+    with db.read() as conn:
+        [run_id] = [r[0] for r in conn.execute("SELECT run_id FROM agent_run")]
+        run, alpha = _waiting(conn, run_id)
+        alpha_v = _pass_validation(conn, site_id, alpha)
+        alpha_step = next(
+            (s for s in list_steps(conn, run_id) if (s["tool_result"] or {}).get("candidate_id")),
+            None,
+        )
+        alpha_actual = _actual(conn, site_id, alpha, alpha_step) if alpha and alpha_step else None
+    events: list[dict[str, Any]] = []
+    beta = beta_v = view = committed = None
+    reply_status = None
+    if alpha_v is not None:
+        x = pack.demo_rejections[0]
+        out = reject_candidate(
+            pack,
+            "supervisor",
+            _key(),
+            RejectRequest(
+                candidate_id=alpha,
+                validation_id=alpha_v.validation_id,
+                reason_code=x.reason_code,
+                target_task_ids=x.target_task_ids,
+                axes=x.axes,
+                comment=x.comment,
+            ),
+        )
+        events.append({"rejected": alpha, "status": out.status})
+        for _ in range(MAX_HUMAN_TURNS):
+            run_until_idle(pack, model_factory=factory)
+            with db.read() as conn:
+                run, ref = _waiting(conn, run_id)
+                message = (
+                    get_message(conn, site_id, ref) if run.wait_kind == "MESSAGE" and ref else None
+                )
+                cand_v = _pass_validation(conn, site_id, ref) if message is None else None
+            if message is not None and message["status"] == "OPEN":
+                decision = "DECLINE" if decline else "ACCEPT"
+                comment = "live run 자동 거절" if decline else "live run 자동 수락"
+                out = reply_message(
+                    pack,
+                    message["to_actor_id"],
+                    _key(),
+                    ReplyRequest(message_id=ref, decision=decision, comment=comment),
+                )
+                reply_status = out.status
+                events.append({"reply": decision, "message_id": ref, "status": out.status})
+                continue
+            if cand_v is not None:
+                beta, beta_v = ref, cand_v
+            break
+        if beta is not None and not decline:
+            with db.read() as conn:
+                view = consultation_view(conn, site_id, beta)
+                ctx = get_site(conn, site_id).context_version
+            if view is not None and view.items_status == "COMPLETE":
+                out = approve_and_commit(
+                    pack,
+                    "supervisor",
+                    _key(),
+                    ApproveRequest(
+                        candidate_id=beta,
+                        validation_id=beta_v.validation_id,
+                        expected_context_version=ctx,
+                    ),
+                )
+                committed = {"status": out.status, "reason_codes": list(out.reason_codes)}
+
+    with db.read() as conn:
+        run = get_run(conn, run_id)
+        steps = list_steps(conn, run_id)
+        plan_revision = get_site(conn, site_id).plan_revision
+        beta_step = next(
+            (s for s in steps if beta and (s["tool_result"] or {}).get("candidate_id") == beta),
+            None,
+        )
+        beta_actual = _actual(conn, site_id, beta, beta_step) if beta and beta_step else None
+        n_messages = conn.execute("SELECT COUNT(*) FROM message").fetchone()[0]
+    rows = _step_rows(steps, rec.calls)
+    names = [(s["action"] or {}).get("name") for s in steps]
+    guards = [(s["guard"] or {}).get("reason_code") for s in steps]
+    ask_steps = [s for s in steps if (s["action"] or {}).get("name") == "ASK_TASK_OWNER"
+                 and s["guard"]["verdict"] == "ACCEPTED"]  # fmt: skip
+    list_alts = {
+        a["resource_id"]
+        for s in steps
+        if (s["action"] or {}).get("name") == "LIST_ASSIGNABLE_RESOURCES"
+        and s["guard"]["verdict"] == "ACCEPTED"
+        for a in s["tool_result"]["assignable"]
+        if a["resource_id"] != s["tool_result"]["current"]
+    }
+    asked = [v for s in ask_steps for v in s["action"]["args"]["allowed_values"]]
+    tries = [s for s in steps if (s["action"] or {}).get("name") == "TRY_ALTERNATIVE_RESOURCE"]
+    accepted = lambda s: any(h["decision"] == "ACCEPT" for h in s["observation"]["human_replies"])
+    reject_step = next((s for s in steps if s["observation"]["rejections"]), None)
+    criteria: dict[str, Any] = {
+        "alpha_pass": alpha_v is not None,
+        "forbidden_actions": guards.count("ACTION_NOT_AVAILABLE"),
+        "malformed": guards.count("MALFORMED"),
+        "llm_errors": guards.count("LLM_ERROR"),
+        "within_budget": run.status != "BUDGET_EXHAUSTED"
+        and run.human_rounds_used <= MAX_HUMAN_ROUNDS,
+        "ask_count": len(ask_steps),
+        "ask_uses_listed_alternative": bool(asked) and set(asked) <= list_alts,
+        "reply_applied": reply_status == "APPLIED",
+    }
+    if decline:
+        after = [
+            s for s in steps if s["step_no"] > max((a["step_no"] for a in ask_steps), default=0)
+        ]
+        criteria.update(
+            no_ask_or_try_after_decline=not any(
+                (s["action"] or {}).get("name") in ("ASK_TASK_OWNER", "TRY_ALTERNATIVE_RESOURCE")
+                and s["guard"]["verdict"] == "ACCEPTED"
+                for s in after
+            ),
+            escalated=run.status == "ESCALATED",
+        )
+        keys = ("alpha_pass", "reply_applied", "no_ask_or_try_after_decline", "escalated",
+                "within_budget")  # fmt: skip
+        success = all(criteria[k] for k in keys) and criteria["ask_count"] == 1
+    else:
+        criteria.update(
+            beta_pass=beta_v is not None,
+            consultation_complete=view is not None and view.items_status == "COMPLETE",
+            committed_r1=(committed or {}).get("status") == "APPLIED" and plan_revision == 1,
+            run_succeeded=run.status == "SUCCEEDED",
+            no_try_before_accept=all(accepted(s) for s in tries),
+        )
+        keys = ("beta_pass", "consultation_complete", "committed_r1", "run_succeeded",
+                "within_budget", "ask_uses_listed_alternative", "no_try_before_accept")  # fmt: skip
+        success = all(criteria[k] for k in keys)
+    success = success and criteria["forbidden_actions"] == 0
+
+    # matches_expected: Alpha = verify의 L1, Beta = 거절 고정 + L0 + try (A.21 9)
+    world_model, world, task_a, _ = verify.load(pack_dir(pack_name))
+    exp_alpha = verify.expected(world_model, world, task_a).get("L1")
+    try_res = {task_a.id: sorted(set(asked))} if asked else {}
+    frozen = set(pack.demo_rejections[0].target_task_ids)
+    exp_beta = verify.expected_try(world_model, world, task_a, try_res, frozen) if try_res else None
+    record.update(
+        model_settings=model_settings(settings),
+        model=next((r["model_id"] for r in rows if r["model_id"]), None),
+        prompt_version=PROMPT_VERSION,
+        success=success,
+        success_criteria=criteria,
+        alpha_matches_expected=alpha_actual is not None
+        and _matches({"L1": exp_alpha}, alpha_actual, False),
+        beta_matches_expected=beta_actual is not None
+        and exp_beta is not None
+        and _matches({"L0": exp_beta}, beta_actual, False),
+        first_action_after_reject=None
+        if reject_step is None
+        else (reject_step["action"] or {}).get("name"),
+        step_count=len(steps),
+        actions=names,
+        events=events,
+        messages=n_messages,
+        steps=rows,
+        run_status=run.status,
+        end_reason=run.end_reason,
+        human_rounds_used=run.human_rounds_used,
+        solver_calls_used=run.solver_calls_used,
+        committed=committed,
+        alpha=alpha_actual,
+        beta=beta_actual,
+        tokens_in=sum(r["tokens_in"] for r in rows),
+        tokens_out=sum(r["tokens_out"] for r in rows),
+        llm_seconds=round(sum(c["ms"] for c in rec.calls) / 1000, 2),
+    )
+
+
 def _run_request(
     index: int,
     position: int,
@@ -367,6 +619,17 @@ def _run_request(
 
 
 def _line(r: dict[str, Any]) -> str:
+    if r.get("path"):
+        c = r.get("success_criteria") or {}
+        return (
+            f"#{r['index']} path {r['path']} success={r.get('success')} "
+            f"run={r.get('run_status')}/{r.get('end_reason')} steps={r.get('step_count')} "
+            f"alpha_matches={r.get('alpha_matches_expected')} "
+            f"beta_matches={r.get('beta_matches_expected')} "
+            f"after_reject={r.get('first_action_after_reject')} {r.get('total_seconds')}s  "
+            f"{' → '.join(a or '-' for a in r.get('actions', []))}  criteria={c}"
+            + (f"  error={r['error']}" if r.get("error") else "")
+        )
     steps = " → ".join(
         f"{s['action'] or '-'}{'(' + s['level'] + ')' if s['level'] else ''}:{s['result_kind']}"
         for s in r.get("steps", [])
@@ -389,6 +652,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="scenario.yaml의 시연 요청 이름(쉼표로 여러 개, 순서대로 하나씩 확정). 기본은 new_task(A)",
     )
     parser.add_argument("--raw", action="store_true", help="prompt·응답 원문을 기록에 넣는다")
+    parser.add_argument(
+        "--path",
+        choices=PATHS,
+        default="A",
+        help="B: 기본안 B(거절 → 담당자 확인 수락 → Beta 승인), B-decline: 확인을 거절 → 이관. 요청 A만",
+    )
     args = parser.parse_args(argv)
     if not 1 <= args.runs <= MAX_RUNS:
         parser.error(f"--runs must be 1..{MAX_RUNS}")
@@ -402,6 +671,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             f"--request must be names from scenario.yaml {known}, got {unknown or requests}"
         )
+    if args.path != "A" and requests != [known[0]]:
+        parser.error(f"--path {args.path} runs only --request {known[0]}")
 
     if not settings.openai_api_key.get_secret_value() or not settings.openai_model:
         print("OPENAI_API_KEY와 OPENAI_MODEL을 .env에 넣은 뒤 실행한다.", file=sys.stderr)
@@ -415,7 +686,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     records = []
     for i in range(args.runs):
-        for r in run_once(i + 1, settings, pack_name, args.raw, requests):
+        batch = (
+            run_once(i + 1, settings, pack_name, args.raw, requests)
+            if args.path == "A"
+            else [run_path_b(i + 1, settings, pack_name, args.raw, args.path == "B-decline")]
+        )
+        for r in batch:
             records.append(r)
             with out.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")

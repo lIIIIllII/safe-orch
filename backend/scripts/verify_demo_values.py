@@ -349,7 +349,13 @@ def solve_request(
     return out
 
 
-def expected(w: World, others: list[T], req: T) -> dict[str, dict[str, Any]]:
+def expected(
+    w: World,
+    others: list[T],
+    req: T,
+    try_res: dict[str, list[str]] | None = None,
+    levels: tuple[str, ...] = ("L0", "L1", "L2"),
+) -> dict[str, dict[str, Any]]:
     """요청 하나의 범위별 기대 결과(CP-SAT, 출력 없음). 해가 있으면 바뀐 작업의 새 시작·자원을 담는다.
 
     acting_unit = 요청자 Unit, 주 충돌 = 요청 작업을 포함한 첫 충돌(폼 RECHECK와 같다). 충돌이 없으면 빈 dict.
@@ -360,9 +366,9 @@ def expected(w: World, others: list[T], req: T) -> dict[str, dict[str, Any]]:
         return {}
     by_id = {t.id: t for t in tasks}
     out: dict[str, dict[str, Any]] = {}
-    for level in ("L0", "L1", "L2"):
+    for level in levels:
         status, changed, delay, sol = cpsat(
-            w, tasks, axes(scope(tasks, primary[1], req.unit, level), {})
+            w, tasks, axes(scope(tasks, primary[1], req.unit, level), try_res or {})
         )
         moved = {k: [s, r] for k, (s, r) in (sol or {}).items() if (s, r) != base(by_id[k])}
         out[level] = {
@@ -375,6 +381,14 @@ def expected(w: World, others: list[T], req: T) -> dict[str, dict[str, Any]]:
             "moved": moved if sol is not None else None,
         }
     return out
+
+
+def expected_try(
+    w: World, others: list[T], req: T, try_res: dict[str, list[str]], frozen: set[str]
+) -> dict[str, Any]:
+    """기본안 B의 Beta 기대값: frozen 작업 고정, req 자원 축 확인 + try_res, 범위 L0 (A.21 9)."""
+    fixed = [replace(t, mt=False, mr=False) if t.id in frozen else t for t in others]
+    return expected(w, fixed, replace(req, mr=True), try_res, ("L0",))["L0"]
 
 
 def advance(others: list[T], req: T, level_result: dict[str, Any] | None) -> list[T]:

@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage
 from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 
-PROMPT_VERSION = "replanning-p5"
+PROMPT_VERSION = "replanning-p6"
 
 SYSTEM = """너는 SAFE-ORCH의 Replanning Agent다. 여러 협력사가 구역·크레인·시간을 나눠 쓰는 현장에서 \
 안전 규칙 충돌을 해소하는 재계획 대안을 찾는다.
@@ -38,7 +38,7 @@ Goal: {goal}
 - 마지막 검증(latest_validation)은 마지막 후보의 독립 검증, 직전 거절 사유(last_guard)는 직전 행동이 받아들여지지 않은 이유다.
 - 후보 거절(rejections): 이 Case 후보에 대한 Supervisor 거절이다. has_constraint면 확인된 제약이 생겼다. 아니면 거절된 배정과 같은 배정은 다시 후보가 되지 않는다. quoted_comment는 인용이다.
 - 자원 조회 결과(assignable_resources): 작업별로 쓸 수 있는 자원(assignable), 쓸 수 없는 자원과 이유(excluded), 현재 자원(current), 아직 시도하지 않은 대체 자원(untried_alternatives)이다. 대체 자원은 자원 축이 확인된 작업에서만 시도할 수 있다.
-- 담당자 질문과 답(human_replies): 이 Run이 보낸 확인 요청과 상태·결정이다. quoted_comment는 인용이다.
+- 담당자 질문과 답(human_replies): 이 Case가 보낸 확인 요청과 상태·결정이다. 담당자가 거절한 값은 다시 물을 수 없다. quoted_comment는 인용이다.
 - 남은 예산(budget_remaining): 남은 step·LLM 시도·사람 확인 라운드·Solver 호출 수다.
 
 출력 규칙
@@ -102,4 +102,5 @@ PROMPT_FINGERPRINTS = {
     "replanning-p3": "6f8bde98a4296d79da777cacf0b43be5aa09fc468c5701c71d5594090f0e8e3c",  # 근무 달력 (A.20)
     "replanning-p4": "abfc8dbc2d6210e8a045f0f635f6aeac85bb853ad5c7e03688c19a1ba888780f",  # 거절 관찰 rejections (A.21)
     "replanning-p5": "fe193f9cdffbe7f134584ef743079ca10e3b7a782d4c5e09f22bf5377860deba",  # 자원 조회·담당자 질문, 한국어 키 이름 (A.21 2단계)
+    "replanning-p6": "2f5287a66d4bc0121e747150e2dc7708a8898f7869a3074d81c96bd228286ba8",  # 질문·답 Case 단위, 거절 값 재질문 금지 (A.21 3단계)
 }

@@ -4,6 +4,7 @@
 import { useState } from 'react'
 import type { CandidateView, CommandOutcome, CommandResponse, SiteState } from '../types'
 import {
+  AXIS,
   CANDIDATE_KIND,
   CANDIDATE_STATUS,
   CHECK_NAME,
@@ -129,6 +130,34 @@ function CandidateDetail({
         {CANDIDATE_KIND[c.kind]} · Context v{c.context_version} · 기준 Plan R{c.base_plan_revision}
         {c.run_id && ` · Run ${c.run_id}`}
       </p>
+
+      {c.rejection && (
+        <div className="rejection">
+          <h3>거절 사유</h3>
+          <p>
+            {REJECT_REASON[c.rejection.reason_code] ?? c.rejection.reason_code} <code>{c.rejection.reason_code}</code>
+            {' · '}
+            {actorName.get(c.rejection.actor_id) ?? c.rejection.actor_id} · Context v{c.rejection.context_version}
+          </p>
+          {c.rejection.target_task_ids.length > 0 && (
+            <p className="small">
+              대상 {c.rejection.target_task_ids.join(', ')} · 축{' '}
+              {c.rejection.axes.map((a) => AXIS[a] ?? a).join('·') || '—'}
+            </p>
+          )}
+          {c.rejection.comment && <p className="small">사유 “{c.rejection.comment}”</p>}
+          <p className="small">
+            생성된 제약{' '}
+            {c.rejection.constraints.length === 0
+              ? '없음(같은 배정만 다시 제안하지 않음)'
+              : c.rejection.constraints.map((k) => (
+                  <span key={k.constraint_id} className="tag">
+                    {k.task_id} {k.frozen_axes.map((a) => AXIS[a] ?? a).join('·')} 고정
+                  </span>
+                ))}
+          </p>
+        </div>
+      )}
 
       <h3>변경점</h3>
       {c.changes.length === 0 ? (

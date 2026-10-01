@@ -6,7 +6,7 @@ import pytest
 from conftest import add_run
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
-from scripted import ScriptedChatModel, escalate, solve
+from scripted import ScriptedChatModel, call, escalate, solve
 
 from app.agents import llm, runtime
 from app.agents.observe import build_observation
@@ -295,3 +295,62 @@ def test_live_run_rejects_unknown_request(capsys):
     with pytest.raises(SystemExit):
         live_run.main(["--request", "N1,X9"])
     assert "X9" in capsys.readouterr().err
+
+
+def _shared_script(*replies):
+    """START_RUN·RESUME_RUN이 같은 스크립트를 이어서 쓴다(기본안 B는 재개가 두 번 있다)."""
+    model = ScriptedChatModel(list(replies))
+    return lambda s: model
+
+
+def _plan_b_script(*after_reply):
+    ask = call(
+        "ASK_TASK_OWNER",
+        "자원 축 확인",
+        task_id="A",
+        axis="RESOURCE",
+        allowed_values=["SITE-CR-01"],
+        question="SITE-CR-01을 써도 되나요?",
+    )
+    return _shared_script(
+        solve("L0"),
+        solve("L1"),
+        solve("L0", "C 고정 반영"),
+        call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
+        ask,
+        *after_reply,
+    )
+
+
+def test_live_run_path_b_with_scripted_model(monkeypatch):
+    """--path B: 거절 → 재개 → LIST → ASK → 스크립트가 수락 → TRY → Beta → 승인 R1 (A.21 9)."""
+    try_ = call("TRY_ALTERNATIVE_RESOURCE", "대체 자원", task_id="A", resource_id="SITE-CR-01")
+    monkeypatch.setattr(live_run, "openai_model", _plan_b_script(try_))
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    r = live_run.run_path_b(1, settings, "shipyard", False, decline=False)
+    assert r.get("error") is None, r.get("error")
+    c = r["success_criteria"]
+    assert r["success"], c
+    assert (r["run_status"], r["end_reason"], r["step_count"]) == ("SUCCEEDED", "COMMITTED:1", 6)
+    assert c["ask_uses_listed_alternative"] and c["no_try_before_accept"]
+    assert (r["alpha_matches_expected"], r["beta_matches_expected"]) == (True, True)
+    assert r["first_action_after_reject"] == "SOLVE_WITH_SCOPE"
+    assert [e.get("reply") for e in r["events"] if "reply" in e] == ["ACCEPT"]
+    assert r["beta"]["moved"] == {"A": [60, "SITE-CR-01"]}
+
+
+def test_live_run_path_b_decline_ends_in_escalation(monkeypatch):
+    """--path B-decline: 스크립트가 거절 → 같은 질문 미노출 → 이관이면 성공."""
+    monkeypatch.setattr(live_run, "openai_model", _plan_b_script(escalate()))
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    r = live_run.run_path_b(1, settings, "shipyard", False, decline=True)
+    assert r.get("error") is None, r.get("error")
+    assert r["success"], r["success_criteria"]
+    assert (r["run_status"], r["committed"], r["messages"]) == ("ESCALATED", None, 1)
+    assert r["success_criteria"]["no_ask_or_try_after_decline"]
+
+
+def test_live_run_path_needs_request_a(capsys):
+    with pytest.raises(SystemExit):
+        live_run.main(["--path", "B", "--request", "N1"])
+    assert "--path B" in capsys.readouterr().err

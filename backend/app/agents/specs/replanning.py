@@ -98,12 +98,19 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
 
     LIST: 자원이 필요한 acting 작업 중 같은 자원 사실에서 아직 조회하지 않은 것.
     TRY: 자원 축 허용(movable.resource ∧ RESOURCE 제약 없음) 작업의 유효 조회 결과 중 미시도 대체 자원.
-    ASK: 자원 축 미확인 ∧ RESOURCE 제약 없음 ∧ 같은 작업·축의 열린 질문 없음, 값은 조회 결과 − 현재 자원.
+    ASK: 자원 축 미확인 ∧ RESOURCE 제약 없음 ∧ 같은 작업·축의 열린 질문 없음, 값은 조회 결과 − 현재 자원
+    − 이 Case에서 담당자가 거절(DECLINE)한 값. 거절당한 질문을 같은 사람에게 다시 보내지 않는다.
     """
     acting = {t["task_id"]: t for t in obs["acting_tasks"]}
     frozen = {(c["task_id"], axis) for c in obs["constraints"] for axis in c["frozen_axes"]}
     listed = {r["task_id"]: r for r in obs["assignable_resources"] if r["task_id"] in acting}
     open_asks = {(h["task_id"], h["axis"]) for h in obs["human_replies"] if h["status"] == "OPEN"}
+    declined = {
+        (h["task_id"], h["axis"], v)
+        for h in obs["human_replies"]
+        if h["decision"] == "DECLINE"
+        for v in h["allowed_values"]
+    }
     try_: dict[str, list[str]] = {}
     ask: dict[str, list[str]] = {}
     for tid, r in listed.items():
@@ -113,7 +120,12 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
             if r["untried_alternatives"]:
                 try_[tid] = list(r["untried_alternatives"])
         elif (tid, "RESOURCE") not in open_asks:
-            values = [a["resource_id"] for a in r["assignable"] if a["resource_id"] != r["current"]]
+            values = [
+                a["resource_id"]
+                for a in r["assignable"]
+                if a["resource_id"] != r["current"]
+                and (tid, "RESOURCE", a["resource_id"]) not in declined
+            ]
             if values:
                 ask[tid] = values
     return {

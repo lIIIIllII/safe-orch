@@ -102,9 +102,22 @@ export interface ConsultationItem {
   item_status: string
 }
 
+/** 거절된 후보의 거절 사유와 그 거절로 생긴 제약 (A.21 7). */
+export interface RejectionView {
+  decision_id: string
+  actor_id: string
+  reason_code: string
+  target_task_ids: string[]
+  axes: string[]
+  comment: string
+  context_version: number
+  constraints: { constraint_id: string; task_id: string; frozen_axes: string[]; created_context_version: number }[]
+}
+
 export interface CandidateView {
   candidate_id: string
   kind: 'REPLAN' | 'RECONFIRM'
+  rejection: RejectionView | null
   run_id: string | null
   context_version: number
   base_plan_revision: number
@@ -161,6 +174,8 @@ export interface RunSummary {
   wait_kind: string | null
   wait_ref: string | null
   wait_generation: number
+  /** 대기 뒤 다시 실행된 횟수 (A.21 7, 서버가 조회 시 계산) */
+  resume_count: number
   last_step_no: number
   current_step_status: string | null
   end_reason: string | null
@@ -179,10 +194,35 @@ export interface SiteState {
   conflicts: Conflict[]
   candidates: CandidateView[]
   review_queue: string[]
+  /** 대기열(QUEUED) 접수 순서 (A.21 0-1) */
+  task_queue: string[]
   holds: HoldView[]
   events: EventView[]
   runs: RunSummary[]
   dispatch: { pending: number; failed: number }
+  /** X-Actor 본인에게 온 질문 (A.21 7) */
+  inbox: InboxItem[]
+}
+
+/** 받은 요청 항목. body = 서버 문구(동의 내용의 기준), agent_text = 모델 작성 설명. */
+export interface InboxItem {
+  message_id: string
+  run_id: string
+  step_no: number
+  to_actor_id: string
+  type: string
+  status: 'OPEN' | 'ANSWERED' | 'CANCELLED' | 'LATE'
+  body: string
+  agent_text: string | null
+  reply: { decision: string; values: string[]; comment: string; actor_id: string; at: string } | null
+  created_context_version: number
+  answered_context_version: number | null
+  proposal_id: string | null
+  proposal_type: string | null
+  proposal_status: string | null
+  task_id: string | null
+  axis: string | null
+  allowed_values: string[]
 }
 
 export interface AgentStep {
