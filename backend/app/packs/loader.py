@@ -319,6 +319,47 @@ def _demo_requests(
     return out
 
 
+def _check_predecessors(
+    where: str,
+    task_id: str,
+    predecessors: tuple[Predecessor, ...],
+    plan_tasks: dict[str, Task],
+    reasons: list[str],
+) -> None:
+    """선행 작업은 plan_r0 작업만(기동 때 seed되는 것), 자기 참조 금지, min_lag ≥ 0 (부록 A.22)."""
+    for p in predecessors:
+        if p.task_id == task_id:
+            reasons.append(f"{where}: predecessor refers to itself {task_id!r}")
+        elif p.task_id not in plan_tasks:
+            reasons.append(f"{where}: undefined predecessor task {p.task_id!r} (plan_r0 only)")
+        if p.min_lag < 0:
+            reasons.append(f"{where}: predecessor {p.task_id!r} min_lag {p.min_lag} < 0")
+
+
+def _check_cycles(tasks: list[Task], reasons: list[str]) -> None:
+    """plan_r0 작업끼리의 선후행 순환을 거절한다 (부록 A.22). 자기 참조는 따로 보고한다."""
+    ids = {t.task_id for t in tasks}
+    edges = {
+        t.task_id: sorted({p.task_id for p in t.predecessors if p.task_id in ids} - {t.task_id})
+        for t in tasks
+    }
+    state: dict[str, int] = {}  # 1 방문 중, 2 끝남
+
+    def visit(tid: str, path: list[str]) -> None:
+        state[tid] = 1
+        for nxt in edges[tid]:
+            if state.get(nxt) == 1:
+                cycle = path[path.index(nxt) :] + [nxt]
+                reasons.append(f"plan_r0.yaml.tasks: predecessor cycle {' -> '.join(cycle)}")
+            elif nxt not in state:
+                visit(nxt, [*path, nxt])
+        state[tid] = 2
+
+    for tid in sorted(edges):
+        if tid not in state:
+            visit(tid, [tid])
+
+
 def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
     reasons: list[str] = []
     pack_doc = _as_dict(raw["pack.yaml"], "pack.yaml", reasons)
@@ -365,6 +406,11 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         rule = _model(Rule, r, where, reasons)
         if rule:
             rules.append(rule)
+    # CP-SAT는 Pack과 관계없이 모든 자원에 NoOverlap을 건다. Rule Engine·Validator 기준을 맞추려고
+    # CAPACITY Rule을 정확히 1개 요구한다 (부록 A.22).
+    n_capacity = sum(1 for r in rule_items if isinstance(r, dict) and r.get("type") == "CAPACITY")
+    if n_capacity != 1:
+        reasons.append(f"rules.yaml.rules: exactly one CAPACITY rule required, got {n_capacity}")
 
     # units·actors·zones
     unit_items = _as_list(site_doc.get("units"), "site.yaml.units", reasons)
@@ -504,6 +550,10 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         if task:
             tasks.append(task)
     tasks_by_id = {t.task_id: t for t in tasks}
+    for t in tasks:
+        where = f"plan_r0.yaml.tasks {t.task_id}"
+        _check_predecessors(where, t.task_id, t.predecessors, tasks_by_id, reasons)
+    _check_cycles(tasks, reasons)
 
     plan_r0: list[Assignment] = []
     for i, a in enumerate(
@@ -547,6 +597,14 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             reasons.append(
                 f"scenario.yaml.new_task: requested.start {new_task.requested.start}"
                 f" != earliest_start {new_task.earliest_start}"
+            )
+        if new_task:
+            _check_predecessors(
+                "scenario.yaml.new_task",
+                new_task.task_id,
+                new_task.predecessors,
+                tasks_by_id,
+                reasons,
             )
         if new_task and work_intervals:
             req = new_task.requested

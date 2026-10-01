@@ -345,3 +345,77 @@ def test_demo_requests_rejected(pack_copy, mutate, expected):
 def test_demo_event_target_must_exist(pack_copy):
     _edit(pack_copy, "scenario.yaml", lambda d: d["demo_events"][0].update(target_task_id="X9"))
     assert "undefined task 'X9'" in _reasons(pack_copy)
+
+
+# ── 판정 기준 정리 (부록 A.22) ─────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("mutate", "count"),
+    [
+        (lambda d: d["rules"].pop(2), 0),
+        (lambda d: d["rules"].append({**d["rules"][2], "rule_id": "CAP-2"}), 2),
+    ],
+    ids=["none", "two"],
+)
+def test_exactly_one_capacity_rule_required(pack_copy, mutate, count):
+    _edit(pack_copy, "rules.yaml", mutate)
+    assert f"exactly one CAPACITY rule required, got {count}" in _reasons(pack_copy)
+
+
+def _set_preds(data, task_id, preds):
+    _task(data, task_id)["predecessors"] = preds
+
+
+@pytest.mark.parametrize(
+    ("preds", "expected"),
+    [
+        ([{"task_id": "X9"}], "undefined predecessor task 'X9' (plan_r0 only)"),
+        ([{"task_id": "A"}], "undefined predecessor task 'A' (plan_r0 only)"),  # new_task
+        ([{"task_id": "C"}], "predecessor refers to itself 'C'"),
+        ([{"task_id": "B", "min_lag": -5}], "predecessor 'B' min_lag -5 < 0"),
+    ],
+    ids=["unknown", "new_task", "self", "negative_lag"],
+)
+def test_plan_r0_predecessors_rejected(pack_copy, preds, expected):
+    _edit(pack_copy, "plan_r0.yaml", lambda d: _set_preds(d, "C", preds))
+    assert f"plan_r0.yaml.tasks C: {expected}" in _reasons(pack_copy)
+
+
+def test_plan_r0_predecessor_cycle_rejected(pack_copy):
+    def mutate(d):
+        _set_preds(d, "B", [{"task_id": "C"}])
+        _set_preds(d, "C", [{"task_id": "D"}])
+        _set_preds(d, "D", [{"task_id": "B"}])
+
+    _edit(pack_copy, "plan_r0.yaml", mutate)
+    assert "predecessor cycle B -> C -> D -> B" in _reasons(pack_copy)
+
+
+def test_plan_r0_predecessor_without_cycle_loads(pack_copy):
+    _edit(pack_copy, "plan_r0.yaml", lambda d: _set_preds(d, "C", [{"task_id": "B"}]))
+    pack = load_pack(pack_copy)
+    assert next(t for t in pack.tasks if t.task_id == "C").predecessors[0].task_id == "B"
+
+
+@pytest.mark.parametrize(
+    ("preds", "expected"),
+    [
+        ([{"task_id": "N1"}], "undefined predecessor task 'N1' (plan_r0 only)"),  # demo_request
+        ([{"task_id": "A"}], "predecessor refers to itself 'A'"),
+        ([{"task_id": "B", "min_lag": -1}], "predecessor 'B' min_lag -1 < 0"),
+    ],
+    ids=["demo_request", "self", "negative_lag"],
+)
+def test_new_task_predecessors_rejected(pack_copy, preds, expected):
+    _edit(pack_copy, "scenario.yaml", lambda d: d["new_task"].update(predecessors=preds))
+    assert f"scenario.yaml.new_task: {expected}" in _reasons(pack_copy)
+
+
+def test_demo_request_predecessors_key_not_accepted(pack_copy):
+    _edit(
+        pack_copy,
+        "scenario.yaml",
+        lambda d: d["demo_requests"][0].update(predecessors=[{"task_id": "B"}]),
+    )
+    assert "scenario.yaml.demo_requests[0].predecessors: Extra inputs" in _reasons(pack_copy)

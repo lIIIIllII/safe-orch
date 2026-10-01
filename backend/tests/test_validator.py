@@ -211,6 +211,40 @@ def test_t05_precedence_c05(seeded):
     assert _bad(v) == [("C05", "PRECEDENCE", ("D", "E"))]
 
 
+def test_predecessor_missing_c05(seeded):
+    """선행 작업이 검사 대상 배정에 없으면 건너뛰지 않는다 (fail-closed, 부록 A.22)."""
+    snap = _retask(take_snapshot(seeded), "E", predecessors=(Predecessor(task_id="X9"),))
+    found = detect_conflicts(snap, snap.facts().check_assignments(), seeded)
+    assert [(c.rule_id, c.task_ids) for c in found] == [("PREDECESSOR_MISSING", ("E",))]
+    v = validate(snap, _reconfirm(snap), None, seeded)
+    assert v.status == "FAIL"
+    assert _bad(v) == [("C05", "PREDECESSOR_MISSING", ("E",))]
+
+
+def test_predecessor_dropped_from_candidate_c02_and_c05(seeded):
+    """후보에서 선행 작업이 빠지면 C02 TASK_MISSING과 함께 C05 PREDECESSOR_MISSING이다 (A.22)."""
+    snap = _retask(take_snapshot(seeded), "E", predecessors=(Predecessor(task_id="D"),))
+    base = snap.facts().base_assignments()
+    cand = _reconfirm(snap, tuple(a for tid, a in sorted(base.items()) if tid != "D"))
+    v = validate(snap, cand, None, seeded)
+    assert _bad(v) == [("C02", "TASK_MISSING", ("D",)), ("C05", "PREDECESSOR_MISSING", ("E",))]
+
+
+def test_cpsat_predecessor_missing_infeasible(with_a):
+    """선행 작업이 Snapshot에 없는 작업이 있으면 해를 내지 않는다(Validator C05와 같은 기준, A.22).
+
+    평소 L1은 OPTIMAL(Alpha)이다. 범위 밖 작업(E, UB)의 누락도 모델 전체를 INFEASIBLE로 만든다.
+    """
+    snap = _retask(take_snapshot(with_a), "E", predecessors=(Predecessor(task_id="X9"),))
+    conflict = next(
+        c
+        for c in detect_conflicts(snap, snap.facts().check_assignments(), with_a)
+        if c.rule_id == "SEP-LIFT-BELOW"
+    )
+    r = cpsat.solve(snap, build_search_spec(snap, conflict, "UA", "L1"), with_a)
+    assert (r.stage1["status"], r.chosen_stage) == ("INFEASIBLE", None)
+
+
 # ── T06·C06 ────────────────────────────────────────────────────
 
 

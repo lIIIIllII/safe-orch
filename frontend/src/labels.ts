@@ -28,6 +28,7 @@ export const REASON: Record<string, string> = {
   TASK_NOT_FOUND: '대상 작업 없음',
   // 요청 철회 (A.20)
   TASK_IN_PLAN: '확정 계획에 있는 작업은 철회 불가',
+  TASK_HAS_SUCCESSORS: '이 작업을 선행으로 둔 요청이 있음(후속 요청을 먼저 철회)',
   // Event·Hold
   SOURCE_BODY_MISMATCH: '같은 신고 ID에 다른 내용',
   HOLD_NOT_FOUND: 'Hold 없음',
@@ -106,6 +107,7 @@ export const REASON: Record<string, string> = {
   DURATION: 'duration 불일치',
   WINDOW: '시간창 위반',
   PRECEDENCE: '선후행 위반',
+  PREDECESSOR_MISSING: '선행 작업이 계획 대상에 없음',
   OUTSIDE_ACTING_UNIT: '다른 Unit 작업 변경',
   FROZEN_BY_CONSTRAINT: '확인된 제약으로 고정된 축 변경',
   RESOURCE_NOT_IN_SPEC: '허용 대안 밖 자원',

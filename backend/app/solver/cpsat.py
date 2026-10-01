@@ -127,13 +127,16 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
                 m.add(sx + x.duration + rule.min_gap <= sy).only_enforce_if(before)
                 m.add(sy + y.duration + rule.min_gap <= sx).only_enforce_if(~before)
 
-    # 선후행
+    # 선후행. 선행 작업이 Snapshot에 없으면 해를 내지 않는다(INFEASIBLE). Rule Engine
+    # PREDECESSOR_MISSING·Validator C05와 같은 기준 (부록 A.22).
     for t in tasks:
         for p in t.predecessors:
             if p.task_id in b.starts:
                 m.add(
                     b.starts[p.task_id] + b.durations[p.task_id] + p.min_lag <= b.starts[t.task_id]
                 )
+            else:
+                m.add_bool_or([])
     return b
 
 

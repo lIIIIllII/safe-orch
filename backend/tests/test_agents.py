@@ -158,6 +158,20 @@ def test_malformed_twice_escalates(with_a, bad):
     assert run.solver_calls_used == 0 and _count("solver_job") == 0
 
 
+def test_malformed_count_restarts_after_other_result(with_a):
+    """바로 앞 COMPLETED step만 본다. 사이에 ACTION_NOT_AVAILABLE이 있으면 다시 센다 (A.22)."""
+    bad = AIMessage(content="L1로 하겠습니다")
+    run, steps, _ = _run(with_a, [solve("L0"), bad, solve("L0"), bad, escalate()])
+    assert _guards(steps) == [
+        ("COMPLETED", "CONTINUE", None),
+        ("COMPLETED", "REJECTED", "MALFORMED"),
+        ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE"),
+        ("COMPLETED", "REJECTED", "MALFORMED"),
+        ("COMPLETED", "DONE", None),
+    ]
+    assert (run.status, run.end_reason) == ("ESCALATED", "ESCALATE_NO_SOLUTION")
+
+
 def test_decision_summary_is_truncated_not_rejected(with_a):
     _, steps, _ = _run(with_a, [solve("L1", "가" * 300)])
     assert steps[0]["result_kind"] == "WAIT"

@@ -94,7 +94,12 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
                 r.reject("RESOURCE_TYPE_MISMATCH")
             if actor.unit_id not in res.allowed_unit_ids:
                 r.reject("RESOURCE_NOT_AUTHORIZED")
-    current = {t.task_id for t in list_current_tasks(tx, site_id, pack)}
+    # 선행 작업은 현재 READY·QUEUED 작업만. 철회된 작업(NEEDS_INFO)은 없는 것으로 본다 (A.22).
+    current = {
+        t.task_id
+        for t in list_current_tasks(tx, site_id, pack)
+        if t.lifecycle in ("READY", "QUEUED")
+    }
     if any(p.task_id not in current for p in form.predecessors):
         r.reject("PREDECESSOR_NOT_FOUND")
     if r.reason_codes or wt is None:
@@ -187,14 +192,10 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
     """
     r = Result()
     site_id = ctx.site_id
-    task = next(
-        (
-            t
-            for t in list_current_tasks(tx, site_id, ctx.pack)
-            if t.task_id == body.task_id and t.lifecycle in ("READY", "QUEUED")
-        ),
-        None,
-    )
+    active = [
+        t for t in list_current_tasks(tx, site_id, ctx.pack) if t.lifecycle in ("READY", "QUEUED")
+    ]
+    task = next((t for t in active if t.task_id == body.task_id), None)
     if task is None:
         r.reject("TASK_NOT_FOUND")
         return r
@@ -204,6 +205,10 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
     plan = get_current_plan(tx, site_id)
     if plan is not None and any(a.task_id == task.task_id for a in plan.assignments):
         r.reject("TASK_IN_PLAN")
+        return r
+    # 이 작업을 선행으로 가진 READY·QUEUED 작업이 있으면 후속 요청을 먼저 철회해야 한다 (A.22).
+    if any(p.task_id == task.task_id for t in active for p in t.predecessors):
+        r.reject("TASK_HAS_SUCCESSORS")
         return r
 
     revision = task.revision + 1

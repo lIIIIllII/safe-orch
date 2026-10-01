@@ -146,6 +146,16 @@ def test_llm_error_on_two_consecutive_steps_escalates(with_a):
     assert run.solver_calls_used == 0
 
 
+def test_llm_error_then_malformed_escalates(with_a):
+    """LLM_ERROR와 MALFORMED는 합산한다. 끝난 사유는 마지막 사유 (A.17·A.22)."""
+    run, steps = _invoke(with_a, [_raise(_conn_error)] * 2 + [AIMessage(content="L1")])
+    assert [(s["result_kind"], s["guard"]["reason_code"]) for s in steps] == [
+        ("REJECTED", "LLM_ERROR"),
+        ("DONE", "MALFORMED"),
+    ]
+    assert (run.status, run.end_reason) == ("ESCALATED", "MALFORMED_TWICE")
+
+
 def test_llm_config_error_ends_run_as_error(with_a):
     run, steps = _invoke(with_a, [_raise(_auth_error)])
     assert (run.status, run.end_reason) == ("ERROR", "LLM_CONFIG: AuthenticationError")

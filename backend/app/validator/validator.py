@@ -29,6 +29,7 @@ BASIC_TO_CHECK = {
     "DURATION": "C03",
     "WINDOW": "C04",
     "PRECEDENCE": "C05",
+    "PREDECESSOR_MISSING": "C05",  # 선행 작업 누락 (부록 A.22)
     "RESOURCE_MISSING": "C07",
     "RESOURCE_TYPE": "C07",
     "RESOURCE_AUTH": "C08",

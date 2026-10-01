@@ -40,6 +40,7 @@ BASIC_RULE_IDS = frozenset(
         "DURATION",
         "WINDOW",
         "PRECEDENCE",
+        "PREDECESSOR_MISSING",
         "RESOURCE_MISSING",
         "RESOURCE_TYPE",
         "RESOURCE_AUTH",
@@ -53,6 +54,7 @@ def _basic(facts: SnapshotContent, pairs: list[tuple[Task, Assignment]]) -> list
     """기본 제약: duration, 시간창·Horizon, 근무 달력, 선후행, 필요 자원, 유형, 권한, 가용 구간.
 
     CALENDAR는 WINDOW와 따로 판정한다(Horizon 밖이면 둘 다 보고, 부록 A.20).
+    선행 작업이 검사 대상 배정에 없으면 건너뛰지 않고 PREDECESSOR_MISSING이다(fail-closed, 부록 A.22).
     """
     out: list[Conflict] = []
     resources = facts.resource_map()
@@ -72,7 +74,9 @@ def _basic(facts: SnapshotContent, pairs: list[tuple[Task, Assignment]]) -> list
             out.append(_conflict("CALENDAR", [(t, a)]))
         for p in t.predecessors:
             pred = by_id.get(p.task_id)
-            if pred is not None and pred[1].end + p.min_lag > a.start:
+            if pred is None:
+                out.append(_conflict("PREDECESSOR_MISSING", [(t, a)]))
+            elif pred[1].end + p.min_lag > a.start:
                 out.append(_conflict("PRECEDENCE", [pred, (t, a)]))
         if t.required_resource_type is not None and a.resource_id is None:
             out.append(_conflict("RESOURCE_MISSING", [(t, a)]))

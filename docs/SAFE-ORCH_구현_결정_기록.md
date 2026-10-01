@@ -425,6 +425,7 @@
 - 모든 Action에 필수 인자 `decision_summary`가 있다. 없으면 스키마 위반(MALFORMED)이다. 200자를 넘으면 **거절하지 않고 저장할 때 200자로 자른다.** 안전과 관계없는 설명 필드라 재질문 비용을 쓰지 않는다. 저장할 때 args에서 떼어 decision_summary 컬럼에 넣는다.
 - **STALE_OBSERVATION은 모든 Action에 같은 규칙이다.** Gateway가 Action을 실행하는 첫 tx에서 site의 (context, plan)이 step의 관찰 버전과 다르면 도구를 실행하지 않고 `REJECTED(STALE_OBSERVATION)`로 끝내고 다시 관찰한다. 모델이 옛 관찰로 고른 행동을 새 사실 위에서 실행하지 않기 위해서다. ESCALATE_NO_SOLUTION의 사유("해가 없다")도 사실 판단이고, D5의 ASK_TASK_OWNER·TRY_ALTERNATIVE_RESOURCE도 사실에 묶인다. MALFORMED는 Action이 아니므로 이 검사 전에 판정한다.
 - MALFORMED: invalid_tool_calls가 있거나, tool_call이 1개가 아니거나, 모르는 이름이거나, 스키마 위반. step은 COMPLETED(guard REJECTED)이고 결과는 REJECTED → 다시 관찰한다. 직전 COMPLETED step도 MALFORMED면(연속 2회) DONE → Run ESCALATED(`MALFORMED_TWICE`). `ACTION_NOT_AVAILABLE`·`STALE_OBSERVATION`은 연속 횟수에 넣지 않는다(step Budget으로 제한).
+  - (A.22) "넣지 않는다"는 연속을 끊고 다시 센다는 뜻이다.
 - SOLVE_WITH_SCOPE:
   - **예약 tx:** run RUNNING ∧ step RESERVED 확인 → STALE_OBSERVATION 검사(위 규칙) → Available 재계산 → Snapshot·SearchSpec 저장 → solver_job RESERVED → solver_calls +1, solver_seconds += time_limit_s(10, 미리 차감하고 돌려주지 않음). SearchSpecError는 그 reason_code로 REJECTED.
   - **계산:** tx 밖에서 `cpsat.solve`.
@@ -1024,3 +1025,55 @@
 - **패널 크기:** 타임라인 아래 손잡이를 끌어 높이를 바꾼다(160px – 창 높이 − 160px, 기본은 내용 높이 최대 min(470px, 52vh)). "크게 보기"는 타임라인을 화면 전체 폭으로 둔다(`?tl=wide`로도 연다). 배치는 grid 영역(tl·bt·rv)만 바꿔 타임라인이 다시 마운트되지 않으므로 배율·스크롤이 유지된다.
 - Pack 값은 여전히 meta·state에서만 받는다(`npm run lint`의 Pack 하드코딩 검사 통과).
 - **headless 확인(Chrome, CDP):** 1920×1080과 1536×864(노트북 125% 배율)에서 ① 10/12 A 장면(Alpha 후보 겹침): 3px/분, 충돌 시작으로 자동 스크롤, B 구역 충돌 띠 위 이름 + A 요청·B·→A 막대, C·D·D2·A-CR-01 행, 빈 행 숨김, 라벨 잘림 없음(Gate는 모서리 표시), 1536에서 B 막대 호버 카드. ② 10/13 N2(충돌 띠): G·G2 행 위 "화기–인화성 작업 분리(15분)" 띠, N2 요청·P·W·K 막대 라벨 온전, K는 행 이름 열 뒤로 일부 가려져도 라벨이 보임, 1536에서 N2 호버 카드(충돌 N2·P 포함). ③ 3일 보기(1px/분): 30분 막대는 바깥 라벨, 날짜 머리줄·접힌 밤 띠, 1536에서 둘째 날 충돌로 자동 스크롤. ④ 1536 "크게 보기" + "근무시간 맞춤": 09:00–17:00이 전체 폭에 맞고 마지막 눈금이 패널 안.
+
+### A.22 판정 기준 정리: 자원 겹침·선행 작업·형식 오류 연속 판정 (§5.3·§6·§7·§8·§9.6·§11.2·§18.1 보충, 스키마 변경 없음)
+
+범위: 블루프린트 §18.1 한계 중 "CAPACITY 기준 불일치", "선행 작업 참조"를 고치고, §11.2 형식 오류 연속 판정의 뜻을 테스트로 고정한다. 이번 범위가 아닌 것: 새 Agent·Action, 스키마 변경, fixture YAML 값 변경, prompt 변경, 화면 기능 추가(labels.ts 문구만 더한다).
+
+**블루프린트와 달라지는 점** (v1.2.4 본문은 지금 고치지 않는다. 다음 개정 때 반영한다)
+1. §5.3 로더 검증: "작업의 predecessors 참조는 검사하지 않는다(§18.1)" → 검사한다(아래 2). rules.yaml에 CAPACITY Rule이 정확히 1개 있어야 한다(아래 1).
+2. §6 기본 제약에 `PREDECESSOR_MISSING`(선행 작업이 검사 대상 배정에 없음)을 더한다. §8 C05가 이것을 받는다.
+3. §7 CP-SAT: READY 작업의 선행 작업이 Snapshot에 없으면 모델을 INFEASIBLE로 만든다(이전: 조용히 건너뜀).
+4. §9.6 철회: 검사에 `TASK_HAS_SUCCESSORS`를 더한다. "셋 다 단독 반환" → 넷 다 단독 반환. 폼의 predecessors 존재 검사는 "현재 READY·QUEUED 작업"으로 좁힌다.
+
+**1. 자원 겹침 기준 (§6, §18.1 CAPACITY 불일치)**
+- 로더는 rules.yaml에 type이 CAPACITY인 Rule이 정확히 1개 있을 때만 Pack을 받는다. 없거나 2개 이상이면 PackError. 이유: CP-SAT는 Pack과 관계없이 모든 자원에 NoOverlap을 걸기 때문에, Rule Engine·Validator의 기준을 여기에 맞춘다(선언이 없으면 겹치는 RECONFIRM 후보가 PASS할 수 있었다).
+- Rule Engine·Validator·CP-SAT 코드는 그대로 둔다. CAP-RESOURCE rule_id와 화면 표시도 그대로다.
+- 테스트: CAPACITY Rule이 없는 Pack과 2개인 Pack은 로더가 거절한다. 기존 Pack 변형 테스트가 이 규칙에 걸리면 기대 사유만 고친다.
+
+**2. 선행 작업 참조 (§18.1 선행 작업)**
+- 로더(위반하면 PackError):
+  - plan_r0 작업의 predecessors는 plan_r0 작업만, new_task의 predecessors도 plan_r0 작업만 가리킬 수 있다. 기동 때 seed되는 것은 plan_r0뿐이라, 다른 시연 작업을 가리키면 기동 직후부터 선행 작업이 없는 READY 작업이 생기기 때문이다.
+  - 자기 자신은 가리킬 수 없고 `min_lag ≥ 0`이어야 한다.
+  - plan_r0 작업끼리 순환이 있으면 거절한다(new_task는 plan_r0만 가리키므로 순환을 만들 수 없다).
+  - demo_requests는 지금처럼 predecessors 키를 받지 않는다(`DemoRequest`는 extra 금지, 모델 변경 없음).
+- 폼(§9.6): 선행 작업은 현재 READY나 QUEUED인 작업이어야 한다. 철회된 작업(NEEDS_INFO)이나 없는 작업이면 `PREDECESSOR_NOT_FOUND`다(기존 사유 코드이고, 다른 사유와 함께 모은다). 이전 코드는 현재 revision 전체를 봐서 NEEDS_INFO 작업도 통과했다.
+- 철회(§9.6): 현재 READY·QUEUED 작업 중 이 작업을 선행 작업으로 가진 것이 있으면 `TASK_HAS_SUCCESSORS`로 거절한다. 단독으로 반환하고, 검사 순서는 `TASK_NOT_FOUND` → `NOT_AUTHORIZED` → `TASK_IN_PLAN` → `TASK_HAS_SUCCESSORS`다. 후속 요청을 먼저 철회해야 한다. HTTP는 기존 규칙대로 409다.
+- 위 두 검사를 거쳤는데도 실행 중에 READY 작업의 선행 작업이 검사 대상 배정에 없으면, 조용히 건너뛰지 않고 막는다(fail-closed):
+  - Rule Engine: 기본 제약 rule_id `PREDECESSOR_MISSING`으로 충돌을 낸다(task_ids = 후속 작업). Validator는 이것을 C05로 매핑한다. 후보에서 선행 작업이 빠진 경우(C02 `TASK_MISSING`)에도 함께 보고된다.
+  - CP-SAT: 이런 작업이 있으면 모델을 INFEASIBLE로 만든다(해를 내지 않는다). Validator와 기준을 같게 하기 위해서다.
+- 대기열과의 관계: QUEUED 작업을 선행으로 지정하면 대기열이 비어 있지 않으므로 새 요청도 QUEUED가 되고, 대기열은 접수 순서로 올라가므로 선행 작업이 먼저 READY가 된다. 철회는 후속 작업이 있으면 막힌다. 그래서 정상 경로에서는 PREDECESSOR_MISSING이 나지 않는다.
+- labels.ts에 `TASK_HAS_SUCCESSORS`와 `PREDECESSOR_MISSING`의 한국어 문구를 더한다.
+- 테스트: 로더(없는 작업 참조, 자기 참조, 순환, 음수 lag), 폼(NEEDS_INFO 작업을 선행으로 지정 → `PREDECESSOR_NOT_FOUND`), 철회(후속 요청이 있는 작업 → `TASK_HAS_SUCCESSORS`, 후속을 먼저 철회하면 성공), Rule Engine·Validator(선행 작업 누락 → `PREDECESSOR_MISSING`, C05 FAIL), CP-SAT(선행 작업 누락 → INFEASIBLE).
+
+**3. 형식 오류 연속 판정 (§11.2)**
+- 코드는 바꾸지 않는다. 판정은 "바로 앞의 COMPLETED step"만 본다. `MALFORMED`·`LLM_ERROR` 사이에 다른 결과의 step(`ACTION_NOT_AVAILABLE`·`STALE_OBSERVATION` 포함)이 있으면 처음부터 다시 센다. 이런 반복은 step Budget이 제한한다(§11.2 그대로).
+- A.16의 "`ACTION_NOT_AVAILABLE`·`STALE_OBSERVATION`은 연속 횟수에 넣지 않는다"는 이 뜻(연속을 끊고 다시 센다)이다. `MALFORMED`와 `LLM_ERROR`는 합산한다(A.17).
+- 테스트로 고정한다: MALFORMED → ACTION_NOT_AVAILABLE → MALFORMED는 이관하지 않는다. LLM_ERROR → MALFORMED는 이관한다(끝난 사유 `MALFORMED_TWICE`).
+
+**구현 기록**
+- 바뀐 파일:
+  - `app/packs/loader.py`: CAPACITY Rule 1개 요구, `_check_predecessors`(plan_r0·new_task → plan_r0만, 자기 참조, min_lag < 0), `_check_cycles`(plan_r0끼리).
+  - `app/commands/task_request.py`: 폼 선행 작업 검사를 현재 READY·QUEUED로 좁힘, 철회 `TASK_HAS_SUCCESSORS`.
+  - `app/rules/engine.py`: 기본 제약 `PREDECESSOR_MISSING`(`BASIC_RULE_IDS`에 추가).
+  - `app/validator/validator.py`: `BASIC_TO_CHECK["PREDECESSOR_MISSING"] = "C05"`.
+  - `app/solver/cpsat.py`: 선행 작업이 Snapshot에 없으면 빈 `add_bool_or([])`로 INFEASIBLE.
+  - `frontend/src/labels.ts`: `TASK_HAS_SUCCESSORS`, `PREDECESSOR_MISSING` 문구.
+  - 테스트: `test_pack_loader.py`(CAPACITY 0·2개, plan_r0 없는 작업·new_task·자기 참조·음수 lag, 순환, 순환 없는 선행은 통과, new_task의 demo_request·자기 참조·음수 lag, demo_requests의 predecessors 키 거절), `test_demo_extension.py`(철회된 선행 → `PREDECESSOR_NOT_FOUND`와 다른 사유 함께, 후속 요청 → `TASK_HAS_SUCCESSORS` 후 순서대로 철회 성공, QUEUED 후속도 막음), `test_validator.py`(누락 → `PREDECESSOR_MISSING`·C05 FAIL, 후보에서 선행이 빠지면 C02와 C05, CP-SAT INFEASIBLE), `test_agents.py`(MALFORMED → ACTION_NOT_AVAILABLE → MALFORMED는 이관하지 않음), `test_llm.py`(LLM_ERROR → MALFORMED는 `MALFORMED_TWICE`).
+- 기존 테스트는 고칠 것이 없었다(CUMULATIVE 변형 테스트는 `in` 비교라 새 사유가 더해져도 통과).
+- 테스트 수: 402 → 422(+20). `npm run build`·`npm run lint` 통과. `verify_demo_values`는 모든 값이 이전과 같다(fixture YAML 변경 없음).
+- 남은 한계:
+  - CAPACITY 판정 코드는 여전히 둘이다(Rule Engine은 Pack Rule, CP-SAT는 상수 NoOverlap). 로더 조건으로 기준만 맞췄다. 자원 겹침을 기본 제약으로 옮기는 것은 하지 않았다.
+  - PREDECESSOR_MISSING은 정상 경로에서는 나지 않는다(로더·폼·철회가 막는다). 나면 그 작업이 있는 동안 모든 Solver 호출이 INFEASIBLE이고, Replanning은 이관으로 끝난다. 풀려면 후속 작업을 철회해야 한다.
+  - 폼은 선후행 순환을 따로 검사하지 않는다. 새 요청은 이미 있는 작업만 가리키고, 이미 있는 작업의 predecessors는 바뀌지 않으므로 순환이 생기지 않는다.
+  - demo_requests에는 선행 작업을 둘 수 없다(시연값에 필요가 생기면 모델에 칸을 더한다).

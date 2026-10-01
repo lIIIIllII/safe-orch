@@ -389,6 +389,58 @@ def test_withdraw_permissions_and_targets(seeded):
     assert withdraw("supervisor", "N5") == ("REJECTED", ("TASK_NOT_FOUND",))  # 이미 철회
 
 
+# ── 선행 작업 참조 (부록 A.22) ─────────────────────────────────
+
+
+def test_form_rejects_withdrawn_predecessor(seeded):
+    """철회된 작업(NEEDS_INFO)은 선행으로 지정할 수 없다. 다른 사유와 함께 모은다."""
+    pack = seeded
+    _submit(pack, "N1")
+    withdraw = withdraw_task_request(pack, "planner_a", _key(), TaskWithdraw(task_id="N1"))
+    assert withdraw.status == "APPLIED"
+    form = _form(pack, "N2", predecessors=({"task_id": "N1"},), zone_id="Z9")
+    out = submit_task_request(pack, "planner_a", _key(), form)
+    assert (out.status, set(out.reason_codes)) == (
+        "REJECTED",
+        {"PREDECESSOR_NOT_FOUND", "UNKNOWN_ZONE"},
+    )
+    # 현재 READY 작업은 선행으로 지정할 수 있다
+    form = _form(pack, "N2", predecessors=({"task_id": "B"},))
+    assert submit_task_request(pack, "planner_a", _key(), form).status == "APPLIED"
+
+
+def test_withdraw_rejects_task_with_successors(seeded):
+    """후속 요청이 있으면 TASK_HAS_SUCCESSORS(단독, 권한 검사 다음). 후속을 먼저 철회하면 된다."""
+    pack = seeded
+    _submit(pack, "N1")
+    form = _form(pack, "N2", predecessors=({"task_id": "N1"},))
+    assert submit_task_request(pack, "planner_a", _key(), form).status == "APPLIED"
+
+    def withdraw(actor, task_id):
+        out = withdraw_task_request(pack, actor, _key(), TaskWithdraw(task_id=task_id))
+        return out.status, out.reason_codes
+
+    assert withdraw("planner_b", "N1") == ("REJECTED", ("NOT_AUTHORIZED",))
+    ctx = _site(pack).context_version
+    assert withdraw("planner_a", "N1") == ("REJECTED", ("TASK_HAS_SUCCESSORS",))
+    assert _site(pack).context_version == ctx
+    assert withdraw("planner_a", "N2") == ("APPLIED", ())
+    assert withdraw("planner_a", "N1") == ("APPLIED", ())
+
+
+def test_withdraw_rejects_task_with_queued_successor(seeded):
+    """대기열(QUEUED) 후속 요청도 후속 작업으로 본다."""
+    pack = seeded
+    _submit(pack, "N1")
+    run_until_idle(pack, model_factory=_factory(solve("L0")))
+    assert _runs()[-1].status == "WAITING_HUMAN"  # 열린 Case → 새 요청은 대기열
+    form = _form(pack, "N2", predecessors=({"task_id": "N1"},))
+    out = submit_task_request(pack, "planner_a", _key(), form)
+    assert out.result_refs["queued"] is True
+    out = withdraw_task_request(pack, "planner_a", _key(), TaskWithdraw(task_id="N1"))
+    assert out.reason_codes == ("TASK_HAS_SUCCESSORS",)
+
+
 # ── API: meta·scenario·withdraw ────────────────────────────────
 
 
