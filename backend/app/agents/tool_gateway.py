@@ -9,18 +9,27 @@ registry·observers·executors를 import하지 않는다(A.23).
 """
 
 import sqlite3
+from collections.abc import Callable
 from typing import Any
 
 from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
-from app.agents.observe import budget_remaining
+from app.agents.observe import Observation, budget_remaining
 from app.agents.types import AgentBinding, AgentSpec, GatewayResult, StepMeta
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 from app.store import db
 from app.store.repos.commands import insert_command_result
-from app.store.repos.runs import abort_step, charge, complete_step, get_run, get_step, list_steps
+from app.store.repos.runs import (
+    abort_step,
+    charge,
+    complete_step,
+    enter_wait,
+    get_run,
+    get_step,
+    list_steps,
+)
 from app.store.repos.site import get_site
 
 ACCEPTED = "ACCEPTED"
@@ -185,6 +194,44 @@ class ToolGateway:
             step["observed_context_version"],
             step["observed_plan_revision"],
         )
+
+    # ── 실행기 공통 틀 (A.24 S0) ────────────────────────────
+
+    def begin_step(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        permitted: Callable[[Observation], bool] | None = None,
+    ) -> tuple[GatewayResult | None, Observation | None]:
+        """Action tx의 첫 부분: Run 활성 확인 → LLM 시도 차감 → STALE_OBSERVATION →
+        (permitted가 있으면) 이 tx에서 다시 관찰해 허용 판정, 아니면 ACTION_NOT_AVAILABLE.
+
+        결과가 있으면 실행기는 그대로 돌려준다. 없으면 효과를 쓴다(관찰은 permitted가 있을 때만).
+        """
+        if not self._active(tx, run_id, step_no):
+            return GatewayResult("INACTIVE"), None
+        charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
+        if self._stale_observation(tx, run_id, step_no):
+            return self._reject(tx, run_id, step_no, meta, parsed, "STALE_OBSERVATION"), None
+        if permitted is None:
+            return None, None
+        obs = self.binding.observer.build_observation(tx, self.pack, run_id)
+        if not permitted(obs):
+            return self._reject(tx, run_id, step_no, meta, parsed, "ACTION_NOT_AVAILABLE"), None
+        return None, obs
+
+    def wait_or_continue(
+        self, tx: sqlite3.Connection, run_id: str, step_no: int, wait_kind: str, wait_ref: str
+    ) -> GatewayResult:
+        """대기 진입 재확인(§11.3(1)·I-19): 관찰 이후 wake가 없으면 WAIT, 있으면 다시 관찰한다."""
+        step = get_step(tx, run_id, step_no)
+        assert step is not None
+        if enter_wait(tx, run_id, wait_kind, wait_ref, step["observed_wake_seq"]):
+            return GatewayResult("WAIT")
+        return GatewayResult("CONTINUE", "NEW_CHANGE_BEFORE_WAIT")
 
     # ── 실행 ────────────────────────────────────────────────
 

@@ -33,9 +33,7 @@ from app.store.repos.records import (
 )
 from app.store.repos.runs import (
     charge,
-    enter_wait,
     finish_solver_job,
-    get_step,
     insert_solver_job,
 )
 from app.store.repos.site import get_site
@@ -51,7 +49,8 @@ class ReplanningExecutor:
         self._active = gateway._active
         self._reject = gateway._reject
         self._complete = gateway._complete
-        self._stale_observation = gateway._stale_observation
+        self.begin_step = gateway.begin_step
+        self.wait_or_continue = gateway.wait_or_continue
 
     def run(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
         if parsed.name in ("SOLVE_WITH_SCOPE", "TRY_ALTERNATIVE_RESOURCE"):
@@ -80,17 +79,15 @@ class ReplanningExecutor:
         self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed
     ) -> GatewayResult:
         """LIST(CONTINUE)와 ASK(WAIT). 재계산·효과·step 완료가 tx 하나다."""
+        action = parsed.action
+        assert action is not None
         with db.write() as tx:
-            if not self._active(tx, run_id, step_no):
-                return GatewayResult("INACTIVE")
-            charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
-            if self._stale_observation(tx, run_id, step_no):
-                return self._reject(tx, run_id, step_no, meta, parsed, "STALE_OBSERVATION")
-            obs = self.observer.build_observation(tx, self.pack, run_id)
-            action = parsed.action
-            assert action is not None
-            if not self._permitted(obs, action):
-                return self._reject(tx, run_id, step_no, meta, parsed, "ACTION_NOT_AVAILABLE")
+            rejected, obs = self.begin_step(
+                tx, run_id, step_no, meta, parsed, lambda o: self._permitted(o, action)
+            )
+            if rejected is not None:
+                return rejected
+            assert obs is not None
             tasks = {t.task_id: t for t in list_current_tasks(tx, self.pack.site_id, self.pack)}
             if isinstance(action, spec.AskTaskOwner):
                 return self._ask(tx, run_id, step_no, meta, parsed, action, tasks[action.task_id])
@@ -159,13 +156,8 @@ class ReplanningExecutor:
             context_version=site.context_version,
         )
         charge(tx, run_id, human_rounds=1)
-        step = get_step(tx, run_id, step_no)
-        assert step is not None
-        if enter_wait(tx, run_id, "MESSAGE", message_id, step["observed_wake_seq"]):
-            outcome = GatewayResult("WAIT")
-        else:
-            # 관찰 이후 새 변화(wake)가 왔다: 질문은 열어 둔 채 다시 관찰한다 (I-19)
-            outcome = GatewayResult("CONTINUE", "NEW_CHANGE_BEFORE_WAIT")
+        # 관찰 이후 새 변화(wake)가 왔으면 질문은 열어 둔 채 다시 관찰한다 (I-19)
+        outcome = self.wait_or_continue(tx, run_id, step_no, "MESSAGE", message_id)
         self._complete(
             tx,
             run_id,
@@ -189,11 +181,9 @@ class ReplanningExecutor:
         self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed
     ) -> GatewayResult:
         with db.write() as tx:
-            if not self._active(tx, run_id, step_no):
-                return GatewayResult("INACTIVE")
-            charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
-            if self._stale_observation(tx, run_id, step_no):
-                return self._reject(tx, run_id, step_no, meta, parsed, "STALE_OBSERVATION")
+            rejected, _ = self.begin_step(tx, run_id, step_no, meta, parsed)
+            if rejected is not None:
+                return rejected
             assert isinstance(parsed.action, spec.EscalateNoSolution)
             self._complete(
                 tx,
@@ -220,14 +210,17 @@ class ReplanningExecutor:
         site_id = self.pack.site_id
         # 1. 예약 tx: 관찰 버전 확인 → Available 재계산 → Snapshot·SearchSpec·SolverJob, Solver Budget
         with db.write() as tx:
-            if not self._active(tx, run_id, step_no):
-                return GatewayResult("INACTIVE")
-            charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
-            if self._stale_observation(tx, run_id, step_no):
-                return self._reject(tx, run_id, step_no, meta, parsed, "STALE_OBSERVATION")
-            obs = self.observer.build_observation(tx, self.pack, run_id)
-            if not self._permitted(obs, action) or obs.primary is None:
-                return self._reject(tx, run_id, step_no, meta, parsed, "ACTION_NOT_AVAILABLE")
+            rejected, obs = self.begin_step(
+                tx,
+                run_id,
+                step_no,
+                meta,
+                parsed,
+                lambda o: self._permitted(o, action) and o.primary is not None,
+            )
+            if rejected is not None:
+                return rejected
+            assert obs is not None
             snapshot = create_snapshot(tx, site_id, self.pack)
             try:
                 search_spec = build_search_spec(
@@ -295,17 +288,13 @@ class ReplanningExecutor:
                 "solver_result_id": result.solver_result_id,
                 "candidate_id": None if candidate is None else candidate.candidate_id,
             }
-            step = get_step(tx, run_id, step_no)
-            assert step is not None
             if result.stage1.get("status") == "MODEL_INVALID":
                 outcome = GatewayResult("DONE", "MODEL_INVALID", "ERROR", "MODEL_INVALID")
-            elif candidate is not None and enter_wait(
-                tx, run_id, "CANDIDATE_OUTCOME", candidate.candidate_id, step["observed_wake_seq"]
-            ):
-                outcome = GatewayResult("WAIT")
             elif candidate is not None:
-                # 관찰 이후 새 변화(wake)가 왔다: 대기하지 않고 다시 관찰한다 (§11.3(1)·I-19, T36)
-                outcome = GatewayResult("CONTINUE", "NEW_CHANGE_BEFORE_WAIT")
+                # 관찰 이후 새 변화(wake)가 왔으면 대기하지 않고 다시 관찰한다 (§11.3(1)·I-19, T36)
+                outcome = self.wait_or_continue(
+                    tx, run_id, step_no, "CANDIDATE_OUTCOME", candidate.candidate_id
+                )
             else:
                 outcome = GatewayResult("CONTINUE")
             self._complete(

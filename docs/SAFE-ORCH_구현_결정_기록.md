@@ -1165,3 +1165,75 @@
 - `verify_demo_values`·`npm run build`·`npm run lint` 통과.
 - live run `--path B` 1회(2026-10-01 17:09 UTC, `data/live_runs/20261001T170950Z.jsonl`): model `gpt-6-luna`(reasoning_effort none), prompt `replanning-p8`, success 1/1, Run SUCCEEDED(`COMMITTED:1`), step 5: SOLVE L0(INFEASIBLE, CONTINUE) → SOLVE L1(Alpha, WAIT) → (거절) LIST → ASK(WAIT) → (수락) TRY(Beta, WAIT) → 승인. 금지 Action 0, MALFORMED 0, LLM 오류 0, alpha·beta 기대값 일치, 토큰 16,245, 16.3초.
 - 로컬 DB: site.yaml이 바뀌어 pack_hash가 다르므로 기존 DB로는 기동이 거절된다. reset이 필요하다(A.3, 사용자가 한다).
+
+### A.24 Coordination Agent — 기본안 A 최소 경로 (§5.1·§9.3·§9.4·§11.3·§11.5·§18.2.1·§18.2.2 보충, 스키마 변경 없음)
+
+목표: 기본안 A 완주. Alpha PASS(C PENDING) → Coordination이 Foreman A2에게 변경 요청 → A2 이견("작업발판 연계 공정 확정") → `DRAFT_CONSTRAINT` → A2 확인 → FeedbackConstraint(source PROPOSAL), Context +1, Alpha STALE → Replanning 재개 → (Scene 3과 같음) Beta → 승인 R1 → Coordination 통지(Planner A, Planner B). 기본안 B와 기존 Replanning 동작은 그대로다(골든 테스트). 컷오프: 10/3 종료까지 `--path coord`가 1회 완주하지 못하면 우선순위 v2대로 기본안 B로 시연하고 설정은 끈 채 둔다.
+
+**블루프린트와 달라지는 점** (v1.2.4 본문은 다음 개정 때 반영한다)
+1. §11.5·§18.2.2: Validation PASS + PENDING item이면 Coordination Run을 시작한다. **설정 `COORDINATION_ENABLED`(기본 false)가 켜졌을 때만**이다. 꺼져 있으면 지금처럼 검토 대기(기본안 B). 확정 뒤 통지 Run도 설정이 켜졌을 때만 시작한다.
+2. §18.2.2 Action은 6종만 구현한다: `SEND_CHANGE_REQUEST`, `WAIT_FOR_REPLIES`, `DRAFT_CONSTRAINT`, `SEND_NOTICE`, `REPORT_TO_SUPERVISOR`, `ESCALATE`. `GET_CHANGE_IMPACT`는 Action이 아니라 Observation에 서버가 넣는다(item·통지 대상). `SEND_REMINDER`와 NOTICE의 `requires_ack`는 구현하지 않는다(§18.1 한계로 남긴다).
+3. §5.1·§9.3: item 상태 ACCEPTED·OBJECTED·OBJECTION_DRAFT_PENDING과 Consultation BLOCKED를 구현한다. 저장하지 않고 메시지·제안에서 계산한다. NOTICE 메시지는 답이 없으므로 OPEN으로 남기고, Run 종료 시 요청 정리(`cancel_requests`)에서 뺀다.
+4. §11.3 wake 표에 행을 더한다(아래 6). §11.5 START_RUN 재확인은 agent_type별로 나뉜다(아래 2).
+
+**0. 공통 틀 (S0)**
+- `ToolGateway`에 공통 도우미 2개를 만들고 Replanning 실행기도 이것을 쓰게 고친다.
+  - `begin_step(tx, run_id, step_no, meta, parsed, permitted=None)`: Run 활성 확인 → LLM 시도 차감 → STALE_OBSERVATION → (permitted가 있으면) 최신 tx에서 재관찰(binding.observer) + 허용 판정(아니면 ACTION_NOT_AVAILABLE). 결과 `(거절 결과 | None, 관찰 | None)`.
+  - `wait_or_continue(tx, run_id, step_no, wait_kind, wait_ref)`: 대기 진입 재확인(I-19). 관찰 이후 wake가 없으면 WAIT, 있으면 CONTINUE(`NEW_CHANGE_BEFORE_WAIT`).
+- 골든 테스트와 기존 테스트가 그대로인지 확인하고 따로 커밋한다. 1시간 안에 골든을 맞추지 못하면 되돌리고, Coordination만 새 도우미를 쓰는 방식(C)으로 간다.
+
+**1. 등록·Budget·prompt**
+- `specs/coordination.py`·`prompts/coordination.py`(`coordination-p1`, `render_system(pack)`, 템플릿 기준 fingerprint)·`observers/coordination.py`·`executors/coordination.py`, registry에 한 줄. exec_contract_version `coordination-a24`.
+- Budget: steps 12(§18.2.1 표), LLM 시도 24(step × 2, Replanning과 같은 규칙). "담당자당 요청 1"은 메시지에서 계산한다(Run·수신자당 CHANGE_REQUEST 1개, 메시지당 PENDING 초안 1개). 카운터·스키마를 더하지 않는다.
+- acting_unit은 SITE, acting_actor는 없음.
+- prompt에 "이견이면 초안을 만든다"고 지시하지 않는다. 이견이 작업 고정 요구가 아니면(선호·일정 불만 등) 초안 대신 `REPORT_TO_SUPERVISOR`·`ESCALATE`를 고를 수 있다. 이 경로를 스크립트 테스트 1개로 고정한다.
+
+**2. 시작과 종료**
+- 협의 Run: BUILD_CONSULTATION tx에서 등록한다(I-18). 조건은 설정 켜짐 ∧ REPLAN 후보 ∧ PENDING item 있음. 키 `START_RUN:COORDINATION:CONSULT:<candidate_id>`, payload `{agent_type, phase: CONSULT, candidate_id, case_id}`. case_id는 후보 Run의 case_id다.
+- 통지 Run: 승인 tx에서 등록한다(설정이 켜졌고 후보에 Run이 있을 때). 키 `START_RUN:COORDINATION:NOTICE:plan<r>`, payload `{agent_type, phase: NOTICE, candidate_id, plan_revision, case_id}`.
+- START_RUN 처리 시점 재확인을 agent_type별로 나눈다. Replanning은 그대로(Hold 없음 ∧ 열린 Case 없음 ∧ (context, plan) 일치). 협의 Run은 Hold 없음 ∧ 후보가 live(STALE·거절·확정 아님). 통지 Run은 plan_revision 일치.
+- 종료: 후보에 걸린 협의 Run을 끝내는 도우미 `end_candidate_runs(tx, pack, candidate_id, status, reason)`(cases.py). 초안 확정 → STALE `CONSTRAINT:<constraint_id>`, 구조화 거절(제약 유무 무관) → STALE `REJECTED:<candidate_id>`, 승인 → SUCCEEDED `COMMITTED:<rev>`, 철회(READY) → STALE `WITHDRAW:<task_id>`, Event → 기존 `stale_active_runs`. fail-closed: 관찰에서 후보가 live가 아니면 `REPORT_TO_SUPERVISOR`·`ESCALATE`만 열린다.
+- `REPORT_TO_SUPERVISOR` → DONE → SUCCEEDED(`REPORT_TO_SUPERVISOR`), `ESCALATE` → ESCALATED(`ESCALATE`).
+
+**3. Case 관계**
+- 협의·통지 Run은 후보 Run과 같은 case_id를 쓴다. `CASE_AGENT_TYPES`는 `("REPLANNING",)` 그대로(협의 중에는 Replanning이 대기 중이라 이미 열린 Case이고, 통지 Run은 확정 뒤 대기열·RECHECK를 막으면 안 된다).
+- Replanning 관찰의 `human_replies`(`list_case_replies`)는 REPLANNING Run의 메시지만 모은다. 같은 Case의 Coordination 메시지가 ASK 조건(`choices`)과 관찰에 섞이지 않게 한다. 기본안 B에는 Coordination 메시지가 없으므로 골든은 그대로다.
+
+**4. 협의 item 상태 (계산)**
+- 순서: WAIVE가 덮으면 WAIVED → 그 후보·change_hash에 묶인 CHANGE_REQUEST의 답이 ACCEPT면 ACCEPTED → DECLINE(이견)이면 OBJECTED, 그 메시지의 FEEDBACK_CONSTRAINT 초안이 PENDING이면 OBJECTION_DRAFT_PENDING(DISCARDED·STALE면 OBJECTED) → 그 밖에는 base_status. 늦은 답(LATE)은 세지 않는다.
+- BLOCKED·COMPLETE·OPEN 판정은 기존 함수 그대로. 승인 9단계는 BLOCKED면 `CONSULTATION_INCOMPLETE`. OBJECTED 계열 WAIVE는 기존 `ITEM_NOT_WAIVABLE`(PENDING만)이 막는다. 검토 대기 정의(A.14)는 그대로다(협의 중에도 Supervisor가 보고 거절할 수 있다).
+
+**5. 메시지와 제안**
+- 답변 API는 기존 `POST /messages/{mid}/reply {ACCEPT | DECLINE, comment}`. CHANGE_REQUEST의 DECLINE은 이견이고 comment가 필수다(`COMMENT_REQUIRED`). 검사 순서(§9.4 ①–⑥)·LATE·REPLAYED 규칙은 그대로다.
+- CHANGE_REQUEST: `candidate_id`·`change_hash`를 채운다. 서버 문구(body)가 변경 내용(작업·전·후)이고 모델 문장은 agent_text.
+- DRAFT_CONSTRAINT: FEEDBACK_CONSTRAINT Proposal(target = item 작업, base_task_revision, payload `{reason_code, axes, candidate_id, change_hash, source_message_id}`, 확인자 = 이견을 낸 사람) + CONFIRMATION 메시지(같은 수신자). ACCEPT = 확정, DECLINE = 폐기. 제안 처리는 type별로 나눈다(MOVABILITY 기존 그대로).
+- 확정 효과(한 tx): FeedbackConstraint(task, frozen_axes = axes, source PROPOSAL, source_id = proposal_id), Context +1, 제안 CONFIRMED, 메시지 ANSWERED, 협의 Run STALE(`CONSTRAINT:<fc_id>`), 후보 Replanning Run wake.
+- NOTICE: 서버 문구(작업·시간·구역·자원, 안전 규칙 연결이면 그 Rule 표시 이름과 조치)와 agent_text. 답 없음, OPEN 유지.
+- 사람이 쓴 자유 텍스트는 Coordination Observation에 `quoted_comment`로만 들어간다.
+- 받은 요청 배지(n)는 답할 수 있는 메시지(QUESTION·CHANGE_REQUEST·CONFIRMATION 중 OPEN)만 센다. NOTICE는 세지 않는다.
+
+**6. 대기와 wake**
+- `WAIT_FOR_REPLIES`: wait_kind CONSULTATION, wait_ref = candidate_id. 열리는 조건은 OPEN CHANGE_REQUEST 또는 PENDING 초안이 있을 때. 대기 진입 재확인은 `wait_or_continue`.
+- CHANGE_REQUEST 답 → 협의 Run wake. 초안 폐기 → 협의 Run wake. 초안 확정 → 협의 Run STALE, 후보 Replanning Run wake(같은 tx). Replanning은 협의 Run이 끝난 뒤에만 재개된다.
+
+**7. 이견 → 제약 (서버 검사)**
+- `DRAFT_CONSTRAINT(message_id, reason_code, task_id, axes)`: message_id는 이 Run의 CHANGE_REQUEST이고 DECLINE으로 답했으며 comment가 있다. task_id는 그 item 작업. reason_code는 `TASK_IMMOVABLE`만. axes는 {TIME, RESOURCE}의 비어 있지 않은 부분집합이고 **그 item에서 바뀐 축을 하나 이상 포함**한다(없으면 A2가 확정한 제약이 이견 대상인 변경을 막지 못하고, 사실이 바뀐 뒤의 탐색에서 같은 협의가 반복된다). 같은 메시지에 PENDING 초안은 1개. 후보가 live. 위반하면 ACTION_NOT_AVAILABLE.
+- 축은 모델이 고르고 A2가 확인한다(I-13: 확인 전에는 제약이 없다).
+- source PROPOSAL과 DECISION의 효과는 같다(제약, Context +1, 후보 STALE, Replanning wake). 다른 점은 권한(작업 담당자 본인 확인 대 Supervisor)과 source_id, Replanning 관찰에서 `rejections`가 비어 있고 `constraints`에만 나타나는 것이다.
+
+**8. 통지 대상 (서버 계산)**
+- 확정된 Plan과 직전 Plan을 비교해 바뀐(또는 새로 들어간) 작업의 담당자, 그리고 새 Plan에서 SEPARATION Rule(hazard 쌍 ∧ 구역 관계 ∈ relations)로 바뀐 작업과 엮인 작업의 담당자. 자원 공유는 넣지 않는다. Beta 기준 {planner_a(A 변경), planner_b(B, SEP-LIFT-BELOW)}.
+- `SEND_NOTICE(actor_id, task_ids, message)`는 대상 목록 안의 actor·task이고 아직 보내지 않았을 때만.
+
+**9. 기존 코드 보정**
+- 철회: 열린 Run이 COORDINATION이면 STALE(`WITHDRAW:<task_id>`, READY 철회는 Context를 올려 후보가 STALE). Replanning 규칙은 그대로.
+- Coordinator: BUILD_CONSULTATION 핸들러에 협의 Run 등록, START_RUN 재확인 분기.
+- 승인·거절 tx: 후보의 협의 Run 종료, 승인 tx에서 통지 START_RUN 등록.
+
+**10. 테스트·live run**
+- 스크립트 E2E: 기본안 A 전체(협의 → 이견 → 초안 → 확정 → Replanning 재개 → Beta → 승인 → 통지 2건), 설정을 켠 상태에서 협의 중 Supervisor 구조화 거절 → 기본안 B로 끝까지(나중에 기본값을 켤 수 있게), 이견이 고정 요구가 아닐 때 REPORT/ESCALATE, item 상태 계산, DRAFT 서버 검사(바뀐 축 포함 등), 초안 폐기·LATE, 설정 꺼짐 → 기본안 B·골든 그대로, `list_case_replies` 거르기.
+- live run `--path coord`(기본안 A). 사람 역할: A2 이견(scenario `demo_rejections[0].comment`) → A2 초안 확정 → Planner A ASK 수락 → Supervisor 승인. 성공 = Alpha PASS ∧ A2에게 C CHANGE_REQUEST ∧ DRAFT_CONSTRAINT(TASK_IMMOVABLE, C, 바뀐 축 포함) ∧ 제약 source PROPOSAL ∧ Beta PASS ∧ R1 ∧ NOTICE 수신자 {planner_a, planner_b} ∧ 금지 Action 0·MALFORMED 0·Budget 안.
+
+**11. 단계**
+- S0 공통 틀(따로 커밋). S1 백엔드 핵심 + 스크립트 E2E(여기서 멈추고 보고). S2 live run `--path coord`. S3 화면(Inbox 3종 카드, 검토 패널 item 상태, labels, 배지). S4 정리(REMINDER·ack, Activity 전용 카드 — D6 "새 기능 없음" 범위 밖이면 하지 않는다).
+- 스키마·Pack 변경 없음. 로컬 DB reset 필요 없음.
