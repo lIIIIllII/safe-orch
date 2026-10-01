@@ -1440,6 +1440,14 @@
 
 **사람에게 묻는 시점**: ASK_CLARIFICATION은 남은 사람 라운드가 2 이상일 때만 열린다(마지막 라운드는 값 확인 요청용). 질문 문장 노출과 live run 요청자 답 규칙은 A.27.
 
+**API 본문 불일치 수정** (화면에서 자유 텍스트 답 422 `INVALID_BODY`)
+- 버그: 화면에서 자유 텍스트 질문(Intake 확인 질문, ER 신고자 확인 질문)에 답하면 422 `INVALID_BODY`가 났다. API 본문 `ReplyBody.decision`이 `Literal["ACCEPT", "DECLINE"]`이라 `ANSWER`를 받지 않았다. 명령 계층 `commands/messages.Decision`은 S1에서 `ANSWER`를 더했다.
+- 원인 ① 명령 계층과 API 본문 모델의 불일치: 같은 값 타입을 두 곳에 따로 정의해 한쪽만 바뀌었다. ② API 경로 테스트 누락: S1~S4·A.24·A.25의 pytest와 live run은 명령 함수를 직접 불러 API 본문 모델을 지나지 않았다. 화면 headless 확인(S3)은 답 카드 표시까지만 봤다.
+- 수정: `ReplyBody.decision`은 명령 계층 `Decision`을 그대로 쓴다. 같은 종류로 `ReleaseBody.resolution`도 명령 계층 `HoldRelease`와 따로 정의돼 있어(값은 같았음) `commands/events.Resolution` 하나로 모았다.
+- A.24–A.28의 사람 응답 API 경로를 훑었다. 자연어 요청 제출(`POST /sites/{id}/intakes`)만 API 테스트가 있었고, 변경 요청 답·제약 초안 확정·폐기·사실 수정 확인·폐기·FACT_CONFIRMED 해제·ANSWER는 없었다(화면은 모두 `POST /messages/{id}/reply`와 `/holds/{id}/release`를 쓴다). 다른 본문 불일치는 없었다.
+- 테스트 509 → 525, `tests/test_api_agent_replies.py`(TestClient, 화면이 보내는 본문 그대로): Intake 질문 ACCEPT → 409 `INVALID_DECISION`·빈 답 → 409 `COMMENT_REQUIRED`·ANSWER → 200 APPLIED, ER 신고자 질문 ANSWER → 200, 제안이 붙은 질문(담당자 이동 가능 여부)에 ANSWER → 409 `INVALID_DECISION`, 변경 요청 수락 200·이견(빈 사유 409 `COMMENT_REQUIRED`, 사유 있으면 200), 제약 초안 확정(reply) 200·폐기(`/proposals/{id}/discard`) 200, 사실 수정 확인 전 FACT_CONFIRMED 해제 409 `FACT_NOT_CONFIRMED` → 확인(reply) 200 → FACT_CONFIRMED 해제 200, 사실 수정 폐기(reply) 200, API 본문 7종과 명령 모델의 같은 필드가 타입·기본값까지 같은지(재발 방지). 수정 전 정의로 되돌리면 ANSWER 3개와 ReplyBody 일치 검사가 실패하는 것을 확인했다.
+- 검사: pytest 525, `npm run build`·`npm run lint` 통과(화면 코드는 바뀌지 않음).
+
 ### A.27 사람에게 묻는 시점 (Agent 공통) (§1·§11.6·§11.7·§18.2.1·§18.2.3·§18.2.4 보충, 스키마 변경 없음)
 
 live run에 남은 실패 두 유형 대응. 모호 신고(A.26 S4 #2)는 LOOKUP_TASKS 없이 ASK_REPORTER로 구역을 두 번 묻고 이관했다(성공 회차도 조회 전에 대상을 물었다). 모호 요청(A.26 intake-p2 #3)은 문장에 있던 시간을 다시 물어 사람 라운드 3을 다 쓰고, 값 확인 요청을 한 번도 내지 못한 채 이관했다.

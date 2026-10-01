@@ -43,9 +43,13 @@ class EventReport(Body):
     target_task_id: str | None = None
 
 
+# Hold 해제 사유. API 본문(api/commands.ReleaseBody)도 이 정의를 쓴다 (A.26 후속)
+Resolution = Literal["FACT_CONFIRMED", "NO_CHANGE"]
+
+
 class HoldRelease(Body):
     hold_id: str
-    resolution: Literal["FACT_CONFIRMED", "NO_CHANGE"]
+    resolution: Resolution
     expected_context_version: int
     comment: str = ""
 

@@ -31,7 +31,8 @@ from app.store.repos.runs import run_for_solver_result
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
-Decision = Literal["ACCEPT", "DECLINE", "ANSWER"]  # ANSWER: 자유 텍스트 답 (A.26 3)
+# ANSWER: 자유 텍스트 답 (A.26 3). API 본문(api/commands.ReplyBody)도 이 정의를 쓴다 (A.26 후속)
+Decision = Literal["ACCEPT", "DECLINE", "ANSWER"]
 
 
 class ReplyRequest(Body):

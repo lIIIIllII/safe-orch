@@ -3,8 +3,6 @@
 경로의 id는 본문에 두지 않고 API가 합쳐 명령 Body를 만든다(request_hash에 들어간다).
 """
 
-from typing import Literal
-
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import Field
@@ -18,9 +16,16 @@ from app.commands.approval import (
     reject_candidate,
     waive,
 )
-from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
+from app.commands.events import (
+    EventReport,
+    HoldRelease,
+    Resolution,
+    receive_event,
+    release_hold_command,
+)
 from app.commands.intake import IntakeRequest, submit_intake
 from app.commands.messages import (
+    Decision,
     ProposalDecision,
     ReplyRequest,
     confirm_proposal,
@@ -62,8 +67,9 @@ class WithdrawBody(Body):
     comment: str = ""
 
 
+# 값 타입은 명령 계층 정의를 그대로 쓴다. 두 곳에 두면 한쪽만 바뀌어 API가 422를 낸다 (A.26 후속)
 class ReplyBody(Body):
-    decision: Literal["ACCEPT", "DECLINE"]
+    decision: Decision
     values: tuple[str, ...] | None = None
     comment: str = ""
 
@@ -73,7 +79,7 @@ class CommentBody(Body):
 
 
 class ReleaseBody(Body):
-    resolution: Literal["FACT_CONFIRMED", "NO_CHANGE"]
+    resolution: Resolution
     expected_context_version: int
     comment: str = ""
 
