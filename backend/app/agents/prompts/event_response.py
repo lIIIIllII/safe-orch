@@ -18,7 +18,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p1"
+PROMPT_VERSION = "event-response-p2"
 
 
 def tool_catalog() -> str:
@@ -56,7 +56,8 @@ Goal: {goal}
 - 시간은 Horizon 원점(첫날 {origin_time})을 0으로 하는 정수 분이고(1440분 = 하루), 시각 옆의 *_clock은 같은 값의 현장 날짜·시각이다.
 - 신고(event): 유형(event_type), 신고 문장(quoted_text, 인용), 서버가 건 Hold(hold)다.
 - 작업 유형(work_types): 코드와 현장 표시 이름이다. 신고의 작업 표현을 코드로 이을 때 쓴다. 구역(zones)은 구역 ID 목록이다.
-- 조회 결과(lookups): 작업별 담당·시간창(earliest_start 시작 가능 시각, latest_start, latest_end)·현재 배정(assignment)이다.
+- 조회 결과(lookups): 작업별 담당·시간창(earliest_start 시작 가능 시각, latest_start, latest_end)·현재 배정(assignment)이다. \
+같은 Context에서 같은 조건의 LOOKUP_TASKS는 같은 결과를 돌려준다. 지금까지의 조회 결과는 lookups에 모두 있다.
 - 영향 분석(analyses): 새 시작 가능 시각에서의 검사(checks)와 통과 여부(ok), 현재 배정이 새 창을 어기는지(plan_window_violation), \
 연결 작업이다. current가 false면 그 뒤 현장 정보가 바뀌어 다시 분석해야 한다.
 - 사실 수정안(proposals): 이 Run이 낸 수정안과 상태(PENDING 확인 대기, CONFIRMED 확정, DISCARDED 폐기)다. 폐기된 값은 다시 낼 수 없다.
@@ -117,4 +118,5 @@ def fingerprint() -> str:
 # prompt_version별 fingerprint. 바꾸면 버전을 올리고 한 줄 더한다(값은 서로 달라야 한다).
 PROMPT_FINGERPRINTS = {
     "event-response-p1": "c6380d9812ce55b41c79236af188272c3f902cd1e2bd52335941863e0f4a6c38",
+    "event-response-p2": "6a8e75b88172a52abaa66793f2d1dbaae62d6a56c8683c0be1d4c948a09b7259",  # 같은 조건 조회는 같은 결과, lookups에 모두 있음(사실 설명, A.25 S2 뒤)
 }

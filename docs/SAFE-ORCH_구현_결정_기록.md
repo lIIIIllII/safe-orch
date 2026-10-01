@@ -1336,3 +1336,9 @@
 - Activity는 그대로다(신고 대응 Agent의 Budget도 Solver 한도가 없어 "—").
 - headless 확인(Chrome 154, CDP, 1920×1080, 스크립트 모델로 만든 단계별 DB, 워커 끈 서버): ① Supervisor 받은 요청: 사실 수정 확인 카드(서버 문구 "E(도장) 작업의 시작 가능 시각 10/12(월) 09:45(45분) → 10/12(월) 10:00(60분). 신고: “도장 준비 15분 늦어져 10시부터”…", 확정·폐기), 배지 1, 상단 "현장 Hold 중" 띠, Activity 신고 대응 Agent 사람 대기. ② 지연 신고 탭 Hold 목록: 사실 수정안 "확인 대기", 두 해제 버튼. ③ 확정 뒤: 수정안 "확인됨", 타임라인 E에 "시간창 위반" 충돌, 신고 대응 Agent 성공 "사실 수정 확정으로 종료", 배지 0.
 - 검사: pytest 472, `npm run build`·`npm run lint`, `verify_demo_values` 통과.
+
+**조회 반복 대응** (S2 #1의 같은 LOOKUP_TASKS 8회 반복)
+- `event-response-p2`: 관찰 읽는 법의 조회 결과 줄에 사실로 적었다. "같은 Context에서 같은 조건의 LOOKUP_TASKS는 같은 결과를 돌려준다. 지금까지의 조회 결과는 lookups에 모두 있다." 행동 순서를 지시하는 문장은 넣지 않았다. 템플릿 fingerprint `6a8e75b8…`(p1 줄은 그대로 둠).
+- Observation `lookups`는 같은 조건(filters)이면 마지막 결과 하나만 둔다(조건별 마지막 결과, 나중 것이 뒤). 반복 조회로 관찰이 커지지 않게 한다. 테스트 `test_same_lookup_keeps_last_result_only`(같은 조건 3번 + 다른 조건 1번 → 2개). 테스트 472 → 473.
+- live run 기록에 `lookup_args`(ER 조회 조건 전부)와 `er_steps`를 더했다.
+- 재실행(2026-10-01 18:21 UTC, `data/live_runs/20261001T182133Z.jsonl`, `--path event --coord`): **3/3 성공**. 회차별 LOOKUP_TASKS 1회(PAINTING), ER 3 step(LOOKUP → ANALYZE → PROPOSE), 전체 9 step, 토큰 약 20,000, 19.7–27.4초. 같은 조건 조회 3회 이상인 회차가 없어 ASK_REPORTER 앞당김 판단은 하지 않았다(S4 그대로).

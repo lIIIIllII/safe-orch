@@ -1056,6 +1056,11 @@ def _path_event(
         success_criteria=criteria,
         step_count=len(steps),
         propose_args=proposes,
+        # ER 조회 조건(모두)과 ER step 수 — 같은 조건 반복을 센다 (A.25 S2 뒤)
+        lookup_args=[
+            s["action"]["args"] for s in steps if (s["action"] or {}).get("name") == "LOOKUP_TASKS"
+        ],
+        er_steps=sum(1 for row in rows if row["agent"] == "EVENT_RESPONSE"),
         released=released,
         actions=[f"{row['agent'][0]}:{row['action'] or '-'}" for row in rows],
         events=events,

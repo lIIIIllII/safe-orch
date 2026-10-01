@@ -5,6 +5,7 @@
 이 모듈을 import하는 곳은 registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다 (A.23).
 """
 
+import json
 import sqlite3
 from typing import Any
 
@@ -135,7 +136,14 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     hold = get_hold(conn, pack.site_id, run.input_ref.get("hold_id", ""))
     steps = [s for s in list_steps(conn, run_id) if s["status"] == "COMPLETED"]
     accepted = [s for s in steps if (s["guard"] or {}).get("verdict") == "ACCEPTED"]
-    lookups = [s["tool_result"] for s in accepted if s["action"]["name"] == "LOOKUP_TASKS"]
+    # 같은 조건(filters)의 조회는 마지막 결과 하나만 둔다. 반복 조회로 관찰이 커지지 않게 (A.25 S2 뒤)
+    by_filters: dict[str, dict[str, Any]] = {}
+    for s in accepted:
+        if s["action"]["name"] == "LOOKUP_TASKS":
+            key = json.dumps(s["tool_result"]["filters"], sort_keys=True)
+            by_filters.pop(key, None)
+            by_filters[key] = s["tool_result"]
+    lookups = list(by_filters.values())
     analyses = [
         {**s["tool_result"], "current": s["tool_result"]["context_version"] == site.context_version}
         for s in accepted

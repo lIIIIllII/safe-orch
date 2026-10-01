@@ -442,3 +442,16 @@ def test_state_shows_fact_update_in_inbox_and_hold(seeded, event_response_on):
     assert [(f["task_id"], f["new_value"], f["status"]) for f in hold["fact_updates"]] == [
         ("E", 60, "PENDING")
     ]
+
+
+def test_same_lookup_keeps_last_result_only(seeded, event_response_on):
+    """같은 조건의 조회를 반복해도 관찰 lookups에는 조건마다 마지막 결과 하나만 남는다 (A.25 S2 뒤)."""
+    zone = call("LOOKUP_TASKS", "구역으로 조회", zone_id="D2")
+    replies = [_lookup(), _lookup(), zone, _lookup(), _analyze(), _propose()]
+    _, er = _to_proposal(seeded, replies)
+    obs = _steps(er.run_id)[4]["observation"]  # 조회 4번 뒤(같은 조건 3번 + D2 1번)
+    assert [lk["filters"] for lk in obs["lookups"]] == [
+        {"work_type": None, "zone_id": "D2"},
+        {"work_type": "PAINTING", "zone_id": None},
+    ]
+    assert "같은 조건의 LOOKUP_TASKS는 같은 결과를 돌려준다" in prompt.SYSTEM
