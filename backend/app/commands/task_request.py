@@ -13,7 +13,7 @@ from app.domain.calendar import has_work_slot
 from app.domain.ids import new_id
 from app.domain.models import Consent, Movable, Task
 from app.packs.loader import LoadedPack, confirmed_fields
-from app.store.repos.cases import end_case_run, register_recheck, wake_run
+from app.store.repos.cases import end_case_run, queued_task_ids, register_recheck, wake_run
 from app.store.repos.consents import insert_consent
 from app.store.repos.plans import get_current_plan
 from app.store.repos.resources import list_resources
@@ -113,9 +113,10 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
         fields=confirmed_fields(data, wt.critical_fields, source_ref),
         lifecycle="READY",
     )
-    # 열린 Replanning Case 중이면 접수 후 대기열(QUEUED): Snapshot·충돌 검사에 들어가지 않으므로
-    # context를 올리지 않고 RECHECK도 없다. Case가 끝날 때 접수 순서로 READY가 된다 (A.21 0-1).
-    queued = has_open_case(tx, site_id)
+    # 열린 Replanning Case 중이거나 먼저 접수된 대기 요청이 있으면 대기열(QUEUED): Snapshot·충돌
+    # 검사에 들어가지 않으므로 context를 올리지 않고 RECHECK도 없다. Case가 끝날 때 접수 순서로
+    # READY가 된다. RECONFIRM 승인 대기 중에도 대기 요청을 앞지르지 않는다 (A.21 0-1).
+    queued = has_open_case(tx, site_id) or bool(queued_task_ids(tx, site_id))
     if queued:
         task = task.model_copy(update={"lifecycle": "QUEUED"})
     insert_task_revision(tx, site_id, task)

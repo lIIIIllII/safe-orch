@@ -64,7 +64,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p4",
+        "replanning-p5",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -100,7 +100,8 @@ def test_same_effective_spec_is_not_retried_site_wide(with_a):
     _run(with_a, [solve("L0"), solve("L1")])
     # 같은 사실 위의 새 Run: L0·L1·L2 모두 같은 실효 SearchSpec을 이미 시도했다
     run, steps, model = _run(with_a, [solve("L2"), escalate()], run_id="run_2")
-    assert model.tool_names(0) == ["ESCALATE_NO_SOLUTION"]
+    # 계산 Action은 없다. 자원 조회(A·C)는 Solver를 부르지 않으므로 남는다 (A.21 5)
+    assert model.tool_names(0) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
     assert _guards(steps)[0] == ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE")
     assert run.status == "ESCALATED" and run.solver_calls_used == 0
 
@@ -186,7 +187,8 @@ def test_solver_budget_exhausted_leaves_only_escalate(with_a):
         )
     model = ScriptedChatModel([escalate()])
     run = runtime.invoke(with_a, {"run_id": "run_s"}, model)
-    assert model.tool_names(0) == ["ESCALATE_NO_SOLUTION"] and run.status == "ESCALATED"
+    assert model.tool_names(0) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
+    assert run.status == "ESCALATED"
 
 
 # ── 버전·Run 상태 재확인 ───────────────────────────────────────

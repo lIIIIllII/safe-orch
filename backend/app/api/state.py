@@ -22,6 +22,7 @@ from app.store.repos.consultations import (
     consultation_view,
     list_review_queue,
 )
+from app.store.repos.messages import list_inbox
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import get_candidate, get_snapshot, list_validations
 from app.store.repos.resources import list_resources
@@ -238,7 +239,9 @@ def run_summary(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
 # ── 상태 ───────────────────────────────────────────────────────
 
 
-def build_state(conn: sqlite3.Connection, pack: LoadedPack) -> dict[str, Any]:
+def build_state(
+    conn: sqlite3.Connection, pack: LoadedPack, actor_id: str | None = None
+) -> dict[str, Any]:
     site_id = pack.site_id
     site = get_site(conn, site_id)
     plan = get_current_plan(conn, site_id)
@@ -322,6 +325,8 @@ def build_state(conn: sqlite3.Connection, pack: LoadedPack) -> dict[str, Any]:
         "events": events,
         "runs": [run_summary(conn, rid) for rid in run_ids],
         "dispatch": {"pending": jobs.get("PENDING", 0), "failed": jobs.get("FAILED", 0)},
+        # X-Actor 본인에게 온 질문 (§12 "본인", A.21 7). body = 서버 문구, agent_text = 모델 작성
+        "inbox": [] if actor_id is None else list_inbox(conn, site_id, actor_id),
     }
 
 
@@ -329,7 +334,7 @@ def build_state(conn: sqlite3.Connection, pack: LoadedPack) -> dict[str, Any]:
 def get_state(site_id: str, pack: PackDep, actor: ActorDep) -> dict[str, Any]:
     check_site(site_id, pack)
     with db.read_tx() as conn:
-        return build_state(conn, pack)
+        return build_state(conn, pack, actor.actor_id)
 
 
 @router.get("/runs/{run_id}")

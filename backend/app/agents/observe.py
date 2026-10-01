@@ -10,11 +10,12 @@ from typing import Any
 
 from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
-from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent
+from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store.repos.decisions import list_case_rejections
+from app.store.repos.messages import list_run_replies
 from app.store.repos.records import list_validations
 from app.store.repos.runs import get_run, list_attempts, list_steps, tried_spec_hashes
 from app.store.repos.site import get_site
@@ -83,6 +84,65 @@ def level_hashes(snapshot: Snapshot, primary: Conflict, acting_unit_id: str) -> 
     return out
 
 
+def resources_hash(facts: SnapshotContent) -> str:
+    """자원 사실의 hash. 자원 조회 결과는 이 값이 같은 동안 유효하다 (A.21 5)."""
+    return canonical_hash([r.model_dump(mode="json") for r in facts.resources])
+
+
+def assignable_resources(facts: SnapshotContent, task: Task, acting_unit_id: str) -> dict[str, Any]:
+    """LIST_ASSIGNABLE_RESOURCES 결과. A.11 TRY 필터와 같은 기준(유형·allowed_unit_ids·가용 구간).
+
+    유형이 다른 자원은 대상이 아니므로 목록에 넣지 않는다(excluded는 같은 유형만, A.21 2단계 기록).
+    """
+    current = facts.base_assignments()[task.task_id].resource_id
+    assignable, excluded = [], []
+    for r in sorted(facts.resources, key=lambda r: r.resource_id):
+        if r.resource_type != task.required_resource_type:
+            continue
+        if acting_unit_id not in r.allowed_unit_ids:
+            excluded.append({"resource_id": r.resource_id, "reason": "NOT_ALLOWED"})
+        elif not r.available_intervals:
+            excluded.append({"resource_id": r.resource_id, "reason": "NO_AVAILABILITY"})
+        else:
+            assignable.append({"resource_id": r.resource_id})
+    return {
+        "task_id": task.task_id,
+        "required_type": task.required_resource_type,
+        "current": current,
+        "assignable": assignable,
+        "excluded": excluded,
+        "resources_hash": resources_hash(facts),
+    }
+
+
+def valid_listings(
+    steps: list[dict[str, Any]], facts: SnapshotContent
+) -> dict[str, dict[str, Any]]:
+    """이 Run의 최근 자원 조회 결과 중 자원 사실이 같은 것 (작업별 마지막 1개)."""
+    current = resources_hash(facts)
+    out = {}
+    for s in steps:
+        result = s["tool_result"] or {}
+        if (
+            (s["action"] or {}).get("name") == "LIST_ASSIGNABLE_RESOURCES"
+            and s["guard"]["verdict"] == "ACCEPTED"
+            and result.get("resources_hash") == current
+        ):
+            out[result["task_id"]] = result
+    return out
+
+
+def try_spec_hash(
+    snapshot: Snapshot, primary: Conflict, acting_unit_id: str, task_id: str, resource_id: str
+) -> str | None:
+    """TRY의 실효 SearchSpec hash(주 충돌 L0 + 대체 자원 1개). 만들 수 없으면 None."""
+    try:
+        spec_ = build_search_spec(snapshot, primary, acting_unit_id, "L0", {task_id: [resource_id]})
+    except SearchSpecError:
+        return None
+    return spec_.hash
+
+
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:
     run = get_run(conn, run_id)
     site = get_site(conn, pack.site_id)
@@ -107,6 +167,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 "latest_start": t.latest_start,
                 "latest_end": t.latest_end,
             },
+            "required_resource_type": t.required_resource_type,
             "movable": t.movable.model_dump(),
             "base": base[t.task_id].model_dump(),
         }
@@ -141,6 +202,25 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     last_guard = (
         steps[-1]["guard"] if steps and steps[-1]["guard"]["verdict"] == "REJECTED" else None
     )
+    # 유효한 자원 조회 결과 + 아직 시도하지 않은 대체 자원 (A.21 5). resources_hash는 모델에 보이지 않는다.
+    listings = []
+    for tid, r in sorted(valid_listings(steps, facts).items()):
+        alternatives = [
+            a["resource_id"] for a in r["assignable"] if a["resource_id"] != r["current"]
+        ]
+        untried_alt = [
+            rid
+            for rid in alternatives
+            if primary is not None
+            and (h := try_spec_hash(snapshot, primary, run.acting_unit_id, tid, rid)) is not None
+            and h not in tried
+        ]
+        listings.append(
+            {
+                **{k: v for k, v in r.items() if k != "resources_hash"},
+                "untried_alternatives": untried_alt,
+            }
+        )
 
     data = {
         "run": {
@@ -165,6 +245,9 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "latest_validation": latest_validation,
         # 이 Case 후보에 대한 Supervisor 거절. comment는 인용 데이터다 (§9.2, A.17·A.21)
         "rejections": list_case_rejections(conn, run.case_id),
+        "assignable_resources": listings,
+        # 이 Run이 담당자에게 보낸 질문과 답. comment는 인용 데이터다 (A.17·A.21)
+        "human_replies": list_run_replies(conn, run_id),
         "last_guard": last_guard,
         "recent_steps": recent,
         "budget_remaining": budget_remaining(run),

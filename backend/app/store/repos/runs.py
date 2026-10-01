@@ -250,7 +250,7 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
     found = rows(
         conn,
         "SELECT j.step_no, j.status AS job_status, s.scope_level, s.hash AS spec_hash,"
-        " r.stage1, r.stage2, c.candidate_id FROM solver_job j"
+        " s.resource_alternatives, r.stage1, r.stage2, c.candidate_id FROM solver_job j"
         " JOIN search_spec s ON s.search_spec_id = j.search_spec_id"
         " LEFT JOIN solver_result r ON r.solver_result_id = j.solver_result_id"
         " LEFT JOIN candidate c ON c.solver_result_id = j.solver_result_id"
@@ -265,6 +265,7 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
                 "step_no": r["step_no"],
                 "job_status": r["job_status"],
                 "scope_level": r["scope_level"],
+                "try_resources": loads(r["resource_alternatives"]),  # TRY 시도 (A.21)
                 "spec_hash": r["spec_hash"],
                 "stage1": None
                 if s1 is None

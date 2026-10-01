@@ -1,7 +1,8 @@
 """Tool Gateway (설계서 §11.1·§11.2·§11.4, 부록 A.16). Agent의 유일한 도구 실행 경로.
 
 tool_call 개수·이름·스키마를 검사하고(MALFORMED), 실행 직전 Available Actions를 최신 DB로 다시
-계산한다. SOLVE_WITH_SCOPE는 예약 tx → tx 밖 Solver → 등록 tx, 나머지는 tx 하나다. step 완료,
+계산한다. SOLVE_WITH_SCOPE·TRY_ALTERNATIVE_RESOURCE는 예약 tx → tx 밖 Solver → 등록 tx, 나머지는
+tx 하나다. ASK_TASK_OWNER는 MOVABILITY 제안과 질문 메시지를 만들고 대기한다(A.21 5). step 완료,
 Budget, CommandResult(키 run_id:step_no)를 도구 효과와 같은 tx에 쓴다.
 승인·확정·Hold 해제·Proposal 확인·Validation 등록 함수는 없다(I-01).
 """
@@ -12,11 +13,18 @@ from typing import Any
 from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
-from app.agents.observe import budget_remaining, build_observation
+from app.agents.observe import (
+    Observation,
+    assignable_resources,
+    budget_remaining,
+    build_observation,
+    current_snapshot,
+)
 from app.agents.specs import replanning as spec
 from app.agents.types import GatewayResult, StepMeta
 from app.domain.canonical import canonical_hash
-from app.domain.models import Snapshot
+from app.domain.ids import new_id
+from app.domain.models import Snapshot, Task
 from app.packs.loader import LoadedPack
 from app.solver import cpsat
 from app.solver.candidate import build_candidate
@@ -24,6 +32,7 @@ from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store import db
 from app.store.repos.commands import insert_command_result
 from app.store.repos.decisions import rejected_candidate_ids
+from app.store.repos.messages import insert_message, insert_proposal
 from app.store.repos.records import (
     StaleError,
     get_candidate,
@@ -43,6 +52,7 @@ from app.store.repos.runs import (
 )
 from app.store.repos.site import get_site
 from app.store.repos.snapshots import create_snapshot
+from app.store.repos.tasks import list_current_tasks
 
 ACCEPTED = "ACCEPTED"
 REJECTED = "REJECTED"
@@ -212,9 +222,134 @@ class ToolGateway:
                     return GatewayResult("INACTIVE")
                 charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
                 return self._reject(tx, run_id, step_no, meta, parsed, "MALFORMED")
-        if parsed.name == "SOLVE_WITH_SCOPE":
+        if parsed.name in ("SOLVE_WITH_SCOPE", "TRY_ALTERNATIVE_RESOURCE"):
             return self._solve(run_id, step_no, meta, parsed)
+        if parsed.name in ("LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER"):
+            return self._single_tx(run_id, step_no, meta, parsed)
         return self._escalate(run_id, step_no, meta, parsed)
+
+    def _permitted(self, obs: Observation, action: spec.Action) -> bool:
+        """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (작업별 조합까지)."""
+        available = obs.available
+        if isinstance(action, spec.SolveWithScope):
+            return action.level in available.get("SOLVE_WITH_SCOPE", {}).get("level", [])
+        c = spec.choices(obs.data)
+        if isinstance(action, spec.ListAssignableResources):
+            return "LIST_ASSIGNABLE_RESOURCES" in available and action.task_id in c["LIST"]
+        if isinstance(action, spec.TryAlternativeResource):
+            tries = c["TRY"].get(action.task_id, [])
+            return "TRY_ALTERNATIVE_RESOURCE" in available and action.resource_id in tries
+        if isinstance(action, spec.AskTaskOwner):
+            asks = set(c["ASK"].get(action.task_id, []))
+            return "ASK_TASK_OWNER" in available and set(action.allowed_values) <= asks
+        return False
+
+    def _single_tx(
+        self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed
+    ) -> GatewayResult:
+        """LIST(CONTINUE)와 ASK(WAIT). 재계산·효과·step 완료가 tx 하나다."""
+        with db.write() as tx:
+            if not self._active(tx, run_id, step_no):
+                return GatewayResult("INACTIVE")
+            charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
+            if self._stale_observation(tx, run_id, step_no):
+                return self._reject(tx, run_id, step_no, meta, parsed, "STALE_OBSERVATION")
+            obs = build_observation(tx, self.pack, run_id)
+            action = parsed.action
+            assert action is not None
+            if not self._permitted(obs, action):
+                return self._reject(tx, run_id, step_no, meta, parsed, "ACTION_NOT_AVAILABLE")
+            tasks = {t.task_id: t for t in list_current_tasks(tx, self.pack.site_id, self.pack)}
+            if isinstance(action, spec.AskTaskOwner):
+                return self._ask(tx, run_id, step_no, meta, parsed, action, tasks[action.task_id])
+            assert isinstance(action, spec.ListAssignableResources)
+            facts = current_snapshot(tx, self.pack).facts()
+            result = assignable_resources(facts, tasks[action.task_id], obs.run.acting_unit_id)
+            self._complete(
+                tx,
+                run_id,
+                step_no,
+                meta,
+                parsed,
+                verdict=ACCEPTED,
+                reason=None,
+                result_kind="CONTINUE",
+                tool_result=result,
+            )
+            return GatewayResult("CONTINUE")
+
+    def _ask(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        action: spec.AskTaskOwner,
+        task: Task,
+    ) -> GatewayResult:
+        """MOVABILITY 제안 → 질문 메시지(수신자 = 작업 담당자) → 사람 라운드 차감 → 대기 (A.21 5).
+
+        동의 효과는 구조화 값(axis·allowed_values)으로만 정해진다. 모델의 question은 agent_text로만 둔다.
+        """
+        site_id = self.pack.site_id
+        site = get_site(tx, site_id)
+        assert site is not None
+        values = list(dict.fromkeys(action.allowed_values))
+        proposal_id, message_id = new_id("prop"), new_id("msg")
+        insert_proposal(
+            tx,
+            site_id,
+            proposal_id,
+            type_="MOVABILITY",
+            run_id=run_id,
+            step_no=step_no,
+            target_task_id=task.task_id,
+            base_task_revision=task.revision,
+            context_version=site.context_version,
+            payload={"axis": action.axis, "allowed_values": values},
+            confirmer_actor_id=task.owner_actor_id,
+        )
+        body = movability_text(self.pack, task, values)
+        insert_message(
+            tx,
+            site_id,
+            message_id,
+            run_id=run_id,
+            step_no=step_no,
+            to_actor_id=task.owner_actor_id,
+            type_="QUESTION",
+            proposal_id=proposal_id,
+            body=body,
+            agent_text=action.question,
+            context_version=site.context_version,
+        )
+        charge(tx, run_id, human_rounds=1)
+        step = get_step(tx, run_id, step_no)
+        assert step is not None
+        if enter_wait(tx, run_id, "MESSAGE", message_id, step["observed_wake_seq"]):
+            outcome = GatewayResult("WAIT")
+        else:
+            # 관찰 이후 새 변화(wake)가 왔다: 질문은 열어 둔 채 다시 관찰한다 (I-19)
+            outcome = GatewayResult("CONTINUE", "NEW_CHANGE_BEFORE_WAIT")
+        self._complete(
+            tx,
+            run_id,
+            step_no,
+            meta,
+            parsed,
+            verdict=ACCEPTED,
+            reason=outcome.reason,
+            result_kind=outcome.kind,
+            tool_result={
+                "proposal_id": proposal_id,
+                "message_id": message_id,
+                "to_actor_id": task.owner_actor_id,
+                "body": body,
+            },
+            state_changes={"proposal_id": proposal_id, "message_id": message_id},
+        )
+        return outcome
 
     def _llm_failure(self, run_id: str, step_no: int, meta: StepMeta) -> GatewayResult:
         """모델 응답 없음. LLM_ERROR(전송 2회 실패)는 다시 관찰, LLM_CONFIG는 Run ERROR (A.17)."""
@@ -263,8 +398,14 @@ class ToolGateway:
             return GatewayResult("DONE", None, "ESCALATED", "ESCALATE_NO_SOLUTION")
 
     def _solve(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
-        assert isinstance(parsed.action, spec.SolveWithScope)
-        level = parsed.action.level
+        """SOLVE_WITH_SCOPE(level)와 TRY_ALTERNATIVE_RESOURCE(주 충돌 L0 + 대체 자원 1개, A.21 5)."""
+        action = parsed.action
+        try_resources: dict[str, list[str]] | None = None
+        if isinstance(action, spec.TryAlternativeResource):
+            level, try_resources = "L0", {action.task_id: [action.resource_id]}
+        else:
+            assert isinstance(action, spec.SolveWithScope)
+            level = action.level
         site_id = self.pack.site_id
         # 1. 예약 tx: 관찰 버전 확인 → Available 재계산 → Snapshot·SearchSpec·SolverJob, Solver Budget
         with db.write() as tx:
@@ -274,13 +415,12 @@ class ToolGateway:
             if self._stale_observation(tx, run_id, step_no):
                 return self._reject(tx, run_id, step_no, meta, parsed, "STALE_OBSERVATION")
             obs = build_observation(tx, self.pack, run_id)
-            allowed = obs.available.get("SOLVE_WITH_SCOPE", {}).get("level", [])
-            if level not in allowed or obs.primary is None:
+            if not self._permitted(obs, action) or obs.primary is None:
                 return self._reject(tx, run_id, step_no, meta, parsed, "ACTION_NOT_AVAILABLE")
             snapshot = create_snapshot(tx, site_id, self.pack)
             try:
                 search_spec = build_search_spec(
-                    snapshot, obs.primary, obs.run.acting_unit_id, level
+                    snapshot, obs.primary, obs.run.acting_unit_id, level, try_resources
                 )
             except SearchSpecError as e:
                 return self._reject(tx, run_id, step_no, meta, parsed, e.reason_code)
@@ -298,6 +438,8 @@ class ToolGateway:
                 finish_solver_job(tx, run_id, step_no, "ABORTED")
                 return GatewayResult("INACTIVE")
             tool_result = _solver_summary(snapshot, level, search_spec.hash, result, candidate)
+            if try_resources:
+                tool_result["try_resources"] = try_resources
             duplicate = candidate is not None and _rejected_duplicate(
                 tx, site_id, candidate.context_version, candidate.assignments
             )
@@ -387,6 +529,16 @@ def _solver_summary(
         "delay_optimality_unconfirmed": result.delay_optimality_unconfirmed,
         "candidate_id": None if candidate is None else candidate.candidate_id,
     }
+
+
+def movability_text(pack: LoadedPack, task: Task, values: list[str]) -> str:
+    """질문의 서버 문구(동의 내용의 기준, A.21 5). Pack 표시 이름으로 서버가 만든다."""
+    name = pack.work_types[task.work_type].display_name
+    return (
+        f"{task.task_id}({name}) 작업에 {', '.join(values)}도 쓸 수 있게 허용하시겠습니까? "
+        f"현재 요청 자원 {task.requested_resource_id}. "
+        "허용하면 재계획이 이 자원을 대안으로 검토합니다."
+    )
 
 
 def assignments_hash(assignments: Any) -> str:

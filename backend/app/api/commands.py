@@ -19,6 +19,13 @@ from app.commands.approval import (
     waive,
 )
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
+from app.commands.messages import (
+    ProposalDecision,
+    ReplyRequest,
+    confirm_proposal,
+    discard_proposal,
+    reply_message,
+)
 from app.commands.runs import CancelRun, cancel_run
 from app.commands.service import Body
 from app.commands.task_request import (
@@ -51,6 +58,16 @@ class WaiveBody(Body):
 
 
 class WithdrawBody(Body):
+    comment: str = ""
+
+
+class ReplyBody(Body):
+    decision: Literal["ACCEPT", "DECLINE"]
+    values: tuple[str, ...] | None = None
+    comment: str = ""
+
+
+class CommentBody(Body):
     comment: str = ""
 
 
@@ -120,3 +137,28 @@ def post_release(
 @router.post("/runs/{run_id}/cancel")
 def post_cancel(run_id: str, pack: PackDep, actor: ActorDep, key: KeyDep) -> JSONResponse:
     return respond(cancel_run(pack, actor.actor_id, key, CancelRun(run_id=run_id)))
+
+
+@router.post("/messages/{message_id}/reply")
+def post_reply(
+    message_id: str, body: ReplyBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """받은 질문에 답한다. 제안이 붙은 메시지면 ACCEPT = 확인, DECLINE = 폐기 (§9.4, A.21 2)."""
+    req = ReplyRequest(message_id=message_id, **body.model_dump())
+    return respond(reply_message(pack, actor.actor_id, key, req))
+
+
+@router.post("/proposals/{proposal_id}/confirm")
+def post_confirm(
+    proposal_id: str, body: CommentBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    req = ProposalDecision(proposal_id=proposal_id, **body.model_dump())
+    return respond(confirm_proposal(pack, actor.actor_id, key, req))
+
+
+@router.post("/proposals/{proposal_id}/discard")
+def post_discard(
+    proposal_id: str, body: CommentBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    req = ProposalDecision(proposal_id=proposal_id, **body.model_dump())
+    return respond(discard_proposal(pack, actor.actor_id, key, req))
