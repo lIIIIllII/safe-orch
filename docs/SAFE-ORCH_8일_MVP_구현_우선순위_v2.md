@@ -1098,7 +1098,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 
 ### A.21 D5: 대기와 재개·거절 후 재탐색·담당자 확인 — 기본안 B (§4 I-17–I-19·§5.1·§9.2–§9.4·§11.3·§11.5·§11.7·§12·§15 Scene 3 보충, schema_version 5)
 
-목표는 기본안 B 완주다: Alpha를 TASK_IMMOVABLE(C)로 거절 → Replanning 재개 → C 고정 관찰 → (L0 재시도 INFEASIBLE) → `LIST_ASSIGNABLE_RESOURCES(A)` → `ASK_TASK_OWNER(A, RESOURCE, [SITE-CR-01])` → Planner A 수락 → 재개 → `TRY_ALTERNATIVE_RESOURCE` → Beta → PASS → Consultation COMPLETE → 승인 R1. 제외: Coordination Agent(CHANGE_REQUEST·이견·DRAFT_CONSTRAINT·통지·REMINDER), Intake·Event Response Agent, FACT_UPDATE, 재시작 복구. 세 번에 나눠 구현한다(아래 10). **세 단계 모두 구현했다**(끝의 "1단계 구현 기록"·"2단계 구현 기록"·"3단계 구현 기록").
+목표는 기본안 B 완주다: Alpha를 TASK_IMMOVABLE(C)로 거절 → Replanning 재개 → C 고정 관찰 → `LIST_ASSIGNABLE_RESOURCES(A)`(§15 Scene 3-2, 거절 뒤 L0 재시도 없음) → `ASK_TASK_OWNER(A, RESOURCE, [SITE-CR-01])` → Planner A 수락 → 재개 → `TRY_ALTERNATIVE_RESOURCE` → Beta → PASS → Consultation COMPLETE → 승인 R1. 제외: Coordination Agent(CHANGE_REQUEST·이견·DRAFT_CONSTRAINT·통지·REMINDER), Intake·Event Response Agent, FACT_UPDATE, 재시작 복구. 세 번에 나눠 구현한다(아래 10). **세 단계 모두 구현했다**(끝의 "1단계 구현 기록"·"2단계 구현 기록"·"3단계 구현 기록").
 
 **0. 정책 결정**
 - **0-1 열린 Case 중 새 요청: 접수 후 대기열(QUEUED).** 거절(`CASE_OPEN`)하면 실제 현장에서 다른 담당자의 요청이 막히고, READY로 받으면 고정 위치의 새 요청이 다른 Unit 고정 작업과 충돌해 열린 Case가 모든 범위에서 INFEASIBLE이 된다(Solver는 모든 READY 작업을 넣는다, A.11).
@@ -1108,7 +1108,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - **대기열 순서:** 열린 Run이 없어도 QUEUED 작업이 하나라도 있으면 새 폼은 대기열 뒤에 선다(QUEUED로 저장). 대기열에서 올라간 요청의 RECONFIRM 후보가 승인을 기다리는 동안 들어온 폼이 먼저 접수된 대기 요청을 앞질러 READY가 되지 않게 한다. 대기열은 Case 종료(RECONFIRM 승인 포함)마다 한 건씩만 올라간다.
   - 그래서 영향받는 Run 표(3)의 "폼" 행에는 wake가 없다. A.20 F-1의 "열린 Case 중 context 변경 → wake"는 거절 제약·MOVABILITY 확인·철회에 적용한다.
 - **0-2 사람에게 묻는 시점 (정책):** "계산으로 할 수 있는 탐색(미시도 범위)을 먼저 하고, 막혔을 때만 사람에게 묻는다(§11.7 '막혔을 때 어떤 확인이 해를 열어줄지', §1 '사람에게는 조회로 알 수 없는 것만 묻는다')." `ASK_TASK_OWNER`는 `untried_levels`가 비었을 때만 Available Actions에 들어간다. Budget처럼 **서버가 지키는 정책**이며, 행동 순서를 지시하는 스크립트가 아니다(모델은 그 안에서 SOLVE·LIST·TRY·ASK·이관을 고른다).
-  - 효과: 첫 Run에서 L0 INFEASIBLE 직후 Beta로 건너뛰지 않는다(전략 변경·거절 반영 장면 유지). C 고정 뒤에는 새 사실에서 L0가 다시 미시도이므로 경로에 "L0 재시도 INFEASIBLE"이 한 단계 들어간다(step 6/15, Solver 4/6).
+  - 효과: 첫 Run에서 L0 INFEASIBLE 직후 Beta로 건너뛰지 않는다(전략 변경·거절 반영 장면 유지). C 고정 뒤에는 제약으로 L1·L2가 L0와 같은 탐색(같은 실효 탐색 키)이 되어 미시도 범위가 비므로 계산을 반복하지 않고 바로 조회·질문으로 간다(C는 L0 범위 밖이라 L0의 Solver 입력도 그대로다, 아래 "무결성 hash와 실효 탐색 키의 구분"). 기본안 B 경로는 step 5/15, Solver 3/6이다(블루프린트 §15 Scene 3-2와 같다).
 - **0-3 제약 없는 거절 횟수:** §9.2·T33("2회 누적 / 2회 후 이관")을 따른다. 같은 Case에서 제약 없는 거절이 2번째면 깨우지 않고 Run을 ESCALATED(`REJECTED_TWICE`)로 끝낸다(§11.5의 "2회 초과"와 다름, 블루프린트 개정 때 맞춘다).
 
 **1. 저장소 (schema_version 5)**
@@ -1171,11 +1171,11 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 **7. Inbox 화면 — 3단계**: 입력 영역 탭 [작업 요청 | 지연 신고 | 받은 요청 n] + 상태바 배지. 데이터는 state의 `inbox`(X-Actor 본인 것만, §12 "본인", 1초 폴링 한 번). 항목: 서버 문구 → "Agent 설명(모델 작성)" → 작업·허용 값·보낸 Run·step·상태, [수락]·[거절] + comment. LATE·취소는 회색. Activity 카드: LIST의 assignable·excluded, ASK의 message_id·서버 문구, TRY의 Solver 요약, Run 머리에 재개 횟수(wait_generation). 검토 패널: 거절된 후보의 거절 사유·생성 제약. 대기열(QUEUED) 요청은 "요청 (Plan 밖)" 목록에 "대기 중"으로 보이고 [철회]할 수 있다. Pack 하드코딩 검사는 그대로 통과해야 한다.
 
 **8. 테스트**
-- 1단계: T33(제약 없는 거절 wake·`DUPLICATE_REJECTED`·2번째 이관), T36(`NEW_CHANGE_BEFORE_WAIT`), T37(이전 세대 RESUME 무효), T38(거절 재전송 REPLAYED·wake 없음, 같은 키 다른 본문 `IDEMPOTENCY_MISMATCH`. 답변 명령도 같은 규칙: 같은 답변 재전송 REPLAYED·wake 없음, 같은 키 다른 본문 `IDEMPOTENCY_MISMATCH`, 다른 키 다른 결정 `ALREADY_ANSWERED`), T39(같은 RESUME 2회·두 연결 동시 claim → 1회), T41(대기 중 wake 2건 → PENDING RESUME 1개, 재개 후 handled_wake_seq 2), T42(대기 중 Event → STALE, RESUME 무효), 대기열(열린 Case 중 폼 QUEUED·context 불변 → 승인 시 READY 승격·Consent 복사·RECHECK, ESCALATED·CANCELLED·Event STALE 때도 승격, 접수 순서, QUEUED 철회), 철회(다른 요청 → wake, Case 자기 작업 → STALE), 기본안 B E2E 앞부분(거절 → 재개 → C 고정 관찰 → L0 INFEASIBLE)과 전체 경로(xfail strict, 2단계에서 통과).
+- 1단계: T33(제약 없는 거절 wake·`DUPLICATE_REJECTED`·2번째 이관), T36(`NEW_CHANGE_BEFORE_WAIT`), T37(이전 세대 RESUME 무효), T38(거절 재전송 REPLAYED·wake 없음, 같은 키 다른 본문 `IDEMPOTENCY_MISMATCH`. 답변 명령도 같은 규칙: 같은 답변 재전송 REPLAYED·wake 없음, 같은 키 다른 본문 `IDEMPOTENCY_MISMATCH`, 다른 키 다른 결정 `ALREADY_ANSWERED`), T39(같은 RESUME 2회·두 연결 동시 claim → 1회), T41(대기 중 wake 2건 → PENDING RESUME 1개, 재개 후 handled_wake_seq 2), T42(대기 중 Event → STALE, RESUME 무효), 대기열(열린 Case 중 폼 QUEUED·context 불변 → 승인 시 READY 승격·Consent 복사·RECHECK, ESCALATED·CANCELLED·Event STALE 때도 승격, 접수 순서, QUEUED 철회), 철회(다른 요청 → wake, Case 자기 작업 → STALE), 기본안 B E2E 앞부분(거절 → 재개 → C 고정 관찰 → 미시도 범위 없음)과 전체 경로(xfail strict, 2단계에서 통과).
 - 2단계: T17(C 고정 뒤 Beta 포함 모든 후보에서 C 불변, C06), T23(MOVABILITY [SITE-CR-01] 동의로 다른 자원·범위 밖 시간 → PENDING), T24, T25, T26, T40, T02, Consent 복사(C1), LIST의 B-CR-01 제외, TRY·ASK 사용 조건(LIST 전, 축 미확인, 미시도 범위 남음, 라운드 소진, C 고정 축), N5 ASK 미노출, 기본안 B E2E 전체.
 - 바뀐 테스트(1단계): schema_version 5, RECHECK·START 키(plan 포함), INCOMPLETE → wake(이전 "D5에서 wake"), 처리하지 않는 job 테스트의 Run 상태(열린 Case면 폼이 대기열로 감), 철회 응답 result_refs(`queued`), 프롬프트 버전·Observation 키.
 
-**9. live run 기본안 B — 3단계**: `--path B`(`--request A`에만). 스크립트가 사람 역할: Alpha PASS 뒤 Supervisor로 `demo_rejections[0]` 거절 → OPEN 메시지가 생기면 그 수신자로 ACCEPT(comment "live run 자동 수락") → Beta PASS 뒤 승인. 성공 = Beta 후보 PASS ∧ Consultation COMPLETE ∧ 확정 R1 ∧ Run SUCCEEDED ∧ 금지 Action 0 ∧ Budget 안(사람 라운드 ≤ 2) ∧ ASK가 LIST의 SITE-CR-01을 담음 ∧ 수락 전 TRY 없음(Gateway가 보장, 기록으로 확인). 따로: Alpha·Beta의 matches_expected(verify의 L1 / L0 + try), 거절 뒤 첫 행동, 단계 수. 거절 뒤 L0 재시도는 정상 경로다(0-2).
+**9. live run 기본안 B — 3단계**: `--path B`(`--request A`에만). 스크립트가 사람 역할: Alpha PASS 뒤 Supervisor로 `demo_rejections[0]` 거절 → OPEN 메시지가 생기면 그 수신자로 ACCEPT(comment "live run 자동 수락") → Beta PASS 뒤 승인. 성공 = Beta 후보 PASS ∧ Consultation COMPLETE ∧ 확정 R1 ∧ Run SUCCEEDED ∧ 금지 Action 0 ∧ Budget 안(사람 라운드 ≤ 2) ∧ ASK가 LIST의 SITE-CR-01을 담음 ∧ 수락 전 TRY 없음(Gateway가 보장, 기록으로 확인). 따로: Alpha·Beta의 matches_expected(verify의 L1 / L0 + try), 거절 뒤 첫 행동, 단계 수. 거절 뒤 첫 행동은 자원 조회다(0-2, L0 재시도 없음).
 - `--path B-decline`: 같은 흐름에서 ACCEPT 대신 DECLINE(comment "live run 자동 거절"). 성공 = Alpha PASS ∧ ASK 1회 ∧ DECLINE 적용 ∧ 거절 뒤 ASK·TRY 없음 ∧ Run ESCALATED ∧ 금지 Action 0 ∧ Budget 안(같은 질문 되풀이 금지 확인).
 
 **10. 구현 순서**
@@ -1208,7 +1208,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - **state `inbox`:** X-Actor 본인 메시지 전체(최신 순): message_id, run_id, step_no, type, status, `body`(서버 문구), `agent_text`(모델 작성), reply, created·answered_context_version, proposal_id·proposal_type·proposal_status, task_id, axis, allowed_values.
 - **프롬프트 p5:** 관찰 키마다 한국어 이름을 붙이고(설명·decision_summary에는 한국어 이름만), decision_summary에 분 숫자 대신 작업 ID·범위 이름·자원 ID, 충돌이 여럿이면 어느 충돌을 다루는지 쓰게 했다. 새 Action 설명은 spec docstring.
 - **대기열 순서(0-1):** 폼 접수 시 `has_open_case ∨ queued_task_ids`면 QUEUED.
-- 테스트: 기본안 B E2E(xfail 해제, step 6·Solver 4·사람 라운드 1, LIST의 B-CR-01 제외, Consent 복사, Beta에서 C 유지, 승인 R1), T17(C 고정 뒤 후보의 C 불변, C를 옮기면 C06 FAIL), T23, T24, T25, T26, T38(답변), T40, DECLINE, T02(답변 comment의 지시 → 없는 Action MALFORMED·허용 밖 TRY `ACTION_NOT_AVAILABLE`, Plan·Hold·APPROVE 결정 불변), TRY·ASK 사용 조건, N5 ASK 미노출, 대기열 순서, state inbox, 답변 API. 바뀐 테스트: 계산 Action이 없을 때 도구 목록에 LIST가 남는다(A·C는 자원이 필요한 작업), prompt_version p5.
+- 테스트: 기본안 B E2E(xfail 해제, step 6·Solver 4·사람 라운드 1(실효 탐색 키 수정 뒤 step 5·Solver 3), LIST의 B-CR-01 제외, Consent 복사, Beta에서 C 유지, 승인 R1), T17(C 고정 뒤 후보의 C 불변, C를 옮기면 C06 FAIL), T23, T24, T25, T26, T38(답변), T40, DECLINE, T02(답변 comment의 지시 → 없는 Action MALFORMED·허용 밖 TRY `ACTION_NOT_AVAILABLE`, Plan·Hold·APPROVE 결정 불변), TRY·ASK 사용 조건, N5 ASK 미노출, 대기열 순서, state inbox, 답변 API. 바뀐 테스트: 계산 Action이 없을 때 도구 목록에 LIST가 남는다(A·C는 자원이 필요한 작업), prompt_version p5.
 
 **3단계 구현 기록**
 - **같은 질문 되풀이 금지(백엔드):** Observation `human_replies`를 Case 단위로 바꿨다(이 Case의 Run이 보낸 메시지, 생성 순). `spec.choices`가 DECLINE된 (작업, 축, 값)을 ASK 후보에서 빼고, 남는 값이 없으면 ASK가 Available Actions에 없다. 프롬프트 `replanning-p6`(human_replies 설명 "이 Case가 보낸", "담당자가 거절한 값은 다시 물을 수 없다").
@@ -1224,7 +1224,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 1. [시연 초기화] → Planner A로 시연값 A 제출 → Activity에서 L0 INFEASIBLE → L1 → Alpha 검토 대기.
 2. Planner A로 시연값 N2 제출 → 결과 영역 "대기열에 접수됨", 요청 목록 "대기 1번째".
 3. Supervisor로 Alpha [거절] → 시연값 "C 작업 고정" → 거절. Alpha 칩을 눌러 거절 사유와 생성된 제약(C 자원·시간 고정) 확인.
-4. Activity: Run "재개 1회", C 고정 반영 L0 INFEASIBLE → 자원 조회 카드(배정 가능·제외 B-CR-01 이유) → 확인 요청 카드(서버 문구·Agent 설명) → Run "답변 대기".
+4. Activity: Run "재개 1회", C 고정 관찰 → 자원 조회 카드(배정 가능·제외 B-CR-01 이유) → 확인 요청 카드(서버 문구·Agent 설명) → Run "답변 대기".
 5. 상태바 "받은 요청"이 Supervisor에게는 0, Planner A로 바꾸면 1이고 탭 배지도 1. 받은 요청 탭에서 서버 문구와 Agent 설명이 나뉘어 보이는지, 허용 값·보낸 Run·step 확인 → 사유 입력 후 [수락].
 6. Activity: "재개 2회", 대체 자원 시도 카드 → Beta 검토 대기. 검토 패널 A 10:00 SITE-CR-01, 협의 완료(기존 동의 범위).
 7. Supervisor로 [승인·확정] → Plan R1, Run 성공, 대기열 N2가 READY가 되어 재검사.
@@ -1234,7 +1234,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - 원인: 실패 회차는 C 고정 뒤 L0 재시도 INFEASIBLE 직후 ESCALATE_NO_SOLUTION으로 끝났다. 그 시점 도구는 LIST·ESCALATE뿐이었고 ASK·TRY는 LIST 뒤에야 열려 모델이 그 경로를 볼 수 없었다. 성공 회차도 C(제약 고정)·Q(이번 충돌과 무관)를 조회해 step을 낭비했다(LIST 3회).
 - **프롬프트 `replanning-p7`:** System에 "도구 전체와 열리는 조건" 절을 둔다. spec `ACTIONS`의 Action마다 한 줄 = docstring 첫 문장(무엇을 하는지) + `OPENS`(열리는 조건, Action 클래스 속성)이고 `prompts.replanning.tool_catalog()`가 생성한다. Pack 값은 없다(테스트가 자원·Rule·작업 유형·작업 ID가 없는지 본다). A.17의 "System에서 반복하지 않는다"는 이 절에 한해 예외다. 실제 실행 가능 여부는 지금처럼 Available Actions가 정한다.
 - 규칙 문구: "전략에는 탐색 범위 확대뿐 아니라 자원 조회, 대체 자원 시도, 담당자 확인도 있다. 계산이 막히면 어떤 조회·확인이 해를 열어 줄지 판단한다(§11.7)." "ESCALATE_NO_SOLUTION은 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만." ESCALATE_NO_SOLUTION 도구 설명(docstring)에도 같은 조건을 적었다.
-- **LIST 대상:** 주 충돌 L0 작업 ∩ 필요 자원 있음 ∩ RESOURCE 축 제약 없음 ∩ 미조회(5 수정). 기본안 B에서 C 고정 뒤 LIST 대상은 A뿐이고, A를 조회하면 LIST가 사라져 도구는 ASK·ESCALATE가 된다. 스크립트 E2E 경로(step 6·Solver 4·사람 라운드 1)는 그대로다.
+- **LIST 대상:** 주 충돌 L0 작업 ∩ 필요 자원 있음 ∩ RESOURCE 축 제약 없음 ∩ 미조회(5 수정). 기본안 B에서 C 고정 뒤 LIST 대상은 A뿐이고, A를 조회하면 LIST가 사라져 도구는 ASK·ESCALATE가 된다. 스크립트 E2E 경로는 이때 step 6·Solver 4·사람 라운드 1이었다(실효 탐색 키에서 제약을 뺀 뒤 step 5·Solver 3).
 - **live_run 요약:** `--path B` 기록에 `first_solve_level`·`l0_first`를 넣고, 요약 줄이 path 기록이면 "L0 first n/N, alpha matches n/N, beta matches n/N"을 센다(이전에는 키가 없어 0/3).
 
 **무결성 hash와 실효 탐색 키의 구분 (schema_version 6, 기본안 B live run data/live_runs/20261001T135426Z.jsonl)**
@@ -1244,7 +1244,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
   - 키 = canonical_hash(Solver 입력만): READY 작업의 task_id·구역·duration·시간창·필요 자원 유형·기준 배정·선후행·hazard_tags, 자원(유형·허용 Unit·가용 구간), 구역 관계, pack_hash(Rule), 근무 구간, Horizon, acting_unit, axes, resource_alternatives, time_limit_s.
   - 넣지 않는 것: context_version·plan_revision 번호, Consent, fields, revision 번호, Hold, owner·work_type(hazard_tags로 대신), movable(axes로 대신).
   - axes 정규화: resource 축이 true여도 그 작업의 resource_alternatives가 비어 있으면 false로 본다(Solver 입력이 같다). 두 축이 모두 false인 작업은 뺀다.
-  - **확인된 제약(작업·고정 축)은 넣는다.** 고정 작업이 범위 밖이면 그 범위의 Solver 입력은 같지만, 거절로 생긴 제약은 Case의 가정이 바뀐 것이고 0-2의 "C 고정 뒤 L0 재시도"가 정상 경로이므로 다른 키로 본다. 그래서 기본안 B 스크립트 경로(step 6·Solver 4)는 그대로다.
+  - **확인된 제약은 넣지 않는다.** 제약은 axes를 통해서만 Solver 입력에 영향을 준다. 범위 안 작업의 축을 막는 제약은 그 범위의 axes를 바꿔 키가 달라지고, 범위 밖 작업의 제약은 키를 바꾸지 않는다. 기본안 B에서 C 고정은 L0(A만 움직임)의 입력을 바꾸지 않으므로 거절 뒤 L0 재시도는 같은 탐색의 반복이고, L1·L2도 C가 (F, F)가 되어 L0와 같은 키가 된다. 그래서 미시도 범위가 비어 재개 직후 바로 조회·질문으로 간다(step 5·Solver 3, 블루프린트 §15 Scene 3-2와 같다). (처음 구현에서는 0-2의 옛 문구에 맞춰 제약을 넣었다가 뺐다.)
 - 결과: 수락 뒤 관찰에서 `untried_levels`가 비어 TRY·ESCALATE만 남는다. 철회로 READY 작업 집합이 바뀌거나 제약이 생기면 다른 키라 다시 시도할 수 있다.
 - live_run 요약: Beta가 없는 경로(B-decline)는 beta matches를 0/N이 아니라 "해당 없음"으로 표시하고, 기록의 `beta_matches_expected`는 null이다.
 - 스키마: `search_spec.search_key TEXT NOT NULL` 추가, schema_version 6. 로컬 DB는 reset이 필요하다.

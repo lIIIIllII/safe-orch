@@ -167,7 +167,10 @@ def _approve(pack, cand_id):
 
 
 def test_plan_b_reject_with_constraint_wakes_and_resumes(seeded):
-    """Alpha를 TASK_IMMOVABLE(C)로 거절 → Context +1, Run wake → 재개 → C 고정 관찰 → L0 INFEASIBLE."""
+    """Alpha를 TASK_IMMOVABLE(C)로 거절 → Context +1, Run wake → 재개 → C 고정 관찰 → 미시도 범위 없음.
+
+    C 고정으로 L1·L2가 L0와 같은 탐색(같은 실효 탐색 키)이 되므로 계산을 반복하지 않고 조회·질문으로 간다.
+    """
     pack = seeded
     run = _alpha_waiting(pack)
     ctx = _site(pack).context_version
@@ -182,12 +185,11 @@ def test_plan_b_reject_with_constraint_wakes_and_resumes(seeded):
     [resume] = _jobs(pack, "RESUME_RUN")
     assert (resume["status"], resume["dedupe_key"]) == ("PENDING", f"RESUME_RUN:{run.run_id}:1")
 
-    # 2단계 전에는 SOLVE·ESCALATE뿐이다: C 고정으로 L0 INFEASIBLE → 이관
-    run_until_idle(pack, model_factory=_factory(solve("L0", "C 고정 반영"), escalate()))
+    run_until_idle(pack, model_factory=_factory(escalate()))
     done = _run(run.run_id)
     assert (done.status, done.end_reason) == ("ESCALATED", "ESCALATE_NO_SOLUTION")
-    assert (done.handled_wake_seq, done.wait_generation) == (1, 1)
-    s3, s4 = _steps(run.run_id)[2:]
+    assert (done.handled_wake_seq, done.wait_generation, done.solver_calls_used) == (1, 1, 2)
+    [s3] = _steps(run.run_id)[2:]
     obs = s3["observation"]
     assert obs["rejections"] == [
         {
@@ -200,18 +202,18 @@ def test_plan_b_reject_with_constraint_wakes_and_resumes(seeded):
         }
     ]
     assert [c["task_id"] for c in obs["constraints"]] == ["C"]
-    assert s3["tool_result"]["stage1"]["status"] == "INFEASIBLE"
-    assert s4["action"]["name"] == "ESCALATE_NO_SOLUTION"
+    assert obs["untried_levels"] == []
+    assert _names(s3) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
+    assert s3["action"]["name"] == "ESCALATE_NO_SOLUTION"
 
 
 def _ask_waiting(pack):
-    """기본안 B 앞부분: Alpha 거절(C 고정) → 재개 → L0 INFEASIBLE → LIST(A) → ASK(A, RESOURCE, [SITE-CR-01])."""
+    """기본안 B 앞부분: Alpha 거절(C 고정) → 재개 → LIST(A) → ASK(A, RESOURCE, [SITE-CR-01]) (§15 Scene 3-2)."""
     run = _alpha_waiting(pack)
     _reject_demo(pack, run.wait_ref)
     run_until_idle(
         pack,
         model_factory=_factory(
-            solve("L0", "C 고정 반영"),
             call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
             _ask_a(),
         ),
@@ -269,7 +271,7 @@ def test_plan_b_full_e2e(seeded):
     run_id = waiting.run_id
     steps = _steps(run_id)
     # LIST: B-CR-01은 UA에 허용되지 않아 제외, 유형이 다른 SITE-GC-01은 대상이 아니다
-    s_list, s_ask = steps[3], steps[4]
+    s_list, s_ask = steps[2], steps[3]
     assert s_list["tool_result"] == {
         "task_id": "A",
         "required_type": "CRANE",
@@ -327,7 +329,7 @@ def test_plan_b_full_e2e(seeded):
     run = _run(run_id)
     beta = run.wait_ref
     steps = _steps(run_id)
-    s_try = steps[5]
+    s_try = steps[4]
     assert s_try["tool_result"]["try_resources"] == {"A": ["SITE-CR-01"]}
     # 자원 축이 확인됐다(ASK 없음). 수락으로 context·Consent가 바뀌어도 Solver 입력이 같아 L0는 다시 열리지 않는다
     assert _names(s_try) == ["TRY_ALTERNATIVE_RESOURCE", "ESCALATE_NO_SOLUTION"]
@@ -345,16 +347,15 @@ def test_plan_b_full_e2e(seeded):
             "quoted_comment": "좋습니다",
         }
     ]
-    # 수락 전 TRY 없음, step 6 / Solver 4 / 사람 라운드 1
+    # 수락 전 TRY 없음, step 5 / Solver 3 / 사람 라운드 1 (거절 뒤 L0 재시도 없음)
     assert [(s["action"] or {}).get("name") for s in steps] == [
-        "SOLVE_WITH_SCOPE",
         "SOLVE_WITH_SCOPE",
         "SOLVE_WITH_SCOPE",
         "LIST_ASSIGNABLE_RESOURCES",
         "ASK_TASK_OWNER",
         "TRY_ALTERNATIVE_RESOURCE",
     ]
-    assert (run.steps_used, run.solver_calls_used, run.human_rounds_used) == (6, 4, 1)
+    assert (run.steps_used, run.solver_calls_used, run.human_rounds_used) == (5, 3, 1)
 
     with db.read() as conn:
         cand = get_candidate(conn, pack.site_id, beta)
@@ -378,12 +379,12 @@ def test_accept_does_not_reopen_tried_levels(seeded):
     assert _site(pack).context_version == ctx + 1
     model = ScriptedChatModel([solve("L0", "다시 계산"), escalate()])
     run_until_idle(pack, model_factory=lambda: model)
-    s_l0, s_end = _steps(waiting.run_id)[5:]
+    s_l0, s_end = _steps(waiting.run_id)[4:]
     assert s_l0["observation"]["untried_levels"] == []
     assert _names(s_l0) == ["TRY_ALTERNATIVE_RESOURCE", "ESCALATE_NO_SOLUTION"]
     assert s_l0["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
     assert s_end["action"]["name"] == "ESCALATE_NO_SOLUTION"
-    assert _run(waiting.run_id).solver_calls_used == 3  # L0·L1·L0(C 고정 뒤)만
+    assert _run(waiting.run_id).solver_calls_used == 2  # Alpha까지의 L0·L1만
 
 
 def test_t17_moving_fixed_c_fails_c06(seeded):
@@ -890,7 +891,7 @@ def test_t02_injected_comment_cannot_trigger_approval(seeded):
         ]
     )
     run_until_idle(pack, model_factory=lambda: model)
-    steps = _steps(waiting.run_id)[5:]
+    steps = _steps(waiting.run_id)[4:]
     assert [s["guard"]["reason_code"] for s in steps] == [
         "MALFORMED",
         "ACTION_NOT_AVAILABLE",
@@ -945,7 +946,6 @@ def test_ask_conditions_rounds_fixed_axis_and_values(seeded):
     run_until_idle(
         pack,
         model_factory=_factory(
-            solve("L0", "C 고정 반영"),
             call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
             call("LIST_ASSIGNABLE_RESOURCES", "C 자원 조회", task_id="C"),
             _ask_a("C"),
@@ -955,8 +955,8 @@ def test_ask_conditions_rounds_fixed_axis_and_values(seeded):
     )
     steps = _steps(run.run_id)
     # C는 RESOURCE 축이 제약으로 고정돼 자원 조회 대상이 아니다 (A.21 p7)
-    assert steps[4]["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
-    s_ask_c, s_ask_bad = steps[5], steps[6]
+    assert steps[3]["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
+    s_ask_c, s_ask_bad = steps[4], steps[5]
     ask = next(
         t["function"]
         for t in s_ask_c["available_actions"]
@@ -1094,7 +1094,6 @@ def test_state_shows_rejection_resume_count_and_queue(seeded):
     run_until_idle(
         pack,
         model_factory=_factory(
-            solve("L0", "C 고정 반영"),
             call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
             _ask_a(),
         ),

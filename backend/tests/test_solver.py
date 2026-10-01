@@ -414,12 +414,15 @@ def test_search_key_normalizes_resource_axis_without_alternatives(with_a, resour
     assert _key(pack, snapshot, try_resources={"A": ["SITE-CR-01"]})[0] != key
 
 
-def test_search_key_changes_with_ready_set_and_constraints(with_a):
+def test_search_key_changes_with_ready_set_and_in_scope_constraints(with_a):
     snapshot = take_snapshot(with_a)
     key, _ = _key(with_a, snapshot)
     facts = snapshot.facts()
     # 철회로 READY 작업 집합이 바뀌면(충돌과 무관한 작업이라도) 다른 키
     withdrawn = with_facts(snapshot, tasks=tuple(t for t in facts.tasks if t.task_id != "E"))
     assert _key(with_a, withdrawn)[0] != key
-    # 확인된 제약이 생기면 다른 키(같은 Case의 가정이 바뀜, A.21 0-2의 L0 재시도)
-    assert _key(with_a, _fix(snapshot, "C"))[0] != key
+    # 제약은 axes로만 Solver 입력에 들어간다: 범위 안 작업(A)의 축을 막으면 그 범위의 키가 바뀌고,
+    # 범위 밖 작업(C)의 제약은 L0 키를 바꾸지 않는다. C가 들어 있는 L1 키는 바뀐다 (A.21)
+    assert _key(with_a, _fix(snapshot, "A", axes=("TIME",)))[0] != key
+    assert _key(with_a, _fix(snapshot, "C"))[0] == key
+    assert _key(with_a, _fix(snapshot, "C"), "L1")[0] != _key(with_a, snapshot, "L1")[0]

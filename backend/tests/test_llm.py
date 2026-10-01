@@ -315,7 +315,6 @@ def _plan_b_script(*after_reply):
     return _shared_script(
         solve("L0"),
         solve("L1"),
-        solve("L0", "C 고정 반영"),
         call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
         ask,
         *after_reply,
@@ -331,10 +330,10 @@ def test_live_run_path_b_with_scripted_model(monkeypatch):
     assert r.get("error") is None, r.get("error")
     c = r["success_criteria"]
     assert r["success"], c
-    assert (r["run_status"], r["end_reason"], r["step_count"]) == ("SUCCEEDED", "COMMITTED:1", 6)
+    assert (r["run_status"], r["end_reason"], r["step_count"]) == ("SUCCEEDED", "COMMITTED:1", 5)
     assert c["ask_uses_listed_alternative"] and c["no_try_before_accept"]
     assert (r["alpha_matches_expected"], r["beta_matches_expected"]) == (True, True)
-    assert r["first_action_after_reject"] == "SOLVE_WITH_SCOPE"
+    assert r["first_action_after_reject"] == "LIST_ASSIGNABLE_RESOURCES"  # 거절 뒤 L0 재시도 없음
     assert [e.get("reply") for e in r["events"] if "reply" in e] == ["ACCEPT"]
     assert r["beta"]["moved"] == {"A": [60, "SITE-CR-01"]}
     assert (r["first_solve_level"], r["l0_first"]) == ("L0", True)

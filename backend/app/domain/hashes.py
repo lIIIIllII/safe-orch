@@ -38,7 +38,8 @@ def search_key(
     context_version·plan_revision 번호, Consent, fields, revision 번호, Hold가 바뀌어도 같다.
     - 작업(READY): 구역, duration, 시간창, 필요 자원 유형, 기준 배정, 선후행, hazard_tags
     - 자원(유형·허용 Unit·가용 구간), 구역 관계, pack_hash(Rule), 근무 구간, Horizon
-    - 확인된 제약(작업·고정 축): 같은 Case의 가정이 바뀐 것으로 보고 넣는다(A.21 0-2의 L0 재시도)
+    - 확인된 제약은 넣지 않는다. 제약은 axes를 통해서만 Solver 입력에 영향을 준다(범위 밖 작업의 제약은
+      그 범위의 탐색을 바꾸지 않는다)
     - axes는 정규화: resource 축이 true여도 대체 자원이 없으면 Solver 입력이 같으므로 false
     """
     base = facts.base_assignments()
@@ -77,9 +78,6 @@ def search_key(
             "pack_hash": facts.pack_hash,
             "work_intervals": [list(iv) for iv in facts.work_intervals],
             "horizon_minutes": facts.horizon_minutes,
-            "constraints": sorted(
-                {(c.task_id, axis) for c in facts.constraints for axis in c.frozen_axes}
-            ),
             "acting_unit_id": acting_unit_id,
             "axes": effective,
             "resource_alternatives": {k: list(v) for k, v in resource_alternatives.items()},
