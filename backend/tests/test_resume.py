@@ -257,6 +257,11 @@ def _names(step):
     return [t["function"]["name"] for t in step["available_actions"]]
 
 
+def _enum(step, name, arg):
+    tool = next(t["function"] for t in step["available_actions"] if t["function"]["name"] == name)
+    return tool["parameters"]["properties"][arg]["enum"]
+
+
 def test_plan_b_full_e2e(seeded):
     """기본안 B 전체: 거절 → 재개 → L0 → LIST → ASK → 수락 → 재개 → TRY → Beta → 승인 R1 (A.21 9 기준)."""
     pack = seeded
@@ -273,13 +278,11 @@ def test_plan_b_full_e2e(seeded):
         "excluded": [{"resource_id": "B-CR-01", "reason": "NOT_ALLOWED"}],
         "resources_hash": s_list["tool_result"]["resources_hash"],
     }
-    # LIST 전에는 TRY·ASK가 없고, LIST 뒤(자원 축 미확인·미시도 범위 없음)에는 ASK가 열린다
+    # LIST 전에는 TRY·ASK가 없고, LIST 뒤(자원 축 미확인·미시도 범위 없음)에는 ASK가 열린다.
+    # LIST 대상은 주 충돌 L0 작업 중 RESOURCE가 막히지 않은 A뿐이다(C는 제약 고정, Q는 무관, A.21 p7).
     assert _names(s_list) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
-    assert _names(s_ask) == [
-        "LIST_ASSIGNABLE_RESOURCES",
-        "ASK_TASK_OWNER",
-        "ESCALATE_NO_SOLUTION",
-    ]
+    assert _enum(s_list, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A"]
+    assert _names(s_ask) == ["ASK_TASK_OWNER", "ESCALATE_NO_SOLUTION"]
     assert s_ask["observation"]["untried_levels"] == []
     assert waiting.human_rounds_used == 1
 
@@ -907,7 +910,8 @@ def test_ask_needs_tried_levels_and_list_and_open_axis(seeded):
     s1, s2, s3, _ = _steps(run.run_id)
     assert _names(s1) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
     assert s2["observation"]["untried_levels"] == ["L0", "L1", "L2"]
-    assert _names(s2) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
+    assert _enum(s1, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A"]
+    assert _names(s2) == ["SOLVE_WITH_SCOPE", "ESCALATE_NO_SOLUTION"]
     assert s2["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"  # ASK
     assert s3["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"  # TRY (자원 축 미확인)
     assert s2["observation"]["assignable_resources"][0]["untried_alternatives"] == []
@@ -931,6 +935,8 @@ def test_ask_conditions_rounds_fixed_axis_and_values(seeded):
         ),
     )
     steps = _steps(run.run_id)
+    # C는 RESOURCE 축이 제약으로 고정돼 자원 조회 대상이 아니다 (A.21 p7)
+    assert steps[4]["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
     s_ask_c, s_ask_bad = steps[5], steps[6]
     ask = next(
         t["function"]

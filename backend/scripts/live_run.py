@@ -293,6 +293,7 @@ def run_path_b(index: int, settings: Settings, pack_name: str, raw: bool, declin
         with db.write() as tx:
             seed_pack(tx, pack)
         _path_b(record, settings, pack, pack_name, raw, decline, real_solve)
+        record["l0_first"] = record.get("first_solve_level") == "L0"
     except Exception as e:  # noqa: BLE001 — 실패도 기록한다
         record.update(success=False, error=f"{type(e).__name__}: {e}")
     finally:
@@ -474,6 +475,15 @@ def _path_b(
         beta_matches_expected=beta_actual is not None
         and exp_beta is not None
         and _matches({"L0": exp_beta}, beta_actual, False),
+        # 첫 SOLVE의 level (--path A와 같은 키로 요약에 집계한다)
+        first_solve_level=next(
+            (
+                (s["action"].get("args") or {}).get("level")
+                for s in steps
+                if (s["action"] or {}).get("name") == "SOLVE_WITH_SCOPE"
+            ),
+            None,
+        ),
         first_action_after_reject=None
         if reject_step is None
         else (reject_step["action"] or {}).get("name"),
@@ -700,9 +710,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     ok = sum(1 for r in records if r.get("success"))
     l0 = sum(1 for r in records if r.get("l0_first"))
     match = sum(1 for r in records if r.get("matches_expected"))
+    paths = [r for r in records if r.get("path")]
     tokens = sum(r.get("tokens_in", 0) + r.get("tokens_out", 0) for r in records)
     n = len(records)
-    print(f"success {ok}/{n}, L0 first {l0}/{n}, matches expected {match}/{n}, tokens {tokens}")
+    if paths:  # 기본안 B: Alpha·Beta 기대값 일치를 따로 센다 (B-decline에는 Beta가 없다)
+        alpha = sum(1 for r in paths if r.get("alpha_matches_expected"))
+        beta = sum(1 for r in paths if r.get("beta_matches_expected"))
+        print(
+            f"success {ok}/{n}, L0 first {l0}/{n}, alpha matches {alpha}/{n}, "
+            f"beta matches {beta}/{n}, tokens {tokens}"
+        )
+    else:
+        print(f"success {ok}/{n}, L0 first {l0}/{n}, matches expected {match}/{n}, tokens {tokens}")
     print(f"saved: {out}")
     return 0
 

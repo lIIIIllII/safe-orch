@@ -337,6 +337,31 @@ def test_live_run_path_b_with_scripted_model(monkeypatch):
     assert r["first_action_after_reject"] == "SOLVE_WITH_SCOPE"
     assert [e.get("reply") for e in r["events"] if "reply" in e] == ["ACCEPT"]
     assert r["beta"]["moved"] == {"A": [60, "SITE-CR-01"]}
+    assert (r["first_solve_level"], r["l0_first"]) == ("L0", True)
+
+
+def test_live_run_summary_counts_path_b(monkeypatch, tmp_path, capsys):
+    """--path B 요약 줄도 L0 먼저와 Alpha·Beta 기대값 일치를 센다."""
+    record = {
+        "index": 1,
+        "path": "B",
+        "success": True,
+        "l0_first": True,
+        "alpha_matches_expected": True,
+        "beta_matches_expected": True,
+        "tokens_in": 1,
+        "tokens_out": 1,
+    }
+    monkeypatch.setattr(live_run, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(live_run, "run_path_b", lambda *a: dict(record))
+    monkeypatch.setattr(
+        live_run,
+        "get_settings",
+        lambda: Settings(openai_api_key="sk-test", openai_model="m"),
+    )
+    assert live_run.main(["--path", "B"]) == 0
+    out = capsys.readouterr().out
+    assert "L0 first 1/1, alpha matches 1/1, beta matches 1/1" in out
 
 
 def test_live_run_path_b_decline_ends_in_escalation(monkeypatch):
@@ -354,3 +379,16 @@ def test_live_run_path_needs_request_a(capsys):
     with pytest.raises(SystemExit):
         live_run.main(["--path", "B", "--request", "N1"])
     assert "--path B" in capsys.readouterr().err
+
+
+def test_system_lists_every_action_with_open_condition(pack):
+    """System의 "도구 전체와 열리는 조건" 절은 spec에서 생성한다. Pack 값은 넣지 않는다 (A.21 p7)."""
+    catalog = prompt.tool_catalog()
+    system = prompt.SYSTEM.format(goal="g")
+    assert catalog in system
+    for name, model in prompt.spec.ACTIONS.items():
+        assert model.OPENS and f"- {name}: " in catalog and model.OPENS in catalog
+    ids = [r.resource_id for r in pack.resources] + [r.rule_id for r in pack.rules]
+    ids += [*pack.work_types, *(t.task_id for t in pack.tasks)]
+    assert not [i for i in ids if len(i) >= 3 and i in catalog]
+    assert "조회·확인으로 열 수 있는 대안" in system
