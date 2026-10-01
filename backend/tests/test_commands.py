@@ -395,11 +395,12 @@ def test_event_scope_hold_snapshot_and_roles(seeded):
     assert _event(seeded, "rep-4", actor="supervisor").status == "APPLIED"
 
 
-def test_hold_release_no_change_only(seeded):
+def test_hold_release_no_change_and_fact_not_confirmed(seeded):
     hold_id = _event(seeded).result_refs["hold_id"]
     ctx = _site(seeded).context_version
     assert _release(seeded, hold_id, expected=ctx - 1).reason_codes == ("STALE_CONTEXT",)
-    assert _release(seeded, hold_id, "FACT_CONFIRMED").reason_codes == ("RESOLUTION_NOT_SUPPORTED",)
+    # 사실 수정이 확정되지 않았으면 FACT_CONFIRMED 해제는 불가 (A.25 4)
+    assert _release(seeded, hold_id, "FACT_CONFIRMED").reason_codes == ("FACT_NOT_CONFIRMED",)
     assert _release(seeded, "hold_nope").reason_codes == ("HOLD_NOT_FOUND",)
     out = _release(seeded, hold_id)
     assert out.status == "APPLIED" and out.context_version == ctx + 1

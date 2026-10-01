@@ -10,8 +10,9 @@ from typing import Any
 
 from app.agents.observe import Observation, budget_remaining, last_guard, recent_steps
 from app.agents.specs import coordination as spec
-from app.domain.models import Assignment, Task
+from app.domain.models import Assignment
 from app.packs.loader import LoadedPack
+from app.rules.engine import separation_links
 from app.store.repos.consultations import candidate_state, consultation_view
 from app.store.repos.messages import list_change_requests, list_run_messages
 from app.store.repos.plans import get_plan
@@ -71,23 +72,6 @@ def _items(conn: sqlite3.Connection, pack: LoadedPack, run_id: str, candidate_id
     ]
 
 
-def linked_by_separation(pack: LoadedPack, x: Task, y: Task) -> list[str]:
-    """두 작업을 잇는 SEPARATION Rule ID (hazard 쌍 ∧ 구역 관계 ∈ relations, 어느 방향이든)."""
-    out = []
-    for rule in pack.rules:
-        if rule.type != "SEPARATION":
-            continue
-        for a, b in ((x, y), (y, x)):
-            if (
-                rule.hazard_a in a.hazard_tags
-                and rule.hazard_b in b.hazard_tags
-                and pack.rel(a.zone_id, b.zone_id) in rule.relations
-            ):
-                out.append(rule.rule_id)
-                break
-    return out
-
-
 def notice_targets(
     conn: sqlite3.Connection, pack: LoadedPack, plan_revision: int
 ) -> list[dict[str, Any]]:
@@ -120,7 +104,7 @@ def notice_targets(
         for other in placed:
             if other.task_id == tid or other.task_id in changed:
                 continue
-            for rule_id in linked_by_separation(pack, tasks[tid], tasks[other.task_id]):
+            for rule_id in separation_links(pack, tasks[tid], tasks[other.task_id]):
                 add(
                     other.task_id,
                     {

@@ -5,6 +5,8 @@
 """
 
 from collections.abc import Sequence
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 Intervals = Sequence[tuple[int, int]] | Sequence[Sequence[int]]
 
@@ -44,3 +46,13 @@ def work_delay(base_start: int, start: int, work_intervals: Intervals) -> int:
     달력 분 지연(§7 목적함수)은 max(0, start − base_start)다.
     """
     return work_minutes(base_start, start, work_intervals) if start > base_start else 0
+
+
+WEEKDAYS = "월화수목금토일"
+
+
+def local_clock(horizon_start_utc: str, timezone: str, minute: int) -> str:
+    """Horizon 원점 기준 분 → 현장 시각 "MM/DD(요일) HH:MM" (A.25: 분 변환 실수를 알아보게)."""
+    origin = datetime.fromisoformat(horizon_start_utc).astimezone(ZoneInfo(timezone))
+    t = origin + timedelta(minutes=minute)
+    return f"{t:%m/%d}({WEEKDAYS[t.weekday()]}) {t:%H:%M}"

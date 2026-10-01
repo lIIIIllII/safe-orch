@@ -556,5 +556,5 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
         "CONFIRMATION",
         "QUESTION",
     ]
-    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0}
+    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0}
     assert (r["run_status"], r["end_reason"]) == ("SUCCEEDED", "COMMITTED:1")

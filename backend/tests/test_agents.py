@@ -320,7 +320,7 @@ def test_t51_error_run_can_continue_but_terminal_cannot(with_a):
 def test_registry_binds_replanning_spec_prompt_observer_executor():
     from app.agents.registry import BINDINGS
 
-    assert sorted(BINDINGS) == ["COORDINATION", "REPLANNING"]  # A.24
+    assert sorted(BINDINGS) == ["COORDINATION", "EVENT_RESPONSE", "REPLANNING"]  # A.24·A.25
     assert all(t == b.spec.agent_type for t, b in BINDINGS.items())
     binding = BINDINGS["REPLANNING"]
     assert binding.spec.agent_type == spec.AGENT_TYPE == "REPLANNING"
@@ -335,6 +335,7 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
     assert binding.prompt.PROMPT_VERSION == "replanning-p8"
     assert runtime.exec_contract_version("REPLANNING") == "replanning-d5"
     assert runtime.exec_contract_version("COORDINATION") == "coordination-a24"
+    assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-a25"
     assert runtime.exec_contract_version("INTAKE") == "AGENT_TYPE_NOT_REGISTERED"
 
 

@@ -165,6 +165,9 @@ def conflicts(w: World, tasks: list[T]) -> list[tuple[str, tuple[str, ...]]]:
     out = []
     for t in tasks:
         s, _ = base(t)
+        # 사실 수정(earliest_start 지연) 뒤 기준 위치가 시간창 밖이면 WINDOW (A.25)
+        if s < t.es or s > t.ls or s + t.d > t.le:
+            out.append(("WINDOW", (t.id,)))
         if w.cal is not None and not any(lo <= s and s + t.d <= hi for lo, hi in w.cal):
             out.append(("CALENDAR", (t.id,)))
     for i, x in enumerate(tasks):
@@ -391,6 +394,47 @@ def expected_try(
     return expected(w, fixed, replace(req, mr=True), try_res, ("L0",))["L0"]
 
 
+def expected_fact(
+    w: World, world: list[T], task_id: str, new_es: int, levels: tuple[str, ...] = ("L0",)
+) -> dict[str, dict[str, Any]]:
+    """사실 수정(작업의 earliest_start → new_es) 뒤 재계획 기대값 (Gamma·Delta, A.25).
+
+    acting_unit = 그 작업의 Unit, 주 충돌 = 그 작업을 포함한 첫 충돌(Hold 해제 RECHECK와 같다).
+    """
+    tasks = sorted(
+        (replace(t, es=new_es) if t.id == task_id else t for t in world), key=lambda t: t.id
+    )
+    by_id = {t.id: t for t in tasks}
+    primary = next((c for c in conflicts(w, tasks) if task_id in c[1]), None)
+    if primary is None:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for level in levels:
+        ax = axes(scope(tasks, primary[1], by_id[task_id].unit, level), {})
+        status, changed, delay, sol = cpsat(w, tasks, ax)
+        b = brute(w, tasks, ax)
+        if status != b[0] or (changed, delay) != b[1:3]:
+            raise SystemExit(f"사실 수정 {task_id}={new_es}: CP-SAT와 전수 열거가 다르다")
+        moved = {k: [s, r] for k, (s, r) in (sol or {}).items() if (s, r) != base(by_id[k])}
+        out[level] = {
+            "conflict": primary,
+            "status": status,
+            "changed": changed,
+            "delay": delay,
+            "work_delay": None
+            if sol is None
+            else sum(w.work_minutes(base(by_id[k])[0], s) for k, (s, _) in moved.items()),
+            "moved": moved if sol is not None else None,
+        }
+    return out
+
+
+def r1_world(w: World, fixture: list[T], a: T) -> list[T]:
+    """기본안 A·B의 R1(Beta 확정) 세계: A 10:00 SITE-CR-01, C 그대로 (§15 Scene 3)."""
+    beta = expected_try(w, fixture, a, {a.id: ["SITE-CR-01"]}, {"C"})
+    return advance(fixture, replace(a, mr=True), beta)
+
+
 def advance(others: list[T], req: T, level_result: dict[str, Any] | None) -> list[T]:
     """다음 요청의 기준 세계: 확정했으면 그 해를 반영하고, 아니면 요청이 기준 위치에 READY로 남는다."""
     if not level_result or not level_result.get("moved"):
@@ -433,6 +477,18 @@ def main() -> None:
         print(d.id)
         world = apply(world, d, solve_request(w, world, d, levels=("L0",))["L0"][3])
     print("최종 충돌:", conflicts(w, sorted(world, key=lambda t: t.id)))
+
+    print("\nScene 4 사실 수정 (R1 = Beta 확정 기준, A.25):")
+    r1 = r1_world(w, fixture, a)
+    for name, new_es in (("Gamma", 60), ("Delta", 75)):
+        e = next(t for t in r1 if t.id == "E")
+        r = expected_fact(w, r1, "E", new_es)["L0"]
+        moved = ", ".join(f"{k} → {w.clock(v[0])}({v[0]})" for k, v in r["moved"].items())
+        print(
+            f"  {name}: E earliest_start {w.clock(e.es)}({e.es}) → {w.clock(new_es)}({new_es})"
+            f" 충돌 {r['conflict']} L0 {r['status']} 변경 {r['changed']} 지연 {r['delay']}"
+            f"/근무 {r['work_delay']} [{moved}] 전수 일치"
+        )
 
 
 if __name__ == "__main__":

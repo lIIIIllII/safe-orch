@@ -142,6 +142,34 @@ def end_candidate_runs(
     return [rid for rid in ids if end_case_run(tx, pack, rid, status, end_reason)]
 
 
+def supervisor_actor(conn: sqlite3.Connection, pack: LoadedPack) -> Any:
+    """actor_id가 가장 작은 SUPERVISOR (Coordination·Event Response의 acting_unit, 사실 수정 확인자)."""
+    found = sorted(
+        (a for a in list_actors(conn, pack.site_id) if "SUPERVISOR" in a.roles),
+        key=lambda a: a.actor_id,
+    )
+    return found[0] if found else None
+
+
+def register_event_response(
+    tx: sqlite3.Connection, pack: LoadedPack, event_id: str, hold_id: str
+) -> bool:
+    """Event Response START_RUN (A.25 1). Event 접수 tx 안에서 부른다(I-18). Event마다 새 Case."""
+    supervisor = supervisor_actor(tx, pack)
+    if supervisor is None:
+        return False
+    payload = {
+        "agent_type": "EVENT_RESPONSE",
+        "event_id": event_id,
+        "hold_id": hold_id,
+        "case_id": new_id("case"),
+        "acting_unit_id": supervisor.unit_id,
+    }
+    return register_job(
+        tx, pack.site_id, "START_RUN", f"START_RUN:EVENT_RESPONSE:{event_id}", payload
+    )
+
+
 def register_coordination(
     tx: sqlite3.Connection,
     pack: LoadedPack,
@@ -156,9 +184,10 @@ def register_coordination(
     phase CONSULT(협의)·NOTICE(통지). Case는 후보 Run의 case_id를 잇고, acting_unit은 SUPERVISOR의 Unit이다
     (Pack ID를 코드에 두지 않는다). acting_actor는 없다.
     """
-    unit = next((a.unit_id for a in list_actors(tx, pack.site_id) if "SUPERVISOR" in a.roles), None)
-    if unit is None:
+    supervisor = supervisor_actor(tx, pack)
+    if supervisor is None:
         return False
+    unit = supervisor.unit_id
     payload = {
         "agent_type": "COORDINATION",
         "phase": phase,

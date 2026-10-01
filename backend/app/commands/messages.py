@@ -13,11 +13,12 @@ from typing import Any, Literal
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
 from app.domain.ids import new_id
-from app.domain.models import Consent, FeedbackConstraint, Movable
+from app.domain.models import Consent, FeedbackConstraint, FieldRecord, Movable
 from app.packs.loader import LoadedPack
-from app.store.repos.cases import copy_consents, end_candidate_runs, wake_run
+from app.store.repos.cases import copy_consents, end_candidate_runs, end_case_run, wake_run
 from app.store.repos.consents import insert_consent
 from app.store.repos.decisions import insert_constraint
+from app.store.repos.events import get_hold
 from app.store.repos.messages import (
     decide_proposal,
     get_message,
@@ -114,6 +115,16 @@ def _answer(
         if task is None or task.revision != proposal["base_task_revision"]:
             r.reject("STALE_PROPOSAL")
             return r
+        if proposal["type"] == "FACT_UPDATE" and decision == "ACCEPT":
+            # 사실 수정: 현재 값 == old_value이고 그 Event의 Hold가 아직 걸려 있어야 한다 (A.25 3)
+            payload = proposal["payload"]
+            if getattr(task, payload["field"]) != payload["old_value"]:
+                r.reject("STALE_PROPOSAL")
+                return r
+            hold = get_hold(tx, site_id, payload.get("hold_id") or "")
+            if hold is None or hold["status"] != "ACTIVE":
+                r.reject("HOLD_NOT_ACTIVE")
+                return r
         # ⑥ values는 allowed_values의 비어 있지 않은 부분집합
         allowed = list(proposal["payload"].get("allowed_values", []))
         if (
@@ -132,7 +143,18 @@ def _answer(
     chosen = [v for v in allowed if values is None or v in values] if decision == "ACCEPT" else []
     context_version = ctx.site.context_version
     constraint = None
-    if proposal is not None and decision == "ACCEPT" and proposal["type"] == "FEEDBACK_CONSTRAINT":
+    fact = None
+    if proposal is not None and decision == "ACCEPT" and proposal["type"] == "FACT_UPDATE":
+        assert task is not None
+        fact = _confirm_fact_update(tx, ctx, task, proposal)
+        context_version = fact.pop("context_version")
+        decide_proposal(
+            tx, proposal["proposal_id"], "CONFIRMED", ctx.actor_id, context_version, fact
+        )
+        refs.update(fact)
+    elif (
+        proposal is not None and decision == "ACCEPT" and proposal["type"] == "FEEDBACK_CONSTRAINT"
+    ):
         constraint = _confirm_constraint(tx, ctx, proposal)
         context_version = constraint.pop("context_version")
         decide_proposal(
@@ -156,6 +178,16 @@ def _answer(
         _reply_record(ctx, decision, chosen, comment),
         context_version,
     )
+    if fact is not None:
+        # 사실 수정 확정: Event Response Run은 할 일을 마쳤다(도메인 사실에 의한 종료, A.25 3)
+        assert proposal is not None
+        end_case_run(
+            tx,
+            ctx.pack,
+            message["run_id"],
+            "SUCCEEDED",
+            f"FACT_CONFIRMED:{proposal['proposal_id']}",
+        )
     if constraint is not None:
         # 제약 확정: 후보가 무효가 되므로 협의 Run을 끝내고 후보의 Replanning Run을 깨운다 (A.24 5·6)
         assert proposal is not None
@@ -177,6 +209,41 @@ def _answer(
     r.refs = {**refs, "run_id": message["run_id"], "woke": woke}
     r.audit_reason = decision
     return r
+
+
+def _confirm_fact_update(
+    tx: sqlite3.Connection, ctx: CommandContext, task: Any, proposal: dict[str, Any]
+) -> dict[str, Any]:
+    """사실 수정 확정 (§18.2.3, A.25 3). 새 task revision(earliest_start = 새 값) → Context +1.
+
+    시간창이 바뀌었으므로 TIME Consent는 복사하지 않고 RESOURCE만 복사한다(A.14 C1).
+    critical field window의 확인 값도 새 값으로 바꾼다(출처 proposal:<id>, Supervisor 확인. 바꾸지 않으면
+    Validator C11이 CONFIRMED_VALUE_MISMATCH로 막는다, A.8·A.25).
+    """
+    payload = proposal["payload"]
+    revision = task.revision + 1
+    fields = dict(task.fields)
+    if "window" in fields:
+        window = {**fields["window"].value, payload["field"]: payload["new_value"]}
+        fields["window"] = FieldRecord(
+            value=window, status="CONFIRMED", source_ref=f"proposal:{proposal['proposal_id']}"
+        )
+    insert_task_revision(
+        tx,
+        ctx.site_id,
+        task.model_copy(
+            update={"revision": revision, payload["field"]: payload["new_value"], "fields": fields}
+        ),
+    )
+    context_version = bump_context_version(tx, ctx.site_id)
+    consent_ids = copy_consents(
+        tx, ctx.site_id, task.task_id, task.revision, revision, context_version, ("RESOURCE",)
+    )
+    return {
+        "task_revision": revision,
+        "consent_ids": consent_ids,
+        "context_version": context_version,
+    }
 
 
 def _confirm_constraint(

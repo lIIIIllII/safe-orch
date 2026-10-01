@@ -132,6 +132,23 @@ def _separation(
     return out
 
 
+def separation_links(pack: LoadedPack, x: Task, y: Task) -> list[str]:
+    """두 작업을 잇는 SEPARATION Rule ID (hazard 쌍 ∧ 구역 관계 ∈ relations, 어느 방향이든, A.24·A.25)."""
+    out = []
+    for rule in pack.rules:
+        if rule.type != "SEPARATION":
+            continue
+        for a, b in ((x, y), (y, x)):
+            if (
+                rule.hazard_a in a.hazard_tags
+                and rule.hazard_b in b.hazard_tags
+                and pack.rel(a.zone_id, b.zone_id) in rule.relations
+            ):
+                out.append(rule.rule_id)
+                break
+    return out
+
+
 def detect_conflicts(
     snapshot: Snapshot, assignments: Iterable[Assignment], pack: LoadedPack
 ) -> list[Conflict]:

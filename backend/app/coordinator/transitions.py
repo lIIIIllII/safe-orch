@@ -20,7 +20,7 @@ from app.store import db
 from app.store.repos.cases import claim_resume, end_case_run, register_coordination, wake_run
 from app.store.repos.consultations import candidate_state, consultation_view
 from app.store.repos.dispatch import job_exists, mark_done, register_job, set_job_run
-from app.store.repos.events import list_active_holds
+from app.store.repos.events import get_hold, list_active_holds
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import (
     find_reconfirm_candidate,
@@ -236,6 +236,10 @@ def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, 
     """START_RUN 처리 시점 재확인 (§11.5, A.16·A.24 2). agent_type별로 다르다."""
     site = get_site(tx, pack.site_id)
     assert site is not None
+    if payload["agent_type"] == "EVENT_RESPONSE":
+        # 그 Event의 Hold가 아직 걸려 있을 때만 (A.25 1). 열린 Case와 무관하다.
+        hold = get_hold(tx, pack.site_id, payload.get("hold_id") or "")
+        return hold is not None and hold["status"] == "ACTIVE"
     if payload["agent_type"] != "COORDINATION":
         return (
             not list_active_holds(tx, pack.site_id)

@@ -57,11 +57,21 @@ class ScriptedChatModel:
 class Router:
     """agent_type별 응답 큐 (부록 A.24). 한 model_factory로 Replanning·Coordination Run을 함께 돌린다.
 
-    모델은 bind된 도구 이름으로 어느 Agent인지 안다(REPORT_TO_SUPERVISOR는 Coordination에만 있다).
+    모델은 bind된 도구 이름으로 어느 Agent인지 안다: REPORT_TO_SUPERVISOR는 Coordination에만,
+    ESCALATE(그 밖)는 Event Response에만 있다(Replanning은 ESCALATE_NO_SOLUTION, A.25).
     """
 
-    def __init__(self, replanning: Sequence[Reply] = (), coordination: Sequence[Reply] = ()):
-        self.queues = {"REPLANNING": list(replanning), "COORDINATION": list(coordination)}
+    def __init__(
+        self,
+        replanning: Sequence[Reply] = (),
+        coordination: Sequence[Reply] = (),
+        event_response: Sequence[Reply] = (),
+    ):
+        self.queues = {
+            "REPLANNING": list(replanning),
+            "COORDINATION": list(coordination),
+            "EVENT_RESPONSE": list(event_response),
+        }
         self.models: list[RoutedChatModel] = []
 
     def factory(self) -> Callable[[], "RoutedChatModel"]:
@@ -85,9 +95,13 @@ class RoutedChatModel(ScriptedChatModel):
         tools, kwargs = self._bound
         self.calls.append({"tools": tools, "kwargs": kwargs, "messages": list(messages)})
         names = {t["function"]["name"] for t in tools}
-        queue = self.router.queues[
-            "COORDINATION" if "REPORT_TO_SUPERVISOR" in names else "REPLANNING"
-        ]
+        if "REPORT_TO_SUPERVISOR" in names:
+            kind = "COORDINATION"
+        elif "ESCALATE" in names:
+            kind = "EVENT_RESPONSE"
+        else:
+            kind = "REPLANNING"
+        queue = self.router.queues[kind]
         if not queue:
             raise RuntimeError("script exhausted")
         reply = queue.pop(0)

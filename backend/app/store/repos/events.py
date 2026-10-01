@@ -97,3 +97,10 @@ def release_hold(
     )
     if cur.rowcount != 1:
         raise LookupError(f"hold {hold_id} is not ACTIVE")
+
+
+def get_event(conn: sqlite3.Connection, site_id: str, event_id: str) -> dict[str, Any] | None:
+    found = rows(
+        conn, "SELECT * FROM event WHERE site_id = ? AND event_id = ?", (site_id, event_id)
+    )
+    return found[0] if found else None

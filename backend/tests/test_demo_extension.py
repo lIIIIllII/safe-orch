@@ -28,6 +28,7 @@ from app.domain.calendar import (
     work_minutes,
 )
 from app.main import app
+from app.packs.loader import pack_dir
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
 from app.solver.search_spec import build_search_spec
@@ -36,6 +37,7 @@ from app.store.repos.records import list_validations
 from app.store.repos.runs import get_run
 from app.store.repos.site import get_site
 from app.store.repos.tasks import list_current_tasks
+from scripts import verify_demo_values as verify
 
 SITE = "YARD-01"
 CAL = ((0, 480), (1440, 1920), (2880, 3360))
@@ -151,6 +153,21 @@ def test_section15_values_on_extended_fixture(with_a):
         60,
         "SITE-CR-01",
     )
+
+
+@pytest.mark.parametrize(("new_es", "start", "delay"), [(60, 60, 15), (75, 75, 30)])
+def test_gamma_delta_expected_values(new_es, start, delay):
+    """Scene 4 사실 수정: R1(Beta) + E earliest_start → Gamma(10:00)·Delta(10:15), 변경 1 (A.25)."""
+    w, fixture, a, _ = verify.load(pack_dir("shipyard"))
+    r1 = verify.r1_world(w, fixture, a)
+    assert {t.id: (t.start, t.res) for t in r1 if t.id in ("A", "C")} == {
+        "A": (60, "SITE-CR-01"),
+        "C": (60, "A-CR-01"),
+    }
+    r = verify.expected_fact(w, r1, "E", new_es)["L0"]
+    assert r["conflict"] == ("WINDOW", ("E",))
+    assert (r["status"], r["changed"], r["delay"], r["work_delay"]) == ("OPTIMAL", 1, delay, delay)
+    assert r["moved"] == {"E": [start, None]}
 
 
 # ── D 표: N1–N5 (요청 하나씩, R0 기준) ─────────────────────────

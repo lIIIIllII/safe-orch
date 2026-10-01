@@ -273,3 +273,22 @@ def list_run_messages(conn: sqlite3.Connection, run_id: str) -> list[dict[str, A
     for r in found:
         r["reply"] = loads(r["reply"])
     return found
+
+
+def list_fact_updates(
+    conn: sqlite3.Connection,
+    site_id: str,
+    *,
+    event_id: str | None = None,
+    run_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """FACT_UPDATE 제안 (Event 또는 Run 기준, A.25). payload에 event_id·old_value·new_value가 있다."""
+    sql = "SELECT * FROM proposal WHERE site_id = ? AND type = 'FACT_UPDATE'"
+    params: list[Any] = [site_id]
+    if event_id is not None:
+        sql += " AND json_extract(payload, '$.event_id') = ?"
+        params.append(event_id)
+    if run_id is not None:
+        sql += " AND run_id = ?"
+        params.append(run_id)
+    return [_proposal(r) for r in rows(conn, sql + " ORDER BY rowid", tuple(params))]

@@ -141,7 +141,7 @@ def _alpha_consulting(pack):
     _submit_a(pack)
     router = Router(replanning=[solve("L0"), solve("L1")], coordination=[_request_c(), _wait()])
     run_until_idle(pack, model_factory=router.factory())
-    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0}
+    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0}
     [rp] = _runs("REPLANNING")
     [coord] = _runs("COORDINATION")
     return rp, coord

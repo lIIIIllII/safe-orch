@@ -161,3 +161,15 @@ def coordination_on(monkeypatch):
     yield
     monkeypatch.delenv("COORDINATION_ENABLED")
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def event_response_on(monkeypatch):
+    """EVENT_RESPONSE_ENABLED를 켠다(부록 A.25). 설정 캐시를 앞뒤로 비운다."""
+    from app.config import get_settings
+
+    monkeypatch.setenv("EVENT_RESPONSE_ENABLED", "true")
+    get_settings.cache_clear()
+    yield
+    monkeypatch.delenv("EVENT_RESPONSE_ENABLED")
+    get_settings.cache_clear()

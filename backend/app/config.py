@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # PASS 후보에 동의 대기 항목이 있으면 Coordination이 담당자와 협의한다(기본안 A, 부록 A.24).
     # 꺼져 있으면 지금처럼 Supervisor 검토 대기(기본안 B).
     coordination_enabled: bool = False
+    # 지연 신고(DELAY)를 접수하면 Event Response가 대상 작업·사실 수정안을 찾는다(부록 A.25).
+    # 꺼져 있으면 지금처럼 Hold만 걸고 Supervisor가 처리한다(Scene 4).
+    event_response_enabled: bool = False
 
     @field_validator("openai_temperature", "openai_seed", "openai_reasoning_effort", mode="before")
     @classmethod
