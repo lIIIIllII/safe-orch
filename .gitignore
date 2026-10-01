@@ -10,3 +10,4 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 data/live_runs/
+.claude/settings.local.json
