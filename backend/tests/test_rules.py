@@ -85,8 +85,9 @@ def test_snapshot_content(with_a):
     assert snap.snapshot_id.startswith("snap_")
     assert snap.snapshot_hash == canonical_hash(content)
     assert set(content) == {
-        "site_id", "pack_hash", "horizon_minutes", "context_version", "plan_revision", "tasks",
-        "resources", "zones", "zone_relations", "plan", "holds", "constraints", "consents",
+        "site_id", "pack_hash", "horizon_minutes", "work_intervals", "context_version",
+        "plan_revision", "tasks", "resources", "zones", "zone_relations", "plan", "holds",
+        "constraints", "consents",
     }  # fmt: skip
     assert (content["site_id"], content["context_version"], content["plan_revision"]) == (
         "YARD-01",
@@ -94,12 +95,17 @@ def test_snapshot_content(with_a):
         0,
     )
     assert content["pack_hash"] == with_a.pack_hash
-    assert [t["task_id"] for t in content["tasks"]] == ["A", "B", "C", "D", "E"]
+    assert content["work_intervals"] == [[0, 480], [1440, 1920], [2880, 3360]]
+    assert [t["task_id"] for t in content["tasks"]] == [
+        "A", "B", "C", "D", "E", "K", "M", "P", "Q", "W",
+    ]  # fmt: skip
     assert next(t for t in content["tasks"] if t["task_id"] == "E")["hazard_tags"] == ["FLAMMABLE"]
-    assert content["zones"] == ["B", "C", "D", "D2"]
+    assert content["zones"] == ["B", "C", "D", "D2", "F", "G", "G2", "H"]
     assert [(r["zone_a"], r["zone_b"]) for r in content["zone_relations"]] == [
         ("D", "D2"),
         ("D2", "D"),
+        ("G", "G2"),
+        ("G2", "G"),
     ]
     assert content["plan"]["plan_revision"] == 0
     assert (content["holds"], content["constraints"], content["consents"]) == ([], [], [])
@@ -124,7 +130,7 @@ def test_snapshot_uses_current_ready_revision_only(with_a):
     ).model_copy(update={"lifecycle": "NEEDS_INFO"})
     add_task(with_a, e2)
     snap = take_snapshot(with_a)
-    assert [t.task_id for t in snap.facts().tasks] == ["A", "B", "C", "D"]
+    assert [t.task_id for t in snap.facts().tasks] == ["A", "B", "C", "D", "K", "M", "P", "Q", "W"]
 
 
 def _e_values(pack):
@@ -208,12 +214,34 @@ def test_basic_duration_window_horizon(with_a):
     assert ("WINDOW", ("A",)) in _ids(
         detect_conflicts(snap, _replace(base, _asg("A", 61, 91, "A-CR-01")), with_a)
     )
-    # Horizon 180 초과 (시간창도 벗어남)
-    wide = _retask(snap, "E", latest_start=170, latest_end=200)
-    asg = _replace(wide.facts().check_assignments(), _asg("E", 160, 190))
-    assert ("WINDOW", ("E",)) in _ids(detect_conflicts(wide, asg, with_a))
-    asg = _replace(wide.facts().check_assignments(), _asg("E", 150, 180))
-    assert ("WINDOW", ("E",)) not in _ids(detect_conflicts(wide, asg, with_a))
+    # Horizon 3360 초과 (시간창은 안). CALENDAR도 따로 보고한다 (A.20)
+    wide = _retask(snap, "E", latest_start=3350, latest_end=3400)
+    asg = _replace(wide.facts().check_assignments(), _asg("E", 3340, 3370))
+    found = _ids(detect_conflicts(wide, asg, with_a))
+    assert ("WINDOW", ("E",)) in found and ("CALENDAR", ("E",)) in found
+    asg = _replace(wide.facts().check_assignments(), _asg("E", 3330, 3360))
+    found = _ids(detect_conflicts(wide, asg, with_a))
+    assert ("WINDOW", ("E",)) not in found and ("CALENDAR", ("E",)) not in found
+
+
+@pytest.mark.parametrize(
+    ("start", "violates"),
+    [
+        (450, False),  # 16:30–17:00: 종료 = 근무 종료는 안 ([start, end))
+        (451, True),  # 17:01 종료
+        (480, True),  # 17:00–17:30 야간
+        (1430, True),  # 다음 날 08:50–09:20
+        (1440, False),  # 다음 날 09:00
+        (470, True),  # 밤을 넘김 (1440 안으로 들어가지 않음)
+    ],
+)
+def test_calendar_one_work_interval(with_a, start, violates):
+    """작업 [start, end)는 근무 구간 하나 안 (기본 제약 CALENDAR, A.20)."""
+    snap = _retask(take_snapshot(with_a), "E", latest_start=2000, latest_end=2100)
+    asg = _replace(snap.facts().check_assignments(), _asg("E", start, start + 30))
+    found = _ids(detect_conflicts(snap, asg, with_a))
+    assert (("CALENDAR", ("E",)) in found) == violates
+    assert ("WINDOW", ("E",)) not in found
 
 
 def test_basic_resource_missing_type_auth_availability(with_a):

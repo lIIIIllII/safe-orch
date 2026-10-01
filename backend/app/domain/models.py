@@ -28,6 +28,7 @@ class Frozen(BaseModel):
 
 class WorkType(Frozen):
     work_type: str
+    display_name: str = Field(min_length=1)  # 화면 표시용 (부록 A.20)
     hazard_tags: tuple[str, ...] = Field(min_length=1)
     critical_fields: tuple[str, ...]
 
@@ -35,6 +36,7 @@ class WorkType(Frozen):
 class Rule(Frozen):
     rule_id: str
     type: Literal["SEPARATION", "CAPACITY"]
+    display_name: str = Field(min_length=1)  # 화면 표시용 (부록 A.20)
     hazard_a: str | None = None
     hazard_b: str | None = None
     relations: tuple[Relation, ...] = ()
@@ -232,6 +234,7 @@ class SnapshotContent(Frozen):
     site_id: str
     pack_hash: str
     horizon_minutes: int = Field(gt=0)
+    work_intervals: tuple[tuple[int, int], ...] = Field(min_length=1)  # 근무 달력 (A.20)
     context_version: int = Field(ge=0)
     plan_revision: int = Field(ge=0)
     tasks: tuple[Task, ...]

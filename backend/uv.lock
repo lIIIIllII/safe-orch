@@ -1295,6 +1295,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1315,6 +1316,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "tzdata", specifier = ">=2026.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]
 

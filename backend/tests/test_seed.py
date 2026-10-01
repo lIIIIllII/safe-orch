@@ -25,7 +25,7 @@ def test_site(seeded):
         "site_id": "YARD-01",
         "pack_hash": seeded.pack_hash,
         "horizon_start_utc": "2026-10-12T00:00:00Z",
-        "horizon_minutes": 180,
+        "horizon_minutes": 3360,
         "context_version": 0,
         "plan_revision": 0,
     }
@@ -52,7 +52,7 @@ def test_units_actors_zones(seeded):
         ("reporter", "Reporter", "SITE", ["REPORTER"]),
         ("supervisor", "Supervisor", "SITE", ["SUPERVISOR"]),
     ]
-    assert zones == ["B", "C", "D", "D2"]
+    assert zones == ["B", "C", "D", "D2", "F", "G", "G2", "H"]
 
 
 def test_zone_relations_adjacent_stored_both_ways(seeded):
@@ -61,6 +61,8 @@ def test_zone_relations_adjacent_stored_both_ways(seeded):
     assert [(r.zone_a, r.zone_b, r.relation) for r in rels] == [
         ("D", "D2", "ADJACENT"),
         ("D2", "D", "ADJACENT"),
+        ("G", "G2", "ADJACENT"),
+        ("G2", "G", "ADJACENT"),
     ]
 
 
@@ -74,7 +76,7 @@ def test_resources(seeded):
             "owner_unit_id": "UA",
             "allowed_unit_ids": ("UA",),
             "capacity": 1,
-            "available_intervals": ((0, 180),),
+            "available_intervals": ((0, 3360),),
         },
         {
             "resource_id": "B-CR-01",
@@ -82,7 +84,7 @@ def test_resources(seeded):
             "owner_unit_id": "UB",
             "allowed_unit_ids": ("UB",),
             "capacity": 1,
-            "available_intervals": ((0, 180),),
+            "available_intervals": ((0, 3360),),
         },
         {
             "resource_id": "SITE-CR-01",
@@ -90,7 +92,15 @@ def test_resources(seeded):
             "owner_unit_id": "SITE",
             "allowed_unit_ids": ("UA",),
             "capacity": 1,
-            "available_intervals": ((0, 180),),
+            "available_intervals": ((0, 3360),),
+        },
+        {
+            "resource_id": "SITE-GC-01",
+            "resource_type": "GANTRY",
+            "owner_unit_id": "SITE",
+            "allowed_unit_ids": ("UA", "UB"),
+            "capacity": 1,
+            "available_intervals": ((0, 3360),),
         },
     ]
 
@@ -106,6 +116,17 @@ EXPECTED_TASKS = {
           (False, False)),
     "E": ("UB", "planner_b", "PAINTING", ("FLAMMABLE",), "D2", 30, 45, 120, 150, None, None,
           (True, False)),
+    # 시연 확장 (부록 A.20): 모두 고정
+    "K": ("UB", "planner_b", "LIFTING", ("LIFTING",), "F", 120, 1440, 1440, 1560, "GANTRY",
+          "SITE-GC-01", (False, False)),
+    "M": ("UA", "foreman_a2", "WORK_BELOW", ("WORK_BELOW",), "H", 90, 2910, 2910, 3000, None,
+          None, (False, False)),
+    "P": ("UB", "planner_b", "PAINTING", ("FLAMMABLE",), "G2", 60, 1500, 1500, 1560, None, None,
+          (False, False)),
+    "Q": ("UA", "foreman_a2", "LIFTING", ("LIFTING",), "F", 60, 2910, 2910, 2970, "GANTRY",
+          "SITE-GC-01", (False, False)),
+    "W": ("UB", "planner_b", "PAINTING", ("FLAMMABLE",), "G2", 240, 1680, 1680, 1920, None, None,
+          (False, False)),
 }
 # fmt: on
 
@@ -113,7 +134,7 @@ EXPECTED_TASKS = {
 def test_tasks_match_a5_table(seeded):
     with db.read() as conn:
         tasks = list_current_tasks(conn, "YARD-01", seeded)
-    assert [t.task_id for t in tasks] == ["B", "C", "D", "E"]
+    assert [t.task_id for t in tasks] == ["B", "C", "D", "E", "K", "M", "P", "Q", "W"]
     for t in tasks:
         assert (
             t.unit_id,
@@ -179,6 +200,11 @@ def test_plan_r0(seeded):
         ("C", 60, 90, "A-CR-01"),
         ("D", 0, 30, None),
         ("E", 45, 75, None),
+        ("K", 1440, 1560, "SITE-GC-01"),
+        ("P", 1500, 1560, None),
+        ("W", 1680, 1920, None),
+        ("Q", 2910, 2970, "SITE-GC-01"),
+        ("M", 2910, 3000, None),
     ]
 
 

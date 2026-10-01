@@ -6,12 +6,14 @@
 
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from app.config import REPO_ROOT
+from app.domain.calendar import fits_work_interval
 from app.domain.canonical import canonical_hash
 from app.domain.models import (
     Actor,
@@ -48,6 +50,8 @@ class NewTaskRequest(Frozen):
     """scenario.yaml의 신규 작업 요청. task로 seed하지 않는다."""
 
     task_id: str
+    # 시연값 이름 (부록 A.20). 폼 본문이 아니므로 model_dump에서 뺀다(작업 값으로 쓰는 곳이 있다).
+    label: str = Field(min_length=1, exclude=True)
     unit_id: str
     owner_actor_id: str
     work_type: str
@@ -63,14 +67,41 @@ class NewTaskRequest(Frozen):
     requested: Assignment
 
 
+class DemoRequest(Frozen):
+    """scenario.yaml의 시연 요청 (부록 A.20). 작업 요청 폼 본문 + 요청자. task로 seed하지 않는다."""
+
+    task_id: str
+    label: str = Field(min_length=1)
+    requester: str  # actor_id. Unit·담당자는 폼처럼 요청자로 정해진다
+    work_type: str
+    zone_id: str
+    duration: int = Field(gt=0)
+    earliest_start: int
+    latest_start: int
+    latest_end: int
+    required_resource_type: str | None = None
+    requested_resource_id: str | None = None
+
+
+class DemoEvent(Frozen):
+    """scenario.yaml의 지연 신고 시연 문구 (부록 A.20)."""
+
+    label: str = Field(min_length=1)
+    event_type: Literal["DELAY", "OTHER"]
+    text: str = Field(min_length=1)
+    target_task_id: str | None = None
+
+
 class LoadedPack(Frozen):
     name: str
     pack_hash: str
     work_types: dict[str, WorkType]
     rules: tuple[Rule, ...]
     site_id: str
+    timezone: str  # IANA (부록 A.20)
     horizon_start_utc: str
     horizon_minutes: int
+    work_intervals: tuple[tuple[int, int], ...]  # 근무 달력 (부록 A.20)
     units: tuple[WorkUnit, ...]
     actors: tuple[Actor, ...]
     zones: tuple[Zone, ...]
@@ -79,6 +110,8 @@ class LoadedPack(Frozen):
     tasks: tuple[Task, ...]  # plan_r0 기존 작업, revision 1
     plan_r0: tuple[Assignment, ...]
     new_task: NewTaskRequest
+    demo_requests: tuple[DemoRequest, ...] = ()
+    demo_events: tuple[DemoEvent, ...] = ()
 
     def hazard_tags(self, work_type: str) -> tuple[str, ...]:
         wt = self.work_types.get(work_type)
@@ -155,6 +188,36 @@ def _model(cls: type, data: Any, where: str, reasons: list[str]) -> Any:
         return None
 
 
+def _check_intervals(
+    where: str, intervals: Any, horizon: Any, reasons: list[str]
+) -> tuple[tuple[int, int], ...]:
+    """0 ≤ lo < hi ≤ horizon, 시작 순, 겹치거나 맞닿지 않음 (부록 A.4·A.20).
+
+    판정은 "구간 하나에 포함"으로 하므로 구간 모양을 강제해 합집합 판정과 같게 한다.
+    """
+    out: list[tuple[int, int]] = []
+    prev_hi = None
+    for iv in intervals:
+        if (
+            not isinstance(iv, (list, tuple))
+            or len(iv) != 2
+            or not all(isinstance(x, int) and not isinstance(x, bool) for x in iv)
+        ):
+            reasons.append(f"{where}: {iv!r} must be [lo, hi] integer minutes")
+            continue
+        lo, hi = iv
+        if not 0 <= lo < hi or (isinstance(horizon, int) and hi > horizon):
+            reasons.append(f"{where}: [{lo}, {hi}] must satisfy 0 <= lo < hi <= {horizon}")
+        if prev_hi is not None and lo <= prev_hi:
+            reasons.append(
+                f"{where}: [{lo}, {hi}] must start after previous end {prev_hi}"
+                " (sorted, no overlap or touching)"
+            )
+        prev_hi = hi
+        out.append((lo, hi))
+    return tuple(out)
+
+
 def _duplicates(where: str, ids: list[Any], reasons: list[str]) -> None:
     for key, n in Counter(ids).items():
         if n > 1:
@@ -185,6 +248,64 @@ def confirmed_fields(
         for name in critical
         if values.get(name) is not None
     }
+
+
+def _demo_requests(
+    scen_doc: dict[str, Any],
+    work_types: dict[str, WorkType],
+    actors: list[Actor],
+    zone_ids: set[str],
+    resources: list[Resource],
+    horizon: Any,
+    work_intervals: tuple[tuple[int, int], ...],
+    reasons: list[str],
+) -> list[DemoRequest]:
+    """시연 요청을 폼 검사와 같은 기준으로 확인한다. 요청 일정은 근무 구간 안이어야 한다 (A.20)."""
+    actors_by_id = {a.actor_id: a for a in actors}
+    resources_by_id = {r.resource_id: r for r in resources}
+    out: list[DemoRequest] = []
+    items = _as_list(scen_doc.get("demo_requests"), "scenario.yaml.demo_requests", reasons)
+    for i, d in enumerate(items):
+        where = f"scenario.yaml.demo_requests[{i}]"
+        req = _model(DemoRequest, d, where, reasons)
+        if not req:
+            continue
+        out.append(req)
+        requester = actors_by_id.get(req.requester)
+        if requester is None:
+            reasons.append(f"{where}: undefined actor {req.requester!r}")
+        elif "UNIT_PLANNER" not in requester.roles:
+            reasons.append(f"{where}: requester {req.requester!r} is not UNIT_PLANNER")
+        wt = work_types.get(req.work_type)
+        if wt is None:
+            reasons.append(f"{where}: undefined work_type {req.work_type!r}")
+        elif "resource" in wt.critical_fields and (
+            req.required_resource_type is None or req.requested_resource_id is None
+        ):
+            reasons.append(f"{where}: {req.work_type} needs required_resource_type and resource")
+        if req.zone_id not in zone_ids:
+            reasons.append(f"{where}: undefined zone {req.zone_id!r}")
+        if req.requested_resource_id is not None:
+            res = resources_by_id.get(req.requested_resource_id)
+            if res is None:
+                reasons.append(f"{where}: undefined resource {req.requested_resource_id!r}")
+            else:
+                if res.resource_type != req.required_resource_type:
+                    reasons.append(f"{where}: resource type mismatch")
+                if requester is not None and requester.unit_id not in res.allowed_unit_ids:
+                    reasons.append(f"{where}: requester unit not allowed on resource")
+        end = req.earliest_start + req.duration
+        if not (
+            0 <= req.earliest_start <= req.latest_start
+            and end <= req.latest_end
+            and (not isinstance(horizon, int) or end <= horizon)
+        ):
+            reasons.append(f"{where}: invalid window")
+        elif work_intervals and not fits_work_interval(req.earliest_start, end, work_intervals):
+            reasons.append(
+                f"{where}: requested [{req.earliest_start}, {end}) outside work_intervals"
+            )
+    return out
 
 
 def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
@@ -296,6 +417,22 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
                 relations.append(ZoneRelation(zone_a=a, zone_b=b, relation=kind))
     _duplicates("site.yaml.zone_relations", [(r.zone_a, r.zone_b) for r in relations], reasons)
 
+    # timezone·근무 달력 (부록 A.20)
+    timezone = site_doc.get("timezone")
+    if not isinstance(timezone, str) or not timezone:
+        reasons.append("site.yaml: timezone missing (IANA name, e.g. Asia/Seoul)")
+    else:
+        try:
+            ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            reasons.append(f"site.yaml: unknown timezone {timezone!r}")
+    horizon = site_doc.get("horizon_minutes")
+    raw_work = site_doc.get("work_intervals")
+    if not isinstance(raw_work, list) or not raw_work:
+        reasons.append("site.yaml: work_intervals missing or empty")
+        raw_work = []
+    work_intervals = _check_intervals("site.yaml.work_intervals", raw_work, horizon, reasons)
+
     # resources
     resources: list[Resource] = []
     res_items = _as_list(site_doc.get("resources"), "site.yaml.resources", reasons)
@@ -315,19 +452,9 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
                 reasons.append(f"site.yaml.resources {r.resource_id}: undefined unit {u!r}")
     # 가용 구간: 0 ≤ lo < hi ≤ horizon, 시작 순, 겹치거나 맞닿지 않음 (부록 A.4).
     # Rule Engine은 한 구간 포함, CP-SAT은 합집합으로 판정하므로 두 판정이 같도록 강제한다.
-    horizon = site_doc.get("horizon_minutes")
     for r in resources:
         where = f"site.yaml.resources {r.resource_id}: available_intervals"
-        prev_hi = None
-        for lo, hi in r.available_intervals:
-            if not 0 <= lo < hi or (isinstance(horizon, int) and hi > horizon):
-                reasons.append(f"{where}: [{lo}, {hi}] must satisfy 0 <= lo < hi <= {horizon}")
-            if prev_hi is not None and lo <= prev_hi:
-                reasons.append(
-                    f"{where}: [{lo}, {hi}] must start after previous end {prev_hi}"
-                    " (sorted, no overlap or touching)"
-                )
-            prev_hi = hi
+        _check_intervals(where, r.available_intervals, horizon, reasons)
     resource_ids = {r.resource_id for r in resources}
 
     def check_task_refs(where: str, t: dict[str, Any]) -> None:
@@ -385,6 +512,8 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             )
         if asg.resource_id is not None and asg.resource_id not in resource_ids:
             reasons.append(f"{where}: undefined resource {asg.resource_id!r}")
+        if work_intervals and not fits_work_interval(asg.start, asg.end, work_intervals):
+            reasons.append(f"{where}: [{asg.start}, {asg.end}) outside work_intervals (CALENDAR)")
     _duplicates("plan_r0.yaml.assignments", [a.task_id for a in plan_r0], reasons)
 
     # scenario
@@ -408,11 +537,34 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
                 f"scenario.yaml.new_task: requested.start {new_task.requested.start}"
                 f" != earliest_start {new_task.earliest_start}"
             )
+        if new_task and work_intervals:
+            req = new_task.requested
+            if not fits_work_interval(req.start, req.end, work_intervals):
+                reasons.append("scenario.yaml.new_task: requested outside work_intervals")
+
+    # 시연 요청·신고 문구 (부록 A.20)
+    demo_requests = _demo_requests(
+        scen_doc, work_types, actors, zone_ids, resources, horizon, work_intervals, reasons
+    )
     _duplicates(
         "tasks (plan_r0 + scenario)",
-        [t.task_id for t in tasks] + ([new_task.task_id] if new_task else []),
+        [t.task_id for t in tasks]
+        + ([new_task.task_id] if new_task else [])
+        + [d.task_id for d in demo_requests],
         reasons,
     )
+    known_tasks = {t.task_id for t in tasks} | ({new_task.task_id} if new_task else set())
+    demo_events: list[DemoEvent] = []
+    for i, e in enumerate(
+        _as_list(scen_doc.get("demo_events"), "scenario.yaml.demo_events", reasons)
+    ):
+        where = f"scenario.yaml.demo_events[{i}]"
+        ev = _model(DemoEvent, e, where, reasons)
+        if not ev:
+            continue
+        demo_events.append(ev)
+        if ev.target_task_id is not None and ev.target_task_id not in known_tasks:
+            reasons.append(f"{where}: undefined task {ev.target_task_id!r}")
 
     if reasons:
         raise PackError(reasons)
@@ -423,8 +575,10 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             work_types=work_types,
             rules=tuple(rules),
             site_id=site_doc.get("site_id"),
+            timezone=timezone,
             horizon_start_utc=site_doc.get("horizon_start_utc"),
             horizon_minutes=site_doc.get("horizon_minutes"),
+            work_intervals=work_intervals,
             units=tuple(units),
             actors=tuple(actors),
             zones=tuple(zones),
@@ -433,6 +587,8 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             tasks=tuple(tasks),
             plan_r0=tuple(plan_r0),
             new_task=new_task,
+            demo_requests=tuple(demo_requests),
+            demo_events=tuple(demo_events),
         )
     except ValidationError as e:
         raise PackError([f"site.yaml: {err['loc']}: {err['msg']}" for err in e.errors()]) from e

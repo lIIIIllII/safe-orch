@@ -10,8 +10,9 @@ from typing import Any
 from fastapi import APIRouter
 
 from app.api.deps import ActorDep, ApiError, PackDep, check_site
+from app.domain.calendar import work_delay
 from app.domain.canonical import canonical_hash
-from app.domain.models import Plan, Snapshot, Task
+from app.domain.models import Assignment, Plan, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.store import db
@@ -64,7 +65,23 @@ def gate(
 # ── 후보 ───────────────────────────────────────────────────────
 
 
-def _solver(conn: sqlite3.Connection, solver_result_id: str | None) -> dict[str, Any] | None:
+def _work_delay_sum(
+    solution: list[dict[str, Any]] | None, base: dict[str, Assignment], intervals: Any
+) -> int | None:
+    """해의 근무 분 지연 합 (부록 A.20). 저장하지 않고 조회 시 계산한다."""
+    if solution is None:
+        return None
+    return sum(
+        work_delay(base[a["task_id"]].start, a["start"], intervals)
+        for a in solution
+        if a["task_id"] in base
+    )
+
+
+def _solver(
+    conn: sqlite3.Connection, solver_result_id: str | None, facts: SnapshotContent | None
+) -> dict[str, Any] | None:
+    """stage2.delay는 §7 목적함수 값(달력 분), work_delay는 같은 해의 근무 분 지연(A.20)."""
     if solver_result_id is None:
         return None
     found = rows(
@@ -79,10 +96,18 @@ def _solver(conn: sqlite3.Connection, solver_result_id: str | None) -> dict[str,
     r = found[0]
     s1, s2 = loads(r["stage1"]), loads(r["stage2"])
     solution = s1 if r["chosen_stage"] == 1 else s2
+    base = facts.base_assignments() if facts else {}
+    intervals = facts.work_intervals if facts else ()
     return {
         "scope_level": r["scope_level"],
         "stage1": {"status": s1["status"], "changed": s1["changed"]},
-        "stage2": None if s2 is None else {"status": s2["status"], "delay": s2["delay"]},
+        "stage2": None
+        if s2 is None
+        else {
+            "status": s2["status"],
+            "delay": s2["delay"],
+            "work_delay": _work_delay_sum(s2.get("solution"), base, intervals),
+        },
         "chosen_stage": r["chosen_stage"],
         "minimal_change": s1["status"] == "OPTIMAL",
         "delay_optimality_unconfirmed": solution is not None
@@ -104,9 +129,18 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         else "OPEN"
     )
     snapshot = get_snapshot(conn, cand.snapshot_id)
-    base = snapshot.facts().base_assignments() if snapshot else {}
+    facts = snapshot.facts() if snapshot else None
+    base = facts.base_assignments() if facts else {}
+    intervals = facts.work_intervals if facts else ()
+    # delay = 달력 분(§7), work_delay = 근무 분. 조회 시 계산하고 저장하지 않는다 (부록 A.20).
     changes = [
-        {"task_id": a.task_id, "before": base[a.task_id].model_dump(), "after": a.model_dump()}
+        {
+            "task_id": a.task_id,
+            "before": base[a.task_id].model_dump(),
+            "after": a.model_dump(),
+            "delay": max(0, a.start - base[a.task_id].start),
+            "work_delay": work_delay(base[a.task_id].start, a.start, intervals),
+        }
         for a in cand.assignments
         if a.task_id in base
         and (a.start, a.resource_id) != (base[a.task_id].start, base[a.task_id].resource_id)
@@ -143,7 +177,7 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "display_status": display,
         "assignments": [a.model_dump() for a in cand.assignments],
         "changes": changes,
-        "solver": _solver(conn, cand.solver_result_id),
+        "solver": _solver(conn, cand.solver_result_id, facts),
         "validation": validation,
         "consultation": consultation,
     }

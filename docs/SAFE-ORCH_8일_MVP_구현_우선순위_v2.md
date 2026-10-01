@@ -295,7 +295,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 ### A.5 shipyard fixture (§15 보충)
 
 - site_id `YARD-01`(가정. Unit `SITE`와 헷갈리지 않게 자원 ID 스타일로). site.yaml에 둔다.
-- Horizon 원점 09:00, `horizon_minutes` 180, `horizon_start_utc` "2026-10-12T00:00:00Z"(= 09:00 KST, 가정).
+- Horizon 원점 09:00, `horizon_minutes` 180, `horizon_start_utc` "2026-10-12T00:00:00Z"(= 09:00 KST, 가정). (A.20에서 3360분·근무 달력으로 확장. 원점은 그대로)
 - Unit(가정. unit_type은 표시용 라벨이며 CHECK 없음):
 
 | unit_id | name | unit_type |
@@ -315,7 +315,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 | supervisor | Supervisor | SITE (가정) | [SUPERVISOR] | |
 
 - Zone B·C·D·D2. zone_id만 두고 이름 필드는 두지 않는다(§5.1). 관계는 D–D2 ADJACENT만.
-- Resource: 모두 resource_type CRANE, capacity 1, available_intervals [[0, 180]](가정). 이름 필드는 두지 않는다(§5.1). A-CR-01(owner UA, allowed [UA]), SITE-CR-01(owner SITE, allowed [UA]), B-CR-01(owner UB, allowed [UB]).
+- Resource: 모두 resource_type CRANE, capacity 1, available_intervals [[0, 180]](가정, A.20에서 [[0, 3360]]). 이름 필드는 두지 않는다(§5.1). A-CR-01(owner UA, allowed [UA]), SITE-CR-01(owner SITE, allowed [UA]), B-CR-01(owner UB, allowed [UB]).
 - 기존 작업(`plan_r0.yaml`): critical field CONFIRMED(source_ref "fixture:plan_r0"), lifecycle READY, revision 1. 시간은 분.
 
 | Task | unit | 담당 | work_type | zone | duration | earliest_start | latest_start | latest_end | 자원 | R0 배정 | movable (time, resource) |
@@ -380,7 +380,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - **검사 대상 배정** = 현재 Plan 배정 + Plan에 없는 READY 작업의 기준 배정.
 - `app/rules/`: `detect_conflicts(snapshot, assignments, pack) -> list[Conflict]`.
   - Conflict = `{rule_id, task_ids(정렬), resource_id | None, zone_ids, interval[start, end)}`. interval은 관련 작업 점유 구간을 모두 덮는 범위(표시용).
-  - rule_id: Pack Rule은 rule_id 그대로(SEP-…, CAP-RESOURCE). 기본 제약은 `DURATION`, `WINDOW`(시간창·Horizon), `PRECEDENCE`, `RESOURCE_MISSING`, `RESOURCE_TYPE`, `RESOURCE_AUTH`, `AVAILABILITY`.
+  - rule_id: Pack Rule은 rule_id 그대로(SEP-…, CAP-RESOURCE). 기본 제약은 `DURATION`, `WINDOW`(시간창·Horizon), `PRECEDENCE`, `RESOURCE_MISSING`, `RESOURCE_TYPE`, `RESOURCE_AUTH`, `AVAILABILITY`, `CALENDAR`(근무 달력, A.20).
   - SEPARATION: 작업 x가 hazard_a, y가 hazard_b를 갖고 rel(zone_x, zone_y) ∈ relations이면 `e_x + gap ≤ s_y` 또는 `e_y + gap ≤ s_x`.
 - 확인 기준: R0만 검사하면 충돌 없음. R0 + A 기준 배정(0–30, A-CR-01)이면 `[SEP-LIFT-BELOW (A, B)]` 하나.
 
@@ -423,7 +423,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - 위치: `app/validator/`. `validate(snapshot, candidate, search_spec | None, pack) -> Validation`. DB를 읽지 않는 순수 함수이고, 어떤 후보가 들어와도 예외를 내지 않는다.
 - 입력: snapshot.tasks의 각 작업은 fields(critical field 확인 기록)를 포함한다. C11은 이 값으로 판정한다.
 - 의존: validator ↛ solver는 유지하고, validator → rules는 허용한다. C03–C05·C07–C10은 `detect_conflicts` 결과를 매핑한다.
-  - 기본 제약: DURATION→C03, WINDOW→C04, PRECEDENCE→C05, RESOURCE_MISSING·RESOURCE_TYPE→C07, RESOURCE_AUTH→C08, AVAILABILITY→C09.
+  - 기본 제약: DURATION→C03, WINDOW→C04, PRECEDENCE→C05, RESOURCE_MISSING·RESOURCE_TYPE→C07, RESOURCE_AUTH→C08, AVAILABILITY→C09, CALENDAR→C04(A.20).
   - Pack Rule: rule_id 접두어가 아니라 rules.yaml의 type으로 매핑한다. CAPACITY→C09, SEPARATION→C10.
 - `candidate_hash`와 `search_spec_hash`는 `app/domain`에 두고 solver와 validator가 같이 쓴다. 정의는 A.11 그대로다.
 - 해시 원칙: candidate_hash와 search_spec_hash를 다시 계산할 때 입력으로 쓰는 다른 해시(snapshot_hash, search_spec_hash, pack_hash)는 저장된 값을 쓴다. 각 해시의 재계산 일치는 해당 검사에서 따로 한다(`SNAPSHOT_HASH_MISMATCH`, `SEARCH_SPEC_HASH_MISMATCH`).
@@ -929,3 +929,97 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - 새로 고침 직후처럼 선택이 없고 검토 대기도 없으면(예: STALE 후보만 있음) 자동 선택하지 않는다. 후보 칩을 눌러 본다. 안전 경계 장면은 화면을 열어 둔 채 진행하므로 선택이 유지된다.
 - 협의 정보가 늦게 도착하면 후보 상세를 다시 그려 PENDING 체크를 채운다(후보 id + 협의 유무를 key로 쓴다).
 - 확인: 임시 DB + 워커 끔 + 스크립트 모델(L0·L1)로 Alpha를 만든 뒤 1920×1080 headless Chrome 화면으로 배치·타임라인 겹쳐 보기·step 카드·SITE Hold·STALE Run을 확인했다. 클릭 조작(승인 결과 영역 등)은 수동 확인 순서로 확인한다.
+
+### A.20 시연 확장: 3일 Horizon·근무 달력·새 충돌·요청 철회 (§5.1·§5.3·§6·§7·§8·§12·§15 보충, 스키마 변경 없음)
+
+범위: 타임라인 Horizon을 3일로 넓히고 근무 달력(09:00–17:00)을 기본 제약으로 넣는다. 기존 A–E 장면은 그대로 두고 다른 충돌 유형을 보여 주는 작업·시연 요청을 더한다. 구현은 두 번에 나눈다. **1차(이번)는 백엔드·fixture**, 2차는 화면이다(아래 "2차에서 할 것"). 이번 범위가 아닌 것: D5 기능(재개·ASK_TASK_OWNER·Inbox), 점심시간·교대 같은 세부 달력, 새 분리 Rule 유형.
+
+**블루프린트와 달라지는 점** (블루프린트 본문은 지금 고치지 않는다. 다음 블루프린트 개정 때 한 번에 반영한다)
+1. §15 Fixture "Horizon 09:00–12:00" → 10/12(월) 09:00 – 10/14(수) 17:00(사용자 결정). 원점, 기존 작업 A–E의 값, §15 후보 표(L0 INFEASIBLE, Alpha 변경 2·지연 90, Beta 변경 1·지연 60)는 그대로이고 회귀 테스트로 확인한다.
+2. §18 MVP 제외 "다음 Shift"와 "다음 날로 옮기는 경우": Horizon 안의 시간 이동으로 해석한다. 교대·Shift 모델이나 Horizon 밖 이월이 아니다.
+3. §6 기본 제약에 `CALENDAR`(작업이 근무 구간 하나 안)를 더하고, §8 C04를 "시간창·Horizon·근무 달력"으로 넓힌다.
+4. §5.1 Site 엔티티에 달력 필드가 없다. 달력은 Pack(site.yaml)에서 읽어 Snapshot content에 넣는다. DB 스키마는 바꾸지 않는다.
+5. §5.3 Pack 파일에 표시 정보와 시연값을 더한다: work_type·Rule의 `display_name`, site의 `timezone`·`work_intervals`, scenario의 `demo_requests`·`demo_events`.
+6. §12 API를 더한다: `GET /sites/{id}/meta`, `GET /dev/scenario`(DEMO_MODE), `POST /tasks/{tid}/withdraw`(명령 `WITHDRAW_TASK_REQUEST`).
+7. §5.1 lifecycle `NEEDS_INFO`를 요청 철회에도 쓴다(계산 대상에서 빠짐).
+
+**근무 달력**
+- site.yaml: `timezone: "Asia/Seoul"`(IANA), `horizon_minutes: 3360`, `work_intervals: [[0, 480], [1440, 1920], [2880, 3360]]`(가정). 시각은 정수 분, 날짜는 주석(A.4). 중첩 키(`work_calendar: {intervals}`)는 쓰지 않는다. 점심·교대가 범위 밖이고, 날짜 문자열을 두면 로더가 시간대 계산을 해야 하기 때문이다.
+- 로더(위반하면 PackError): `work_intervals`가 없거나 비면 거절(기본값 없음). 각 구간은 available_intervals와 같은 검사(`0 ≤ lo < hi ≤ horizon`, 시작 순, 겹치거나 맞닿지 않음, 정수). plan_r0 배정·scenario 요청 일정(new_task·demo_requests)은 근무 구간 하나 안. 고정 작업이 달력을 어기면 모든 Solver 호출이 INFEASIBLE이 되므로 로더에서 막는다. `timezone`이 없거나 `zoneinfo`가 모르는 이름이면 거절(Windows용 `tzdata` 의존성을 명시).
+- 데이터 경로: `LoadedPack.work_intervals` → `SnapshotContent.work_intervals`(필수 필드, `build_snapshot_content`가 pack에서 넣는다). snapshot_hash가 달력을 덮으므로 C01이 변조를 잡는다.
+- 순수 함수(`app/domain/calendar.py`): `fits_work_interval`, `start_domain`, `has_work_slot`, `work_minutes`, `work_delay`. Rule Engine·CP-SAT·폼·로더·state가 같이 쓴다.
+- Rule Engine `CALENDAR`: `not any(lo ≤ start ∧ end ≤ hi)`. 17:00 종료는 통과([start, end)). WINDOW와 따로 판정한다(Horizon 밖이면 둘 다 보고. WINDOW·AVAILABILITY를 함께 내는 지금 관행과 같다). `BASIC_RULE_IDS`에 추가.
+- CP-SAT: 모든 작업(고정 작업 상수 포함)에 `add_linear_expression_in_domain(s, Domain.from_intervals([[lo, hi − d] …]))`. 구간별 도메인이라 "구간 하나에 포함"과 같은 판정이고, 고정 작업이 어기면 INFEASIBLE이다(A.12 원칙). d가 구간보다 길면 빈 도메인 → INFEASIBLE.
+- Validator: `BASIC_TO_CHECK["CALENDAR"] = "C04"`, reason_code `CALENDAR`.
+- 자원 가용 구간은 `[[0, 3360]]` 한 덩어리(가정). 근무일별로 쪼개면 야간 배치가 AVAILABILITY·CALENDAR로 이중 보고된다. 장비 사실과 현장 근무 사실을 나눈다.
+- 폼: 시간창 안에 근무 구간 하나에 들어가는 시작이 없으면 `WINDOW_OUTSIDE_WORK_HOURS`로 거절한다(`INVALID_WINDOW`가 아닐 때만 검사). 받아도 이관으로 끝날 뿐이기 때문이다. 요청 시작만 근무시간 밖이면 접수하고, RECHECK가 `CALENDAR` 충돌로 Replanning을 시작해 근무시간 안으로 옮긴다(§6 "기본 제약 위반도 충돌").
+
+**지연 단위**
+- 목적함수는 달력 분 그대로다(§7 `Σ max(0, s_t − base_t)`). A–E는 모두 첫날 안의 이동이라 두 단위가 같고, 밤을 넘기면 960분이 더해져 당일 해를 먼저 찾는다.
+- 근무 분 지연(`work_delay` = 기준 시작에서 새 시작까지의 근무 분, 늦어질 때만)은 **서버가 조회 시 계산하고 저장하지 않는다.** state의 후보 `changes[]`에 `delay`(달력 분)·`work_delay`, Solver 요약 `stage2`에 `work_delay`(그 해의 합)를 함께 내려준다.
+
+**표시 정보와 시연값** (화면이 Pack 값을 하드코딩하지 않는다)
+- pack.yaml work_types·rules.yaml 각 Rule에 `display_name`(없으면 PackError).
+- `GET /api/sites/{id}/meta`(읽기, X-Actor 필요): `pack, pack_hash, work_types{display_name, hazard_tags, critical_fields}, rules[{rule_id, type, display_name}], timezone, horizon_start_utc, horizon_minutes, work_intervals, zones, zone_relations(저장 방향 그대로), resources`. Pack에서 바로 읽는다(DB 없음).
+- `GET /api/dev/scenario`(DEMO_MODE 전용, 아니면 404, X-Actor 필요): `task_requests[{label, requester, form}]`(A = new_task, N1–N5 = demo_requests. form은 작업 요청 폼 본문 그대로, 시각은 분), `event_reports[{label, body{event_type, text, target_task_id}}]`. 프런트의 시연값 A와 신고 문구를 scenario.yaml로 옮겼다(화면 연결은 2차).
+- scenario.yaml `new_task.label`은 `model_dump`에서 뺀다(작업 값으로 덤프하는 곳이 있다). `demo_requests` 검사: 요청자는 UNIT_PLANNER, 참조·자원 유형·허용 Unit·critical field·시간창, 요청 일정이 근무 구간 안, task_id 중복 없음. `demo_events` 대상 작업이 있으면 존재해야 한다.
+
+**fixture 확장** (모두 가정)
+- 구역 F(안벽 인양), G, G2(G–G2 ADJACENT), H. 기존 B·C·D·D2와 관계 없음.
+- 자원 `SITE-GC-01`: resource_type `GANTRY`, owner SITE, allowed [UA, UB], `[[0, 3360]]`. 협력사 간 장비 이중 배정에는 공용 자원이 필요하다. CRANE이면 D5 `LIST_ASSIGNABLE_RESOURCES(A)`에 나와 Scene 3(SITE-CR-01 → Beta)이 흔들리므로 유형을 나눈다.
+- 기존 작업(plan_r0)은 모두 movable (F, F)다. 두 축이 모두 false인 작업은 SearchSpec hash에서 빠지므로(A.11) UA·UB의 L2 hash가 그대로이고, C 고정 뒤 L1·L2 = L0 hash가 유지된다. 작업 ID에 L·R·T를 쓰지 않는다(탐색 범위·Plan R#·테스트 T##와 혼동).
+
+| Task | unit | 담당 | work_type | zone | duration | es | ls | le | 자원 | R0 배정 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| K | UB | planner_b | LIFTING | F | 120 | 1440 | 1440 | 1560 | GANTRY, SITE-GC-01 | 10/13 09:00–11:00 |
+| P | UB | planner_b | PAINTING | G2 | 60 | 1500 | 1500 | 1560 | 없음 | 10/13 10:00–11:00 |
+| W | UB | planner_b | PAINTING | G2 | 240 | 1680 | 1680 | 1920 | 없음 | 10/13 13:00–17:00 |
+| Q | UA | foreman_a2 | LIFTING | F | 60 | 2910 | 2910 | 2970 | GANTRY, SITE-GC-01 | 10/14 09:30–10:30 |
+| M | UA | foreman_a2 | WORK_BELOW | H | 90 | 2910 | 2910 | 3000 | 없음 | 10/14 09:30–11:00 |
+
+**시연 요청과 기대값** (scenario.yaml `demo_requests`. 근거: `backend/scripts/verify_demo_values.py`가 Pack YAML을 읽어 독립 CP-SAT과 전수 열거로 다시 계산한다. 모든 경우 두 결과가 같고 최적해는 하나다)
+
+| 요청 | 요청자 | 작업·요청 일정 | 시작 범위 / 종료 ≤ | 충돌 | L0 | 변경 | 지연(달력/근무) | 후보 |
+| --- | --- | --- | --- | --- | --- | ---: | ---: | --- |
+| N1 장비 이중 배정 | Planner A | LIFTING F 60분, 10/13 10:00, SITE-GC-01 | 10:00–14:00 / 15:00 | CAP-RESOURCE (K, N1) | OPTIMAL | 1 | 60 / 60 | N1 → 10/13 11:00 |
+| N2 화기–도장 | Planner A | HOT_WORK G 60분, 10/13 10:30 | 10:30–12:00 / 13:00 | SEP-HOT-FLAM (N2, P) | OPTIMAL | 1 | 45 / 45 | N2 → 10/13 11:15 (P 종료 + 15분) |
+| N3 충돌 2건 | Planner B | LIFTING H 60분, 10/14 09:00, SITE-GC-01 | 09:00–15:00 / 16:00 | CAP-RESOURCE (N3, Q) + SEP-LIFT-BELOW (M, N3) | OPTIMAL | 1 | 120 / 120 | N3 → 10/14 11:00 (CAP만 풀면 10:30이지만 M이 11:00까지) |
+| N4 다음 날 | Planner A | HOT_WORK G 120분, 10/13 14:00 | 10/13 14:00–10/14 12:00 / 10/14 14:00 | SEP-HOT-FLAM (N4, W) | OPTIMAL | 1 | 1140 / 180 | N4 → 10/14 09:00. 달력이 없으면 10/13 17:15(야간) |
+| N5 (선택) 해 없음 | Planner B | WORK_BELOW F 60분, 10/13 09:30 | 09:30–10:00 / 11:00 | SEP-LIFT-BELOW (K, N5) | INFEASIBLE | – | – | L1 = L0 hash, L2(+E)도 INFEASIBLE |
+
+- N1–N4는 L1·L2로 넓혀도 같은 결과다(상대가 모두 다른 Unit의 고정 작업). A를 Alpha로 확정 → N1 → N2 → N3 → N4 순서로 앞 결과를 확정한 상태에서도 같고, 최종 충돌은 0이다.
+- 모든 이동이 요청자 Consent의 TIME 범위 [es, ls] 안이라 Consultation이 바로 COMPLETE다(WAIVE 없이 승인).
+- 확장 fixture에서도 §15 값(L0 INFEASIBLE, Alpha, Beta)과 Gamma 1·15, Delta 1·30이 같다.
+
+**Replanning이 보여 줄 판단**
+- 지금 Action은 SOLVE_WITH_SCOPE·ESCALATE뿐이라(D5 제외) N1–N4에서 모델의 행동은 모두 "L0 한 번"이다. 차이는 관찰(충돌 수·상대 Unit), decision_summary, 서버 결과에 있다. 후보가 나오면 Run이 대기하므로 "다음 날로 밀림"은 모델 판단이 아니라 Solver 결과로 보인다.
+- N3: 관찰에 충돌 2개(주 충돌 CAP). "두 충돌의 공통 당사자 N3만 옮기면 된다"를 기대한다.
+- N5: 유일하게 다른 판단. L0 INFEASIBLE → (L1은 같은 hash라 빠짐) → L2 또는 이관 → 이관 사유. 자기 회사 인양 K가 고정이라 D5 ASK_TASK_OWNER로 이어질 장면이다. 마지막에 하고, 끝나면 철회한다.
+
+**요청 철회 (F-2 수정)**
+- 결함: 해결 못 한 요청(Plan에 없는 READY 작업)은 기준 위치에 고정 상수로 남아 이후 모든 Solver 호출이 INFEASIBLE이 된다(예: N5 이관 뒤 N1).
+- 명령 `withdraw_task_request`(`app/commands/task_request.py`, command_type `WITHDRAW_TASK_REQUEST`, 본문 `{task_id, comment}`):
+  - 검사 순서: 대상이 현재 READY 작업이 아니면 `TASK_NOT_FOUND`(이미 철회한 작업 포함) → 작업 담당자도 SUPERVISOR도 아니면 `NOT_AUTHORIZED` → 현재 Plan에 있으면 `TASK_IN_PLAN`. 셋 다 단독 반환.
+  - 적용(한 tx): 새 revision(lifecycle NEEDS_INFO, 나머지 값 그대로) → context +1 → 열린 Run(RUNNING·WAITING_HUMAN)을 Event 접수와 같이 STALE(`WITHDRAW:<task_id>`) → `RECHECK`(cause `{kind: WITHDRAW, task_id, actor_id}`) → Audit·CommandResult. result_refs `{task_id, revision}`.
+- API `POST /api/tasks/{tid}/withdraw` `{comment}`. HTTP: `TASK_NOT_FOUND` 404, `NOT_AUTHORIZED` 403, `TASK_IN_PLAN` 409.
+- A.15 acting_unit 보충: cause 작업이 충돌에 없으면 **충돌 작업 중 Plan에 없는 요청 작업(task_id가 가장 작은 것)의 Unit**을 먼저 쓰고, 그것도 없을 때 가장 작은 task_id의 Unit을 쓴다. 철회 뒤 RECHECK에서 남은 요청(N1)의 요청자가 재계획하게 하기 위해서다. 이전 규칙이면 K(UB, 고정)가 골라져 INFEASIBLE이었다.
+
+**프롬프트** `replanning-p3`: "시간은 Horizon 원점(첫날 09:00)을 0으로 하는 정수 분(1440분 = 하루)", "work_intervals는 근무 구간, 작업은 한 구간 안(CALENDAR), 같은 날 자리가 없으면 다음 근무일로 갈 수 있다"를 더하고, Observation에 `work_intervals` 키를 더했다(달력 값은 Pack에서 오므로 System에 하드코딩하지 않는다). live run 기록(A.17)은 p3로 다시 측정해 L0 선택 비율을 더한다.
+
+**운영 전제와 한계**
+- 시연 요청은 하나씩 확정한 뒤 다음을 보낸다. A 장면을 먼저 한다(확정된 N1·N2·N4는 time-movable UA 작업이라 UA의 L2 hash를 바꾼다. A–E 값은 같지만 D5에서 C 고정 뒤 L2가 선택지로 다시 나온다).
+- **한계(F-1, 이번에 고치지 않음):** 열린 Case 중 다른 요청이 들어오면 사이트 전체 context가 바뀌어(§9.5) 열린 후보가 STALE이 되고, 대기 중인 Run은 재개가 없어 멈춘다. RECHECK는 열린 Case가 있어 건너뛰고 승인은 RECHECK를 등록하지 않으므로, 그 요청은 Run 없이 남는다. D5 재개 설계 항목으로 넘긴다:
+  - 열린 Case 중 context 변경 → Replanning wake.
+  - Case 종료 시 RECHECK 재등록(dedupe 키에 plan_revision 포함, 예: `RECHECK:ctx<n>:plan<r>`).
+
+**테스트** (`tests/test_demo_extension.py` 외)
+- 기존 테스트 값 갱신: seed(site 3360·zones·관계·자원·작업·R0), 로더(가용 구간 메시지 3360), Snapshot 키·작업·구역 목록, Horizon 경계(3360), T29 pack_hash 치환 문자열, scope 목록(확장 작업 포함, UA L2 = L1 hash), 후보 배정 목록, 수동 SnapshotContent(work_intervals), prompt 버전·Observation 키.
+- 추가: 달력 순수 함수(N4 달력 1140 / 근무 180), CALENDAR 경계(17:00 종료 통과, 넘침·야간 위반, WINDOW와 독립), CP-SAT(달력을 어긴 고정 작업 → INFEASIBLE), C04 CALENDAR, 로더(달력 모양·누락, R0·요청 일정 달력 밖, timezone 누락·미지원, display_name 누락, demo_requests·demo_events 검사), D 표 N1–N5(L0·L1·L2)와 §15 값 재현, N4 달력 없으면 17:15, A → N1–N4 누적 확정, state의 delay·work_delay, 폼(`WINDOW_OUTSIDE_WORK_HOURS`, 야간 시작은 CALENDAR로 재계획), meta·dev/scenario API(DEMO_MODE 아니면 404), F-2(N5 이관 → N1 INFEASIBLE → N5 철회 → N1이 10/13 11:00 후보), 철회 권한·`TASK_IN_PLAN`·`TASK_NOT_FOUND`·열린 Run STALE, acting_unit 보충 규칙.
+
+**2차(화면)에서 할 것**
+- meta로 표시: work_type·Rule 이름, timezone 변환, 근무 구간(labels.ts의 Pack 값 하드코딩 제거). 시연값은 `/api/dev/scenario`에서 읽는다("시연값 ▾" 하나에 A, N1–N5와 요청자 표시. Actor가 다르면 경고만 하고 자동 전환하지 않음, 열린 재계획 Run이 있으면 "재검사되지 않음" 경고).
+- 시각 표기 `10/13(화) 14:00`, 날짜를 넘으면 `10/13(화) 14:00 → 10/14(수) 09:00`.
+- 폼: 날짜는 근무일 select, 시각은 HH:MM 텍스트(`type=time`은 한국어 로캘에서 오전/오후). 분 = 일차×1440 + 시각 − 원점 시각, 칸 옆에 "= 1500분". 근무시간 밖 입력은 막지 않고 안내만 한다.
+- 타임라인: [하루 | 3일] 전환, 날짜 탭(그날 충돌·후보 변경 수 배지, 자동 이동 없음). 하루 보기는 08:00–18:00, 08–09·17–18 회색 사선 "비근무", 15분 눈금·30분 라벨. 3일 보기는 근무 구간을 잇고 밤은 24px 사선 띠로 접는다. 1분 = grid 1칸을 분→x 절대 위치로 바꾼다. 행 12개(구역 8 + 자원 4).
+- 지연 표시 "총 지연 1140분 (근무시간 기준 180분)"(값은 서버의 work_delay), labels: `CALENDAR`, `WINDOW_OUTSIDE_WORK_HOURS`, `TASK_IN_PLAN`, end_reason `WITHDRAW:`. 철회 버튼(Plan 밖 READY 작업, 담당자·SUPERVISOR).
+- 3분 영상: 문제 0:00–0:20 → A 요청 0:20–0:40 → Agent 판단 0:40–1:50 → Beta 확정 1:50–2:05 → **확장 2:05–2:30**(3일 보기, N3 충돌 2건 → 10/14 11:00 승인, N4 → 10/14 09:00 "1140분 · 근무 180분", 달력이 없으면 17:15) → 안전 경계 2:30–2:50 → 결과 2:50–3:00. 모자라면 N4만 남기고 N1·N2·N5는 실시연·보고서에 쓴다.

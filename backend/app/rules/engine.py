@@ -6,6 +6,7 @@ Solver와 코드를 나눈다: app.solver를 import하지 않는다. Rule 데이
 
 from collections.abc import Iterable
 
+from app.domain.calendar import fits_work_interval
 from app.domain.models import Assignment, Conflict, Rule, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 
@@ -43,12 +44,16 @@ BASIC_RULE_IDS = frozenset(
         "RESOURCE_TYPE",
         "RESOURCE_AUTH",
         "AVAILABILITY",
+        "CALENDAR",
     }
 )
 
 
 def _basic(facts: SnapshotContent, pairs: list[tuple[Task, Assignment]]) -> list[Conflict]:
-    """기본 제약: duration, 시간창·Horizon, 선후행, 필요 자원, 유형, 권한, 가용 구간."""
+    """기본 제약: duration, 시간창·Horizon, 근무 달력, 선후행, 필요 자원, 유형, 권한, 가용 구간.
+
+    CALENDAR는 WINDOW와 따로 판정한다(Horizon 밖이면 둘 다 보고, 부록 A.20).
+    """
     out: list[Conflict] = []
     resources = facts.resource_map()
     by_id = {t.task_id: (t, a) for t, a in pairs}
@@ -63,6 +68,8 @@ def _basic(facts: SnapshotContent, pairs: list[tuple[Task, Assignment]]) -> list
             or a.end > facts.horizon_minutes
         ):
             out.append(_conflict("WINDOW", [(t, a)]))
+        if not fits_work_interval(a.start, a.end, facts.work_intervals):
+            out.append(_conflict("CALENDAR", [(t, a)]))
         for p in t.predecessors:
             pred = by_id.get(p.task_id)
             if pred is not None and pred[1].end + p.min_lag > a.start:

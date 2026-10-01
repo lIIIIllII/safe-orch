@@ -157,10 +157,13 @@ def test_scope_levels(with_a):
     snap = take_snapshot(with_a)
     conflict = _conflict(with_a, snap)
     ub = build_search_spec(snap, conflict, "UB", "L2")
-    assert list(ub.axes) == ["B", "D", "E"]
+    assert list(ub.axes) == ["B", "D", "E", "K", "P", "W"]  # 확장 작업은 고정 (A.20)
     assert ub.axes["B"] == Movable(time=False, resource=False)
     assert list(build_search_spec(snap, conflict, "UB", "L0").axes) == ["B"]
-    assert list(build_search_spec(snap, conflict, "UA", "L2").axes) == ["A", "C"]
+    ua = build_search_spec(snap, conflict, "UA", "L2")
+    assert list(ua.axes) == ["A", "C", "M", "Q"]
+    # 두 축이 모두 고정인 확장 작업은 hash에서 빠진다: L2 = L1 (A.11·A.20)
+    assert ua.hash == build_search_spec(snap, conflict, "UA", "L1").hash
 
 
 def test_search_spec_hash_ignores_ids_and_scope_name(with_a):
@@ -312,7 +315,9 @@ def test_candidate_and_register(with_a):
     cand = build_candidate(snap, spec, result)
     facts = snap.facts()
     assert cand.candidate_id.startswith("cand_") and cand.kind == "REPLAN"
-    assert [a.task_id for a in cand.assignments] == ["A", "B", "C", "D", "E"]
+    assert [a.task_id for a in cand.assignments] == [
+        "A", "B", "C", "D", "E", "K", "M", "P", "Q", "W",
+    ]  # fmt: skip
     assert (cand.base_plan_revision, cand.context_version) == (0, 1)
     assert (cand.pack_hash, cand.search_spec_hash) == (facts.pack_hash, spec.hash)
     assert cand.candidate_hash == candidate_hash(

@@ -9,12 +9,15 @@ import sqlite3
 from pydantic import Field
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
+from app.domain.calendar import has_work_slot
 from app.domain.ids import new_id
 from app.domain.models import Consent, Movable, Task
 from app.packs.loader import LoadedPack, confirmed_fields
 from app.store.repos.consents import insert_consent
 from app.store.repos.dispatch import register_job
+from app.store.repos.plans import get_current_plan
 from app.store.repos.resources import list_resources
+from app.store.repos.runs import stale_active_runs
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
@@ -68,6 +71,12 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
         or end_min > ctx.site.horizon_minutes
     ):
         r.reject("INVALID_WINDOW")
+    elif not has_work_slot(
+        es, form.latest_start, form.latest_end, form.duration, pack.work_intervals
+    ):
+        # 시간창 어디에도 근무 구간 하나에 들어가는 시작이 없다. 받아도 이관으로 끝날 뿐이다 (A.20).
+        # 요청 시작만 근무시간 밖이면 접수하고 CALENDAR 충돌로 재계획한다.
+        r.reject("WINDOW_OUTSIDE_WORK_HOURS")
     if (
         wt is not None
         and "resource" in wt.critical_fields
@@ -148,3 +157,58 @@ def submit_task_request(
     pack: LoadedPack, actor_id: str, idempotency_key: str, form: TaskRequestForm
 ) -> CommandOutcome:
     return run_command(pack, COMMAND, actor_id, idempotency_key, form, _handle)
+
+
+# ── 요청 철회 (부록 A.20) ──────────────────────────────────────
+
+WITHDRAW_COMMAND = "WITHDRAW_TASK_REQUEST"
+
+
+class TaskWithdraw(Body):
+    task_id: str = Field(min_length=1)
+    comment: str = ""
+
+
+def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -> Result:
+    """해결하지 못한 요청(Plan에 없는 READY 작업)을 계산 대상에서 뺀다.
+
+    남겨 두면 기준 위치에 고정 상수로 남아 이후 모든 Solver 호출이 INFEASIBLE이 된다.
+    새 revision(lifecycle NEEDS_INFO) + context +1 + RECHECK. 열린 Run은 Event처럼 STALE.
+    """
+    r = Result()
+    site_id = ctx.site_id
+    task = next(
+        (
+            t
+            for t in list_current_tasks(tx, site_id, ctx.pack)
+            if t.task_id == body.task_id and t.lifecycle == "READY"
+        ),
+        None,
+    )
+    if task is None:
+        r.reject("TASK_NOT_FOUND")
+        return r
+    if ctx.actor_id != task.owner_actor_id and not ctx.has_role("SUPERVISOR"):
+        r.reject("NOT_AUTHORIZED")
+        return r
+    plan = get_current_plan(tx, site_id)
+    if plan is not None and any(a.task_id == task.task_id for a in plan.assignments):
+        r.reject("TASK_IN_PLAN")
+        return r
+
+    revision = task.revision + 1
+    insert_task_revision(
+        tx, site_id, task.model_copy(update={"revision": revision, "lifecycle": "NEEDS_INFO"})
+    )
+    context_version = bump_context_version(tx, site_id)
+    stale_active_runs(tx, site_id, f"WITHDRAW:{task.task_id}")
+    cause = {"kind": "WITHDRAW", "task_id": task.task_id, "actor_id": ctx.actor_id}
+    register_job(tx, site_id, "RECHECK", f"RECHECK:ctx{context_version}", {"cause": cause})
+    r.refs = {"task_id": task.task_id, "revision": revision}
+    return r
+
+
+def withdraw_task_request(
+    pack: LoadedPack, actor_id: str, idempotency_key: str, body: TaskWithdraw
+) -> CommandOutcome:
+    return run_command(pack, WITHDRAW_COMMAND, actor_id, idempotency_key, body, _withdraw)

@@ -197,6 +197,14 @@ def test_t05_window_c04(alpha):
     assert _bad(v) == [("C04", "WINDOW", ("C",))]
 
 
+def test_calendar_c04(seeded):
+    """근무 구간 하나에 들어가지 않는 배정은 C04 CALENDAR (부록 A.20). 시간창 안이어도 FAIL."""
+    snap = with_facts(take_snapshot(seeded), work_intervals=((30, 480), (1440, 1920), (2880, 3360)))
+    v = validate(snap, _reconfirm(snap), None, seeded)
+    assert v.status == "FAIL"
+    assert _bad(v) == [("C04", "CALENDAR", ("B",)), ("C04", "CALENDAR", ("D",))]
+
+
 def test_t05_precedence_c05(seeded):
     snap = _retask(take_snapshot(seeded), "E", predecessors=(Predecessor(task_id="D", min_lag=20),))
     v = validate(snap, _reconfirm(snap), None, seeded)  # E 45 < D 끝 30 + 20
@@ -365,7 +373,7 @@ def test_t29_other_pack_hash_c01(alpha, pack_copy):
     f = pack_copy / "site.yaml"  # 후보와 무관한 값(B-CR-01 가용 구간)만 바꾼다
     text = f.read_text(encoding="utf-8")
     b_line = next(line for line in text.splitlines() if "resource_id: B-CR-01" in line)
-    f.write_text(text.replace(b_line, b_line.replace("[[0, 180]]", "[[0, 170]]")), "utf-8")
+    f.write_text(text.replace(b_line, b_line.replace("[[0, 3360]]", "[[0, 3300]]")), "utf-8")
     other = load_pack(pack_copy)
     assert other.pack_hash != pack.pack_hash
     assert _bad(validate(snap, cand, spec, other)) == [("C01", "PACK_HASH_MISMATCH", ())]

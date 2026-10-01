@@ -4,9 +4,11 @@
 그 전에 워커가 처리 중인 job을 끝내길 기다리고(최대 RESET_WORKER_WAIT_S), 못 끝내면 409
 WORKER_BUSY로 아무것도 바꾸지 않는다. 끝나면 새 워커를 시작한다. ?pack=은 현재 Pack만 받는다.
 CommandResult는 남기지 않는다(방금 지웠다). 새 SEED audit 행이 기록이다.
+
+GET /dev/scenario는 화면의 시연값(작업 요청·지연 신고 문구)을 scenario.yaml에서 내려준다 (부록 A.20).
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -15,6 +17,7 @@ from app.api.deps import ActorDep, ApiError, PackDep
 from app.commands.service import Body
 from app.config import get_settings
 from app.coordinator.dispatcher import DispatchWorker
+from app.packs.loader import LoadedPack
 from app.store import db
 from app.store.repos.seed import seed_pack
 
@@ -27,6 +30,57 @@ RESET_WORKER_WAIT_S = 30.0
 class ResetBody(Body):
     confirm: str
     start: Literal["R0"] = "R0"  # 중간 시작점 (2)·(3)은 D6
+
+
+FORM_FIELDS = (
+    "task_id",
+    "work_type",
+    "zone_id",
+    "duration",
+    "earliest_start",
+    "latest_start",
+    "latest_end",
+    "required_resource_type",
+    "requested_resource_id",
+)
+
+
+def scenario_view(pack: LoadedPack) -> dict[str, Any]:
+    """시연값. form은 작업 요청 폼 본문 그대로(시각은 원점 기준 분), requester는 보낼 Actor."""
+    nt = pack.new_task
+    requests = [
+        {
+            "label": nt.label,
+            "requester": nt.owner_actor_id,
+            "form": {k: getattr(nt, k) for k in FORM_FIELDS},
+        }
+    ] + [
+        {
+            "label": d.label,
+            "requester": d.requester,
+            "form": {k: getattr(d, k) for k in FORM_FIELDS},
+        }
+        for d in pack.demo_requests
+    ]
+    events = [
+        {
+            "label": e.label,
+            "body": {
+                "event_type": e.event_type,
+                "text": e.text,
+                "target_task_id": e.target_task_id,
+            },
+        }
+        for e in pack.demo_events
+    ]
+    return {"pack": pack.name, "task_requests": requests, "event_reports": events}
+
+
+@router.get("/dev/scenario")
+def get_scenario(pack: PackDep, actor: ActorDep) -> dict[str, Any]:
+    if not get_settings().demo_mode:
+        raise ApiError(404, "NOT_FOUND")
+    return scenario_view(pack)
 
 
 @router.post("/dev/reset")

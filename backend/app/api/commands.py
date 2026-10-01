@@ -21,7 +21,12 @@ from app.commands.approval import (
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.runs import CancelRun, cancel_run
 from app.commands.service import Body
-from app.commands.task_request import TaskRequestForm, submit_task_request
+from app.commands.task_request import (
+    TaskRequestForm,
+    TaskWithdraw,
+    submit_task_request,
+    withdraw_task_request,
+)
 from app.domain.models import Axis
 
 router = APIRouter()
@@ -45,6 +50,10 @@ class WaiveBody(Body):
     comment: str
 
 
+class WithdrawBody(Body):
+    comment: str = ""
+
+
 class ReleaseBody(Body):
     resolution: Literal["FACT_CONFIRMED", "NO_CHANGE"]
     expected_context_version: int
@@ -57,6 +66,15 @@ def post_task_request(
 ) -> JSONResponse:
     check_site(site_id, pack)
     return respond(submit_task_request(pack, actor.actor_id, key, form))
+
+
+@router.post("/tasks/{task_id}/withdraw")
+def post_withdraw(
+    task_id: str, body: WithdrawBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """Plan에 없는 READY 작업(해결 못 한 요청) 철회 (부록 A.20)."""
+    req = TaskWithdraw(task_id=task_id, **body.model_dump())
+    return respond(withdraw_task_request(pack, actor.actor_id, key, req))
 
 
 @router.post("/candidates/{candidate_id}/approve")

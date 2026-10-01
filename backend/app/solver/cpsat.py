@@ -10,7 +10,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ortools.sat.python import cp_model
+from ortools.util.python.sorted_interval_list import Domain
 
+from app.domain.calendar import start_domain
 from app.domain.ids import new_id
 from app.domain.models import Movable, SearchSpec, Snapshot, SolverResult
 from app.packs.loader import LoadedPack
@@ -48,6 +50,11 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
         m.add(s <= t.latest_start)
         m.add(s + d <= t.latest_end)
         m.add(s + d <= horizon)
+        # 근무 달력: 시작은 근무 구간 하나 안에 끝나는 값만. 상수(고정 작업)에도 걸어 위반이면
+        # INFEASIBLE이다(Rule Engine CALENDAR·Validator C04와 같은 판정, 부록 A.20).
+        m.add_linear_expression_in_domain(
+            s, Domain.from_intervals(start_domain(d, facts.work_intervals))
+        )
 
         options: list[str] = []
         if t.required_resource_type is not None:

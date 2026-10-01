@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.agents.llm import openai_model
-from app.api import commands, dev, health, state
+from app.api import commands, dev, health, meta, state
 from app.api.deps import ApiError, envelope
 from app.config import get_settings
 from app.coordinator.dispatcher import DispatchWorker
@@ -62,6 +62,7 @@ def invalid_body(request: Request, exc: RequestValidationError) -> JSONResponse:
 api = APIRouter(prefix="/api")
 api.include_router(health.router)
 api.include_router(state.router)
+api.include_router(meta.router)
 api.include_router(commands.router)
 api.include_router(dev.router)
 app.include_router(api)

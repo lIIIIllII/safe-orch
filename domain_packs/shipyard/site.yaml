@@ -1,8 +1,16 @@
-# shipyard 현장 (설계서 §15, 부록 A.5).
-# 시간은 Horizon 원점(09:00) 기준 정수 분. 날짜·시각 문자열은 따옴표로 감싼다.
+# shipyard 현장 (설계서 §15, 부록 A.5·A.20).
+# 시간은 Horizon 원점(10/12 09:00) 기준 정수 분, 1440분 = 하루. 날짜·시각 문자열은 따옴표로 감싼다.
 site_id: YARD-01                            # 가정
-horizon_start_utc: "2026-10-12T00:00:00Z"   # = 09:00 KST, 가정
-horizon_minutes: 180                        # 09:00–12:00
+timezone: "Asia/Seoul"                      # IANA. 화면의 날짜·시각 변환용 (A.20)
+horizon_start_utc: "2026-10-12T00:00:00Z"   # = 10/12(월) 09:00 KST, 가정
+horizon_minutes: 3360                       # 10/12(월) 09:00 – 10/14(수) 17:00 (A.20)
+
+# 근무 달력(가정, A.20). 작업 [start, end)는 근무 구간 하나 안에 있어야 한다(기본 제약 CALENDAR).
+# 0 ≤ lo < hi ≤ horizon, 시작 순, 겹치거나 맞닿지 않음.
+work_intervals:
+  - [0, 480]                                # 10/12(월) 09:00–17:00
+  - [1440, 1920]                            # 10/13(화) 09:00–17:00
+  - [2880, 3360]                            # 10/14(수) 09:00–17:00
 
 # name·unit_type은 가정(unit_type은 표시용 라벨)
 units:
@@ -17,15 +25,19 @@ actors:
   - { actor_id: reporter,   name: Reporter,   unit_id: SITE, roles: [REPORTER] }      # unit 가정
   - { actor_id: supervisor, name: Supervisor, unit_id: SITE, roles: [SUPERVISOR] }    # unit 가정
 
-zones: [B, C, D, D2]
+# F·G·G2·H는 시연 확장 구역(가정, A.20). 기존 B·C·D·D2와 관계를 두지 않는다.
+zones: [B, C, D, D2, F, G, G2, H]
 
 # SAME은 선언하지 않는다(같은 zone이면 자동). ADJACENT는 zones: [a, b](대칭),
 # BELOW는 { relation: BELOW, upper: <zone>, lower: <zone> }로만 선언한다.
 zone_relations:
   - { relation: ADJACENT, zones: [D, D2] }
+  - { relation: ADJACENT, zones: [G, G2] }  # 가정 (A.20)
 
-# available_intervals [[0, 180]]은 가정
+# available_intervals [[0, 3360]]은 가정. 야간은 근무 달력(CALENDAR)이 막는다(A.20).
+# SITE-GC-01(골리앗 크레인, 가정)은 두 협력사 공용이다. 유형을 CRANE과 나눠 A 장면의 자원 조회에 섞이지 않게 한다.
 resources:
-  - { resource_id: A-CR-01,    resource_type: CRANE, owner_unit_id: UA,   allowed_unit_ids: [UA], capacity: 1, available_intervals: [[0, 180]] }
-  - { resource_id: SITE-CR-01, resource_type: CRANE, owner_unit_id: SITE, allowed_unit_ids: [UA], capacity: 1, available_intervals: [[0, 180]] }
-  - { resource_id: B-CR-01,    resource_type: CRANE, owner_unit_id: UB,   allowed_unit_ids: [UB], capacity: 1, available_intervals: [[0, 180]] }
+  - { resource_id: A-CR-01,    resource_type: CRANE,  owner_unit_id: UA,   allowed_unit_ids: [UA],     capacity: 1, available_intervals: [[0, 3360]] }
+  - { resource_id: SITE-CR-01, resource_type: CRANE,  owner_unit_id: SITE, allowed_unit_ids: [UA],     capacity: 1, available_intervals: [[0, 3360]] }
+  - { resource_id: B-CR-01,    resource_type: CRANE,  owner_unit_id: UB,   allowed_unit_ids: [UB],     capacity: 1, available_intervals: [[0, 3360]] }
+  - { resource_id: SITE-GC-01, resource_type: GANTRY, owner_unit_id: SITE, allowed_unit_ids: [UA, UB], capacity: 1, available_intervals: [[0, 3360]] }

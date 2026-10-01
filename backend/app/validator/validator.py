@@ -33,6 +33,7 @@ BASIC_TO_CHECK = {
     "RESOURCE_TYPE": "C07",
     "RESOURCE_AUTH": "C08",
     "AVAILABILITY": "C09",
+    "CALENDAR": "C04",  # 근무 달력 (부록 A.20)
 }
 RULE_TYPE_TO_CHECK = {"CAPACITY": "C09", "SEPARATION": "C10"}
 NOT_MOVABLE = Movable(time=False, resource=False)

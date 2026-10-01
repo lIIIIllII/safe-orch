@@ -47,13 +47,17 @@ def choose_acting(
 ) -> tuple[str, Conflict]:
     """acting_unit과 주 충돌 (부록 A.15).
 
-    cause 작업이 충돌에 있으면 그 Unit, 아니면 충돌 작업 중 task_id가 가장 작은 작업의 Unit.
+    cause 작업이 충돌에 있으면 그 Unit, 아니면 충돌 작업 중 Plan에 없는 요청 작업(task_id가 가장
+    작은 것)의 Unit, 그것도 없으면 충돌 작업 중 task_id가 가장 작은 작업의 Unit (A.20 보충: 철회 뒤
+    RECHECK처럼 cause 작업이 충돌에 없을 때 남은 요청의 요청자가 재계획한다).
     주 충돌 = detect_conflicts 순서에서 acting_unit 작업을 포함한 첫 충돌.
     """
     tasks = facts.task_map()
     in_conflict = sorted({tid for c in conflicts for tid in c.task_ids})
+    in_plan = {a.task_id for a in facts.plan.assignments}
+    requests = [tid for tid in in_conflict if tid not in in_plan]
     cause_task = cause.get("task_id")
-    acting_task = cause_task if cause_task in in_conflict else in_conflict[0]
+    acting_task = cause_task if cause_task in in_conflict else (requests or in_conflict)[0]
     unit = tasks[acting_task].unit_id
     primary = next(c for c in conflicts if any(tasks[t].unit_id == unit for t in c.task_ids))
     return unit, primary

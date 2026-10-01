@@ -150,7 +150,7 @@ def test_startup_accepts_matching_seeded_pack(seeded):
             "undefined work_type 'WELDING'",
         ),
         ("plan_r0.yaml", lambda d: _task(d, "E").update(zone_id="Z9"), "undefined zone 'Z9'"),
-        ("plan_r0.yaml", lambda d: d["assignments"][0].update(task_id="Q"), "undefined task 'Q'"),
+        ("plan_r0.yaml", lambda d: d["assignments"][0].update(task_id="X9"), "undefined task 'X9'"),
         (
             "plan_r0.yaml",
             lambda d: d["assignments"][1].update(end=100),
@@ -228,10 +228,10 @@ def test_scenario_requested_start_must_equal_earliest_start(pack_copy):
         ([[0, 90], [60, 180]], "must start after previous end 90"),  # 겹침
         ([[0, 90], [90, 180]], "must start after previous end 90"),  # 맞닿음
         ([[120, 180], [0, 60]], "must start after previous end 180"),  # 정렬 안 됨
-        ([[0, 181]], "0 <= lo < hi <= 180"),  # Horizon 밖
-        ([[-10, 60]], "0 <= lo < hi <= 180"),  # 0 미만
-        ([[60, 60]], "0 <= lo < hi <= 180"),  # lo = hi
-        ([[90, 60]], "0 <= lo < hi <= 180"),  # lo > hi
+        ([[0, 3361]], "0 <= lo < hi <= 3360"),  # Horizon 밖
+        ([[-10, 60]], "0 <= lo < hi <= 3360"),  # 0 미만
+        ([[60, 60]], "0 <= lo < hi <= 3360"),  # lo = hi
+        ([[90, 60]], "0 <= lo < hi <= 3360"),  # lo > hi
     ],
 )
 def test_available_intervals_rejected(pack_copy, intervals, expected):
@@ -247,3 +247,101 @@ def test_available_intervals_disjoint_sorted_accepted(pack_copy):
         lambda d: d["resources"][0].update(available_intervals=[[0, 60], [61, 180]]),
     )
     assert load_pack(pack_copy).resources[0].available_intervals == ((0, 60), (61, 180))
+
+
+# ── 근무 달력·표시 정보·시연값 (부록 A.20) ─────────────────────
+
+
+def test_calendar_timezone_and_display_names_loaded(pack):
+    assert pack.horizon_minutes == 3360
+    assert pack.work_intervals == ((0, 480), (1440, 1920), (2880, 3360))
+    assert pack.timezone == "Asia/Seoul"
+    assert pack.work_types["PAINTING"].display_name == "도장"
+    assert {r.rule_id: r.display_name for r in pack.rules}["CAP-RESOURCE"] == "자원 중복 배정 금지"
+
+
+@pytest.mark.parametrize(
+    ("intervals", "expected"),
+    [
+        ([], "work_intervals missing or empty"),
+        ([[0, 480], [480, 960]], "must start after previous end 480"),  # 맞닿음
+        ([[0, 480], [400, 900]], "must start after previous end 480"),  # 겹침
+        ([[1440, 1920], [0, 480]], "must start after previous end 1920"),  # 정렬 안 됨
+        ([[0, 480], [2880, 3361]], "0 <= lo < hi <= 3360"),  # Horizon 밖
+        ([[0, "480"]], "must be [lo, hi] integer minutes"),
+    ],
+)
+def test_work_intervals_rejected(pack_copy, intervals, expected):
+    _edit(pack_copy, "site.yaml", lambda d: d.update(work_intervals=intervals))
+    assert expected in _reasons(pack_copy)
+
+
+def test_work_intervals_missing_rejected(pack_copy):
+    _edit(pack_copy, "site.yaml", lambda d: d.pop("work_intervals"))
+    assert "work_intervals missing or empty" in _reasons(pack_copy)
+
+
+def test_plan_r0_outside_calendar_rejected(pack_copy):
+    """고정 작업이 달력을 어기면 모든 Solver 호출이 INFEASIBLE이므로 로더에서 막는다."""
+    _edit(
+        pack_copy,
+        "site.yaml",
+        lambda d: d.update(work_intervals=[[30, 480], [1440, 1920], [2880, 3360]]),
+    )
+    reasons = _reasons(pack_copy)
+    assert "[0, 60) outside work_intervals (CALENDAR)" in reasons  # B 09:00–10:00
+    assert "new_task: requested outside work_intervals" in reasons  # A 09:00–09:30
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (lambda d: d.pop("timezone"), "timezone missing"),
+        (lambda d: d.update(timezone="Mars/Olympus"), "unknown timezone 'Mars/Olympus'"),
+    ],
+)
+def test_timezone_rejected(pack_copy, mutate, expected):
+    _edit(pack_copy, "site.yaml", mutate)
+    assert expected in _reasons(pack_copy)
+
+
+def test_display_names_required(pack_copy):
+    _edit(pack_copy, "pack.yaml", lambda d: d["work_types"]["PAINTING"].pop("display_name"))
+    _edit(pack_copy, "rules.yaml", lambda d: d["rules"][2].pop("display_name"))
+    reasons = _reasons(pack_copy)
+    assert "pack.yaml.work_types.PAINTING.display_name: Field required" in reasons
+    assert "rules.yaml.rules[2].display_name: Field required" in reasons
+
+
+def test_demo_requests_and_events_loaded(pack):
+    assert [(d.task_id, d.requester) for d in pack.demo_requests] == [
+        ("N1", "planner_a"),
+        ("N2", "planner_a"),
+        ("N3", "planner_b"),
+        ("N4", "planner_a"),
+        ("N5", "planner_b"),
+    ]
+    assert pack.new_task.label and "label" not in pack.new_task.model_dump()
+    assert pack.demo_events[0].text == "도장 준비 15분 늦어져 10시부터"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (lambda r: r.update(requester="foreman_a2"), "is not UNIT_PLANNER"),
+        (lambda r: r.update(requester="nobody"), "undefined actor 'nobody'"),
+        (lambda r: r.update(zone_id="Z9"), "undefined zone 'Z9'"),
+        (lambda r: r.update(requested_resource_id="A-CR-01"), "resource type mismatch"),
+        (lambda r: r.update(requested_resource_id=None), "needs required_resource_type"),
+        (lambda r: r.update(earliest_start=1000, latest_start=1000), "outside work_intervals"),
+        (lambda r: r.update(task_id="K"), "duplicate id 'K'"),
+    ],
+)
+def test_demo_requests_rejected(pack_copy, mutate, expected):
+    _edit(pack_copy, "scenario.yaml", lambda d: mutate(d["demo_requests"][0]))  # N1
+    assert expected in _reasons(pack_copy)
+
+
+def test_demo_event_target_must_exist(pack_copy):
+    _edit(pack_copy, "scenario.yaml", lambda d: d["demo_events"][0].update(target_task_id="X9"))
+    assert "undefined task 'X9'" in _reasons(pack_copy)

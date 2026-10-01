@@ -64,7 +64,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p2",
+        "replanning-p3",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)

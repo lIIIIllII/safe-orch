@@ -165,6 +165,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "last_guard": last_guard,
         "recent_steps": recent,
         "budget_remaining": budget_remaining(run),
+        "work_intervals": [list(iv) for iv in facts.work_intervals],  # 근무 달력 (A.20)
     }
     return Observation(
         run=run,

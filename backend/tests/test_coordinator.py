@@ -16,7 +16,7 @@ from app.coordinator.dispatcher import (
     requeue_claimed_jobs,
     run_until_idle,
 )
-from app.domain.models import Conflict
+from app.domain.models import Assignment, Conflict
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
 from app.solver.candidate import build_candidate
@@ -270,6 +270,7 @@ def test_choose_acting_cause_then_smallest_task():
             "site_id": "S",
             "pack_hash": "h",
             "horizon_minutes": 60,
+            "work_intervals": [[0, 60]],
             "context_version": 1,
             "plan_revision": 0,
             "tasks": [task("A", "UA"), task("B", "UB"), task("E", "UB")],
@@ -284,6 +285,22 @@ def test_choose_acting_cause_then_smallest_task():
     assert transitions.choose_acting(facts, [c_ab, c_e], {"task_id": "B"}) == ("UB", c_ab)
     assert transitions.choose_acting(facts, [c_ab, c_e], {"task_id": "E"}) == ("UB", c_ab)
     assert transitions.choose_acting(facts, [c_e, c_ab], {}) == ("UA", c_ab)  # 가장 작은 A
+
+    # cause 작업이 충돌에 없으면(철회 뒤 RECHECK) Plan에 없는 요청 작업의 Unit이 먼저다 (A.20)
+    in_plan = facts.model_copy(
+        update={
+            "plan": facts.plan.model_copy(
+                update={
+                    "assignments": (
+                        Assignment(task_id="A", start=0, end=10),
+                        Assignment(task_id="E", start=0, end=10),
+                    )
+                }
+            )
+        }
+    )
+    withdraw = {"kind": "WITHDRAW", "task_id": "N5"}
+    assert transitions.choose_acting(in_plan, [c_ab], withdraw) == ("UB", c_ab)  # 요청 B
 
 
 # ── VALIDATE ───────────────────────────────────────────────────

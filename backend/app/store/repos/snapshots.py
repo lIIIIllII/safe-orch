@@ -35,6 +35,7 @@ def build_snapshot_content(
         site_id=site.site_id,
         pack_hash=site.pack_hash,
         horizon_minutes=site.horizon_minutes,
+        work_intervals=pack.work_intervals,  # Pack에서 (pack_hash로 고정, 부록 A.20)
         context_version=site.context_version,
         plan_revision=site.plan_revision,
         tasks=tuple(t for t in list_current_tasks(conn, site_id, pack) if t.lifecycle == "READY"),
