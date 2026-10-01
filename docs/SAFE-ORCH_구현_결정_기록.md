@@ -1099,14 +1099,14 @@
 - 아키텍처 테스트 추가: graph ↛ registry, specs·prompts ↛ store·commands·solver, observers·executors는 registry(와 tests)만 import, registry는 runtime만 import, ToolGateway(`tool_gateway.py`) ↛ registry·observers·executors, executors에 approve·commit·release·confirm·waive 이름의 함수 없음(I-01).
 
 **2. 공통과 Replanning 전용의 경계** (코드 이동은 잘라 붙이기만 한다. 옮기면서 로직·이름·문구를 고치지 않는다)
-- `observe.py`(공통): `Observation`(run, versions, data, available, extra — Replanning의 주 충돌은 `extra`로), `budget_remaining(run, spec)`, `budget_exhausted`, `last_guard`·`recent_steps` 계산.
+- `observe.py`(공통): `Observation`(run, versions, data, available, spec)과 `active`·`budget_exhausted`, `budget_remaining(run, spec)`. Replanning 관찰은 이것을 상속해 주 충돌(`primary`)을 더한다(옮긴 코드가 `obs.primary`를 그대로 쓰게). `last_guard`·`recent_steps` 계산은 옮긴 코드를 고치지 않으려고 Replanning 관찰에 그대로 둔다(두 번째 Agent가 쓸 때 공통으로 올린다).
 - `observers/replanning.py`: Snapshot·충돌·주 충돌·실효 탐색 키·acting_tasks·자원 조회·관찰 JSON 조립.
-- `tool_gateway.py`(공통): `_active`, LLM 시도 차감, MALFORMED(`_parse`는 spec.actions로), `_reject`와 연속 2회 규칙, `_llm_failure`, `_stale_observation`, `_complete`(AgentStep·CommandResult), ACTION_NOT_AVAILABLE 틀(허용 판정은 실행기), 대기 진입 재확인 도우미, 단일 tx 실행 틀.
-- `executors/replanning.py`: 허용 판정(`_permitted`), SOLVE·TRY의 3단계, LIST, ASK와 `movability_text`, ESCALATE 효과, 거절 배정 중복 검사.
+- `tool_gateway.py`(공통): `_active`, LLM 시도 차감, MALFORMED(`_parse`는 spec.actions로), `_reject`와 연속 2회 규칙, `_llm_failure`, `_stale_observation`, `_complete`(AgentStep·CommandResult). 실행기는 이 도우미를 받아 STALE_OBSERVATION·ACTION_NOT_AVAILABLE을 판정한다. "대기 진입 재확인 도우미"와 "단일 tx 실행 틀"은 옮긴 코드를 고쳐야 공통으로 뺄 수 있으므로 이번에는 Replanning 실행기 안에 그대로 두고, Coordination을 붙일 때 공통으로 올린다.
+- `executors/replanning.py`: 허용 판정(`_permitted`), SOLVE·TRY의 3단계, LIST, ASK와 `movability_text`, ESCALATE 효과, 거절 배정 중복 검사. 관찰 함수(`build_observation`·`current_snapshot`·`assignable_resources`)는 observers를 import하지 않고 `binding.observer`로 부른다(호출 4곳에 `self.observer.` 접두어만 붙음).
 
 **3. Coordinator**
 - `runtime.invoke`가 Run의 agent_type으로 binding을 고른다. START_RUN·RESUME_RUN 핸들러는 그대로이고, START_RUN의 exec_contract_version만 `runtime.exec_contract_version(agent_type)`에서 받는다.
-- 등록되지 않은 agent_type이면 그래프를 부르지 않고 Run을 ERROR(`AGENT_TYPE_NOT_REGISTERED`)로 끝낸다(fail-closed, RUNNING으로 남아 열린 Case가 되지 않게). labels.ts end_reason 접두어에 더한다.
+- 등록되지 않은 agent_type이면 그래프를 부르지 않고 Run을 ERROR(`AGENT_TYPE_NOT_REGISTERED: <agent_type>`)로 끝낸다(fail-closed, RUNNING으로 남아 열린 Case가 되지 않게). labels.ts end_reason 접두어에 더한다. 그런 Run의 exec_contract_version은 `AGENT_TYPE_NOT_REGISTERED`로 기록된다.
 - dedupe 키 `START_RUN:REPLANNING:ctx<n>:plan<r>`은 그대로다.
 - "열린 Case"는 의미를 바꾸지 않고 `CASE_AGENT_TYPES = ("REPLANNING",)` 상수 하나로 모은다(`has_open_case`, `end_case_run`). Coordination의 Case 관계는 그 Agent를 붙일 때 정한다.
 - 철회가 모든 열린 Run의 `input_ref.conflict`를 보는 것은 Replanning 전용 해석이다. 이번에는 고치지 않는다(Coordination 때 agent_type별로 나눈다).
@@ -1132,3 +1132,21 @@
 **7. 단계**
 - 1단계(동작 변화 0): AgentSpec·registry, 공통/Replanning 분리, runtime의 agent_type 선택, `AGENT_TYPE_NOT_REGISTERED`, `CASE_AGENT_TYPES`, 아키텍처 테스트. prompt는 p7 그대로.
 - 2단계: site.yaml `site_description`, 로더 검증, `render_system(pack)`, p8, prompt 테스트, live run `--path B` 1회, reset 안내.
+
+**1단계 구현 기록** (동작 변화 0)
+- 골든 테스트를 먼저 커밋했다(`5d43725`, 리팩터링 전 코드). 기본안 B 전체 hash `67a18e61…`, Gateway 거절 경로 hash `c7bb35a4…`가 리팩터링 뒤에도 같다(3회 반복 실행해 결정적임을 확인).
+- 바뀐 파일:
+  - `agents/types.py`: `AgentSpec`·`AgentBinding`.
+  - `agents/specs/replanning.py`: 기존 이름 그대로 두고 `SPEC = AgentSpec(...)`만 더함.
+  - `agents/registry.py`(새 파일): `BINDINGS = {"REPLANNING": …}`, exec_contract_version `replanning-d5`.
+  - `agents/observe.py`: 공통 `Observation`·`budget_remaining(run, spec)`만 남김. 나머지는 `agents/observers/replanning.py`로 옮김(잘라 붙이기. `build_observation`만 공통 함수 호출 2곳에 spec 인자 추가: `budget_remaining(run, spec.SPEC)`, `Observation(..., spec=spec.SPEC, ...)`).
+  - `agents/tool_gateway.py`: 공통 판정만 남김. `_parse`가 spec.actions·summary_max를 받고, `execute`가 MALFORMED가 아니면 `self.executor.run(...)`을 부른다. Replanning 메서드(`_permitted`·`_single_tx`·`_ask`·`_escalate`·`_solve`)와 모듈 함수(`_solver_summary`·`movability_text`·`assignments_hash`·`_rejected_duplicate`)는 `agents/executors/replanning.py`로 옮김. 공통 도우미는 실행기 `__init__`에서 bound method로 받아 옮긴 코드의 `self._active` 등이 그대로 동작한다. AST 비교로 옮긴 함수가 원본과 같음을 확인했다(차이는 관찰 함수 호출 4곳의 `self.observer.` 접두어와 ruff format의 줄바꿈 1곳).
+  - `agents/runtime.py`: Run의 agent_type으로 binding 선택, `exec_contract_version(agent_type)`, 미등록이면 ERROR. `EXEC_CONTRACT_VERSION` 상수는 없앴다.
+  - `agents/graph.py`: spec을 `AgentSpec`으로 받음(`spec.goal`).
+  - `coordinator/transitions.py`: START_RUN의 exec_contract_version을 `runtime.exec_contract_version(agent_type)`에서 받음.
+  - `store/repos/runs.py`·`cases.py`: `CASE_AGENT_TYPES = ("REPLANNING",)`.
+  - `frontend/src/labels.ts`: end_reason 접두어 `AGENT_TYPE_NOT_REGISTERED`.
+- 테스트: 425 → 433(+8). 아키텍처 6개(graph ↛ registry·observers·executors, specs·prompts 순수, observers·executors는 registry만 import, registry는 runtime만 import, ToolGateway ↛ registry·observers·executors, 실행기 접근은 ToolGateway의 `__init__`·`execute`에만, Gateway·실행기에 승인·확정·해제·확인·수용 이름의 함수 없음), 등록부 2개(binding 값, 미등록 agent_type → ERROR·그래프 미호출).
+- 기존 테스트 수정은 import 경로 2곳뿐이다: `test_llm.py`의 `build_observation`(→ `observers.replanning`), `test_agents.py`의 `tool_gateway.cpsat` monkeypatch(→ `cpsat` 모듈).
+- prompt는 `replanning-p7` 그대로이고 fingerprint 테스트가 통과한다. 기본안 B E2E step 5·Solver 3·사람 라운드 1 그대로. `verify_demo_values`·`npm run build`·`npm run lint` 통과.
+- 남은 것(2단계): site.yaml `site_description`, 로더 검증, `render_system(pack)`, p8, prompt 테스트, live run `--path B` 1회, reset 안내.

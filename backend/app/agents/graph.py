@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.llm import ChatModel, bind, invoke_with_retry, model_id
-from app.agents.types import GatewayResult, StepMeta
+from app.agents.types import AgentSpec, GatewayResult, StepMeta
 
 
 class ObservationLike(Protocol):
@@ -53,9 +53,9 @@ class State(TypedDict, total=False):
     end: tuple[str, str] | None
 
 
-def build_graph(port: RunPort, model: ChatModel, spec: ModuleType, prompt: ModuleType) -> Any:
-    """spec: AgentSpec 모듈(GOAL, tool_schemas), prompt: SYSTEM·PROMPT_VERSION·render_observation."""
-    system = SystemMessage(prompt.SYSTEM.format(goal=spec.GOAL))
+def build_graph(port: RunPort, model: ChatModel, spec: AgentSpec, prompt: ModuleType) -> Any:
+    """spec: AgentSpec(goal, tool_schemas), prompt: SYSTEM·PROMPT_VERSION·render_observation (A.23)."""
+    system = SystemMessage(prompt.SYSTEM.format(goal=spec.goal))
 
     def observe(state: State) -> State:
         obs = port.observe(state["run_id"])

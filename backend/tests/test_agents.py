@@ -8,9 +8,10 @@ from conftest import add_run
 from langchain_core.messages import AIMessage
 from scripted import ScriptedChatModel, call, escalate, solve
 
-from app.agents import runtime, tool_gateway
+from app.agents import runtime
 from app.agents.prompts.replanning import OBS_HEADER
 from app.agents.specs import replanning as spec
+from app.solver import cpsat
 from app.store import db
 from app.store.repos.commands import get_command_result
 from app.store.repos.dispatch import list_jobs
@@ -236,7 +237,7 @@ def test_stale_observation_applies_to_escalate(with_a):
 
 
 def test_stale_snapshot_at_registration(with_a, monkeypatch):
-    real = tool_gateway.cpsat.solve
+    real = cpsat.solve
 
     def solve_then_change(*args):
         result = real(*args)
@@ -244,7 +245,7 @@ def test_stale_snapshot_at_registration(with_a, monkeypatch):
             bump_context_version(tx, with_a.site_id)
         return result
 
-    monkeypatch.setattr(tool_gateway.cpsat, "solve", solve_then_change)
+    monkeypatch.setattr(cpsat, "solve", solve_then_change)
     run, steps, _ = _run(with_a, [solve("L1"), escalate()])
     assert _guards(steps)[0] == ("COMPLETED", "CONTINUE", "STALE_SNAPSHOT")
     with db.read() as conn:
@@ -311,3 +312,36 @@ def test_t51_error_run_can_continue_but_terminal_cannot(with_a):
     assert run.status == "ERROR"
     with db.write() as tx:  # §12 continue: ERROR → RUNNING은 허용
         tx.execute("UPDATE agent_run SET status = 'RUNNING', end_reason = NULL")
+
+
+# ── agent_type 등록부 (부록 A.23) ──────────────────────────────
+
+
+def test_registry_binds_replanning_spec_prompt_observer_executor():
+    from app.agents.registry import BINDINGS
+
+    [(agent_type, binding)] = BINDINGS.items()
+    assert agent_type == binding.spec.agent_type == spec.AGENT_TYPE == "REPLANNING"
+    assert binding.spec is spec.SPEC
+    assert (binding.spec.goal, binding.spec.recursion_limit) == (spec.GOAL, spec.RECURSION_LIMIT)
+    assert dict(binding.spec.budget) == {
+        "steps": spec.MAX_STEPS,
+        "llm_attempts": spec.MAX_LLM_ATTEMPTS,
+        "human_rounds": spec.MAX_HUMAN_ROUNDS,
+        "solver_calls": spec.MAX_SOLVER_CALLS,
+    }
+    assert binding.prompt.PROMPT_VERSION == "replanning-p7"
+    assert runtime.exec_contract_version("REPLANNING") == "replanning-d5"
+    assert runtime.exec_contract_version("COORDINATION") == "AGENT_TYPE_NOT_REGISTERED"
+
+
+def test_unregistered_agent_type_ends_run_as_error_without_graph(with_a):
+    """등록되지 않은 agent_type은 그래프를 부르지 않고 ERROR로 끝낸다(열린 Case로 남지 않음)."""
+    add_run(with_a, "run_coord", agent_type="COORDINATION", input_ref=CONFLICT)
+    model = ScriptedChatModel([solve("L0")])
+    run = runtime.invoke(with_a, {"run_id": "run_coord"}, model)
+    assert (run.status, run.end_reason) == (
+        "ERROR",
+        "AGENT_TYPE_NOT_REGISTERED: COORDINATION",
+    )
+    assert model.calls == [] and run.steps_used == 0 and _count("agent_step") == 0

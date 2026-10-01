@@ -150,6 +150,8 @@ export function endReason(code: string | null): string {
       return `${rest}이(가) 취소`
     case 'MODEL_UNAVAILABLE':
       return `모델 준비 실패: ${rest}`
+    case 'AGENT_TYPE_NOT_REGISTERED':
+      return `등록되지 않은 Agent 유형: ${rest}`
     case 'EXCEPTION':
       return `예외: ${rest}`
     case 'LLM_CONFIG':

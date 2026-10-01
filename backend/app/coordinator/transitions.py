@@ -240,7 +240,7 @@ def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -
                     acting_actor_id=payload.get("acting_actor_id"),
                     acting_unit_id=payload["acting_unit_id"],
                     input_ref={**payload, "job_id": job["job_id"]},
-                    exec_contract_version=runtime.EXEC_CONTRACT_VERSION,
+                    exec_contract_version=runtime.exec_contract_version(payload["agent_type"]),
                     status="RUNNING",
                 ),
             )

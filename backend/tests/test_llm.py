@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage
 from scripted import ScriptedChatModel, call, escalate, solve
 
 from app.agents import llm, runtime
-from app.agents.observe import build_observation
+from app.agents.observers.replanning import build_observation
 from app.agents.prompts import replanning as prompt
 from app.config import Settings
 from app.main import app

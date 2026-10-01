@@ -1,7 +1,9 @@
 """그래프와 Gateway가 주고받는 값 (설계서 §11.2, 부록 A.16). store를 import하지 않는다."""
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Literal
+from types import ModuleType
+from typing import Any, Literal
 
 GatewayKind = Literal["CONTINUE", "WAIT", "DONE", "REJECTED", "INACTIVE"]
 
@@ -25,3 +27,36 @@ class GatewayResult:
     reason: str | None = None
     end_status: str | None = None
     end_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentSpec:
+    """agent_type별 순수 데이터 (부록 A.23). graph는 이것만 받는다. store를 모른다.
+
+    budget: 카운터 이름(steps·llm_attempts·human_rounds·solver_calls) → 한도.
+    """
+
+    agent_type: str
+    goal: str
+    budget: Mapping[str, int]
+    recursion_limit: int
+    summary_max: int
+    actions: Mapping[str, Any]
+    available_actions: Callable[[dict[str, Any]], dict[str, dict[str, Any]]]
+    tool_schemas: Callable[[dict[str, dict[str, Any]]], list[dict[str, Any]]]
+
+
+@dataclass(frozen=True)
+class AgentBinding:
+    """agent_type 하나의 묶음 (부록 A.23). registry가 만들고 runtime이 고른다.
+
+    observer: build_observation(conn, pack, run_id)을 가진 모듈. executor: ToolGateway가 만들고
+    ToolGateway.execute 안에서만 부르는 Action 실행기 클래스. ToolGateway는 registry를 import하지 않고
+    runtime이 넘긴 이 값을 쓴다.
+    """
+
+    spec: AgentSpec
+    prompt: ModuleType
+    observer: ModuleType
+    executor: type
+    exec_contract_version: str

@@ -3,11 +3,14 @@
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터(untried_levels 등)만 보고 계산한다.
 Action: SOLVE_WITH_SCOPE, LIST_ASSIGNABLE_RESOURCES, TRY_ALTERNATIVE_RESOURCE, ASK_TASK_OWNER,
 ESCALATE_NO_SOLUTION (A.21 5). ASK는 계산으로 시도할 범위가 없을 때만 연다(A.21 0-2, 서버 정책).
+모듈 이름(GOAL, ACTIONS, tool_schemas 등)은 그대로 두고, 그 값으로 SPEC(AgentSpec)을 만든다 (A.23).
 """
 
 from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.agents.types import AgentSpec
 
 AGENT_TYPE = "REPLANNING"
 GOAL = (
@@ -218,3 +221,20 @@ def tool_schemas(available: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return tools
+
+
+SPEC = AgentSpec(
+    agent_type=AGENT_TYPE,
+    goal=GOAL,
+    budget={
+        "steps": MAX_STEPS,
+        "llm_attempts": MAX_LLM_ATTEMPTS,
+        "human_rounds": MAX_HUMAN_ROUNDS,
+        "solver_calls": MAX_SOLVER_CALLS,
+    },
+    recursion_limit=RECURSION_LIMIT,
+    summary_max=SUMMARY_MAX,
+    actions=ACTIONS,
+    available_actions=available_actions,
+    tool_schemas=tool_schemas,
+)

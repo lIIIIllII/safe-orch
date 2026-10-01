@@ -104,8 +104,88 @@ def test_agent_specs_do_not_import_solver():
 def test_agent_graph_does_not_import_agent_store_modules():
     """graph.py는 port로만 DB에 닿는다. store를 쓰는 agents 모듈도 import하지 않는다 (부록 A.16)."""
     files = [APP / "agents" / "graph.py"]
-    forbidden = ["app.agents.runtime", "app.agents.tool_gateway", "app.agents.observe"]
+    forbidden = [
+        "app.agents.runtime",
+        "app.agents.tool_gateway",
+        "app.agents.observe",
+        "app.agents.registry",
+        "app.agents.observers",
+        "app.agents.executors",
+    ]
     assert _violations(files, forbidden) == []
+
+
+# ── agent_type 등록 구조 (부록 A.23) ───────────────────────────
+
+
+AGENTS = APP / "agents"
+
+
+def test_agent_specs_and_prompts_are_pure():
+    """specs·prompts는 store·commands·solver를 import하지 않는다 (graph가 받는 순수 데이터)."""
+    files = _py_files(AGENTS / "specs", AGENTS / "prompts")
+    assert files and _violations(files, ["app.store", "app.commands", "app.solver"]) == []
+
+
+def _importers(target: str, allowed: set[Path]) -> list[str]:
+    bad = []
+    for f in _py_files(APP):
+        if f in allowed:
+            continue
+        mods = _imports(f, ast.parse(f.read_text(encoding="utf-8")))
+        bad += [f"{f.relative_to(BACKEND)}: {m}" for m in sorted(_hits(mods, target))]
+    return bad
+
+
+def test_only_registry_imports_observers_and_executors():
+    allowed = {AGENTS / "registry.py"}
+    assert _importers("app.agents.observers", allowed) == []
+    assert _importers("app.agents.executors", allowed) == []
+
+
+def test_only_runtime_imports_registry():
+    assert _importers("app.agents.registry", {AGENTS / "runtime.py"}) == []
+
+
+def test_tool_gateway_does_not_import_registry_or_agent_modules():
+    """ToolGateway는 runtime이 넘긴 binding을 쓴다 (부록 A.23)."""
+    forbidden = ["app.agents.registry", "app.agents.observers", "app.agents.executors"]
+    assert _violations([AGENTS / "tool_gateway.py"], forbidden) == []
+
+
+def _attribute_sites(attr: str) -> set[tuple[str, str]]:
+    """app 코드에서 `<x>.<attr>`를 읽는 (파일, 감싼 함수) 목록."""
+    sites = set()
+    for f in _py_files(APP):
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Attribute) and node.attr == attr:
+                    sites.add((f.relative_to(APP).as_posix(), fn.name))
+    return sites
+
+
+def test_executor_is_called_only_inside_tool_gateway_execute():
+    """실행기는 ToolGateway가 만들고(__init__) execute 안에서만 부른다. 도구 실행 경로는 하나다 (§11.2)."""
+    assert _attribute_sites("executor") == {
+        ("agents/tool_gateway.py", "__init__"),
+        ("agents/tool_gateway.py", "execute"),
+    }
+
+
+def test_gateway_and_executors_have_no_authority_functions():
+    """승인·확정·Hold 해제·Proposal 확인·미응답 수용 함수가 코드상 없다 (I-01, §3.2)."""
+    words = ("approve", "commit", "release", "confirm", "waive")
+    bad = []
+    for f in _py_files(AGENTS / "tool_gateway.py", AGENTS / "executors"):
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and any(
+                w in node.name.lower() for w in words
+            ):
+                bad.append(f"{f.relative_to(BACKEND)}: {node.name}")
+    assert bad == []
 
 
 def test_commands_do_not_import_agents():

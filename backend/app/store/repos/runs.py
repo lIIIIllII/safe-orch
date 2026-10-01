@@ -10,6 +10,8 @@ from app.domain.models import AgentRun
 from app.store.repos._rows import dumps, loads, rows
 
 ACTIVE = ("RUNNING", "WAITING_HUMAN")
+# 열린 Case를 이루는 agent_type (A.16·A.23). Coordination의 Case 관계는 그 Agent를 붙일 때 정한다.
+CASE_AGENT_TYPES = ("REPLANNING",)
 
 
 def insert_run(tx: sqlite3.Connection, site_id: str, run: AgentRun) -> None:
@@ -286,12 +288,13 @@ def run_for_solver_result(conn: sqlite3.Connection, solver_result_id: str) -> st
 
 
 def has_open_case(conn: sqlite3.Connection, site_id: str) -> bool:
-    """열린 Case = REPLANNING Run이 RUNNING 또는 WAITING_HUMAN (부록 A.16)."""
+    """열린 Case = CASE_AGENT_TYPES Run이 RUNNING 또는 WAITING_HUMAN (부록 A.16·A.23)."""
+    marks = ", ".join("?" for _ in CASE_AGENT_TYPES)
     return bool(
         conn.execute(
-            "SELECT 1 FROM agent_run WHERE site_id = ? AND agent_type = 'REPLANNING'"
+            f"SELECT 1 FROM agent_run WHERE site_id = ? AND agent_type IN ({marks})"
             " AND status IN ('RUNNING', 'WAITING_HUMAN') LIMIT 1",
-            (site_id,),
+            (site_id, *CASE_AGENT_TYPES),
         ).fetchone()
     )
 

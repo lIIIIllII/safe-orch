@@ -17,7 +17,7 @@ from app.packs.loader import LoadedPack
 from app.store.repos._rows import loads, rows
 from app.store.repos.consents import insert_consent
 from app.store.repos.dispatch import register_job
-from app.store.repos.runs import ACTIVE, end_run, get_run, has_open_case
+from app.store.repos.runs import ACTIVE, CASE_AGENT_TYPES, end_run, get_run, has_open_case
 from app.store.repos.site import bump_context_version, get_site
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
@@ -116,7 +116,7 @@ def end_case_run(
     if before is None or not end_run(tx, run_id, status, end_reason, from_statuses):
         return False
     cancel_requests(tx, run_id)
-    if before.status in ACTIVE and before.agent_type == "REPLANNING":
+    if before.status in ACTIVE and before.agent_type in CASE_AGENT_TYPES:
         close_case(tx, pack)
     return True
 
