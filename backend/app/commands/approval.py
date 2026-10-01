@@ -9,10 +9,18 @@ import sqlite3
 from pydantic import Field
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
+from app.config import get_settings
 from app.domain.ids import new_id
 from app.domain.models import Axis, Candidate, FeedbackConstraint, Plan, Validation
 from app.packs.loader import LoadedPack
-from app.store.repos.cases import close_case, end_case_run, register_recheck, wake_run
+from app.store.repos.cases import (
+    close_case,
+    end_candidate_runs,
+    end_case_run,
+    register_coordination,
+    register_recheck,
+    wake_run,
+)
 from app.store.repos.consultations import CandidateState, candidate_state, consultation_view
 from app.store.repos.decisions import insert_constraint, insert_decision
 from app.store.repos.events import list_active_holds
@@ -152,6 +160,26 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
             run_id = None
     if run_id is None:
         close_case(tx, ctx.pack)
+    # 이 후보의 협의 Run도 끝내고, 설정이 켜졌으면 확정 통지 Run을 등록한다 (A.24 2)
+    end_candidate_runs(
+        tx, ctx.pack, candidate.candidate_id, "SUCCEEDED", f"COMMITTED:{plan_revision}"
+    )
+    maker = (
+        run_for_solver_result(tx, candidate.solver_result_id)
+        if candidate.solver_result_id is not None
+        else None
+    )
+    maker_run = get_run(tx, maker) if maker else None
+    if get_settings().coordination_enabled and maker_run is not None:
+        register_coordination(
+            tx,
+            ctx.pack,
+            "NOTICE",
+            f"START_RUN:COORDINATION:NOTICE:plan{plan_revision}",
+            candidate.candidate_id,
+            maker_run.case_id,
+            plan_revision=plan_revision,
+        )
     register_recheck(tx, site_id, {"kind": "COMMIT", "plan_revision": plan_revision})
     r.refs = {
         "plan_revision": plan_revision,
@@ -271,6 +299,10 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
             constraint_ids.append(fc.constraint_id)
     r.refs = {"decision_id": decision_id, "constraint_ids": constraint_ids}
     r.audit_reason = body.reason_code
+    # 후보가 거절되었으므로 그 후보의 협의 Run을 끝낸다(보낸 요청 정리) (A.24 2)
+    end_candidate_runs(
+        tx, ctx.pack, candidate.candidate_id, "STALE", f"REJECTED:{candidate.candidate_id}"
+    )
     # 후보를 만든 Replanning Run에 거절을 알린다 (§9.2·§11.3 표·§11.5, A.21 3).
     # 제약 있는 거절은 wake, 제약 없는 거절은 Case의 2번째면 이관(T33), 아니면 wake.
     run_id = (

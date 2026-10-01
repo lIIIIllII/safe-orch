@@ -320,8 +320,10 @@ def test_t51_error_run_can_continue_but_terminal_cannot(with_a):
 def test_registry_binds_replanning_spec_prompt_observer_executor():
     from app.agents.registry import BINDINGS
 
-    [(agent_type, binding)] = BINDINGS.items()
-    assert agent_type == binding.spec.agent_type == spec.AGENT_TYPE == "REPLANNING"
+    assert sorted(BINDINGS) == ["COORDINATION", "REPLANNING"]  # A.24
+    assert all(t == b.spec.agent_type for t, b in BINDINGS.items())
+    binding = BINDINGS["REPLANNING"]
+    assert binding.spec.agent_type == spec.AGENT_TYPE == "REPLANNING"
     assert binding.spec is spec.SPEC
     assert (binding.spec.goal, binding.spec.recursion_limit) == (spec.GOAL, spec.RECURSION_LIMIT)
     assert dict(binding.spec.budget) == {
@@ -332,16 +334,14 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
     }
     assert binding.prompt.PROMPT_VERSION == "replanning-p8"
     assert runtime.exec_contract_version("REPLANNING") == "replanning-d5"
-    assert runtime.exec_contract_version("COORDINATION") == "AGENT_TYPE_NOT_REGISTERED"
+    assert runtime.exec_contract_version("COORDINATION") == "coordination-a24"
+    assert runtime.exec_contract_version("INTAKE") == "AGENT_TYPE_NOT_REGISTERED"
 
 
 def test_unregistered_agent_type_ends_run_as_error_without_graph(with_a):
     """등록되지 않은 agent_type은 그래프를 부르지 않고 ERROR로 끝낸다(열린 Case로 남지 않음)."""
-    add_run(with_a, "run_coord", agent_type="COORDINATION", input_ref=CONFLICT)
+    add_run(with_a, "run_intake", agent_type="INTAKE", input_ref=CONFLICT)
     model = ScriptedChatModel([solve("L0")])
-    run = runtime.invoke(with_a, {"run_id": "run_coord"}, model)
-    assert (run.status, run.end_reason) == (
-        "ERROR",
-        "AGENT_TYPE_NOT_REGISTERED: COORDINATION",
-    )
+    run = runtime.invoke(with_a, {"run_id": "run_intake"}, model)
+    assert (run.status, run.end_reason) == ("ERROR", "AGENT_TYPE_NOT_REGISTERED: INTAKE")
     assert model.calls == [] and run.steps_used == 0 and _count("agent_step") == 0

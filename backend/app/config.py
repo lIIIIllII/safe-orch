@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     pack: str = "shipyard"  # domain_packs/<pack>/ (부록 A.4)
     dispatch_worker: bool = True  # 기동 시 dispatch 워커 스레드 시작 (부록 A.15)
     dispatch_poll_s: float = 0.5
+    # PASS 후보에 동의 대기 항목이 있으면 Coordination이 담당자와 협의한다(기본안 A, 부록 A.24).
+    # 꺼져 있으면 지금처럼 Supervisor 검토 대기(기본안 B).
+    coordination_enabled: bool = False
 
     @field_validator("openai_temperature", "openai_seed", "openai_reasoning_effort", mode="before")
     @classmethod

@@ -18,7 +18,7 @@ from app.store.repos._rows import loads, rows
 from app.store.repos.consents import insert_consent
 from app.store.repos.dispatch import register_job
 from app.store.repos.runs import ACTIVE, CASE_AGENT_TYPES, end_run, get_run, has_open_case
-from app.store.repos.site import bump_context_version, get_site
+from app.store.repos.site import bump_context_version, get_site, list_actors
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
 
@@ -84,9 +84,14 @@ def claim_resume(tx: sqlite3.Connection, run_id: str, wait_generation: int) -> b
 
 
 def cancel_requests(tx: sqlite3.Connection, run_id: str) -> None:
-    """Run이 끝나면 보낸 요청은 효력을 잃는다: 메시지 OPEN → CANCELLED, 제안 PENDING → STALE."""
+    """Run이 끝나면 보낸 요청은 효력을 잃는다: 메시지 OPEN → CANCELLED, 제안 PENDING → STALE.
+
+    통지(NOTICE)는 답을 받는 요청이 아니므로 OPEN으로 남긴다 (A.24).
+    """
     tx.execute(
-        "UPDATE message SET status = 'CANCELLED' WHERE run_id = ? AND status = 'OPEN'", (run_id,)
+        "UPDATE message SET status = 'CANCELLED'"
+        " WHERE run_id = ? AND status = 'OPEN' AND type <> 'NOTICE'",
+        (run_id,),
     )
     tx.execute(
         "UPDATE proposal SET status = 'STALE' WHERE run_id = ? AND status = 'PENDING'", (run_id,)
@@ -119,6 +124,50 @@ def end_case_run(
     if before.status in ACTIVE and before.agent_type in CASE_AGENT_TYPES:
         close_case(tx, pack)
     return True
+
+
+def end_candidate_runs(
+    tx: sqlite3.Connection, pack: LoadedPack, candidate_id: str, status: str, end_reason: str
+) -> list[str]:
+    """후보에 걸린 열린 협의 Run(COORDINATION, phase CONSULT)을 끝낸다 (A.24 2). 끝낸 run_id."""
+    ids = [
+        r[0]
+        for r in tx.execute(
+            "SELECT run_id FROM agent_run WHERE site_id = ? AND agent_type = 'COORDINATION'"
+            " AND status IN (?, ?) AND json_extract(input_ref, '$.phase') = 'CONSULT'"
+            " AND json_extract(input_ref, '$.candidate_id') = ? ORDER BY rowid",
+            (pack.site_id, *ACTIVE, candidate_id),
+        )
+    ]
+    return [rid for rid in ids if end_case_run(tx, pack, rid, status, end_reason)]
+
+
+def register_coordination(
+    tx: sqlite3.Connection,
+    pack: LoadedPack,
+    phase: str,
+    key: str,
+    candidate_id: str,
+    case_id: str,
+    **extra: Any,
+) -> bool:
+    """Coordination START_RUN 등록 (A.24 2). 원인 tx 안에서 부른다(I-18).
+
+    phase CONSULT(협의)·NOTICE(통지). Case는 후보 Run의 case_id를 잇고, acting_unit은 SUPERVISOR의 Unit이다
+    (Pack ID를 코드에 두지 않는다). acting_actor는 없다.
+    """
+    unit = next((a.unit_id for a in list_actors(tx, pack.site_id) if "SUPERVISOR" in a.roles), None)
+    if unit is None:
+        return False
+    payload = {
+        "agent_type": "COORDINATION",
+        "phase": phase,
+        "candidate_id": candidate_id,
+        "case_id": case_id,
+        "acting_unit_id": unit,
+        **extra,
+    }
+    return register_job(tx, pack.site_id, "START_RUN", key, payload)
 
 
 def stale_active_runs(tx: sqlite3.Connection, pack: LoadedPack, end_reason: str) -> list[str]:

@@ -16,6 +16,7 @@ from app.domain.consultation import (
 from app.domain.models import Candidate, ConsultationItem
 from app.store.repos._rows import dumps, loads, rows
 from app.store.repos.decisions import list_decisions
+from app.store.repos.messages import change_answers, list_change_requests
 from app.store.repos.plans import get_plan_by_candidate
 from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.site import get_site
@@ -90,7 +91,8 @@ def consultation_view(
         for d in list_decisions(conn, site_id, candidate_id, "WAIVE")
         for tid in d["target_task_ids"]
     ]
-    statuses = item_statuses(items, waived)
+    answers = change_answers(list_change_requests(conn, site_id, candidate_id))
+    statuses = item_statuses(items, waived, answers)  # type: ignore[arg-type]
     state = candidate_state(conn, site_id, candidate)
     return ConsultationView(
         candidate_id=candidate_id,

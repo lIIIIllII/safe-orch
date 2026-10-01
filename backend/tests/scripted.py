@@ -52,3 +52,43 @@ class ScriptedChatModel:
 
     def tool_names(self, i: int) -> list[str]:
         return [t["function"]["name"] for t in self.calls[i]["tools"]]
+
+
+class Router:
+    """agent_type별 응답 큐 (부록 A.24). 한 model_factory로 Replanning·Coordination Run을 함께 돌린다.
+
+    모델은 bind된 도구 이름으로 어느 Agent인지 안다(REPORT_TO_SUPERVISOR는 Coordination에만 있다).
+    """
+
+    def __init__(self, replanning: Sequence[Reply] = (), coordination: Sequence[Reply] = ()):
+        self.queues = {"REPLANNING": list(replanning), "COORDINATION": list(coordination)}
+        self.models: list[RoutedChatModel] = []
+
+    def factory(self) -> Callable[[], "RoutedChatModel"]:
+        def make() -> RoutedChatModel:
+            model = RoutedChatModel(self)
+            self.models.append(model)
+            return model
+
+        return make
+
+    def left(self) -> dict[str, int]:
+        return {k: len(v) for k, v in self.queues.items()}
+
+
+class RoutedChatModel(ScriptedChatModel):
+    def __init__(self, router: Router):
+        super().__init__([])
+        self.router = router
+
+    def invoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
+        tools, kwargs = self._bound
+        self.calls.append({"tools": tools, "kwargs": kwargs, "messages": list(messages)})
+        names = {t["function"]["name"] for t in tools}
+        queue = self.router.queues[
+            "COORDINATION" if "REPORT_TO_SUPERVISOR" in names else "REPLANNING"
+        ]
+        if not queue:
+            raise RuntimeError("script exhausted")
+        reply = queue.pop(0)
+        return reply() if callable(reply) else reply

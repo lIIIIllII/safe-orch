@@ -13,10 +13,11 @@ from typing import Any, Literal
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
 from app.domain.ids import new_id
-from app.domain.models import Consent, Movable
+from app.domain.models import Consent, FeedbackConstraint, Movable
 from app.packs.loader import LoadedPack
-from app.store.repos.cases import copy_consents, wake_run
+from app.store.repos.cases import copy_consents, end_candidate_runs, wake_run
 from app.store.repos.consents import insert_consent
+from app.store.repos.decisions import insert_constraint
 from app.store.repos.messages import (
     decide_proposal,
     get_message,
@@ -24,6 +25,8 @@ from app.store.repos.messages import (
     message_for_proposal,
     set_message_reply,
 )
+from app.store.repos.records import get_candidate
+from app.store.repos.runs import run_for_solver_result
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
@@ -121,9 +124,22 @@ def _answer(
             r.reject("INVALID_VALUES")
             return r
 
+    # 변경 요청의 이견(DECLINE)에는 사유가 필요하다. 제약 초안의 근거가 된다 (A.24 5)
+    if message["type"] == "CHANGE_REQUEST" and decision == "DECLINE" and not comment.strip():
+        r.reject("COMMENT_REQUIRED")
+        return r
+
     chosen = [v for v in allowed if values is None or v in values] if decision == "ACCEPT" else []
     context_version = ctx.site.context_version
-    if proposal is not None and decision == "ACCEPT":
+    constraint = None
+    if proposal is not None and decision == "ACCEPT" and proposal["type"] == "FEEDBACK_CONSTRAINT":
+        constraint = _confirm_constraint(tx, ctx, proposal)
+        context_version = constraint.pop("context_version")
+        decide_proposal(
+            tx, proposal["proposal_id"], "CONFIRMED", ctx.actor_id, context_version, constraint
+        )
+        refs.update(constraint)
+    elif proposal is not None and decision == "ACCEPT":
         assert task is not None
         result_ref = _confirm_movability(tx, ctx, task, message["message_id"], chosen)
         context_version = result_ref.pop("context_version")
@@ -140,11 +156,47 @@ def _answer(
         _reply_record(ctx, decision, chosen, comment),
         context_version,
     )
-    # 메시지를 만든 Run을 깨운다 (§11.3 표, A.21 3)
+    if constraint is not None:
+        # 제약 확정: 후보가 무효가 되므로 협의 Run을 끝내고 후보의 Replanning Run을 깨운다 (A.24 5·6)
+        assert proposal is not None
+        candidate_id = proposal["payload"]["candidate_id"]
+        end_candidate_runs(
+            tx, ctx.pack, candidate_id, "STALE", f"CONSTRAINT:{constraint['constraint_id']}"
+        )
+        candidate = get_candidate(tx, site_id, candidate_id)
+        replanning = (
+            run_for_solver_result(tx, candidate.solver_result_id)
+            if candidate is not None and candidate.solver_result_id
+            else None
+        )
+        if replanning is not None:
+            wake_run(tx, site_id, replanning)
+        refs["replanning_run_id"] = replanning
+    # 메시지를 만든 Run을 깨운다 (§11.3 표, A.21 3). 이미 끝났으면 아무것도 하지 않는다.
     woke = wake_run(tx, site_id, message["run_id"])
     r.refs = {**refs, "run_id": message["run_id"], "woke": woke}
     r.audit_reason = decision
     return r
+
+
+def _confirm_constraint(
+    tx: sqlite3.Connection, ctx: CommandContext, proposal: dict[str, Any]
+) -> dict[str, Any]:
+    """제약 초안 확정 (§18.2.2, A.24 5). 이견을 낸 담당자가 확인했을 때만 제약이 생긴다(I-13).
+
+    FeedbackConstraint(frozen_axes = 초안 축, source PROPOSAL) → context +1. 효과는 Supervisor
+    구조화 거절(source DECISION)과 같다: 후보 STALE, Replanning 재탐색에서 Hard 제약.
+    """
+    context_version = bump_context_version(tx, ctx.site_id)
+    fc = FeedbackConstraint(
+        constraint_id=new_id("fc"),
+        task_id=proposal["target_task_id"],
+        frozen_axes=tuple(proposal["payload"]["axes"]),
+        source_type="PROPOSAL",
+        source_id=proposal["proposal_id"],
+    )
+    insert_constraint(tx, ctx.site_id, fc, context_version)
+    return {"constraint_id": fc.constraint_id, "context_version": context_version}
 
 
 def _confirm_movability(

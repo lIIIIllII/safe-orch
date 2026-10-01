@@ -220,7 +220,10 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
         return r
     bump_context_version(tx, site_id)
     for run in list_active_runs(tx, site_id):
-        if task.task_id in (run.input_ref.get("conflict") or {}).get("task_ids", []):
+        if run.agent_type == "COORDINATION":
+            # Context가 올라 협의 중인 후보가 무효다 (A.24 9)
+            end_case_run(tx, ctx.pack, run.run_id, "STALE", f"WITHDRAW:{task.task_id}")
+        elif task.task_id in (run.input_ref.get("conflict") or {}).get("task_ids", []):
             end_case_run(tx, ctx.pack, run.run_id, "STALE", f"WITHDRAW:{task.task_id}")
         else:
             wake_run(tx, site_id, run.run_id)

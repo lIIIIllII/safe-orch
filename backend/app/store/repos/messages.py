@@ -56,11 +56,14 @@ def insert_message(
     body: str,
     agent_text: str | None,
     context_version: int,
+    candidate_id: str | None = None,
+    change_hash: str | None = None,
 ) -> None:
+    """candidate_id·change_hash는 변경 요청(CHANGE_REQUEST)을 후보의 그 변경에 묶는다 (A.24)."""
     tx.execute(
         "INSERT INTO message (message_id, site_id, run_id, step_no, to_actor_id, type,"
-        " proposal_id, body, agent_text, created_context_version)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " proposal_id, body, agent_text, created_context_version, candidate_id, change_hash)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             message_id,
             site_id,
@@ -72,6 +75,8 @@ def insert_message(
             body,
             agent_text,
             context_version,
+            candidate_id,
+            change_hash,
         ),
     )
 
@@ -164,7 +169,9 @@ def list_case_replies(conn: sqlite3.Connection, case_id: str) -> list[dict[str, 
     out = []
     for r in rows(
         conn,
-        _JOINED + " JOIN agent_run r ON r.run_id = m.run_id WHERE r.case_id = ? ORDER BY m.rowid",
+        _JOINED + " JOIN agent_run r ON r.run_id = m.run_id"
+        # 같은 Case의 Coordination 메시지는 넣지 않는다(ASK 조건과 관찰에 섞이지 않게, A.24)
+        " WHERE r.case_id = ? AND r.agent_type = 'REPLANNING' ORDER BY m.rowid",
         (case_id,),
     ):
         r = _joined(r)
@@ -202,3 +209,65 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
             }
         )
     return out
+
+
+# ── Coordination (부록 A.24) ───────────────────────────────────
+
+
+def list_change_requests(
+    conn: sqlite3.Connection, site_id: str, candidate_id: str
+) -> list[dict[str, Any]]:
+    """후보에 묶인 변경 요청과 그 메시지의 제약 초안(FEEDBACK_CONSTRAINT 제안, 마지막 1개)."""
+    out = []
+    for r in rows(
+        conn,
+        "SELECT message_id, run_id, step_no, to_actor_id, status, reply, change_hash"
+        " FROM message WHERE site_id = ? AND candidate_id = ? AND type = 'CHANGE_REQUEST'"
+        " ORDER BY rowid",
+        (site_id, candidate_id),
+    ):
+        r["reply"] = loads(r["reply"])
+        drafts = rows(
+            conn,
+            "SELECT proposal_id, status, payload FROM proposal"
+            " WHERE site_id = ? AND type = 'FEEDBACK_CONSTRAINT'"
+            " AND json_extract(payload, '$.source_message_id') = ? ORDER BY rowid",
+            (site_id, r["message_id"]),
+        )
+        draft = drafts[-1] if drafts else None
+        if draft is not None:
+            draft["payload"] = loads(draft["payload"])
+        out.append({**r, "draft": draft})
+    return out
+
+
+def change_answers(requests: list[dict[str, Any]]) -> dict[str, str]:
+    """change_hash → 담당자 답에 따른 item 상태 (A.24 4). 늦은 답(LATE)은 세지 않는다.
+
+    ACCEPT → ACCEPTED, DECLINE(이견) → OBJECTED, 그 이견의 제약 초안이 PENDING이면
+    OBJECTION_DRAFT_PENDING. 같은 변경에 답이 여럿이면 마지막 것.
+    """
+    out: dict[str, str] = {}
+    for r in requests:
+        if r["status"] != "ANSWERED":
+            continue
+        decision = (r["reply"] or {}).get("decision")
+        if decision == "ACCEPT":
+            out[r["change_hash"]] = "ACCEPTED"
+        elif decision == "DECLINE":
+            pending = r["draft"] is not None and r["draft"]["status"] == "PENDING"
+            out[r["change_hash"]] = "OBJECTION_DRAFT_PENDING" if pending else "OBJECTED"
+    return out
+
+
+def list_run_messages(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
+    """이 Run이 보낸 메시지(유형·수신자·상태·답·결합 값)."""
+    found = rows(
+        conn,
+        "SELECT message_id, step_no, to_actor_id, type, status, reply, proposal_id,"
+        " candidate_id, change_hash FROM message WHERE run_id = ? ORDER BY rowid",
+        (run_id,),
+    )
+    for r in found:
+        r["reply"] = loads(r["reply"])
+    return found

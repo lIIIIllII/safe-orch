@@ -35,6 +35,20 @@ def get_plan_by_candidate(conn: sqlite3.Connection, site_id: str, candidate_id: 
     return Plan(**r)
 
 
+def get_plan(conn: sqlite3.Connection, site_id: str, plan_revision: int) -> Plan | None:
+    found = rows(
+        conn,
+        "SELECT plan_revision, assignments, candidate_id, committed_context_version FROM plan"
+        " WHERE site_id = ? AND plan_revision = ?",
+        (site_id, plan_revision),
+    )
+    if not found:
+        return None
+    r = found[0]
+    r["assignments"] = loads(r["assignments"])
+    return Plan(**r)
+
+
 def insert_plan(tx: sqlite3.Connection, site_id: str, plan: Plan) -> None:
     tx.execute(
         "INSERT INTO plan (site_id, plan_revision, assignments, candidate_id,"

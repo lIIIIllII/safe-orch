@@ -149,3 +149,15 @@ def with_a(seeded):
     """R0 + 신규 작업 A(revision 1)."""
     add_task(seeded, make_task(seeded))
     return seeded
+
+
+@pytest.fixture
+def coordination_on(monkeypatch):
+    """COORDINATION_ENABLED를 켠다(기본안 A, 부록 A.24). 설정 캐시를 앞뒤로 비운다."""
+    from app.config import get_settings
+
+    monkeypatch.setenv("COORDINATION_ENABLED", "true")
+    get_settings.cache_clear()
+    yield
+    monkeypatch.delenv("COORDINATION_ENABLED")
+    get_settings.cache_clear()

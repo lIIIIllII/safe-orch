@@ -1237,3 +1237,19 @@
 **11. 단계**
 - S0 공통 틀(따로 커밋). S1 백엔드 핵심 + 스크립트 E2E(여기서 멈추고 보고). S2 live run `--path coord`. S3 화면(Inbox 3종 카드, 검토 패널 item 상태, labels, 배지). S4 정리(REMINDER·ack, Activity 전용 카드 — D6 "새 기능 없음" 범위 밖이면 하지 않는다).
 - 스키마·Pack 변경 없음. 로컬 DB reset 필요 없음.
+
+**S0 구현 기록** (`deef3a6`): `ToolGateway.begin_step`·`wait_or_continue`를 만들고 Replanning 실행기의 단일 tx 틀 3곳(LIST·ASK, ESCALATE, SOLVE·TRY 예약)과 대기 진입 2곳(ASK, 후보 등록)이 쓰게 고쳤다. 골든 테스트·기존 447개가 그대로 통과했다(1시간 안, C로 되돌리지 않음).
+
+**S1 구현 기록** (백엔드 핵심 + 스크립트 E2E)
+- 새 파일: `agents/specs/coordination.py`(Action 6종, Budget steps 12·LLM 24, `choices`·`available_actions`), `agents/prompts/coordination.py`(`coordination-p1`, `render_system(pack)`, 템플릿 fingerprint `fc329da2…`), `agents/observers/coordination.py`(협의 항목·변경 요청·초안, 통지 대상 계산), `agents/executors/coordination.py`(변경 요청·대기·초안·통지·보고·이관, 서버 문구), registry 한 줄(`coordination-a24`).
+- 바뀐 파일: `config.py`(`coordination_enabled`, 기본 false), `domain/consultation.py`(`item_statuses`에 담당자 답), `repos/messages.py`(변경 요청 결합 컬럼, `list_change_requests`·`change_answers`·`list_run_messages`, `list_case_replies`는 REPLANNING Run만), `repos/consultations.py`(답 반영), `repos/plans.py`(`get_plan`), `repos/cases.py`(NOTICE는 정리하지 않음, `end_candidate_runs`, `register_coordination`), `commands/messages.py`(이견 사유 필수, 초안 확정 → FeedbackConstraint PROPOSAL·Context +1·협의 Run STALE·Replanning wake), `commands/approval.py`(승인: 협의 Run SUCCEEDED + 통지 Run 등록, 거절: 협의 Run STALE), `commands/task_request.py`(철회: 협의 Run STALE), `coordinator/transitions.py`(BUILD_CONSULTATION에서 협의 Run 등록, START_RUN 재확인 agent_type별, case_id 잇기), `agents/observe.py`(`recent_steps`·`last_guard` 도우미, Coordination이 쓴다. Replanning 관찰은 그대로).
+- 결정과 다르게 한 것:
+  - 변경 요청 횟수: "Run·수신자당 1개" 대신 **Run·항목(작업)당 1개**로 했다. 항목마다 담당자가 1명이라 기본안 A에서는 같고, 한 담당자의 항목이 여럿일 때 하나만 묻고 멈추지 않게 하기 위해서다.
+  - `DRAFT_CONSTRAINT`에 `message`(담당자에게 보이는 설명, agent_text) 인자를 더했다. 블루프린트 인자(message_id, reason_code, task_id, axes)는 그대로다.
+  - `SEND_CHANGE_REQUEST`의 인자는 item_id 대신 task_id다(후보 안에서 작업마다 항목 1개).
+- 서버 문구 예: 변경 요청 "재계획 후보가 C(인양) 작업을 바꿉니다: 시작 10/12 10:00 → 10/12 10:30. …", 초안 확인 "C(인양) 작업의 시간·자원을(를) 고정하는 제약으로 확정하시겠습니까? …", 통지 "계획 R1이 확정되었습니다. … 안전 규칙 '인양–하부 작업 분리'로 …".
+- end_reason: 협의 Run `CONSTRAINT:<fc_id>`·`REJECTED:<candidate_id>`·`COMMITTED:<rev>`·`WITHDRAW:<task_id>`, Coordination 행동 종료 `REPORT_TO_SUPERVISOR`(SUCCEEDED)·`ESCALATE`(ESCALATED). 화면 문구는 S3.
+- 테스트: 447 → 456(+9, `tests/test_coordination.py`). 기본안 A 전체(협의 → 이견 → 초안 → 확정 → Replanning 재개 → Beta → R1 → 통지 2건, Replanning step 5·Solver 3·사람 1, Replanning 관찰에 Coordination 메시지 없음, `rejections` 비고 `constraints` source PROPOSAL), 설정을 켠 채 협의 중 구조화 거절 → 협의 Run STALE·변경 요청 CANCELLED·늦은 이견 LATE → 기본안 B로 R1, 고정 요구가 아닌 이견 → REPORT_TO_SUPERVISOR(초안 열려 있었지만 고르지 않음, 제약 없음, BLOCKED·WAIVE 불가), 초안 서버 검사(바뀐 축 없는 축·다른 사유·다른 작업 → ACTION_NOT_AVAILABLE), 이견 사유 필수, 초안 폐기 → OBJECTED·wake, 설정 꺼짐 → Coordination 없음, item 상태 계산(단위), prompt fingerprint·Observation 키·System에 "이견이면" 지시 없음. 테스트용 `scripted.Router`(agent_type별 응답 큐)와 `coordination_on` fixture를 더했다.
+- 기존 테스트 수정: 등록부 테스트 2개(COORDINATION이 등록되어 미등록 예시를 INTAKE로).
+- 골든 테스트·기존 테스트 그대로, `verify_demo_values`·`npm run build`·`npm run lint` 통과. 스키마·Pack 변경 없음(로컬 DB reset 필요 없음).
+- 남은 것: S2 live run `--path coord`, S3 화면(Inbox 카드 3종·배지 규칙·검토 패널 item 상태·labels). 통지 Run 중 Event가 오면 통지 Run도 STALE이 된다(기존 `stale_active_runs`).

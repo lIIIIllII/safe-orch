@@ -3,7 +3,7 @@
 item은 후보 snapshot의 사실과 Consent로 만들고, 상태는 저장하지 않고 조회할 때 계산한다.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Literal
 
 from app.domain.canonical import canonical_hash
@@ -72,11 +72,20 @@ def build_items(facts: SnapshotContent, candidate: Candidate) -> tuple[Consultat
 
 
 def item_statuses(
-    items: Iterable[ConsultationItem], waived_task_ids: Iterable[str]
+    items: Iterable[ConsultationItem],
+    waived_task_ids: Iterable[str],
+    answers: Mapping[str, ItemStatus] | None = None,
 ) -> dict[str, ItemStatus]:
-    """item의 실효 상태. WAIVE decision이 덮으면 WAIVED, 아니면 base_status."""
+    """item의 실효 상태. WAIVE decision이 덮으면 WAIVED, 그다음 담당자 답(A.24), 아니면 base_status.
+
+    answers: change_hash → ACCEPTED·OBJECTED·OBJECTION_DRAFT_PENDING (변경 요청의 답과 제약 초안).
+    """
     waived = set(waived_task_ids)
-    return {i.task_id: "WAIVED" if i.task_id in waived else i.base_status for i in items}
+    answered = answers or {}
+    return {
+        i.task_id: "WAIVED" if i.task_id in waived else answered.get(i.change_hash, i.base_status)
+        for i in items
+    }
 
 
 def items_status(statuses: Iterable[str]) -> ConsultationStatus:

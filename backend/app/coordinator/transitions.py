@@ -10,13 +10,15 @@ from typing import Any
 
 from app.agents import runtime
 from app.commands.consultation import build_consultation
+from app.config import get_settings
 from app.domain.hashes import candidate_hash
 from app.domain.ids import new_id
 from app.domain.models import AgentRun, Candidate, Conflict, SnapshotContent
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.store import db
-from app.store.repos.cases import claim_resume, end_case_run, wake_run
+from app.store.repos.cases import claim_resume, end_case_run, register_coordination, wake_run
+from app.store.repos.consultations import candidate_state, consultation_view
 from app.store.repos.dispatch import job_exists, mark_done, register_job, set_job_run
 from app.store.repos.events import list_active_holds
 from app.store.repos.plans import get_current_plan
@@ -29,7 +31,7 @@ from app.store.repos.records import (
     insert_validation,
     list_validations,
 )
-from app.store.repos.runs import has_open_case, insert_run, run_for_solver_result
+from app.store.repos.runs import get_run, has_open_case, insert_run, run_for_solver_result
 from app.store.repos.site import get_site, list_actors
 from app.store.repos.snapshots import create_snapshot
 from app.store.repos.tasks import list_current_tasks
@@ -207,9 +209,47 @@ def validate_candidate(pack: LoadedPack, job: Job) -> None:
 
 
 def build_consultation_job(pack: LoadedPack, job: Job) -> None:
+    """Consultation 생성. 설정이 켜졌고 Run이 만든 후보에 동의 대기(PENDING) 항목이 있으면 같은 tx에서
+    Coordination 협의 Run을 등록한다(기본안 A, A.24 2). 꺼져 있으면 검토 대기(기본안 B)."""
+    candidate_id = job["payload"]["candidate_id"]
     with db.write() as tx:
-        build_consultation(tx, pack.site_id, job["payload"]["candidate_id"])
+        build_consultation(tx, pack.site_id, candidate_id)
+        if get_settings().coordination_enabled:
+            _register_consult(tx, pack, candidate_id)
         mark_done(tx, job["job_id"])
+
+
+def _register_consult(tx: sqlite3.Connection, pack: LoadedPack, candidate_id: str) -> None:
+    candidate = get_candidate(tx, pack.site_id, candidate_id)
+    if candidate is None or candidate.kind != "REPLAN" or candidate.solver_result_id is None:
+        return
+    run_id = run_for_solver_result(tx, candidate.solver_result_id)
+    run = get_run(tx, run_id) if run_id else None
+    view = consultation_view(tx, pack.site_id, candidate_id)
+    if run is None or view is None or "PENDING" not in view.item_status.values():
+        return
+    key = f"START_RUN:COORDINATION:CONSULT:{candidate_id}"
+    register_coordination(tx, pack, "CONSULT", key, candidate_id, run.case_id)
+
+
+def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, Any]) -> bool:
+    """START_RUN 처리 시점 재확인 (§11.5, A.16·A.24 2). agent_type별로 다르다."""
+    site = get_site(tx, pack.site_id)
+    assert site is not None
+    if payload["agent_type"] != "COORDINATION":
+        return (
+            not list_active_holds(tx, pack.site_id)
+            and not has_open_case(tx, pack.site_id)
+            and (payload.get("context_version"), payload.get("plan_revision"))
+            == (site.context_version, site.plan_revision)
+        )
+    if payload.get("phase") == "NOTICE":
+        return payload.get("plan_revision") == site.plan_revision
+    candidate = get_candidate(tx, pack.site_id, payload["candidate_id"])
+    if candidate is None or list_active_holds(tx, pack.site_id):
+        return False
+    state = candidate_state(tx, pack.site_id, candidate)
+    return not (state.stale or state.rejected or state.committed)
 
 
 def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -> str | None:
@@ -223,12 +263,7 @@ def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -
         site = get_site(tx, site_id)
         assert site is not None
         run_id = None
-        if (
-            not list_active_holds(tx, site_id)
-            and not has_open_case(tx, site_id)
-            and (payload.get("context_version"), payload.get("plan_revision"))
-            == (site.context_version, site.plan_revision)
-        ):
+        if _start_allowed(tx, pack, payload):
             run_id = new_id("run")
             insert_run(
                 tx,
@@ -236,7 +271,8 @@ def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -
                 AgentRun(
                     run_id=run_id,
                     agent_type=payload["agent_type"],
-                    case_id=new_id("case"),
+                    # Coordination은 후보 Run의 Case를 잇는다 (A.24 3)
+                    case_id=payload.get("case_id") or new_id("case"),
                     acting_actor_id=payload.get("acting_actor_id"),
                     acting_unit_id=payload["acting_unit_id"],
                     input_ref={**payload, "job_id": job["job_id"]},
