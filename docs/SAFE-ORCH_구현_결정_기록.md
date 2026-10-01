@@ -1547,3 +1547,15 @@ live run에 남은 실패 두 유형 대응. 모호 신고(A.26 S4 #2)는 LOOKUP
 
 **S3 문서**: 이 항목, A.24·A.25 1의 가리키는 줄, `.env.example`(두 키, 기본 true와 끌 때의 동작), CLAUDE.md 실행 절(Agent 스위치, 테스트는 conftest가 끈다), 우선순위 v2 맨 위 절.
 
+**S4 live run** (model `gpt-6-luna`, reasoning_effort none, `replanning-p8`·`coordination-p1`·`event-response-p5`·`intake-p3`)
+
+| 경로 | agent_flags (Coordination, ER) | 결과 | 기록 |
+|---|---|---|---|
+| `--path B --coord` (새 경로) | on, off | **3/3**. 세 회차 모두 같은 흐름: R:SOLVE(L0) → R:SOLVE(L1, Alpha) → C:SEND_CHANGE_REQUEST(C) → C:WAIT → (Supervisor 거절, 협의 Run STALE `REJECTED:<Alpha>`) → R:LIST → R:ASK → (수락) → R:TRY → Beta → R1 → C:SEND_NOTICE ×2 → C:REPORT. L0 먼저 3/3, Alpha·Beta 기대값 3/3, 통지 {planner_a, planner_b} 전원, 약 26,500 토큰·25초 | `data/live_runs/20261001T203703Z.jsonl` |
+| `--path B` | off, off | 1/1 (Replanning Run 하나, step 5, Alpha·Beta 기대값 일치) | `20261001T203831Z.jsonl` |
+| `--path coord` | on, off | 1/1 (기본안 A, step 12) | `20261001T203845Z.jsonl` |
+| `--path event --coord` | on, on | 1/1 (ER 4 step, ASK_REPORTER 1회 — A.27 남은 문제 그대로) | `20261001T203916Z.jsonl` |
+| `--path intake` | off, off | 1/1 (ASK 1회) | `20261001T203942Z.jsonl` |
+
+- 모든 회차 금지 Action·MALFORMED·LLM 오류 0, Budget 안. 기록의 `agent_flags`가 경로 명시값과 같다(`.env`는 둘 다 true).
+
