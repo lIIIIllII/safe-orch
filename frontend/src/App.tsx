@@ -80,6 +80,15 @@ function Site({ env, firstActor }: { env: Env; firstActor: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [pinnedRun, setPinnedRun] = useState<string | null>(null)
   const [overlay, setOverlay] = useState(true)
+  // 타임라인 "크게 보기"(화면 전체 폭). ?tl=wide로 열 수 있다 (A.21 타임라인 가시성)
+  const [wide, setWide] = useState(() => new URLSearchParams(window.location.search).get('tl') === 'wide')
+  const changeWide = (on: boolean) => {
+    setWide(on)
+    const url = new URL(window.location.href)
+    if (on) url.searchParams.set('tl', 'wide')
+    else url.searchParams.delete('tl')
+    window.history.replaceState(null, '', url)
+  }
   const [busy, setBusy] = useState<string | null>(null)
   const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -201,22 +210,28 @@ function Site({ env, firstActor }: { env: Env; firstActor: string }) {
           {loadError && <p className="bad">조회 실패: {loadError}</p>}
         </main>
       ) : (
-        <main className="main">
-          <div className="left">
-            <Timeline state={state} candidate={candidate} overlay={overlay} onOverlay={setOverlay} />
-            <div className="left-bottom">
-              <Activity
-                state={state}
-                actorId={actorId}
-                selectedRunId={selectedRunId}
-                onSelectRun={setPinnedRun}
-                isSupervisor={isSupervisor}
-                busy={busy}
-                run={run}
-                refreshKey={refreshKey}
-              />
-              <InputPanel state={state} actorId={actorId} roles={roles} busy={busy} run={run} />
-            </div>
+        <main className={`main ${wide ? 'main-wide' : ''}`}>
+          {/* 같은 자리(grid 영역)에서 배치만 바꿔 타임라인 상태(배율·스크롤)를 유지한다 */}
+          <Timeline
+            state={state}
+            candidate={candidate}
+            overlay={overlay}
+            onOverlay={setOverlay}
+            wide={wide}
+            onWide={changeWide}
+          />
+          <div className="left-bottom">
+            <Activity
+              state={state}
+              actorId={actorId}
+              selectedRunId={selectedRunId}
+              onSelectRun={setPinnedRun}
+              isSupervisor={isSupervisor}
+              busy={busy}
+              run={run}
+              refreshKey={refreshKey}
+            />
+            <InputPanel state={state} actorId={actorId} roles={roles} busy={busy} run={run} />
           </div>
           <ReviewPanel
             state={state}

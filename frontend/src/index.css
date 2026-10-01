@@ -234,8 +234,31 @@ textarea {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1140fr) minmax(0, 780fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    'tl rv'
+    'bt rv';
   gap: 8px;
   padding: 8px;
+}
+
+/* 타임라인 크게 보기: 화면 전체 폭 (A.21 타임라인 가시성) */
+.main-wide {
+  grid-template-areas:
+    'tl tl'
+    'bt rv';
+}
+
+.main > .timeline {
+  grid-area: tl;
+}
+
+.main > .left-bottom {
+  grid-area: bt;
+}
+
+.main > .review {
+  grid-area: rv;
 }
 
 .left {
@@ -362,7 +385,21 @@ textarea {
 /* ── 타임라인 ─────────────────────────── */
 
 .timeline {
-  max-height: 470px;
+  max-height: min(470px, 52vh);
+  flex-direction: column;
+  position: relative;
+}
+
+/* 아래 손잡이를 끌어 높이를 바꾼다 */
+.tl-resize {
+  flex: none;
+  height: 8px;
+  cursor: ns-resize;
+  background: linear-gradient(var(--border), var(--border)) center / 48px 3px no-repeat;
+}
+
+.tl-resize:hover {
+  background-color: #eef1f5;
 }
 
 .timeline .panel-head {
@@ -476,9 +513,18 @@ textarea {
 }
 
 .tl {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
-  padding: 4px 12px 10px;
   position: relative;
+}
+
+.tl-canvas {
+  position: relative;
+}
+
+.tl-empty {
+  padding: 8px 12px;
 }
 
 .tl-site-hold {
@@ -486,9 +532,16 @@ textarea {
 }
 
 .tl-row {
-  display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
+  display: flex;
   border-bottom: 1px solid #eef0f3;
+}
+
+/* 시간 머리줄은 위에, 행 이름 열은 왼쪽에 고정 */
+.tl-axis {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: #fff;
 }
 
 .tl-sep {
@@ -496,21 +549,32 @@ textarea {
 }
 
 .tl-label {
-  font-size: 13px;
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  flex: none;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
   font-weight: 600;
-  padding: 2px 6px 2px 0;
-  align-self: center;
+  padding: 0 8px 0 12px;
+  background: #fff;
+  border-right: 1px solid var(--border);
+}
+
+.tl-axis .tl-label {
+  z-index: 7;
 }
 
 .tl-track {
   position: relative;
-  min-height: 22px;
+  flex: none;
+  min-height: 36px;
   overflow: hidden;
 }
 
 .tl-axis-track {
-  height: 34px;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .tl-day-label {
@@ -549,7 +613,7 @@ textarea {
 .tl-tick,
 .tl-day {
   position: absolute;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   white-space: nowrap;
   transform: translateX(-50%);
@@ -581,12 +645,12 @@ textarea {
 .tl-conflict span {
   position: absolute;
   top: 1px;
-  right: 3px;
+  left: 3px;
   z-index: 3;
   background: rgba(255, 255, 255, 0.85);
   padding: 0 3px;
   border-radius: 2px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--conflict);
   font-weight: 700;
   white-space: nowrap;
@@ -596,20 +660,88 @@ textarea {
   z-index: 1;
   position: absolute;
   border-radius: 4px;
-  font-size: 11px;
-  padding: 0 4px;
+  padding: 0 5px;
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border: 1px solid;
+  cursor: default;
+}
+
+/* 막대 라벨 2줄: 작업 ID·유형 / 시각 범위 (A.21 타임라인 가시성) */
+.bar-line1 {
   display: flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.15;
 }
 
-.bar-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.bar-line2 {
+  font-size: 12px;
+  line-height: 1.15;
+  color: #3b4554;
+}
+
+/* 막대가 좁으면 라벨을 막대 바깥에 붙인다 */
+.bar-out {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 4px;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 3px;
+}
+
+.bar-out-after .bar-line1 {
+  color: #111;
+}
+
+.bar-out-before {
+  opacity: 0.6;
+}
+
+/* 좁은 막대의 Gate 표시: 오른쪽 위 모서리 삼각형 (글자 배지는 들어갈 때만) */
+.bar-gate::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-style: solid;
+  border-width: 0 10px 10px 0;
+}
+
+.bar-gate-stale::after {
+  border-color: transparent var(--stale) transparent transparent;
+}
+
+.bar-gate-hold::after {
+  border-color: transparent var(--hold) transparent transparent;
+}
+
+/* 마우스를 올리면 나오는 카드 */
+.tl-card {
+  position: fixed;
+  z-index: 50;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(28, 36, 48, 0.18);
+  padding: 8px 10px;
+  pointer-events: none;
+}
+
+.tl-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
 }
 
 /* Unit 색은 state.units 순서로 받는다(Pack의 Unit ID를 쓰지 않음, A.20) */
@@ -675,7 +807,8 @@ textarea {
 }
 
 .gate {
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 400;
   padding: 0 4px;
   border-radius: 3px;
   margin-left: auto;
@@ -1156,4 +1289,13 @@ input.time {
 
 .statusbar .stat-inbox b {
   color: var(--fail);
+}
+
+.lg-gate::before {
+  width: 0;
+  height: 0;
+  border-radius: 0;
+  border-style: solid;
+  border-width: 0 10px 10px 0;
+  border-color: transparent var(--stale) transparent transparent;
 }
