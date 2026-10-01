@@ -574,3 +574,23 @@ def test_ask_reporter_opens_only_after_lookup(seeded, event_response_on):
     empty = {**obs, "lookups": [{"filters": {"work_type": None, "zone_id": "X"}, "tasks": []}]}
     assert "ASK_REPORTER" in spec.available_actions(empty)
     assert "ASK_REPORTER" not in spec.available_actions({**obs, "lookups": []})
+
+
+def test_lookup_start_slack_and_analysis_delay_minutes(seeded, event_response_on):
+    """조회 결과의 start_slack(= latest_start − earliest_start)과 분석의 delay_minutes (A.27).
+
+    도장 작업 중 P·W는 시작이 고정(slack 0)이라 늦추는 수정안을 낼 수 없고, E만 75분 늦출 수 있다.
+    """
+    _, er = _to_proposal(seeded)
+    lookup, analysis = _steps(er.run_id)[:2]
+    slack = {t["task_id"]: t["start_slack"] for t in lookup["tool_result"]["tasks"]}
+    assert slack == {"E": 75, "P": 0, "W": 0}
+    assert (analysis["tool_result"]["task_id"], analysis["tool_result"]["delay_minutes"]) == (
+        "E",
+        15,
+    )
+    # 관찰에도 그대로 보인다(모델이 본 것 = 기록한 것)
+    obs = _steps(er.run_id)[2]["observation"]
+    assert obs["lookups"][0]["tasks"][0]["start_slack"] == 75
+    assert obs["analyses"][0]["delay_minutes"] == 15
+    assert "start_slack은 시작 가능 시각을 늦출 수 있는 최대 분이다" in prompt.SYSTEM

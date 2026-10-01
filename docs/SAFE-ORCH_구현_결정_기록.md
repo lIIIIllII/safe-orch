@@ -1498,3 +1498,19 @@ live run에 남은 실패 두 유형 대응. 모호 신고(A.26 S4 #2)는 LOOKUP
 - 조회 뒤 질문 정책의 새 실패 형태: 조회 전에 묻고 싶은 모델이 닫힌 ASK 대신 ESCALATE를 고를 수 있다(모호 신고 #1, 1/6 회차).
 - 명확 신고의 불필요한 질문(S4부터, HEAD에서도 3/3 회차): 조회 결과에 도장 작업 E(10/12 09:45 시작)·P(10/13 10:00)·W(10/13 13:00)가 나온다. 신고 "도장 준비 15분 늦어져 10시부터"에는 날짜·구역이 없어서 "09:45 + 15분 = 10:00"으로 E를 골라야 하는데, 모델이 이 비교를 하지 못하고 신고자에게 날짜·구역을 묻는다. 신고자 답은 정보가 없지만, 결국 E를 고르는 데는 성공한다.
 
+**명확 신고의 불필요한 질문 대응 — (f) 조회 start_slack + (a) 분석 delay_minutes, 이관 조건 문구** (`event-response-p5`)
+- 결정: (f)+(a). 관찰 읽는 법의 비교 지시(b), ER만 reasoning_effort 상향(c), 하네스 신고자 사실(d)은 하지 않는다.
+- (f) LOOKUP_TASKS 결과의 작업마다 `start_slack` = latest_start − earliest_start(분). 관찰 읽는 법에는 뜻만 사실로 적었다: "start_slack은 시작 가능 시각을 늦출 수 있는 최대 분이다. 0이면 시작 가능 시각을 늦추는 수정안은 영향 분석을 통과하지 못한다." 분석의 `within_latest_start` 판정과 같은 기준이다(A.25 3). 비교를 지시하는 문장은 넣지 않았다.
+- (a) ANALYZE_IMPACT 결과에 `delay_minutes` = 새 값 − 현재 earliest_start.
+- 이관 조건 문구: ER ESCALATE의 docstring·OPENS·규칙 줄이 Replanning p7과 달랐다(docstring "대상 작업을 정할 수 없거나 …", OPENS "언제나 열려 있다", 규칙 줄에 "때만" 조건 없음). A.21 p7 수정과 같은 근거로 맞췄다: docstring "조회·분석·신고자 확인으로 열 수 있는 대안이 남아 있지 않거나 신고가 시작 지연이 아닐 때만 사유와 함께 이관한다", OPENS "언제나 열려 있다. 단 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다", 규칙 "이관(ESCALATE)은 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 한다. 신고가 시작 지연이 아니면 사유를 붙여 이관한다."
+- 템플릿 fingerprint `c08d380c…`. 테스트 505 → 506: `test_lookup_start_slack_and_analysis_delay_minutes`(도장 조회에서 E 75·P 0·W 0, 분석(E, 60)의 delay_minutes 15, 관찰에도 같은 값, prompt 문장).
+- live run (`event-response-p5`, model `gpt-6-luna`, reasoning_effort none)
+
+| 경로 | 결과 | 회차별 첫 Action · ASK 횟수 | 기록 |
+|---|---|---|---|
+| 명확 신고 `--path event --coord` | **3/3** | #1 LOOKUP · 2(FIRST·REPEAT), #2 LOOKUP · 1, #3 LOOKUP · 2(FIRST·REPEAT). 모두 PROPOSE(E, 60) → Gamma(지연 15) → R2 | `data/live_runs/20261001T194215Z.jsonl` |
+| 모호 신고 `--path event --coord --ambiguous` | **3/3** (p4 2/3) | 세 회차 모두 LOOKUP · 1. PROPOSE(E, 75) → Gamma(지연 30) → R2 | `20261001T194339Z.jsonl` |
+
+  - 모든 회차 금지 Action·MALFORMED·LLM 오류 0, Budget 안. 조회 전 이관(p4 모호 #1)은 이번 6회에 없었다.
+- **남은 문제 (명확 신고 질문 0회 목표 미달)**: 명확 신고는 성공했지만 세 회차 모두 신고자에게 1–2회 물었다. ASK의 decision_summary는 모두 "도장 작업이 D2·G2에 여러 건, 구역·날짜(‘10시’가 첫날인지) 불명확"이었고 start_slack이나 E의 09:45 + 15분을 언급하지 않았다. 조회 결과에 P·W의 start_slack 0이 보였는데도 모델은 후보를 줄이지 않고 물었다. 신고자 답(신고 문장 그대로·REPEAT)은 정보가 없었지만 모델은 그 뒤 E(10:00)를 골랐다. 대응은 결정 뒤에 한다.
+

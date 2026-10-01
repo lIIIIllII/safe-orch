@@ -86,9 +86,10 @@ class AskReporter(Action):
 
 
 class Escalate(Action):
-    """대상 작업을 정할 수 없거나 신고가 지연이 아니거나 수정안을 만들 수 없을 때 사유와 함께 이관한다."""
+    """조회·분석·신고자 확인으로 열 수 있는 대안이 남아 있지 않거나 신고가 시작 지연이 아닐 때만 사유와 함께 이관한다."""
 
-    OPENS = "언제나 열려 있다"
+    # Replanning p7과 같은 조건 문구 (A.21 p7 수정, A.27)
+    OPENS = "언제나 열려 있다. 단 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
 
     reason: str = Field(min_length=1, description="이관 사유")
 

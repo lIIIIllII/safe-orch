@@ -64,6 +64,8 @@ def lookup_tasks(
             "earliest_start_clock": clock(pack, t.earliest_start),
             "latest_start": t.latest_start,
             "latest_end": t.latest_end,
+            # 시작 가능 시각을 늦출 수 있는 최대 분. 0이면 늦추는 수정안은 분석을 통과하지 못한다 (A.27)
+            "start_slack": t.latest_start - t.earliest_start,
             "assignment": _assignment(pack, placed.get(t.task_id)),
         }
         for t in sorted(_ready(conn, pack), key=lambda t: t.task_id)
@@ -112,6 +114,7 @@ def analyze_impact(
         "old_clock": clock(pack, task.earliest_start),
         "new_earliest_start": new,
         "new_clock": clock(pack, new),
+        "delay_minutes": new - task.earliest_start,  # 새 값 − 현재 earliest_start (A.27)
         "latest_start": task.latest_start,
         "latest_start_clock": clock(pack, task.latest_start),
         "checks": checks,
