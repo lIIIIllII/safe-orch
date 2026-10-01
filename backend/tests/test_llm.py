@@ -602,3 +602,37 @@ def test_live_run_path_event_with_scripted_model(monkeypatch):
     assert c["gamma_changed_delay"] == [1, 15] and c["noticed"] == ["planner_b"]
     assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
     assert (r["run_status"], r["released"]) == ("SUCCEEDED", "APPLIED")
+
+
+INTAKE_VALUES = {
+    "work_type": "LIFTING",
+    "zone_id": "B",
+    "duration": 30,
+    "earliest_start": 0,
+    "latest_start": 60,
+    "latest_end": 90,
+    "required_resource_type": "CRANE",
+    "requested_resource_id": "A-CR-01",
+}
+
+
+@pytest.mark.parametrize("ambiguous", [False, True], ids=["clear", "ambiguous"])
+def test_live_run_path_intake_with_scripted_model(monkeypatch, ambiguous):
+    """--path intake [--ambiguous] (A.26): 질문(모호) → 값 확인 → 완료 → Replanning Alpha."""
+    ask = call(
+        "ASK_CLARIFICATION", "질문", field_ids=["zone_id", "resource"], question="구역·자원?"
+    )
+    intake = [
+        *([ask] if ambiguous else []),
+        call("REQUEST_CONFIRMATION", "확인", values=INTAKE_VALUES, message="이 값으로?"),
+        call("COMPLETE_TASKSPEC", "완료", values=INTAKE_VALUES),
+    ]
+    router = Router(intake=intake, replanning=[solve("L0"), solve("L1")])
+    make = router.factory()
+    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    r = live_run.run_path_intake(1, settings, "shipyard", False, ambiguous)
+    assert r.get("error") is None, r.get("error")
+    assert r["success"], r["success_criteria"]
+    assert r["asks"] == (1 if ambiguous else 0)
+    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}

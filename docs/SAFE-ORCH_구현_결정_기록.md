@@ -1401,3 +1401,11 @@
 - 테스트: 474 → 492(+18). `tests/test_intake.py` 15개(명확한 요청 → 폼 A와 같은 작업 값·movable·hazard_tags·fields(CONFIRMED, source `message:`)·Consent(TIME·RESOURCE, source `message:`)·Context +1 → Replanning L0 INFEASIBLE·L1 Alpha(변경 2·지연 90, A 10:00·C 10:30), RECHECK 원인 INTAKE·acting actor planner_a; 폼으로 낸 작업과 source_ref·task_id를 빼면 같음; 모호한 요청 → 질문 → ANSWER(ACCEPT·빈 답 거절) → 값 확인 → 완료, 확인 메시지에 ANSWER 불가; 다른 값으로 완료 → `CONFIRMED_VALUE_MISMATCH`; 확인 전 완료 → ACTION_NOT_AVAILABLE; 권한 없는 자원 → `TASKSPEC_INVALID`(폼 사유 `RESOURCE_NOT_AUTHORIZED`)·확인 요청 없음; 거절 사유 인용 → 다시 확인 요청; 열린 Case 중 완료 → QUEUED·Context 그대로; 지시 주입(hazard_tags 넣은 값·승인 도구 → MALFORMED, 완료된 작업의 태그는 LIFTING, Plan 그대로); 요청 검사; Event 중 Intake 유지; 같은 조건 자원 조회는 마지막 결과만; API; prompt) + 로더 4개(demo_intakes).
 - 기존 테스트 수정: 등록부 테스트(4종, 미등록 예시 ASSISTANT), Router 큐 수(4).
 - 골든·기존 테스트 그대로, `verify_demo_values`·`npm run build`·`npm run lint` 통과. **scenario.yaml이 바뀌어 pack_hash가 다르므로 로컬 DB reset이 필요하다(사용자가 한다).**
+
+**S2 구현 기록** (live run `--path intake [--ambiguous]`)
+- `scripts/live_run.py --path intake [--ambiguous]`: 임시 DB에서 demo_intakes[0](명확)·[1](모호) 문장으로 요청 A. 사람 역할(요청자): 확인 질문에는 scenario의 answer(명확한 요청은 "요청 문장에 적은 대로입니다: …")로 ANSWER, 값 확인 요청에는 확인. 완료 뒤 Replanning을 실제 모델로 Alpha까지. 기록에 `asks`·`intake_steps`·`intake_actions`. 스크립트 모델 테스트 2개(명확·모호).
+- 실행(model `gpt-6-luna`, prompt `intake-p1`·`replanning-p8`):
+  - 명확 3회(2026-10-01 18:47 UTC, `data/live_runs/20261001T184744Z.jsonl`): **1/3 성공**. #2 성공(ASK 1 → REQUEST → COMPLETE → Replanning L0·L1 Alpha, 작업 값·fields·Consent·Alpha 기대값 모두 일치, Intake 3 step). #1·#3 실패(ASK 3회 → ESCALATE, Intake 7 step): LOOKUP_RESOURCE가 빈 결과를 받고("크레인이 조회되지 않음") REQUEST_CONFIRMATION이 `TASKSPEC_INVALID`(자원 유형 불일치)로 막힌 뒤 질문을 반복해 사람 라운드 3을 다 썼다. ASK 횟수 [3, 1, 3].
+  - 모호 3회(18:48 UTC, `data/live_runs/20261001T184859Z.jsonl`): **1/3 성공**. #1 성공(ASK 1 → LOOKUP → REQUEST → COMPLETE → Alpha). #2·#3 실패(ASK → LOOKUP → ASK → ASK → ESCALATE): 구역·자원을 답으로 받은 뒤 문장에 이미 있던 작업 시간·시간창을 "확인값이 아니다"라며 다시 물어 사람 라운드를 다 썼다.
+  - 모든 회차 금지 Action·MALFORMED·LLM 오류 0, Budget 소진 없음(이관은 모델의 ESCALATE).
+- 원인(설계 누락, 수정은 결정을 받은 뒤): ① Observation에 **자원 유형 코드 목록이 없다**(작업 유형·구역만 줌). 모델이 "크레인" 같은 표현으로 조회해 빈 결과를 받고, 확인 값의 required_resource_type을 틀린다. ② "값 확인 요청에 요청자가 확인하면 그 값 전체가 확인된 값이 된다, 확인 질문의 답은 확인이 아니다"라는 **확인의 의미가 prompt에 사실로 적혀 있지 않다**. 모델이 값마다 질문으로 확인하려 해 사람 라운드(질문·확인 공유 3)를 소진한다.

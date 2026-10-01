@@ -29,6 +29,12 @@
   Supervisor WAIVE) → 승인. 성공 = PROPOSE(E, 60) ∧ 제안 CONFIRMED ∧ Hold FACT_CONFIRMED ∧ Gamma PASS(E 60,
   변경 1, 지연 15) ∧ R2 ∧ ER Run SUCCEEDED ∧ (--coord면 통지 대상 전원 통지) ∧ 신고 뒤 Run에서 금지 Action·
   MALFORMED 0 ∧ Budget 안.
+- --path intake [--ambiguous] (Work Intake, 부록 A.26): 요청 A를 demo_intakes[0](명확) 또는 [1](모호) 문장으로
+  자연어 요청한다. 사람 역할(요청자): 확인 질문에는 scenario의 answer 문장으로 ANSWER, 값 확인 요청에는 확인.
+  완료 뒤 Replanning을 실제 모델로 Alpha 후보까지. 성공 = Intake SUCCEEDED ∧ 작업 값 = new_task ∧ fields 모두
+  CONFIRMED·source message: ∧ Consent(TIME 시작 범위, RESOURCE 요청 자원, source message:) ∧ Alpha PASS·기대값(L1)
+  일치 ∧ 금지 Action·MALFORMED 0 ∧ Budget 안 (∧ --ambiguous면 확인 질문 1회 이상). 명확한 요청의 질문 횟수는
+  기록만 한다(성공 기준 아님).
 """
 
 import argparse
@@ -48,6 +54,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from app.agents.llm import model_settings, openai_model
 from app.agents.prompts.coordination import PROMPT_VERSION as COORDINATION_PROMPT_VERSION
 from app.agents.prompts.event_response import PROMPT_VERSION as EVENT_RESPONSE_PROMPT_VERSION
+from app.agents.prompts.intake import PROMPT_VERSION as INTAKE_PROMPT_VERSION
 from app.agents.prompts.replanning import PROMPT_VERSION
 from app.agents.specs.replanning import MAX_HUMAN_ROUNDS
 from app.commands.approval import (
@@ -59,6 +66,7 @@ from app.commands.approval import (
     waive,
 )
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
+from app.commands.intake import IntakeRequest, submit_intake
 from app.commands.messages import ReplyRequest, reply_message
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.config import REPO_ROOT, Settings, get_settings
@@ -74,12 +82,13 @@ from app.store.repos.records import get_candidate, get_snapshot, list_validation
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.seed import seed_pack
 from app.store.repos.site import get_site
+from app.store.repos.tasks import list_current_tasks
 from scripts import verify_demo_values as verify
 
 OUT_DIR = REPO_ROOT / "data" / "live_runs"
 RUN_DEADLINE_S = 300
 MAX_RUNS = 10
-PATHS = ("A", "B", "B-decline", "coord", "event")
+PATHS = ("A", "B", "B-decline", "coord", "event", "intake")
 MAX_HUMAN_TURNS = 6  # 기본안 B에서 사람 응답 반복 상한(무한 반복 방지)
 
 
@@ -1085,6 +1094,189 @@ def _path_event(
     )
 
 
+# ── Work Intake (부록 A.26) ───────────────────────────────────
+
+
+def run_path_intake(
+    index: int, settings: Settings, pack_name: str, raw: bool, ambiguous: bool
+) -> dict:
+    """임시 DB에서 자연어 요청 A → Intake → Replanning Alpha까지 실제 모델로 돌린다."""
+    tmp = tempfile.TemporaryDirectory(prefix="live_run_")
+    old_db = os.environ.get("DB_PATH")
+    os.environ["DB_PATH"] = str(Path(tmp.name) / "live.db")
+    get_settings.cache_clear()
+    db.close()
+    path = "intake-ambiguous" if ambiguous else "intake"
+    record: dict[str, Any] = {"index": index, "request": "A", "path": path, "ambiguous": ambiguous}
+    t0 = time.perf_counter()
+    try:
+        db.init_db()
+        pack = load_pack(pack_dir(pack_name))
+        with db.write() as tx:
+            seed_pack(tx, pack)
+        _path_intake(record, settings, pack, pack_name, raw, ambiguous)
+    except Exception as e:  # noqa: BLE001 — 실패도 기록한다
+        record.update(success=False, error=f"{type(e).__name__}: {e}")
+    finally:
+        db.close()
+        if old_db is None:
+            os.environ.pop("DB_PATH", None)
+        else:
+            os.environ["DB_PATH"] = old_db
+        get_settings.cache_clear()
+        tmp.cleanup()
+    record["total_seconds"] = round(time.perf_counter() - t0, 2)
+    return record
+
+
+def _path_intake(
+    record: dict[str, Any],
+    settings: Settings,
+    pack: Any,
+    pack_name: str,
+    raw: bool,
+    ambiguous: bool,
+) -> None:
+    rec = _Recorder(time.monotonic() + RUN_DEADLINE_S * 2, raw)
+    site_id = pack.site_id
+    factory = lambda: _RecordingModel(openai_model(settings), rec)
+    demo = pack.demo_intakes[1 if ambiguous else 0]
+    # 명확한 요청에 질문이 오면 요청 문장 그대로 답한다(값은 문장에 다 있다)
+    answer = demo.answer or f"요청 문장에 적은 대로입니다: {demo.text}"
+    out = submit_intake(
+        pack, demo.requester, _key(), IntakeRequest(task_id=demo.task_id, text=demo.text)
+    )
+    events: list[dict[str, Any]] = [{"intake": demo.label, "status": out.status}]
+    for _ in range(MAX_HUMAN_TURNS * 2):
+        run_until_idle(pack, model_factory=factory)
+        with db.read() as conn:
+            opened = _open_requests(conn)
+        if not opened:
+            break
+        m = opened[0]
+        decision, comment = ("ANSWER", answer) if m["type"] == "QUESTION" else ("ACCEPT", "")
+        out = reply_message(
+            pack,
+            m["to_actor_id"],
+            _key(),
+            ReplyRequest(message_id=m["message_id"], decision=decision, comment=comment),
+        )
+        events.append({"reply": decision, "type": m["type"], "status": out.status})
+
+    with db.read() as conn:
+        runs = [
+            get_run(conn, r[0]) for r in conn.execute("SELECT run_id FROM agent_run ORDER BY rowid")
+        ]
+        order = [
+            (r[0], r[1])
+            for r in conn.execute("SELECT run_id, step_no FROM agent_step ORDER BY rowid")
+        ]
+        by_run = {r.run_id: list_steps(conn, r.run_id) for r in runs}
+        steps = [next(s for s in by_run[rid] if s["step_no"] == no) for rid, no in order]
+        task = next(
+            (t for t in list_current_tasks(conn, site_id, pack) if t.task_id == demo.task_id),
+            None,
+        )
+        consents = conn.execute(
+            "SELECT axis, scope, source_ref FROM consent WHERE task_id = ? ORDER BY rowid",
+            (demo.task_id,),
+        ).fetchall()
+        rp = next((r for r in runs if r.agent_type == "REPLANNING"), None)
+        alpha = rp.wait_ref if rp is not None and rp.status == "WAITING_HUMAN" else None
+        alpha_v = _pass_validation(conn, site_id, alpha)
+        alpha_step = next(
+            (s for s in steps if alpha and (s["tool_result"] or {}).get("candidate_id") == alpha),
+            None,
+        )
+        alpha_actual = _actual(conn, site_id, alpha, alpha_step) if alpha and alpha_step else None
+    rows = _step_rows(steps, rec.calls)
+    for row, s in zip(rows, steps, strict=True):
+        row["run_id"] = s["run_id"]
+        row["agent"] = next(r.agent_type for r in runs if r.run_id == s["run_id"])
+    intake = next((r for r in runs if r.agent_type == "INTAKE"), None)
+    names = [
+        (s["action"] or {}).get("name")
+        for s in steps
+        if next(r.agent_type for r in runs if r.run_id == s["run_id"]) == "INTAKE"
+    ]
+    asks = sum(
+        1
+        for s in steps
+        if (s["action"] or {}).get("name") == "ASK_CLARIFICATION"
+        and s["guard"]["verdict"] == "ACCEPTED"
+    )
+    nt = pack.new_task
+    keys = ("work_type", "zone_id", "duration", "earliest_start", "latest_start", "latest_end",
+            "required_resource_type", "requested_resource_id")  # fmt: skip
+    sources = {f.source_ref for f in task.fields.values()} if task else set()
+    expected_consents = [
+        ("TIME", {"start_min": nt.earliest_start, "start_max": nt.latest_start}),
+        ("RESOURCE", {"resource_ids": [nt.requested_resource_id]}),
+    ]
+    world_model, world, task_a, _ = verify.load(pack_dir(pack_name))
+    exp_alpha = verify.expected(world_model, world, task_a).get("L1")
+    guards = [(s["guard"] or {}).get("reason_code") for s in steps]
+    criteria: dict[str, Any] = {
+        "intake_succeeded": intake is not None and intake.status == "SUCCEEDED",
+        "values_match_new_task": task is not None
+        and all(getattr(task, k) == getattr(nt, k) for k in keys),
+        "fields_confirmed_from_message": task is not None
+        and {f.status for f in task.fields.values()} == {"CONFIRMED"}
+        and len(sources) == 1
+        and next(iter(sources)).startswith("message:"),
+        "consents_like_form": [(c[0], json.loads(c[1])) for c in consents] == expected_consents
+        and all(c[2].startswith("message:") for c in consents),
+        "alpha_pass": alpha_v is not None,
+        "alpha_matches_expected": alpha_actual is not None
+        and _matches({"L1": exp_alpha}, alpha_actual, False),
+        "asks": asks,
+        "forbidden_actions": guards.count("ACTION_NOT_AVAILABLE"),
+        "malformed": guards.count("MALFORMED"),
+        "llm_errors": guards.count("LLM_ERROR"),
+        "within_budget": all(r.status != "BUDGET_EXHAUSTED" for r in runs),
+    }
+    keys_ok = ("intake_succeeded", "values_match_new_task", "fields_confirmed_from_message",
+               "consents_like_form", "alpha_pass", "alpha_matches_expected", "within_budget")  # fmt: skip
+    success = (
+        all(criteria[k] for k in keys_ok)
+        and criteria["forbidden_actions"] == 0
+        and criteria["malformed"] == 0
+        and (not ambiguous or asks >= 1)
+    )
+    record.update(
+        model_settings=model_settings(settings),
+        model=next((r["model_id"] for r in rows if r["model_id"]), None),
+        prompt_version=PROMPT_VERSION,
+        intake_prompt_version=INTAKE_PROMPT_VERSION,
+        success=success,
+        success_criteria=criteria,
+        step_count=len(steps),
+        intake_steps=len(names),
+        intake_actions=names,
+        asks=asks,
+        actions=[f"{row['agent'][0]}:{row['action'] or '-'}" for row in rows],
+        events=events,
+        steps=rows,
+        runs=[
+            {
+                "run_id": r.run_id,
+                "agent_type": r.agent_type,
+                "status": r.status,
+                "end_reason": r.end_reason,
+                "steps_used": r.steps_used,
+                "human_rounds_used": r.human_rounds_used,
+            }
+            for r in runs
+        ],
+        run_status=None if intake is None else intake.status,
+        end_reason=None if intake is None else intake.end_reason,
+        alpha=alpha_actual,
+        tokens_in=sum(r["tokens_in"] for r in rows),
+        tokens_out=sum(r["tokens_out"] for r in rows),
+        llm_seconds=round(sum(c["ms"] for c in rec.calls) / 1000, 2),
+    )
+
+
 def _run_request(
     index: int,
     position: int,
@@ -1213,7 +1405,7 @@ def _na(value: Any) -> Any:
 
 
 def _line(r: dict[str, Any]) -> str:
-    if r.get("path") in ("coord", "event"):
+    if r.get("path") in ("coord", "event", "intake", "intake-ambiguous"):
         return (
             f"#{r['index']} path {r['path']}{' --coord' if r.get('coord') else ''} success={r.get('success')} "
             f"run={r.get('run_status')}/{r.get('end_reason')} steps={r.get('step_count')} "
@@ -1258,6 +1450,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--coord", action="store_true", help="--path event에서 Coordination도 켠다(A.25)"
     )
     parser.add_argument(
+        "--ambiguous", action="store_true", help="--path intake에서 모호한 요청을 쓴다(A.26)"
+    )
+    parser.add_argument(
         "--path",
         choices=PATHS,
         default="A",
@@ -1295,6 +1490,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch = run_once(i + 1, settings, pack_name, args.raw, requests)
         elif args.path == "coord":
             batch = [run_path_coord(i + 1, settings, pack_name, args.raw)]
+        elif args.path == "intake":
+            batch = [run_path_intake(i + 1, settings, pack_name, args.raw, args.ambiguous)]
         elif args.path == "event":
             batch = [run_path_event(i + 1, settings, pack_name, args.raw, args.coord)]
         else:
@@ -1313,6 +1510,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     n = len(records)
     if paths and paths[0]["path"] == "coord":
         print(f"success {ok}/{n} (기본안 A), tokens {tokens}")
+    elif paths and paths[0]["path"].startswith("intake"):
+        asks = [r.get("asks") for r in paths]
+        print(f"success {ok}/{n} ({paths[0]['path']}), asks {asks}, tokens {tokens}")
     elif paths and paths[0]["path"] == "event":
         print(
             f"success {ok}/{n} (Scene 4 최소 경로, coord={paths[0].get('coord')}), tokens {tokens}"
