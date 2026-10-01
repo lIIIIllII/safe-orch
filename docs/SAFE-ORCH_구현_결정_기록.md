@@ -1253,3 +1253,7 @@
 - 기존 테스트 수정: 등록부 테스트 2개(COORDINATION이 등록되어 미등록 예시를 INTAKE로).
 - 골든 테스트·기존 테스트 그대로, `verify_demo_values`·`npm run build`·`npm run lint` 통과. 스키마·Pack 변경 없음(로컬 DB reset 필요 없음).
 - 남은 것: S2 live run `--path coord`, S3 화면(Inbox 카드 3종·배지 규칙·검토 패널 item 상태·labels). 통지 Run 중 Event가 오면 통지 Run도 STALE이 된다(기존 `stale_active_runs`).
+
+**S2 구현 기록** (live run `--path coord`)
+- `scripts/live_run.py --path coord`: COORDINATION_ENABLED를 켠 임시 DB에서 요청 A. 사람 역할 스크립트: 변경 요청 → 이견(`demo_rejections[0].comment`), 제약 초안 → 확정, 담당자 질문 → 수락, 동의가 끝난 PASS 후보 → 승인. 여러 Run의 step은 예약 순서(agent_step rowid)로 모아 모델 호출 기록과 맞춘다. 기록에 `runs`(Run별 상태)·`draft_args`·`coordination_prompt_version`을 더했다. 스크립트 모델 테스트 1개(`test_live_run_path_coord_with_scripted_model`).
+- 실행(2026-10-01 17:41 UTC, `data/live_runs/20261001T174106Z.jsonl`): model `gpt-6-luna`(reasoning_effort none), prompt `replanning-p8`·`coordination-p1`. **3/3 성공**(완주 판정 충족). 세 회차 모두 같은 12 step: R:SOLVE(L0) → R:SOLVE(L1, Alpha) → C:SEND_CHANGE_REQUEST(C) → C:WAIT → (A2 이견) → C:DRAFT_CONSTRAINT → C:WAIT → (A2 확정) → R:LIST → R:ASK → (Planner A 수락) → R:TRY(Beta) → (승인 R1) → C:SEND_NOTICE(planner_a) → C:SEND_NOTICE(planner_b) → C:REPORT_TO_SUPERVISOR. 금지 Action 0, MALFORMED 0, LLM 오류 0, 통지 대상 {planner_a, planner_b} 전원 통지. 회차당 토큰 약 31,000, 27.6–29.5초. 초안 축은 세 회차 모두 TIME을 포함했다(draft_ok, 인자 기록은 이 실행 뒤에 더했다).

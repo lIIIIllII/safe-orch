@@ -10,7 +10,7 @@ import yaml
 from conftest import add_run
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
-from scripted import ScriptedChatModel, call, escalate, solve
+from scripted import Router, ScriptedChatModel, call, escalate, solve
 
 from app.agents import llm, runtime
 from app.agents.observers.replanning import build_observation
@@ -488,3 +488,73 @@ def test_system_lists_every_action_with_open_condition(pack):
     ids += [*pack.work_types, *(t.task_id for t in pack.tasks)]
     assert not [i for i in ids if len(i) >= 3 and i in catalog]
     assert "조회·확인으로 열 수 있는 대안" in system
+
+
+def test_live_run_path_coord_with_scripted_model(monkeypatch):
+    """--path coord(기본안 A, A.24): 변경 요청 → 스크립트 이견 → 초안 → 스크립트 확정 → 재개 → Beta → R1 → 통지."""
+
+    def draft():
+        with db.read() as conn:
+            mid = conn.execute(
+                "SELECT message_id FROM message WHERE type = 'CHANGE_REQUEST'"
+            ).fetchone()[0]
+        return call(
+            "DRAFT_CONSTRAINT",
+            "초안",
+            message_id=mid,
+            reason_code="TASK_IMMOVABLE",
+            task_id="C",
+            axes=["TIME", "RESOURCE"],
+            message="C 고정 확인",
+        )
+
+    def report():
+        args = {"decision_summary": "보고", "summary": "통지 완료"}
+        return AIMessage(
+            content="", tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": "r"}]
+        )
+
+    wait = call("WAIT_FOR_REPLIES", "대기")
+    router = Router(
+        replanning=[
+            solve("L0"),
+            solve("L1"),
+            call("LIST_ASSIGNABLE_RESOURCES", "조회", task_id="A"),
+            call(
+                "ASK_TASK_OWNER",
+                "확인",
+                task_id="A",
+                axis="RESOURCE",
+                allowed_values=["SITE-CR-01"],
+                question="SITE-CR-01?",
+            ),
+            call("TRY_ALTERNATIVE_RESOURCE", "시도", task_id="A", resource_id="SITE-CR-01"),
+        ],
+        coordination=[
+            call("SEND_CHANGE_REQUEST", "요청", task_id="C", message="C 이동 안"),
+            wait,
+            draft,
+            wait,
+            call("SEND_NOTICE", "통지", actor_id="planner_a", task_ids=["A"], message="A 변경"),
+            call("SEND_NOTICE", "통지", actor_id="planner_b", task_ids=["B"], message="B 유지"),
+            report,
+        ],
+    )
+    make = router.factory()
+    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    r = live_run.run_path_coord(1, settings, "shipyard", False)
+    assert r.get("error") is None, r.get("error")
+    c = r["success_criteria"]
+    assert r["success"], c
+    assert (c["notice_targets"], c["noticed"]) == (
+        ["planner_a", "planner_b"],
+        ["planner_a", "planner_b"],
+    )
+    assert [e.get("type") for e in r["events"] if "reply" in e] == [
+        "CHANGE_REQUEST",
+        "CONFIRMATION",
+        "QUESTION",
+    ]
+    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0}
+    assert (r["run_status"], r["end_reason"]) == ("SUCCEEDED", "COMMITTED:1")

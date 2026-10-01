@@ -18,6 +18,11 @@
   ∧ 금지 Action 0 ∧ Budget 안(사람 라운드 ≤ 2) ∧ ASK가 LIST 결과의 대체 자원을 담음 ∧ 수락 전 TRY 없음.
 - --path B-decline: 같은 흐름에서 ACCEPT 대신 DECLINE(comment "live run 자동 거절"). 성공 = Alpha PASS ∧ ASK
   1회 ∧ DECLINE 적용 ∧ 거절 뒤 ASK·TRY 없음 ∧ Run ESCALATED ∧ 금지 Action 0 ∧ Budget 안.
+- --path coord(기본안 A, 부록 A.24): COORDINATION_ENABLED를 켠 임시 DB에서 요청 A만. 스크립트가 사람 역할을
+  한다: 변경 요청에는 이견(demo_rejections[0].comment), 제약 초안에는 확정, 담당자 질문에는 수락, 동의가 끝난
+  PASS 후보는 승인. 성공 = Alpha PASS ∧ C 담당자에게 C 변경 요청 ∧ DRAFT_CONSTRAINT(TASK_IMMOVABLE, C, 바뀐 축
+  포함) ∧ 제약 source PROPOSAL ∧ Beta PASS ∧ R1 ∧ Replanning SUCCEEDED ∧ 통지 대상 전원에게 NOTICE ∧ 통지 Run
+  SUCCEEDED ∧ 모든 Run에서 금지 Action·MALFORMED 0 ∧ Budget 안.
 """
 
 import argparse
@@ -35,6 +40,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage
 
 from app.agents.llm import model_settings, openai_model
+from app.agents.prompts.coordination import PROMPT_VERSION as COORDINATION_PROMPT_VERSION
 from app.agents.prompts.replanning import PROMPT_VERSION
 from app.agents.specs.replanning import MAX_HUMAN_ROUNDS
 from app.commands.approval import (
@@ -54,6 +60,7 @@ from app.packs.loader import load_pack, pack_dir
 from app.solver import cpsat
 from app.store import db
 from app.store.repos.consultations import consultation_view
+from app.store.repos.decisions import list_constraints
 from app.store.repos.messages import get_message
 from app.store.repos.records import get_candidate, get_snapshot, list_validations
 from app.store.repos.runs import get_run, list_steps
@@ -64,7 +71,7 @@ from scripts import verify_demo_values as verify
 OUT_DIR = REPO_ROOT / "data" / "live_runs"
 RUN_DEADLINE_S = 300
 MAX_RUNS = 10
-PATHS = ("A", "B", "B-decline")
+PATHS = ("A", "B", "B-decline", "coord")
 MAX_HUMAN_TURNS = 6  # 기본안 B에서 사람 응답 반복 상한(무한 반복 방지)
 
 
@@ -508,6 +515,222 @@ def _path_b(
     )
 
 
+# ── 기본안 A: Coordination (부록 A.24) ─────────────────────────
+
+
+def run_path_coord(index: int, settings: Settings, pack_name: str, raw: bool) -> dict:
+    """COORDINATION_ENABLED를 켠 임시 DB에서 요청 A로 기본안 A를 끝까지 돌린다. 기록 1개."""
+    tmp = tempfile.TemporaryDirectory(prefix="live_run_")
+    old_db, old_flag = os.environ.get("DB_PATH"), os.environ.get("COORDINATION_ENABLED")
+    os.environ["DB_PATH"] = str(Path(tmp.name) / "live.db")
+    os.environ["COORDINATION_ENABLED"] = "true"
+    get_settings.cache_clear()
+    db.close()
+    record: dict[str, Any] = {"index": index, "request": "A", "path": "coord"}
+    t0 = time.perf_counter()
+    try:
+        db.init_db()
+        pack = load_pack(pack_dir(pack_name))
+        with db.write() as tx:
+            seed_pack(tx, pack)
+        _path_coord(record, settings, pack, raw)
+    except Exception as e:  # noqa: BLE001 — 실패도 기록한다
+        record.update(success=False, error=f"{type(e).__name__}: {e}")
+    finally:
+        db.close()
+        for name, old in (("DB_PATH", old_db), ("COORDINATION_ENABLED", old_flag)):
+            if old is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = old
+        get_settings.cache_clear()
+        tmp.cleanup()
+    record["total_seconds"] = round(time.perf_counter() - t0, 2)
+    return record
+
+
+ANSWERABLE = ("QUESTION", "CHANGE_REQUEST", "CONFIRMATION")
+
+
+def _open_requests(conn: Any) -> list[dict[str, Any]]:
+    cur = conn.execute(
+        "SELECT message_id, to_actor_id, type FROM message WHERE status = 'OPEN' ORDER BY rowid"
+    )
+    return [
+        {"message_id": r[0], "to_actor_id": r[1], "type": r[2]}
+        for r in cur.fetchall()
+        if r[2] in ANSWERABLE
+    ]
+
+
+def _path_coord(record: dict[str, Any], settings: Settings, pack: Any, raw: bool) -> None:
+    rec = _Recorder(time.monotonic() + RUN_DEADLINE_S * 2, raw)
+    site_id = pack.site_id
+    factory = lambda: _RecordingModel(openai_model(settings), rec)
+    objection = pack.demo_rejections[0].comment
+    form, requester = _form_and_requester(pack, pack.new_task.task_id)
+    record["submitted"] = submit_task_request(pack, requester, _key(), form).status
+    events: list[dict[str, Any]] = []
+    alpha = committed = None
+    for _ in range(MAX_HUMAN_TURNS * 2):
+        run_until_idle(pack, model_factory=factory)
+        with db.read() as conn:
+            [rp_id] = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT run_id FROM agent_run WHERE agent_type = 'REPLANNING'"
+                )
+            ]
+            rp, ref = _waiting(conn, rp_id)
+            alpha = alpha or ref
+            opened = _open_requests(conn)
+            cand_v = (
+                _pass_validation(conn, site_id, ref)
+                if rp.wait_kind == "CANDIDATE_OUTCOME"
+                else None
+            )
+            view = consultation_view(conn, site_id, ref) if cand_v else None
+            ctx = get_site(conn, site_id).context_version
+        if opened:
+            m = opened[0]
+            # 사람 역할: 변경 요청에는 이견, 제약 초안에는 확정, 담당자 질문에는 수락
+            decision, comment = {
+                "CHANGE_REQUEST": ("DECLINE", objection),
+                "CONFIRMATION": ("ACCEPT", "live run 자동 확정"),
+                "QUESTION": ("ACCEPT", "live run 자동 수락"),
+            }[m["type"]]
+            out = reply_message(
+                pack,
+                m["to_actor_id"],
+                _key(),
+                ReplyRequest(message_id=m["message_id"], decision=decision, comment=comment),
+            )
+            events.append({"reply": decision, "type": m["type"], "status": out.status})
+            continue
+        if cand_v is not None and view is not None and view.items_status == "COMPLETE":
+            out = approve_and_commit(
+                pack,
+                "supervisor",
+                _key(),
+                ApproveRequest(
+                    candidate_id=ref,
+                    validation_id=cand_v.validation_id,
+                    expected_context_version=ctx,
+                ),
+            )
+            committed = {
+                "candidate_id": ref,
+                "status": out.status,
+                "reasons": list(out.reason_codes),
+            }
+            events.append({"approve": ref, "status": out.status})
+            run_until_idle(pack, model_factory=factory)  # 통지 Run
+        break
+
+    with db.read() as conn:
+        runs = [
+            get_run(conn, r[0]) for r in conn.execute("SELECT run_id FROM agent_run ORDER BY rowid")
+        ]
+        order = [
+            (r[0], r[1])
+            for r in conn.execute("SELECT run_id, step_no FROM agent_step ORDER BY rowid")
+        ]
+        by_run = {r.run_id: list_steps(conn, r.run_id) for r in runs}
+        steps = [next(s for s in by_run[rid] if s["step_no"] == no) for rid, no in order]
+        constraints = list_constraints(conn, site_id)
+        cur = conn.execute("SELECT to_actor_id, type, body FROM message ORDER BY rowid")
+        messages = [{"to": r[0], "type": r[1], "body": r[2]} for r in cur.fetchall()]
+        plan_revision = get_site(conn, site_id).plan_revision
+        alpha_v = _pass_validation(conn, site_id, alpha)
+        beta_v = _pass_validation(conn, site_id, (committed or {}).get("candidate_id"))
+    rows = _step_rows(steps, rec.calls)
+    for row, s in zip(rows, steps, strict=True):
+        row["run_id"], row["agent"] = (
+            s["run_id"],
+            next(r.agent_type for r in runs if r.run_id == s["run_id"]),
+        )
+    rp = next(r for r in runs if r.agent_type == "REPLANNING")
+    coords = [r for r in runs if r.agent_type == "COORDINATION"]
+    notice_run = next((r for r in coords if r.input_ref.get("phase") == "NOTICE"), None)
+    c_task = next(t for t in pack.tasks if t.task_id in pack.demo_rejections[0].target_task_ids)
+    drafts = [
+        s for s in steps
+        if (s["action"] or {}).get("name") == "DRAFT_CONSTRAINT" and s["guard"]["verdict"] == "ACCEPTED"
+    ]  # fmt: skip
+    targets = []
+    if notice_run is not None:
+        first = next((s for s in steps if s["run_id"] == notice_run.run_id), None)
+        targets = sorted(
+            t["actor_id"] for t in (first or {}).get("observation", {}).get("notice_targets", [])
+        )
+    noticed = sorted({m["to"] for m in messages if m["type"] == "NOTICE"})
+    guards = [(s["guard"] or {}).get("reason_code") for s in steps]
+    criteria: dict[str, Any] = {
+        "alpha_pass": alpha_v is not None,
+        "change_request_to_owner": any(
+            m["type"] == "CHANGE_REQUEST" and m["to"] == c_task.owner_actor_id for m in messages
+        ),
+        "draft_ok": any(
+            s["action"]["args"]["reason_code"] == "TASK_IMMOVABLE"
+            and s["action"]["args"]["task_id"] == c_task.task_id
+            and "TIME" in s["action"]["args"]["axes"]
+            for s in drafts
+        ),
+        "constraint_from_proposal": any(
+            c.task_id == c_task.task_id and c.source_type == "PROPOSAL" for c in constraints
+        ),
+        "beta_pass": beta_v is not None and (committed or {}).get("candidate_id") != alpha,
+        "committed_r1": (committed or {}).get("status") == "APPLIED" and plan_revision == 1,
+        "replanning_succeeded": rp.status == "SUCCEEDED",
+        "notice_targets": targets,
+        "noticed": noticed,
+        "notices_complete": bool(targets) and noticed == targets,
+        "notice_run_succeeded": notice_run is not None and notice_run.status == "SUCCEEDED",
+        "forbidden_actions": guards.count("ACTION_NOT_AVAILABLE"),
+        "malformed": guards.count("MALFORMED"),
+        "llm_errors": guards.count("LLM_ERROR"),
+        "within_budget": all(r.status != "BUDGET_EXHAUSTED" for r in runs),
+    }
+    keys = ("alpha_pass", "change_request_to_owner", "draft_ok", "constraint_from_proposal",
+            "beta_pass", "committed_r1", "replanning_succeeded", "notices_complete",
+            "notice_run_succeeded", "within_budget")  # fmt: skip
+    success = (
+        all(criteria[k] for k in keys)
+        and criteria["forbidden_actions"] == 0
+        and criteria["malformed"] == 0
+    )
+    record.update(
+        model_settings=model_settings(settings),
+        model=next((r["model_id"] for r in rows if r["model_id"]), None),
+        prompt_version=PROMPT_VERSION,
+        coordination_prompt_version=COORDINATION_PROMPT_VERSION,
+        success=success,
+        success_criteria=criteria,
+        step_count=len(steps),
+        draft_args=[s["action"]["args"] for s in drafts],
+        actions=[f"{row['agent'][0]}:{row['action'] or '-'}" for row in rows],
+        events=events,
+        steps=rows,
+        runs=[
+            {
+                "run_id": r.run_id,
+                "agent_type": r.agent_type,
+                "phase": r.input_ref.get("phase"),
+                "status": r.status,
+                "end_reason": r.end_reason,
+                "steps_used": r.steps_used,
+            }
+            for r in runs
+        ],
+        run_status=rp.status,
+        end_reason=rp.end_reason,
+        committed=committed,
+        tokens_in=sum(r["tokens_in"] for r in rows),
+        tokens_out=sum(r["tokens_out"] for r in rows),
+        llm_seconds=round(sum(c["ms"] for c in rec.calls) / 1000, 2),
+    )
+
+
 def _run_request(
     index: int,
     position: int,
@@ -636,6 +859,14 @@ def _na(value: Any) -> Any:
 
 
 def _line(r: dict[str, Any]) -> str:
+    if r.get("path") == "coord":
+        return (
+            f"#{r['index']} path coord success={r.get('success')} "
+            f"run={r.get('run_status')}/{r.get('end_reason')} steps={r.get('step_count')} "
+            f"{r.get('total_seconds')}s  {' → '.join(r.get('actions', []))}  "
+            f"criteria={r.get('success_criteria')}"
+            + (f"  error={r['error']}" if r.get("error") else "")
+        )
     if r.get("path"):
         c = r.get("success_criteria") or {}
         return (
@@ -703,11 +934,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     records = []
     for i in range(args.runs):
-        batch = (
-            run_once(i + 1, settings, pack_name, args.raw, requests)
-            if args.path == "A"
-            else [run_path_b(i + 1, settings, pack_name, args.raw, args.path == "B-decline")]
-        )
+        if args.path == "A":
+            batch = run_once(i + 1, settings, pack_name, args.raw, requests)
+        elif args.path == "coord":
+            batch = [run_path_coord(i + 1, settings, pack_name, args.raw)]
+        else:
+            batch = [run_path_b(i + 1, settings, pack_name, args.raw, args.path == "B-decline")]
         for r in batch:
             records.append(r)
             with out.open("a", encoding="utf-8") as f:
@@ -720,7 +952,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     paths = [r for r in records if r.get("path")]
     tokens = sum(r.get("tokens_in", 0) + r.get("tokens_out", 0) for r in records)
     n = len(records)
-    if paths:  # 기본안 B: Alpha·Beta 기대값 일치를 따로 센다 (B-decline에는 Beta가 없다)
+    if paths and paths[0]["path"] == "coord":
+        print(f"success {ok}/{n} (기본안 A), tokens {tokens}")
+    elif paths:  # 기본안 B: Alpha·Beta 기대값 일치를 따로 센다 (B-decline에는 Beta가 없다)
         alpha = sum(1 for r in paths if r.get("alpha_matches_expected"))
         with_beta = [r for r in paths if r.get("beta_matches_expected") is not None]
         beta = sum(1 for r in with_beta if r["beta_matches_expected"])
