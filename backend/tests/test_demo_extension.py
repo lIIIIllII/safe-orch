@@ -529,3 +529,19 @@ def test_demo_rejection_target_must_exist(pack_copy):
     f.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
     with pytest.raises(PackError, match="undefined task 'X9'"):
         load_pack(pack_copy)
+
+
+def test_steps_api_reports_work_delay_without_storing(client, seeded):
+    """GET /runs/{rid}/steps의 SOLVE step에 근무 분 지연을 조회 시 붙인다. AgentStep에는 없다 (A.20)."""
+    _submit(seeded, "N4")
+    run_until_idle(seeded, model_factory=_factory(solve("L0")))
+    [run] = _runs()
+    res = client.get(f"/api/runs/{run.run_id}/steps", headers={"X-Actor": "supervisor"})
+    assert res.status_code == 200, res.text
+    [step] = res.json()
+    assert step["tool_result"]["stage2"] == {"status": "OPTIMAL", "delay": 1140, "work_delay": 180}
+    with db.read() as conn:
+        stored = conn.execute(
+            "SELECT tool_result FROM agent_step WHERE run_id = ?", (run.run_id,)
+        ).fetchone()[0]
+    assert "work_delay" not in stored

@@ -6,7 +6,7 @@ import pytest
 from conftest import add_run
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
-from scripted import ScriptedChatModel, solve
+from scripted import ScriptedChatModel, escalate, solve
 
 from app.agents import llm, runtime
 from app.agents.observe import build_observation
@@ -233,7 +233,7 @@ def test_live_run_flow_with_scripted_model(monkeypatch):
         live_run, "openai_model", lambda s: ScriptedChatModel([solve("L0"), solve("L1")])
     )
     settings = Settings(openai_api_key="sk-test", openai_model="m", openai_temperature="0")
-    r = live_run.run_once(1, settings, "shipyard", raw=False)
+    [r] = live_run.run_once(1, settings, "shipyard", raw=False)
     assert r.get("error") is None, r.get("error")
     assert (r["success"], r["l0_first"], r["first_solve_level"]) == (True, True, "L0")
     assert r["committed"] == {"status": "APPLIED", "reason_codes": []}
@@ -244,3 +244,54 @@ def test_live_run_flow_with_scripted_model(monkeypatch):
     ]
     assert r["model_settings"]["temperature"] == 0.0 and "api_key" not in r["model_settings"]
     assert r["success_criteria"]["forbidden_actions"] == 0
+    assert (r["request"], r["expected_outcome"], r["matches_expected"]) == ("A", "CANDIDATE", True)
+    assert r["actual"]["level"] == "L1" and r["actual"]["moved"] == {
+        "A": [60, "A-CR-01"],
+        "C": [90, "A-CR-01"],
+    }
+
+
+def _scripted_each_run(*replies):
+    """START_RUN마다 새 스크립트 모델(같은 응답 순서)."""
+    return lambda s: ScriptedChatModel(list(replies))
+
+
+def test_live_run_requests_in_sequence(monkeypatch):
+    """--request N1,N2,N3,N4: 같은 DB에서 하나씩 확정한다. 기대값은 verify_demo_values와 같은 출처."""
+    monkeypatch.setattr(live_run, "openai_model", _scripted_each_run(solve("L0")))
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    records = live_run.run_once(1, settings, "shipyard", False, ["N1", "N2", "N3", "N4"])
+    assert [r.get("error") for r in records] == [None] * 4
+    assert [r["request"] for r in records] == ["N1", "N2", "N3", "N4"]
+    assert all(r["success"] and r["matches_expected"] and r["l0_first"] for r in records)
+    assert [r["committed"]["status"] for r in records] == ["APPLIED"] * 4
+    assert [(r["actual"]["delay"], r["actual"]["work_delay"]) for r in records] == [
+        (60, 60),
+        (45, 45),
+        (120, 120),
+        (1140, 180),
+    ]
+    assert records[3]["actual"]["moved"] == {"N4": [2880, None]}
+    assert records[3]["expected"]["L0"]["moved"] == {"N4": [2880, None]}
+
+
+def test_live_run_no_solution_request_succeeds_by_escalation(monkeypatch):
+    """--request N5: 모든 범위 INFEASIBLE이 기대값이므로 후보 없음 + ESCALATE_NO_SOLUTION 종료가 성공."""
+    monkeypatch.setattr(
+        live_run, "openai_model", _scripted_each_run(solve("L0"), solve("L2"), escalate())
+    )
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    [r] = live_run.run_once(1, settings, "shipyard", False, ["N5"])
+    assert r.get("error") is None, r.get("error")
+    assert r["expected_outcome"] == "ESCALATE"
+    assert {e["status"] for e in r["expected"].values()} == {"INFEASIBLE"}
+    assert (r["actual"], r["committed"]) == (None, None)
+    assert r["run_status"] == "ESCALATED" and r["end_reason"].startswith("ESCALATE_NO_SOLUTION")
+    assert r["success"] and r["matches_expected"]
+    assert r["success_criteria"]["pass_reached"] is False
+
+
+def test_live_run_rejects_unknown_request(capsys):
+    with pytest.raises(SystemExit):
+        live_run.main(["--request", "N1,X9"])
+    assert "X9" in capsys.readouterr().err

@@ -6,6 +6,7 @@
 - 계산은 app 코드(rules·solver·validator)를 import하지 않는 독립 구현이다. CP-SAT 모델(§7 + CALENDAR)과
   전수 열거를 함께 돌려 상태·변경 수·지연·해가 같은지 대조하고, 최적해가 하나뿐인지 센다.
 - 결과는 콘솔에만 쓴다. pytest(tests/test_demo_extension.py)가 같은 값을 운영 코드로 재현한다.
+- scripts/live_run.py --request가 `load`·`expected`·`advance`로 요청별 기대값을 같은 출처에서 얻는다(A.17).
 """
 
 import datetime as dt
@@ -70,8 +71,8 @@ class World:
         return sum(max(0, min(b, hi) - max(a, lo)) for lo, hi in self.work_cal)
 
 
-def load() -> tuple[World, list[T], T, list[T]]:
-    raw = {f: yaml.safe_load((PACK / f).read_text(encoding="utf-8")) for f in (
+def load(pack: Path = PACK) -> tuple[World, list[T], T, list[T]]:
+    raw = {f: yaml.safe_load((pack / f).read_text(encoding="utf-8")) for f in (
         "pack.yaml", "rules.yaml", "site.yaml", "plan_r0.yaml", "scenario.yaml",
     )}  # fmt: skip
     tags = {k: v["hazard_tags"][0] for k, v in raw["pack.yaml"]["work_types"].items()}
@@ -346,6 +347,41 @@ def solve_request(
         if not agree:
             raise SystemExit("CP-SAT와 전수 열거가 다르다")
     return out
+
+
+def expected(w: World, others: list[T], req: T) -> dict[str, dict[str, Any]]:
+    """요청 하나의 범위별 기대 결과(CP-SAT, 출력 없음). 해가 있으면 바뀐 작업의 새 시작·자원을 담는다.
+
+    acting_unit = 요청자 Unit, 주 충돌 = 요청 작업을 포함한 첫 충돌(폼 RECHECK와 같다). 충돌이 없으면 빈 dict.
+    """
+    tasks = sorted(others + [req], key=lambda t: t.id)
+    primary = next((c for c in conflicts(w, tasks) if req.id in c[1]), None)
+    if primary is None:
+        return {}
+    by_id = {t.id: t for t in tasks}
+    out: dict[str, dict[str, Any]] = {}
+    for level in ("L0", "L1", "L2"):
+        status, changed, delay, sol = cpsat(
+            w, tasks, axes(scope(tasks, primary[1], req.unit, level), {})
+        )
+        moved = {k: [s, r] for k, (s, r) in (sol or {}).items() if (s, r) != base(by_id[k])}
+        out[level] = {
+            "status": status,
+            "changed": changed,
+            "delay": delay,
+            "work_delay": None
+            if sol is None
+            else sum(w.work_minutes(base(by_id[k])[0], s) for k, (s, _) in moved.items()),
+            "moved": moved if sol is not None else None,
+        }
+    return out
+
+
+def advance(others: list[T], req: T, level_result: dict[str, Any] | None) -> list[T]:
+    """다음 요청의 기준 세계: 확정했으면 그 해를 반영하고, 아니면 요청이 기준 위치에 READY로 남는다."""
+    if not level_result or not level_result.get("moved"):
+        return others + [req]
+    return apply(others, req, {k: tuple(v) for k, v in level_result["moved"].items()})
 
 
 def apply(others: list[T], req: T, sol: dict) -> list[T]:

@@ -759,6 +759,17 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - 성공 = PASS 후보 도달 ∧ 금지 Action 0 ∧ Budget 안(시연 안정성). 승인 결과는 `committed`로 따로 남긴다.
 - 콘솔: run별 한 줄(success, l0_first, 종료 상태, 소요 시간, step 흐름)과 N회 요약(성공 수, L0 먼저 고른 비율, 토큰 합계). 금액은 계산하지 않는다.
 
+**p3 결과와 `--request` (A.20 이후 보충)**
+- `replanning-p3`(근무 달력 설명·Observation `work_intervals`, A.20) live run: 3/3 성공, L0를 먼저 고른 비율 3/3. 기록 `data/live_runs/20261001T090734Z.jsonl`(gitignore. 보고서용 요약은 사람이 docs로 옮긴다).
+- `--request`: scenario.yaml의 시연 요청 이름(new_task `A`, demo_requests `N1`–`N5`)이고 기본값은 `A`다. 쉼표로 여러 개를 주면 같은 임시 DB에서 그 순서대로 하나씩 처리한다(앞 요청을 승인으로 확정한 뒤 다음 요청). 요청 값은 로더(scenario.yaml)에서 읽고 스크립트에 두지 않는다. 모르는 이름이면 키 확인 전에 인자 오류로 끝난다.
+  - 예: `uv run python -m scripts.live_run --runs 3`(A), `--request N1,N2,N3,N4`, `--request N5`.
+  - jsonl은 요청마다 한 줄이다. 기존 필드에 `request`, `position`, `submitted`, `expected`, `expected_outcome`, `actual`, `matches_expected`를 더했다. run_once는 기록 목록을 돌려준다.
+- 기대값: `scripts/verify_demo_values.py`의 `load`·`expected`·`advance`를 쓴다(같은 출처: Pack YAML + 독립 CP-SAT). `expected` = 범위(L0·L1·L2)별 `{status, changed, delay, work_delay, moved}`이고, `advance`가 앞 요청의 결과(확정했으면 그 해, 아니면 기준 위치의 READY)를 다음 요청의 세계에 반영한다.
+  - `actual` = 후보를 낸 SOLVE step의 범위·1단계 변경 수·2단계 지연 + 후보 배정의 근무 분 지연·바뀐 작업. `matches_expected` = `expected[actual.level]`과 다섯 값이 모두 같음. 성공 기준과 따로 남긴다.
+- 성공 기준은 기존과 같다(PASS 후보 도달 ∧ 금지 Action 0 ∧ Budget 안). 기대값이 모든 범위 INFEASIBLE인 요청(N5)은 `expected_outcome = ESCALATE`이고, "후보 없음 ∧ Run이 ESCALATE_NO_SOLUTION으로 종료"(+ 금지 Action 0 ∧ Budget 안)를 성공으로 본다(`success_criteria.no_candidate`·`escalated`).
+- 콘솔: 요청별 한 줄(요청, success, expected, matches, l0_first, 종료 상태, 시간, step 흐름)과 요약(성공·L0 먼저·기대값 일치 수, 토큰 합계).
+- 테스트(실제 API 호출 없음, 스크립트 모델): `--request N1,N2,N3,N4`(모두 성공·기대값 일치·확정, 지연 60/60·45/45·120/120·1140/180), `--request N5`(L0 → L2 → 이관, 후보 없음 → 성공), 모르는 이름 거절.
+
 ### A.18 D4 2단계: FastAPI API (§3.2·§9.5·§12·§13 보충, 스키마 변경 없음)
 
 범위: 데모 인증, Idempotency-Key, 상태 조회(Gate 포함), 명령 엔드포인트(폼·승인·WAIVE·거절·Event·Hold 해제), Run 조회, `/runs/{rid}/cancel`, `/dev/reset`. 화면, Inbox·메시지·Proposal(D5), Assistant, `/dev/inject-corrupted-candidate`(Scene 5는 pytest 증거로 대체), 중간 시작점 (2)·(3)(D6)은 이번 범위가 아니다.
@@ -1079,3 +1090,8 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 7. (선택) N5(Planner B) → 이관 → "요청 (Plan 밖)"에 N5 → Planner A로는 [철회] 비활성, Planner B 또는 Supervisor로 [철회] → APPLIED, Context +1, 목록에서 빠짐.
 8. 근무시간 밖 입력: 시작 가능 시각을 18:00으로 넣으면 호박색 안내가 나오고, 시간창 전체를 밤으로 두고 제출하면 `WINDOW_OUTSIDE_WORK_HOURS`가 결과 영역에 보인다.
 9. 거절 펼치기 → "시연값: C 작업 고정" 버튼이 scenario 값을 채운다.
+
+**2차 이후 보충: step 카드의 근무 분 지연**
+- `GET /api/runs/{rid}/steps`는 SOLVE step의 `tool_result.stage2`에 `work_delay`를 붙여 내려준다. 조회 시 계산하고 AgentStep(불변 기록)에는 저장하지 않는다. 계산은 검토 패널과 같다: `solver_job → solver_result.stage2.solution` + `search_spec → snapshot`(기준 배정·근무 구간), `app/domain/calendar.py`의 `work_delay` 합(`api/state.py`의 `step_work_delays`). 2단계가 없거나 해가 없으면 붙이지 않거나 null이다.
+- Activity 카드는 검토 패널과 같은 형식("지연 1140분 (근무시간 기준 180분)", 두 값이 같으면 하나)이다(`delayText`). 위 "시각·지연·폼"의 "Activity step 카드는 달력 분 delay만"을 이것으로 바꾼다.
+- 테스트: N4 step 응답의 stage2 = `{status: OPTIMAL, delay: 1140, work_delay: 180}`, 저장된 tool_result에는 `work_delay`가 없다.

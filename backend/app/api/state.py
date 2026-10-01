@@ -186,6 +186,32 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
 # ── Run ────────────────────────────────────────────────────────
 
 
+def step_work_delays(conn: sqlite3.Connection, run_id: str) -> dict[int, int | None]:
+    """Solver step별 2단계 해의 근무 분 지연 (부록 A.20). 조회 시 계산하고 AgentStep에는 저장하지 않는다.
+
+    solver_job → solver_result(2단계 해) + search_spec → snapshot(기준 배정·근무 구간). 검토 패널과 같은 계산.
+    """
+    found = rows(
+        conn,
+        "SELECT j.step_no, r.stage2, s.snapshot_id FROM solver_job j"
+        " JOIN solver_result r ON r.solver_result_id = j.solver_result_id"
+        " JOIN search_spec s ON s.search_spec_id = j.search_spec_id"
+        " WHERE j.run_id = ?",
+        (run_id,),
+    )
+    out: dict[int, int | None] = {}
+    for r in found:
+        stage2 = loads(r["stage2"])
+        snapshot = get_snapshot(conn, r["snapshot_id"])
+        if stage2 is None or snapshot is None:
+            continue
+        facts = snapshot.facts()
+        out[r["step_no"]] = _work_delay_sum(
+            stage2.get("solution"), facts.base_assignments(), facts.work_intervals
+        )
+    return out
+
+
 def run_summary(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
     run = get_run(conn, run_id)
     if run is None:
@@ -328,4 +354,11 @@ def get_run_steps(run_id: str, actor: ActorDep) -> list[dict[str, Any]]:
     with db.read_tx() as conn:
         if get_run(conn, run_id) is None:
             raise ApiError(404, "RUN_NOT_FOUND")
-        return list_steps(conn, run_id)
+        steps = list_steps(conn, run_id)
+        delays = step_work_delays(conn, run_id)
+    # SOLVE step의 tool_result.stage2에 근무 분 지연을 붙인다(응답에만, A.20)
+    for s in steps:
+        stage2 = (s["tool_result"] or {}).get("stage2")
+        if isinstance(stage2, dict):
+            stage2["work_delay"] = delays.get(s["step_no"])
+    return steps

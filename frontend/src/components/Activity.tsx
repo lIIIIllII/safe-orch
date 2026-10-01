@@ -16,6 +16,7 @@ import {
   endReason,
 } from '../labels'
 import { Code } from './common'
+import { delayText } from '../time'
 import type { Run } from './ReviewPanel'
 
 interface Props {
@@ -179,7 +180,8 @@ function StepCard({ s }: { s: AgentStep }) {
   const level = typeof args.level === 'string' ? args.level : null
   const tr = s.tool_result ?? {}
   const stage1 = tr.stage1 as { status?: string; changed?: number } | undefined
-  const stage2 = tr.stage2 as { status?: string; delay?: number } | null | undefined
+  // work_delay는 steps API가 조회 시 붙인다(저장하지 않음, A.20). 표기는 검토 패널과 같다.
+  const stage2 = tr.stage2 as { status?: string; delay?: number; work_delay?: number | null } | null | undefined
   const summary = s.decision_summary ? splitSummary(s.decision_summary) : null
   const rest = Object.fromEntries(
     Object.entries(tr).filter(
@@ -238,7 +240,7 @@ function StepCard({ s }: { s: AgentStep }) {
                 <>
                   {' '}
                   / 2단계 {SOLVER_STATUS[stage2.status ?? ''] ?? stage2.status} <code>{stage2.status}</code> · 지연{' '}
-                  {stage2.delay ?? '—'}분
+                  {delayText(stage2.delay, stage2.work_delay)}
                 </>
               )}
               {tr.delay_optimality_unconfirmed === true && <span className="tag tag-warn">지연 최적성 미확정</span>}
