@@ -1077,3 +1077,58 @@
   - PREDECESSOR_MISSING은 정상 경로에서는 나지 않는다(로더·폼·철회가 막는다). 나면 그 작업이 있는 동안 모든 Solver 호출이 INFEASIBLE이고, Replanning은 이관으로 끝난다. 풀려면 후속 작업을 철회해야 한다.
   - 폼은 선후행 순환을 따로 검사하지 않는다. 새 요청은 이미 있는 작업만 가리키고, 이미 있는 작업의 predecessors는 바뀌지 않으므로 순환이 생기지 않는다.
   - demo_requests에는 선행 작업을 둘 수 없다(시연값에 필요가 생기면 모델에 칸을 더한다).
+
+### A.23 Agent 실행 계층 일반화와 prompt 현장 문구의 Pack화 (§5.3·§11.1·§11.6·§11.7·§14·§18.1·§18.2.1·§18.2.6 보충, 스키마 변경 없음)
+
+범위: agent_type별로 AgentSpec·prompt·Observation 계산·Action 실행기를 등록하고, `runtime.invoke`가 Run의 agent_type으로 고르게 한다. Replanning System prompt의 현장 문구를 Pack에서 받는다. 목표는 Replanning 동작이 바뀌지 않고, 다음 Agent(§18.2.1, 첫 후보 Coordination)가 그래프·reserve_step·대기·재개·Budget 계약(§11.2–§11.3)을 그대로 쓰는 것이다. 이번 범위가 아닌 것: 새 Agent·Action, 화면 변경(labels.ts 문구 1개만), 스키마 변경.
+
+**블루프린트와 달라지는 점** (v1.2.4 본문은 다음 개정 때 반영한다)
+1. §11.1 "runtime.py는 Replanning spec·prompt를 직접 연결한다" → agent_type 등록부(`agents/registry.py`)에서 고른다.
+2. §14 디렉터리: `agents/registry.py`, `agents/observers/replanning.py`, `agents/executors/replanning.py`를 더한다. `observe.py`·`tool_gateway.py`는 agent_type 공통 부분만 남는다. exec_contract_version은 runtime 상수가 아니라 agent_type별 값이다(Replanning은 `replanning-d5` 그대로). CI import 검사를 더한다(아래).
+3. §5.3 site.yaml에 `site_description`(필수)을 더한다. 로더 검증을 더한다(아래).
+4. §11.6·§11.7: fingerprint는 렌더링 전 System 템플릿 기준이다. System은 Pack 값으로 렌더링한다. 현재 버전 `replanning-p8`.
+5. §18.1 "Agent 실행 계층의 범용성"·"Prompt의 현장 문구"를 해소한다. §18.2.1의 선행 작업과 §18.2.6의 현장 문구 항목을 완료한다. Coordination은 여전히 미구현이다.
+
+**1. 등록 구조**
+- 두 층으로 나눈다.
+  - `AgentSpec`(순수 데이터, frozen dataclass): agent_type, goal, Budget 한도 dict(`steps`·`llm_attempts`·`human_rounds`·`solver_calls`), recursion_limit, summary_max, actions, `available_actions`, `tool_schemas`. graph는 이것만 받는다. `specs/replanning.py`는 기존 모듈 이름(GOAL, ACTIONS, MAX_STEPS, tool_schemas 등)을 그대로 두고, 그 값으로 `SPEC = AgentSpec(...)`을 만든다(live_run·테스트 import 변경 최소).
+  - `AgentBinding`(`agents/registry.py`): spec, prompt 모듈, observer(Observation 빌더), executor(Action 실행기), exec_contract_version. `BINDINGS = {"REPLANNING": …}`.
+- graph는 spec, 렌더링된 System 문자열, prompt(관찰 렌더러·버전)만 받는다. registry를 import하지 않는다.
+- 실행기는 `ToolGateway.execute` 안에서만 호출된다(§11.2, 도구 실행 경로는 하나). ToolGateway는 registry를 import하지 않고 runtime이 넘긴 binding을 쓴다.
+- `observers/`·`executors/`를 import하는 곳은 registry(와 테스트)뿐이다. registry를 import하는 곳은 runtime(과 테스트)뿐이다. coordinator는 지금처럼 `agents.runtime`만 import한다.
+- 아키텍처 테스트 추가: graph ↛ registry, specs·prompts ↛ store·commands·solver, observers·executors는 registry(와 tests)만 import, registry는 runtime만 import, ToolGateway(`tool_gateway.py`) ↛ registry·observers·executors, executors에 approve·commit·release·confirm·waive 이름의 함수 없음(I-01).
+
+**2. 공통과 Replanning 전용의 경계** (코드 이동은 잘라 붙이기만 한다. 옮기면서 로직·이름·문구를 고치지 않는다)
+- `observe.py`(공통): `Observation`(run, versions, data, available, extra — Replanning의 주 충돌은 `extra`로), `budget_remaining(run, spec)`, `budget_exhausted`, `last_guard`·`recent_steps` 계산.
+- `observers/replanning.py`: Snapshot·충돌·주 충돌·실효 탐색 키·acting_tasks·자원 조회·관찰 JSON 조립.
+- `tool_gateway.py`(공통): `_active`, LLM 시도 차감, MALFORMED(`_parse`는 spec.actions로), `_reject`와 연속 2회 규칙, `_llm_failure`, `_stale_observation`, `_complete`(AgentStep·CommandResult), ACTION_NOT_AVAILABLE 틀(허용 판정은 실행기), 대기 진입 재확인 도우미, 단일 tx 실행 틀.
+- `executors/replanning.py`: 허용 판정(`_permitted`), SOLVE·TRY의 3단계, LIST, ASK와 `movability_text`, ESCALATE 효과, 거절 배정 중복 검사.
+
+**3. Coordinator**
+- `runtime.invoke`가 Run의 agent_type으로 binding을 고른다. START_RUN·RESUME_RUN 핸들러는 그대로이고, START_RUN의 exec_contract_version만 `runtime.exec_contract_version(agent_type)`에서 받는다.
+- 등록되지 않은 agent_type이면 그래프를 부르지 않고 Run을 ERROR(`AGENT_TYPE_NOT_REGISTERED`)로 끝낸다(fail-closed, RUNNING으로 남아 열린 Case가 되지 않게). labels.ts end_reason 접두어에 더한다.
+- dedupe 키 `START_RUN:REPLANNING:ctx<n>:plan<r>`은 그대로다.
+- "열린 Case"는 의미를 바꾸지 않고 `CASE_AGENT_TYPES = ("REPLANNING",)` 상수 하나로 모은다(`has_open_case`, `end_case_run`). Coordination의 Case 관계는 그 Agent를 붙일 때 정한다.
+- 철회가 모든 열린 Run의 `input_ref.conflict`를 보는 것은 Replanning 전용 해석이다. 이번에는 고치지 않는다(Coordination 때 agent_type별로 나눈다).
+
+**4. 현장 문구의 Pack화**
+- 대상은 두 곳이다: "여러 협력사가 구역·크레인·시간을 나눠 쓰는 현장"(현장 설명), "첫날 09:00"(원점 시각).
+- site.yaml `site_description`(문자열, 필수, 기본값 없음): 비어 있지 않은 한 줄, 100자 이하, `{`·`}` 금지(System을 `str.format`으로 렌더링한다). 위반하면 PackError.
+- 원점 시각은 키를 두지 않고 `horizon_start_utc` + `timezone`에서 `HH:MM`으로 계산한다(같은 값을 두 곳에 두지 않는다). 로더는 `horizon_start_utc`가 ISO 시각으로 읽히는지 검사한다.
+- System 템플릿은 `{site_description}`·`{origin_time}`을 갖고, prompt의 `render_system(pack)`이 렌더링한다. runtime이 렌더링한 문자열을 graph에 넘긴다(graph는 Pack을 모른다).
+- Pack 문구는 System(신뢰 채널)에 들어간다. Pack은 운영자가 쓰는 설정이고 기동 시 한 번 읽어 pack_hash로 고정되므로 받아들인다.
+- fingerprint는 렌더링 전 템플릿 기준(Pack에 독립)이다. 템플릿이 바뀌므로 `replanning-p8`로 올린다. shipyard에서 렌더링한 System이 p7 System과 글자까지 같다는 것을 테스트로 고정한다(p7 렌더링 hash 상수). 모델이 받는 바이트가 같으므로 live run은 2단계 뒤 `--path B` 1회로 p8 기록만 확인한다.
+- site.yaml이 바뀌어 pack_hash가 바뀐다. 로컬 DB는 reset이 필요하다(A.3, 사용자가 한다).
+
+**5. prompt 테스트**
+- 렌더링 전 템플릿·Goal·머리말·전체 도구 스키마에 Pack 값이 없다: 자원·Rule·work_type·작업(plan_r0·new_task·demo)·unit·actor·zone ID, site_id, timezone, work_type·Rule display_name, unit·actor 이름, site_description, 원점 시각. 짧은 ID는 토큰 경계로 찾는다.
+- 렌더링 결과에 site_description과 원점 시각이 각각 1번 들어간다. "L0부터" 금지 검사는 렌더링 결과로 한다.
+- 두 번째 Pack(pack_copy에서 설명·원점을 바꿈)으로 렌더링하면 그 값이 들어가고 shipyard 값은 없다.
+
+**6. 동작이 그대로라는 확인**
+- 골든 테스트(`tests/test_golden_replanning.py`): 리팩터링 전 코드에서 만들어 통과시키고 따로 커밋한 뒤 코드 이동을 시작한다. 시나리오는 기본안 B 전체(거절 → 재개 → LIST → ASK → 수락 → TRY → 승인)와 Gateway 거절 경로(MALFORMED·ACTION_NOT_AVAILABLE·LLM_ERROR·이관)다. 대상은 Run 행, AgentStep 행(created_at 제외), Gateway CommandResult(created_at 제외), 모델이 받은 입력(System·Human 메시지, 바인딩한 도구, bind 인자)이다. hash하기 전에 uuid4 ID(`<접두어>_<32 hex>`, tool call id 32 hex)와 64 hex hash를 등장 순서대로 치환해 정규화한다.
+- 기존 테스트 전부 통과(import 경로 변경은 최소), 기본안 B E2E step 5·Solver 3·사람 라운드 1, 1단계는 fingerprint p7 그대로, `verify_demo_values`.
+
+**7. 단계**
+- 1단계(동작 변화 0): AgentSpec·registry, 공통/Replanning 분리, runtime의 agent_type 선택, `AGENT_TYPE_NOT_REGISTERED`, `CASE_AGENT_TYPES`, 아키텍처 테스트. prompt는 p7 그대로.
+- 2단계: site.yaml `site_description`, 로더 검증, `render_system(pack)`, p8, prompt 테스트, live run `--path B` 1회, reset 안내.
