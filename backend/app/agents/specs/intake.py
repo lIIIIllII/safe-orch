@@ -132,31 +132,65 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def code_values(obs: dict[str, Any]) -> dict[str, list[str]]:
+    """코드 값을 받는 인자의 허용 값(관찰의 Pack 데이터, A.26 intake-p2). 정적 스키마에는 넣지 않는다."""
+    types = obs["resource_types"]
+    return {
+        "work_type": [w["work_type"] for w in obs["work_types"]],
+        "zone_id": list(obs["zones"]),
+        "required_resource_type": [t["resource_type"] for t in types],
+        "requested_resource_id": sorted({r for t in types for r in t["resource_ids"]}),
+    }
+
+
 def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """{action 이름: 인자 제한}. 코드 인자에는 실행 시 Pack 값으로 enum을 건다(Replanning과 같은 방식)."""
     c = choices(obs)
-    out: dict[str, dict[str, Any]] = {"LOOKUP_RESOURCE": {}}
+    codes = code_values(obs)
+    values = {"values": codes}
+    out: dict[str, dict[str, Any]] = {
+        "LOOKUP_RESOURCE": {"resource_type": codes["required_resource_type"]}
+    }
     if c["ASK"]:
         out["ASK_CLARIFICATION"] = {}
     if c["REQUEST"]:
-        out["REQUEST_CONFIRMATION"] = {}
+        out["REQUEST_CONFIRMATION"] = values
     if c["COMPLETE"]:
-        out["COMPLETE_TASKSPEC"] = {}
+        out["COMPLETE_TASKSPEC"] = values
     out["ESCALATE"] = {}
     return out
 
 
+def _enum(prop: dict[str, Any], allowed: list[str]) -> None:
+    """선택 인자(str | None)면 문자열 쪽에만 enum을 건다."""
+    if "anyOf" in prop:
+        for branch in prop["anyOf"]:
+            if branch.get("type") == "string":
+                branch["enum"] = list(allowed)
+    else:
+        prop["enum"] = list(allowed)
+
+
 def tool_schemas(available: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """bind_tools에 넘길 OpenAI 함수 스키마."""
+    """bind_tools에 넘길 OpenAI 함수 스키마. 코드 인자의 enum은 현재 허용 값만(values는 TaskValues 안)."""
     tools = []
-    for name in available:
+    for name, limits in available.items():
         model = ACTIONS[name]
+        params = model.model_json_schema()
+        for arg, allowed in limits.items():
+            if arg == "values":
+                props = params["$defs"]["TaskValues"]["properties"]
+                for field, field_allowed in allowed.items():
+                    _enum(props[field], field_allowed)
+            else:
+                _enum(params["properties"][arg], allowed)
         tools.append(
             {
                 "type": "function",
                 "function": {
                     "name": name,
                     "description": (model.__doc__ or "").strip(),
-                    "parameters": model.model_json_schema(),
+                    "parameters": params,
                 },
             }
         )

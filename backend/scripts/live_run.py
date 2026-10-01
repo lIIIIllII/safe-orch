@@ -1254,6 +1254,12 @@ def _path_intake(
         intake_steps=len(names),
         intake_actions=names,
         asks=asks,
+        # 값 확인 요청이 막힌 사유(TASKSPEC_INVALID의 폼 사유 코드) (A.26 intake-p2)
+        request_rejections=[
+            (s["tool_result"] or {}).get("reason_codes")
+            for s in steps
+            if (s["guard"] or {}).get("reason_code") == "TASKSPEC_INVALID"
+        ],
         actions=[f"{row['agent'][0]}:{row['action'] or '-'}" for row in rows],
         events=events,
         steps=rows,

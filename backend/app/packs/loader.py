@@ -118,6 +118,7 @@ class LoadedPack(Frozen):
     name: str
     pack_hash: str
     work_types: dict[str, WorkType]
+    resource_types: dict[str, str] = Field(default_factory=dict)  # 코드 → 표시 이름 (A.26)
     rules: tuple[Rule, ...]
     site_id: str
     site_description: str  # Replanning System prompt의 현장 설명 (부록 A.23)
@@ -398,6 +399,17 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             work_types[wt_id] = wt
     tags = {t for wt in work_types.values() for t in wt.hazard_tags}
 
+    # resource_types: 코드 → 표시 이름 (A.26 intake-p2). 자원의 resource_type은 여기 있어야 한다.
+    resource_types: dict[str, str] = {}
+    for rt_id, spec in _as_dict(
+        pack_doc.get("resource_types"), "pack.yaml.resource_types", reasons
+    ).items():
+        rt_name = _as_dict(spec, f"pack.yaml.resource_types.{rt_id}", reasons).get("display_name")
+        if not isinstance(rt_name, str) or not rt_name.strip():
+            reasons.append(f"pack.yaml.resource_types.{rt_id}: display_name missing")
+            continue
+        resource_types[rt_id] = rt_name
+
     # rules
     rules: list[Rule] = []
     rule_items = _as_list(rules_doc.get("rules"), "rules.yaml.rules", reasons)
@@ -540,6 +552,11 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         if res:
             resources.append(res)
     _duplicates("site.yaml.resources", [r.resource_id for r in resources], reasons)
+    for r in resources:
+        if r.resource_type not in resource_types:
+            reasons.append(
+                f"site.yaml.resources {r.resource_id}: undefined resource_type {r.resource_type!r}"
+            )
     for r in resources:
         for u in (r.owner_unit_id, *r.allowed_unit_ids):
             if u not in unit_ids:
@@ -708,6 +725,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             name=name,
             pack_hash=pack_hash,
             work_types=work_types,
+            resource_types=resource_types,
             rules=tuple(rules),
             site_id=site_doc.get("site_id"),
             site_description=site_description,

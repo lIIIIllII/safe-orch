@@ -5,12 +5,14 @@
 같은 값이면 폼으로 낸 A와 source_ref만 다르고 같은 작업·같은 Replanning 결과가 나와야 한다.
 """
 
+import json
 import uuid
 
 from fastapi.testclient import TestClient
 from scripted import Router, call, solve
 
 from app.agents.prompts import intake as prompt
+from app.agents.specs import intake as spec
 from app.api.state import build_state
 from app.commands.events import EventReport, receive_event
 from app.commands.intake import IntakeRequest, submit_intake
@@ -396,3 +398,32 @@ def test_state_inbox_has_intake_values(seeded):
         mine = build_state(conn, pack, "planner_a")["inbox"]
     [card] = [m for m in mine if m["type"] == "CONFIRMATION"]
     assert (card["proposal_id"], card["values"]) == (None, VALUES_A)
+
+
+def test_runtime_enums_on_code_arguments_and_static_schema_has_no_pack_values(seeded):
+    """코드 인자에는 실행 시 Pack 값 enum, 정적 도구 스키마에는 Pack 값이 없다 (A.26 intake-p2, A.23)."""
+    run = _to_request(seeded)
+    obs = _steps(run.run_id)[1]["observation"]
+    assert {t["resource_type"]: t["resource_ids"] for t in obs["resource_types"]} == {
+        "CRANE": ["A-CR-01", "B-CR-01", "SITE-CR-01"],
+        "GANTRY": ["SITE-GC-01"],
+    }
+    assert {t["resource_type"]: t["display_name"] for t in obs["resource_types"]}[
+        "CRANE"
+    ] == "크레인"
+    tools = {
+        t["function"]["name"]: t["function"] for t in _steps(run.run_id)[1]["available_actions"]
+    }
+    props = tools["REQUEST_CONFIRMATION"]["parameters"]["$defs"]["TaskValues"]["properties"]
+    assert props["zone_id"]["enum"] == [z.zone_id for z in seeded.zones]
+    assert props["work_type"]["enum"] == sorted(seeded.work_types)
+    rid = next(b for b in props["requested_resource_id"]["anyOf"] if b.get("type") == "string")
+    assert rid["enum"] == ["A-CR-01", "B-CR-01", "SITE-CR-01", "SITE-GC-01"]
+    lookup = tools["LOOKUP_RESOURCE"]["parameters"]["properties"]["resource_type"]
+    assert next(b for b in lookup["anyOf"] if b.get("type") == "string")["enum"] == [
+        "CRANE",
+        "GANTRY",
+    ]
+    static = json.dumps(spec.tool_schemas({name: {} for name in spec.ACTIONS}), ensure_ascii=False)
+    for value in ("A-CR-01", "CRANE", "LIFTING", "크레인"):
+        assert value not in static

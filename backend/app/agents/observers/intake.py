@@ -114,6 +114,17 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             for k, v in sorted(pack.work_types.items())
         ],
         "zones": [z.zone_id for z in pack.zones],
+        # 자원 유형 코드·표시 이름과 그 유형의 자원 ID (요청 문장의 자원 표현을 코드로 잇는 근거, intake-p2)
+        "resource_types": [
+            {
+                "resource_type": code,
+                "display_name": name,
+                "resource_ids": sorted(
+                    r.resource_id for r in pack.resources if r.resource_type == code
+                ),
+            }
+            for code, name in sorted(pack.resource_types.items())
+        ],
         "resource_lookups": list(by_filters.values()),
         "questions": questions,
         "confirmations": confirmations,

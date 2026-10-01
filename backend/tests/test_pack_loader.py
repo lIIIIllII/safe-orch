@@ -482,3 +482,14 @@ def test_demo_intakes_loaded(pack):
 def test_demo_intakes_rejected(pack_copy, mutate, expected):
     _edit(pack_copy, "scenario.yaml", lambda d: mutate(d["demo_intakes"][0]))
     assert expected in _reasons(pack_copy)
+
+
+def test_resource_types_loaded_and_checked(pack, pack_copy):
+    assert pack.resource_types == {"CRANE": "크레인", "GANTRY": "골리앗(갠트리) 크레인"}
+    _edit(pack_copy, "pack.yaml", lambda d: d["resource_types"].pop("GANTRY"))
+    assert "undefined resource_type 'GANTRY'" in _reasons(pack_copy)
+
+
+def test_resource_type_display_name_required(pack_copy):
+    _edit(pack_copy, "pack.yaml", lambda d: d["resource_types"]["CRANE"].pop("display_name"))
+    assert "pack.yaml.resource_types.CRANE: display_name missing" in _reasons(pack_copy)

@@ -39,6 +39,7 @@ def get_meta(site_id: str, pack: PackDep, actor: ActorDep) -> dict[str, Any]:
     return {
         "pack": pack.name,
         "pack_hash": pack.pack_hash,
+        "resource_types": dict(pack.resource_types),  # 코드 → 표시 이름 (A.26)
         "work_types": {
             wt_id: {
                 "display_name": wt.display_name,

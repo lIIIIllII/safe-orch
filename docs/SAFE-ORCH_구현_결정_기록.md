@@ -1417,3 +1417,11 @@
 - labels.ts: 메시지 종류 `FREE_QUESTION`·`TASKSPEC`과 답 문구(확인/거절), 결정 `ANSWER`(답변), 사유 `INVALID_DECISION`·`TASK_ID_IN_INTAKE`·`TASKSPEC_INVALID`, end_reason 접두어 `TASKSPEC_COMPLETE:`. 작업 접수 Agent 이름은 이미 있었다.
 - headless 확인(Chrome 154, CDP, 1920×1080, 스크립트 모델로 만든 단계별 DB, 워커 끈 서버): ① Planner A 자연어 요청 탭에서 "시연: 자연어 요청(명확)" → 작업 ID A·문장 채워짐, 보내기 켜짐. ② 모호한 요청 뒤 받은 요청: 확인 질문 카드(서버 문구 "작업 요청 A 확인 질문: 구역, 자원을(를) 알려 주세요…", Agent 설명, 답 입력란, 비어 있어 보내기 꺼짐), 배지 1, Activity 작업 접수 Agent 사람 대기. ③ 답 뒤 값 확인 카드(서버 문구에 값과 날짜·시각·분, 표 "인양 · B 구역 · 30분 / 10/12(월) 09:00 – 10/12(월) 10:00 · 종료 한도 10:30 / CRANE A-CR-01", 확인·거절), 답한 질문 카드는 버튼 없음.
 - 검사: pytest 495, `npm run build`·`npm run lint`, `verify_demo_values` 통과. **로컬 DB reset 필요(scenario.yaml 변경, 사용자가 한다).**
+
+**intake-p2** (S2 실패 원인 대응)
+- Pack: pack.yaml에 `resource_types`(코드 → display_name)를 더했다. Pack에 자원 유형 표시 이름이 없어 "코드와 표시 이름"을 주려면 정의가 필요했다(작업 유형과 같은 방식). 로더가 site.yaml 자원의 resource_type이 여기 있는지, display_name이 있는지 검사한다. meta API에 `resource_types`. **pack_hash가 바뀐다(demo_intakes와 합쳐 로컬 DB reset 한 번).**
+- Observation `resource_types`: `[{resource_type, display_name, resource_ids}]`.
+- 코드 인자의 실행 시 enum(정적 도구 스키마에는 Pack 값 없음, A.23 검사 유지): LOOKUP_RESOURCE `resource_type`, REQUEST_CONFIRMATION·COMPLETE_TASKSPEC `values`의 `work_type`·`zone_id`·`required_resource_type`·`requested_resource_id`(TaskValues `$defs` 안, 선택 인자는 문자열 쪽에). LOOKUP_RESOURCE에는 zone_id 인자가 없다(Pack 자원에 구역이 없다)라 enum 대상이 아니다.
+- 관찰 읽는 법(사실): "작업 ID는 구역이 아니다", 자원 유형 줄, "요청 문장과 확인 질문의 답은 확인 값이 아니다. 값 확인 요청에 요청자가 확인하면 그 values 전체가 확인된다." 행동 순서 지시 없음. 템플릿 fingerprint `fcfca39e…`(p1 줄 유지).
+- 테스트 495 → 498: 실행 시 enum과 정적 스키마의 Pack 값 없음·관찰 resource_types, 로더 2개. live run 기록에 `request_rejections`.
+- 재실행(model `gpt-6-luna`, `intake-p2`): 명확 **3/3**(`data/live_runs/20261001T190156Z.jsonl`) — ASK [0, 0, 0], Intake step [2, 3, 2], REQUEST 거절 없음. 모호 **2/3**(`20261001T190230Z.jsonl`) — ASK [1, 1, 3], Intake step [3, 4, 4], REQUEST 거절 없음. 모호 #3은 구역·자원 답을 받은 뒤 문장에 있던 작업 시간·시간창을 "확인되지 않음"이라며 두 번 더 물어 사람 라운드를 다 쓰고 이관했다(REQUEST 0회).
