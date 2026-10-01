@@ -347,3 +347,20 @@ def test_unregistered_agent_type_ends_run_as_error_without_graph(with_a):
     run = runtime.invoke(with_a, {"run_id": "run_assistant"}, model)
     assert (run.status, run.end_reason) == ("ERROR", "AGENT_TYPE_NOT_REGISTERED: ASSISTANT")
     assert model.calls == [] and run.steps_used == 0 and _count("agent_step") == 0
+
+
+def test_agent_auto_start_is_on_by_default(monkeypatch):
+    """운영 기본값 (A.28): Coordination·Event Response 자동 시작은 켜짐이고 설정은 끄는 스위치다.
+
+    테스트는 .env를 읽지 않고 conftest가 둘 다 끈다. 환경변수를 지우면 코드 기본값이 보인다.
+    """
+    from app.config import Settings
+
+    monkeypatch.delenv("COORDINATION_ENABLED")
+    monkeypatch.delenv("EVENT_RESPONSE_ENABLED")
+    s = Settings()
+    assert (s.coordination_enabled, s.event_response_enabled) == (True, True)
+    monkeypatch.setenv("COORDINATION_ENABLED", "false")
+    monkeypatch.setenv("EVENT_RESPONSE_ENABLED", "false")
+    s = Settings()
+    assert (s.coordination_enabled, s.event_response_enabled) == (False, False)

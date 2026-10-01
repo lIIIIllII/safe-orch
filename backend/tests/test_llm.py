@@ -1,6 +1,7 @@
 """실제 모델 연결 (설계서 §11.2·§11.6, 부록 A.17). 실제 API는 부르지 않는다."""
 
 import json
+import os
 import re
 
 import httpx
@@ -427,6 +428,73 @@ def test_live_run_path_b_with_scripted_model(monkeypatch):
     assert [e.get("reply") for e in r["events"] if "reply" in e] == ["ACCEPT"]
     assert r["beta"]["moved"] == {"A": [60, "SITE-CR-01"]}
     assert (r["first_solve_level"], r["l0_first"]) == ("L0", True)
+
+
+def test_live_run_path_b_fixes_agent_flags_regardless_of_env(monkeypatch):
+    """경로가 Agent 설정을 명시한다 (A.28): 환경변수가 둘 다 켜져 있어도 --path B는 둘 다 끈 채로 잰다."""
+    monkeypatch.setenv("COORDINATION_ENABLED", "true")
+    monkeypatch.setenv("EVENT_RESPONSE_ENABLED", "true")
+    try_ = call("TRY_ALTERNATIVE_RESOURCE", "대체 자원", task_id="A", resource_id="SITE-CR-01")
+    monkeypatch.setattr(live_run, "openai_model", _plan_b_script(try_))
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    r = live_run.run_path_b(1, settings, "shipyard", False, decline=False)
+    assert r.get("error") is None, r.get("error")
+    assert r["success"], r["success_criteria"]
+    assert r["agent_flags"] == {"coordination": False, "event_response": False}
+    assert [x["agent_type"] for x in r["runs"]] == ["REPLANNING"]
+    assert os.environ["COORDINATION_ENABLED"] == "true"  # 끝나면 되돌린다
+
+
+def test_live_run_path_b_coord_with_scripted_model(monkeypatch):
+    """--path B --coord (A.28): Alpha 협의 Run이 변경 요청 → Supervisor 거절로 STALE → Beta → R1 → 통지."""
+
+    def report():
+        args = {"decision_summary": "보고", "summary": "통지 완료"}
+        return AIMessage(
+            content="", tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": "r"}]
+        )
+
+    router = Router(
+        replanning=[
+            solve("L0"),
+            solve("L1"),
+            call("LIST_ASSIGNABLE_RESOURCES", "조회", task_id="A"),
+            call(
+                "ASK_TASK_OWNER",
+                "확인",
+                task_id="A",
+                axis="RESOURCE",
+                allowed_values=["SITE-CR-01"],
+                question="SITE-CR-01?",
+            ),
+            call("TRY_ALTERNATIVE_RESOURCE", "시도", task_id="A", resource_id="SITE-CR-01"),
+        ],
+        coordination=[
+            call("SEND_CHANGE_REQUEST", "요청", task_id="C", message="C 이동 안"),
+            call("WAIT_FOR_REPLIES", "대기"),
+            call("SEND_NOTICE", "통지", actor_id="planner_a", task_ids=["A"], message="A 변경"),
+            call("SEND_NOTICE", "통지", actor_id="planner_b", task_ids=["B"], message="B 유지"),
+            report,
+        ],
+    )
+    make = router.factory()
+    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    r = live_run.run_path_b(1, settings, "shipyard", False, decline=False, coord=True)
+    assert r.get("error") is None, r.get("error")
+    c = r["success_criteria"]
+    assert r["success"], c
+    assert r["path"] == "B-coord"
+    assert r["agent_flags"] == {"coordination": True, "event_response": False}
+    assert c["consult_stale_rejected"] and c["notices_complete"]
+    assert c["noticed"] == ["planner_a", "planner_b"]
+    assert [(x["agent_type"], x["phase"], x["status"]) for x in r["runs"]] == [
+        ("REPLANNING", None, "SUCCEEDED"),
+        ("COORDINATION", "CONSULT", "STALE"),
+        ("COORDINATION", "NOTICE", "SUCCEEDED"),
+    ]
+    assert (r["run_status"], r["end_reason"]) == ("SUCCEEDED", "COMMITTED:1")
+    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
 
 
 def test_live_run_summary_counts_path_b(monkeypatch, tmp_path, capsys):

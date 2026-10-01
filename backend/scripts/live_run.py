@@ -16,6 +16,12 @@
   demo_rejections[0] 거절 → OPEN 메시지가 생기면 그 수신자로 ACCEPT(comment "live run 자동 수락")
   → Beta PASS ∧ 협의 완료면 승인(WAIVE 없음). 성공 = Beta PASS ∧ Consultation COMPLETE ∧ 확정 R1 ∧ Run SUCCEEDED
   ∧ 금지 Action 0 ∧ Budget 안(사람 라운드 ≤ 2) ∧ ASK가 LIST 결과의 대체 자원을 담음 ∧ 수락 전 TRY 없음.
+- --path B --coord(A.28): Coordination을 켠 기본안 B(운영 기본값의 기본안 B 흐름). Alpha PASS 뒤 협의 Run이
+  C 담당자에게 변경 요청을 보내지만 스크립트는 답하지 않고 Supervisor가 거절한다. 성공 = 기본안 B 성공 기준 ∧ 협의 Run
+  STALE(REJECTED:) ∧ 확정 뒤 통지 대상 전원 통지.
+- Agent 자동 시작 설정(COORDINATION_ENABLED·EVENT_RESPONSE_ENABLED)은 경로가 명시한다(.env·기본값과 무관, A.28):
+  A·B·B-decline·intake = 둘 다 끔, coord = Coordination만, B --coord = Coordination만, event = Event Response
+  (--coord면 Coordination도). 기록 agent_flags에 남긴다.
 - --path B-decline: 같은 흐름에서 ACCEPT 대신 DECLINE(comment "live run 자동 거절"). 성공 = Alpha PASS ∧ ASK
   1회 ∧ DECLINE 적용 ∧ 거절 뒤 ASK·TRY 없음 ∧ Run ESCALATED ∧ 금지 Action 0 ∧ Budget 안.
 - --path coord(기본안 A, 부록 A.24): COORDINATION_ENABLED를 켠 임시 DB에서 요청 A만. 스크립트가 사람 역할을
@@ -163,6 +169,31 @@ def _key() -> str:
     return uuid.uuid4().hex
 
 
+def _flag_env(coordination: bool, event_response: bool) -> dict[str, str]:
+    """Agent 자동 시작 설정을 경로가 명시한다. .env·기본값과 무관하게 같은 조건으로 잰다 (A.28)."""
+    return {
+        "COORDINATION_ENABLED": "true" if coordination else "false",
+        "EVENT_RESPONSE_ENABLED": "true" if event_response else "false",
+    }
+
+
+def _set_env(values: dict[str, str]) -> dict[str, str | None]:
+    """환경변수를 바꾸고 이전 값을 돌려준다. 설정 캐시를 비운다."""
+    old = {name: os.environ.get(name) for name in values}
+    os.environ.update(values)
+    get_settings.cache_clear()
+    return old
+
+
+def _restore_env(old: dict[str, str | None]) -> None:
+    for name, value in old.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+    get_settings.cache_clear()
+
+
 def _step_rows(steps: list[dict[str, Any]], calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """AgentStep 요약. 모델 호출 기록은 step의 llm_attempts만큼 순서대로 나눠 붙인다."""
     out, i = [], 0
@@ -248,8 +279,7 @@ def run_once(
 ) -> list[dict[str, Any]]:
     """임시 DB 하나에서 요청을 순서대로 하나씩 처리한다(앞 요청을 승인으로 확정한 뒤 다음). 요청마다 기록 1개."""
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
-    old_db = os.environ.get("DB_PATH")
-    os.environ["DB_PATH"] = str(Path(tmp.name) / "live.db")
+    old_env = _set_env({"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(False, False)})
     get_settings.cache_clear()
     db.close()
     real_solve = cpsat.solve
@@ -266,6 +296,7 @@ def run_once(
             expected = verify.expected(world_model, world, req_model[name])
             escalate = bool(expected) and all(e["status"] != "OPTIMAL" for e in expected.values())
             record = _run_request(index, position, name, settings, pack, raw, real_solve)
+            record["agent_flags"] = {"coordination": False, "event_response": False}
             record["expected"] = expected
             record["expected_outcome"] = "ESCALATE" if escalate else "CANDIDATE"
             if escalate:
@@ -293,11 +324,7 @@ def run_once(
     finally:
         cpsat.solve = real_solve
         db.close()
-        if old_db is None:
-            os.environ.pop("DB_PATH", None)
-        else:
-            os.environ["DB_PATH"] = old_db
-        get_settings.cache_clear()
+        _restore_env(old_env)
         tmp.cleanup()
     return records
 
@@ -316,34 +343,39 @@ def _waiting(conn: Any, run_id: str) -> tuple[Any, str | None]:
     return run, ref
 
 
-def run_path_b(index: int, settings: Settings, pack_name: str, raw: bool, decline: bool) -> dict:
-    """임시 DB에서 요청 A로 기본안 B(또는 B-decline)를 끝까지 돌린다. 기록 1개."""
+def run_path_b(
+    index: int, settings: Settings, pack_name: str, raw: bool, decline: bool, coord: bool = False
+) -> dict:
+    """임시 DB에서 요청 A로 기본안 B(또는 B-decline)를 끝까지 돌린다. 기록 1개.
+
+    coord면 Coordination을 켠다(운영 기본값의 기본안 B, A.28).
+    """
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
-    old_db = os.environ.get("DB_PATH")
-    os.environ["DB_PATH"] = str(Path(tmp.name) / "live.db")
+    old_env = _set_env({"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(coord, False)})
     get_settings.cache_clear()
     db.close()
     real_solve = cpsat.solve
-    path = "B-decline" if decline else "B"
-    record: dict[str, Any] = {"index": index, "request": "A", "path": path}
+    path = "B-decline" if decline else ("B-coord" if coord else "B")
+    record: dict[str, Any] = {
+        "index": index,
+        "request": "A",
+        "path": path,
+        "agent_flags": {"coordination": coord, "event_response": False},
+    }
     t0 = time.perf_counter()
     try:
         db.init_db()
         pack = load_pack(pack_dir(pack_name))
         with db.write() as tx:
             seed_pack(tx, pack)
-        _path_b(record, settings, pack, pack_name, raw, decline, real_solve)
+        _path_b(record, settings, pack, pack_name, raw, decline, real_solve, coord)
         record["l0_first"] = record.get("first_solve_level") == "L0"
     except Exception as e:  # noqa: BLE001 — 실패도 기록한다
         record.update(success=False, error=f"{type(e).__name__}: {e}")
     finally:
         cpsat.solve = real_solve
         db.close()
-        if old_db is None:
-            os.environ.pop("DB_PATH", None)
-        else:
-            os.environ["DB_PATH"] = old_db
-        get_settings.cache_clear()
+        _restore_env(old_env)
         tmp.cleanup()
     record["total_seconds"] = round(time.perf_counter() - t0, 2)
     return record
@@ -357,6 +389,7 @@ def _path_b(
     raw: bool,
     decline: bool,
     real_solve: Any,
+    coord: bool = False,
 ) -> None:
     rec = _Recorder(time.monotonic() + RUN_DEADLINE_S * 2, raw)
     site_id = pack.site_id
@@ -365,7 +398,11 @@ def _path_b(
     record["submitted"] = submit_task_request(pack, requester, _key(), form).status
     run_until_idle(pack, model_factory=factory)
     with db.read() as conn:
-        [run_id] = [r[0] for r in conn.execute("SELECT run_id FROM agent_run")]
+        # Coordination을 켜면 Alpha의 협의 Run도 생긴다. 기본안 B는 Replanning Run을 따라간다
+        [run_id] = [
+            r[0]
+            for r in conn.execute("SELECT run_id FROM agent_run WHERE agent_type = 'REPLANNING'")
+        ]
         run, alpha = _waiting(conn, run_id)
         alpha_v = _pass_validation(conn, site_id, alpha)
         alpha_step = next(
@@ -431,10 +468,24 @@ def _path_b(
                     ),
                 )
                 committed = {"status": out.status, "reason_codes": list(out.reason_codes)}
+                if coord:
+                    run_until_idle(pack, model_factory=factory)  # 통지 Run (A.28)
 
     with db.read() as conn:
         run = get_run(conn, run_id)
-        steps = list_steps(conn, run_id)
+        runs = [
+            get_run(conn, r[0]) for r in conn.execute("SELECT run_id FROM agent_run ORDER BY rowid")
+        ]
+        order = [
+            (r[0], r[1])
+            for r in conn.execute("SELECT run_id, step_no FROM agent_step ORDER BY rowid")
+        ]
+        by_run = {r.run_id: list_steps(conn, r.run_id) for r in runs}
+        # 모든 Run의 step(예약 순서, 모델 호출 기록과 맞춤). Coordination을 끄면 Replanning뿐이다
+        all_steps = [next(x for x in by_run[rid] if x["step_no"] == no) for rid, no in order]
+        steps = by_run[run_id]
+        cur = conn.execute("SELECT to_actor_id, type FROM message ORDER BY rowid")
+        messages = [{"to": r[0], "type": r[1]} for r in cur.fetchall()]
         plan_revision = get_site(conn, site_id).plan_revision
         beta_step = next(
             (s for s in steps if beta and (s["tool_result"] or {}).get("candidate_id") == beta),
@@ -442,9 +493,12 @@ def _path_b(
         )
         beta_actual = _actual(conn, site_id, beta, beta_step) if beta and beta_step else None
         n_messages = conn.execute("SELECT COUNT(*) FROM message").fetchone()[0]
-    rows = _step_rows(steps, rec.calls)
+    rows = _step_rows(all_steps, rec.calls)
+    for row, s in zip(rows, all_steps, strict=True):
+        row["run_id"] = s["run_id"]
+        row["agent"] = next(r.agent_type for r in runs if r.run_id == s["run_id"])
     names = [(s["action"] or {}).get("name") for s in steps]
-    guards = [(s["guard"] or {}).get("reason_code") for s in steps]
+    guards = [(s["guard"] or {}).get("reason_code") for s in all_steps]
     ask_steps = [s for s in steps if (s["action"] or {}).get("name") == "ASK_TASK_OWNER"
                  and s["guard"]["verdict"] == "ACCEPTED"]  # fmt: skip
     list_alts = {
@@ -496,6 +550,36 @@ def _path_b(
         keys = ("beta_pass", "consultation_complete", "committed_r1", "run_succeeded",
                 "within_budget", "ask_uses_listed_alternative", "no_try_before_accept")  # fmt: skip
         success = all(criteria[k] for k in keys)
+    if coord:
+        # Coordination을 켠 기본안 B (A.28): Alpha 협의 Run은 거절로 STALE, 확정 뒤 통지 대상 전원 통지
+        coords = [r for r in runs if r.agent_type == "COORDINATION"]
+        consults = [r for r in coords if r.input_ref.get("phase") == "CONSULT"]
+        notice_run = next((r for r in coords if r.input_ref.get("phase") == "NOTICE"), None)
+        targets: list[str] = []
+        if notice_run is not None:
+            first = next((x for x in all_steps if x["run_id"] == notice_run.run_id), None)
+            targets = sorted(
+                t["actor_id"]
+                for t in (first or {}).get("observation", {}).get("notice_targets", [])
+            )
+        noticed = sorted({m["to"] for m in messages if m["type"] == "NOTICE"})
+        criteria.update(
+            consult_stale_rejected=bool(consults)
+            and all(
+                r.status == "STALE" and str(r.end_reason or "").startswith("REJECTED:")
+                for r in consults
+            ),
+            notice_targets=targets,
+            noticed=noticed,
+            notices_complete=bool(targets) and noticed == targets,
+            all_runs_within_budget=all(r.status != "BUDGET_EXHAUSTED" for r in runs),
+        )
+        success = (
+            success
+            and criteria["consult_stale_rejected"]
+            and criteria["notices_complete"]
+            and criteria["all_runs_within_budget"]
+        )
     success = success and criteria["forbidden_actions"] == 0
 
     # matches_expected: Alpha = verify의 L1, Beta = 거절 고정 + L0 + try (A.21 9)
@@ -532,6 +616,18 @@ def _path_b(
         else (reject_step["action"] or {}).get("name"),
         step_count=len(steps),
         actions=names,
+        # 모든 Run의 Action(에이전트 첫 글자 접두어). Coordination을 켠 경로에서 협의·통지를 본다
+        actions_all=[f"{row['agent'][0]}:{row['action'] or '-'}" for row in rows],
+        runs=[
+            {
+                "run_id": r.run_id,
+                "agent_type": r.agent_type,
+                "phase": r.input_ref.get("phase"),
+                "status": r.status,
+                "end_reason": r.end_reason,
+            }
+            for r in runs
+        ],
         events=events,
         messages=n_messages,
         steps=rows,
@@ -554,12 +650,14 @@ def _path_b(
 def run_path_coord(index: int, settings: Settings, pack_name: str, raw: bool) -> dict:
     """COORDINATION_ENABLED를 켠 임시 DB에서 요청 A로 기본안 A를 끝까지 돌린다. 기록 1개."""
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
-    old_db, old_flag = os.environ.get("DB_PATH"), os.environ.get("COORDINATION_ENABLED")
-    os.environ["DB_PATH"] = str(Path(tmp.name) / "live.db")
-    os.environ["COORDINATION_ENABLED"] = "true"
-    get_settings.cache_clear()
+    old_env = _set_env({"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(True, False)})
     db.close()
-    record: dict[str, Any] = {"index": index, "request": "A", "path": "coord"}
+    record: dict[str, Any] = {
+        "index": index,
+        "request": "A",
+        "path": "coord",
+        "agent_flags": {"coordination": True, "event_response": False},
+    }
     t0 = time.perf_counter()
     try:
         db.init_db()
@@ -571,12 +669,7 @@ def run_path_coord(index: int, settings: Settings, pack_name: str, raw: bool) ->
         record.update(success=False, error=f"{type(e).__name__}: {e}")
     finally:
         db.close()
-        for name, old in (("DB_PATH", old_db), ("COORDINATION_ENABLED", old_flag)):
-            if old is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = old
-        get_settings.cache_clear()
+        _restore_env(old_env)
         tmp.cleanup()
     record["total_seconds"] = round(time.perf_counter() - t0, 2)
     return record
@@ -863,6 +956,8 @@ def run_path_event(
         "path": "event-ambiguous" if ambiguous else "event",
         "coord": coord,
         "ambiguous": ambiguous,
+        # 신고부터 잰 구간의 설정. R1 준비(스크립트)는 둘 다 끈다 (A.28)
+        "agent_flags": {"coordination": coord, "event_response": True},
     }
     t0 = time.perf_counter()
     try:
@@ -1153,12 +1248,17 @@ def run_path_intake(
 ) -> dict:
     """임시 DB에서 자연어 요청 A → Intake → Replanning Alpha까지 실제 모델로 돌린다."""
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
-    old_db = os.environ.get("DB_PATH")
-    os.environ["DB_PATH"] = str(Path(tmp.name) / "live.db")
+    old_env = _set_env({"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(False, False)})
     get_settings.cache_clear()
     db.close()
     path = "intake-ambiguous" if ambiguous else "intake"
-    record: dict[str, Any] = {"index": index, "request": "A", "path": path, "ambiguous": ambiguous}
+    record: dict[str, Any] = {
+        "index": index,
+        "request": "A",
+        "path": path,
+        "ambiguous": ambiguous,
+        "agent_flags": {"coordination": False, "event_response": False},
+    }
     t0 = time.perf_counter()
     try:
         db.init_db()
@@ -1170,11 +1270,7 @@ def run_path_intake(
         record.update(success=False, error=f"{type(e).__name__}: {e}")
     finally:
         db.close()
-        if old_db is None:
-            os.environ.pop("DB_PATH", None)
-        else:
-            os.environ["DB_PATH"] = old_db
-        get_settings.cache_clear()
+        _restore_env(old_env)
         tmp.cleanup()
     record["total_seconds"] = round(time.perf_counter() - t0, 2)
     return record
@@ -1515,7 +1611,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--raw", action="store_true", help="prompt·응답 원문을 기록에 넣는다")
     parser.add_argument(
-        "--coord", action="store_true", help="--path event에서 Coordination도 켠다(A.25)"
+        "--coord",
+        action="store_true",
+        help="--path event·B에서 Coordination도 켠다(A.25·A.28)",
     )
     parser.add_argument(
         "--ambiguous", action="store_true", help="--path intake에서 모호한 요청을 쓴다(A.26)"
@@ -1539,6 +1637,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             f"--request must be names from scenario.yaml {known}, got {unknown or requests}"
         )
+    if args.coord and args.path not in ("event", "B"):
+        parser.error("--coord는 --path event 또는 B에서만 쓴다")
     if args.path != "A" and requests != [known[0]]:
         parser.error(f"--path {args.path} runs only --request {known[0]}")
 
@@ -1565,7 +1665,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_path_event(i + 1, settings, pack_name, args.raw, args.coord, args.ambiguous)
             ]
         else:
-            batch = [run_path_b(i + 1, settings, pack_name, args.raw, args.path == "B-decline")]
+            decline = args.path == "B-decline"
+            batch = [run_path_b(i + 1, settings, pack_name, args.raw, decline, args.coord)]
         for r in batch:
             records.append(r)
             with out.open("a", encoding="utf-8") as f:
