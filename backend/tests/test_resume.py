@@ -329,7 +329,9 @@ def test_plan_b_full_e2e(seeded):
     steps = _steps(run_id)
     s_try = steps[5]
     assert s_try["tool_result"]["try_resources"] == {"A": ["SITE-CR-01"]}
-    assert "ASK_TASK_OWNER" not in _names(s_try)  # 자원 축이 확인됐다
+    # 자원 축이 확인됐다(ASK 없음). 수락으로 context·Consent가 바뀌어도 Solver 입력이 같아 L0는 다시 열리지 않는다
+    assert _names(s_try) == ["TRY_ALTERNATIVE_RESOURCE", "ESCALATE_NO_SOLUTION"]
+    assert s_try["observation"]["untried_levels"] == []
     obs = s_try["observation"]
     assert obs["assignable_resources"][0]["untried_alternatives"] == ["SITE-CR-01"]
     assert obs["human_replies"] == [
@@ -365,6 +367,23 @@ def test_plan_b_full_e2e(seeded):
     assert _approve(pack, beta).status == "APPLIED"
     done = _run(run_id)
     assert (done.status, _site(pack).plan_revision) == ("SUCCEEDED", 1)
+
+
+def test_accept_does_not_reopen_tried_levels(seeded):
+    """MOVABILITY 수락은 context·Consent·revision만 바꾼다. 실효 탐색 키가 같아 L0는 미시도가 아니다 (A.21)."""
+    pack = seeded
+    waiting = _ask_waiting(pack)
+    ctx = _site(pack).context_version
+    assert _reply(pack, waiting.wait_ref).status == "APPLIED"
+    assert _site(pack).context_version == ctx + 1
+    model = ScriptedChatModel([solve("L0", "다시 계산"), escalate()])
+    run_until_idle(pack, model_factory=lambda: model)
+    s_l0, s_end = _steps(waiting.run_id)[5:]
+    assert s_l0["observation"]["untried_levels"] == []
+    assert _names(s_l0) == ["TRY_ALTERNATIVE_RESOURCE", "ESCALATE_NO_SOLUTION"]
+    assert s_l0["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
+    assert s_end["action"]["name"] == "ESCALATE_NO_SOLUTION"
+    assert _run(waiting.run_id).solver_calls_used == 3  # L0·L1·L0(C 고정 뒤)만
 
 
 def test_t17_moving_fixed_c_fails_c06(seeded):

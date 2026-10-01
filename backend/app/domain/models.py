@@ -300,6 +300,8 @@ class SearchSpec(Frozen):
     axes: dict[str, Movable]
     resource_alternatives: dict[str, tuple[str, ...]]
     time_limit_s: int = Field(gt=0)
+    # 실효 탐색 키(미시도 판정용, Solver 입력만). 무결성 hash와 다르다 (A.21)
+    search_key: str
 
 
 class SolverResult(Frozen):

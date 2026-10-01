@@ -472,7 +472,10 @@ def _path_b(
         success_criteria=criteria,
         alpha_matches_expected=alpha_actual is not None
         and _matches({"L1": exp_alpha}, alpha_actual, False),
-        beta_matches_expected=beta_actual is not None
+        # B-decline은 Beta가 없는 경로라 None(해당 없음)
+        beta_matches_expected=None
+        if decline
+        else beta_actual is not None
         and exp_beta is not None
         and _matches({"L0": exp_beta}, beta_actual, False),
         # 첫 SOLVE의 level (--path A와 같은 키로 요약에 집계한다)
@@ -628,6 +631,10 @@ def _run_request(
     return record
 
 
+def _na(value: Any) -> Any:
+    return "해당 없음" if value is None else value
+
+
 def _line(r: dict[str, Any]) -> str:
     if r.get("path"):
         c = r.get("success_criteria") or {}
@@ -635,7 +642,7 @@ def _line(r: dict[str, Any]) -> str:
             f"#{r['index']} path {r['path']} success={r.get('success')} "
             f"run={r.get('run_status')}/{r.get('end_reason')} steps={r.get('step_count')} "
             f"alpha_matches={r.get('alpha_matches_expected')} "
-            f"beta_matches={r.get('beta_matches_expected')} "
+            f"beta_matches={_na(r.get('beta_matches_expected'))} "
             f"after_reject={r.get('first_action_after_reject')} {r.get('total_seconds')}s  "
             f"{' → '.join(a or '-' for a in r.get('actions', []))}  criteria={c}"
             + (f"  error={r['error']}" if r.get("error") else "")
@@ -715,10 +722,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     n = len(records)
     if paths:  # 기본안 B: Alpha·Beta 기대값 일치를 따로 센다 (B-decline에는 Beta가 없다)
         alpha = sum(1 for r in paths if r.get("alpha_matches_expected"))
-        beta = sum(1 for r in paths if r.get("beta_matches_expected"))
+        with_beta = [r for r in paths if r.get("beta_matches_expected") is not None]
+        beta = sum(1 for r in with_beta if r["beta_matches_expected"])
+        beta_text = f"{beta}/{len(with_beta)}" if with_beta else "해당 없음"
         print(
             f"success {ok}/{n}, L0 first {l0}/{n}, alpha matches {alpha}/{n}, "
-            f"beta matches {beta}/{n}, tokens {tokens}"
+            f"beta matches {beta_text}, tokens {tokens}"
         )
     else:
         print(f"success {ok}/{n}, L0 first {l0}/{n}, matches expected {match}/{n}, tokens {tokens}")

@@ -17,7 +17,7 @@ from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store.repos.decisions import list_case_rejections
 from app.store.repos.messages import list_case_replies
 from app.store.repos.records import list_validations
-from app.store.repos.runs import get_run, list_attempts, list_steps, tried_spec_hashes
+from app.store.repos.runs import get_run, list_attempts, list_steps, tried_search_keys
 from app.store.repos.site import get_site
 from app.store.repos.snapshots import build_snapshot_content
 
@@ -73,12 +73,12 @@ def current_snapshot(conn: sqlite3.Connection, pack: LoadedPack) -> Snapshot:
     return Snapshot(snapshot_id="observe", snapshot_hash=canonical_hash(content), content=content)
 
 
-def level_hashes(snapshot: Snapshot, primary: Conflict, acting_unit_id: str) -> dict[str, str]:
-    """level별 실효 SearchSpec hash. 만들 수 없는 level(NO_ACTING_TASKS 등)은 뺀다."""
+def level_keys(snapshot: Snapshot, primary: Conflict, acting_unit_id: str) -> dict[str, str]:
+    """level별 실효 탐색 키(A.21). 만들 수 없는 level(NO_ACTING_TASKS 등)은 뺀다."""
     out = {}
     for level in spec.LEVELS:
         try:
-            out[level] = build_search_spec(snapshot, primary, acting_unit_id, level).hash
+            out[level] = build_search_spec(snapshot, primary, acting_unit_id, level).search_key
         except SearchSpecError:
             continue
     return out
@@ -132,15 +132,15 @@ def valid_listings(
     return out
 
 
-def try_spec_hash(
+def try_search_key(
     snapshot: Snapshot, primary: Conflict, acting_unit_id: str, task_id: str, resource_id: str
 ) -> str | None:
-    """TRY의 실효 SearchSpec hash(주 충돌 L0 + 대체 자원 1개). 만들 수 없으면 None."""
+    """TRY의 실효 탐색 키(주 충돌 L0 + 대체 자원 1개). 만들 수 없으면 None."""
     try:
         spec_ = build_search_spec(snapshot, primary, acting_unit_id, "L0", {task_id: [resource_id]})
     except SearchSpecError:
         return None
-    return spec_.hash
+    return spec_.search_key
 
 
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:
@@ -152,9 +152,10 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     facts = snapshot.facts()
     conflicts = detect_conflicts(snapshot, facts.check_assignments(), pack)
     primary = primary_conflict(facts, conflicts, run)
-    tried = tried_spec_hashes(conn, pack.site_id)
-    hashes = level_hashes(snapshot, primary, run.acting_unit_id) if primary else {}
-    untried = [lv for lv, h in hashes.items() if h not in tried]
+    # 미시도 판정은 실효 탐색 키(Solver 입력)로 한다. 무결성 hash가 아니다 (A.21)
+    tried = tried_search_keys(conn, pack.site_id)
+    keys = level_keys(snapshot, primary, run.acting_unit_id) if primary else {}
+    untried = [lv for lv, k in keys.items() if k not in tried]
 
     base = facts.base_assignments()
     acting_tasks = [
@@ -212,7 +213,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             rid
             for rid in alternatives
             if primary is not None
-            and (h := try_spec_hash(snapshot, primary, run.acting_unit_id, tid, rid)) is not None
+            and (h := try_search_key(snapshot, primary, run.acting_unit_id, tid, rid)) is not None
             and h not in tried
         ]
         listings.append(
@@ -240,8 +241,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "constraints": [c.model_dump(mode="json") for c in facts.constraints],
         "consents": [c.model_dump(mode="json") for c in facts.consents if c.task_id in acting_ids],
         "untried_levels": untried,
-        # spec_hash는 내부 계산(시도 여부)에만 쓰고 모델에는 보이지 않는다 (A.17)
-        "attempts": [{k: v for k, v in a.items() if k != "spec_hash"} for a in attempts],
+        # search_key는 내부 계산(시도 여부)에만 쓰고 모델에는 보이지 않는다 (A.17·A.21)
+        "attempts": [{k: v for k, v in a.items() if k != "search_key"} for a in attempts],
         "latest_validation": latest_validation,
         # 이 Case 후보에 대한 Supervisor 거절. comment는 인용 데이터다 (§9.2, A.17·A.21)
         "rejections": list_case_rejections(conn, run.case_id),

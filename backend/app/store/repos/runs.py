@@ -231,13 +231,13 @@ def finish_solver_job(
     )
 
 
-def tried_spec_hashes(conn: sqlite3.Connection, site_id: str) -> set[str]:
-    """site에서 이미 시도한 실효 SearchSpec hash (RESERVED·REGISTERED, 부록 A.16)."""
+def tried_search_keys(conn: sqlite3.Connection, site_id: str) -> set[str]:
+    """site에서 이미 시도한 실효 탐색 키 (RESERVED·REGISTERED, 부록 A.16·A.21)."""
     return {
-        r["hash"]
+        r["search_key"]
         for r in rows(
             conn,
-            "SELECT s.hash FROM solver_job j JOIN search_spec s"
+            "SELECT s.search_key FROM solver_job j JOIN search_spec s"
             " ON s.search_spec_id = j.search_spec_id"
             " WHERE j.site_id = ? AND j.status IN ('RESERVED', 'REGISTERED')",
             (site_id,),
@@ -249,7 +249,7 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
     """이 Run의 Solver 시도 (Observation attempts)."""
     found = rows(
         conn,
-        "SELECT j.step_no, j.status AS job_status, s.scope_level, s.hash AS spec_hash,"
+        "SELECT j.step_no, j.status AS job_status, s.scope_level, s.search_key,"
         " s.resource_alternatives, r.stage1, r.stage2, c.candidate_id FROM solver_job j"
         " JOIN search_spec s ON s.search_spec_id = j.search_spec_id"
         " LEFT JOIN solver_result r ON r.solver_result_id = j.solver_result_id"
@@ -266,7 +266,7 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
                 "job_status": r["job_status"],
                 "scope_level": r["scope_level"],
                 "try_resources": loads(r["resource_alternatives"]),  # TRY 시도 (A.21)
-                "spec_hash": r["spec_hash"],
+                "search_key": r["search_key"],
                 "stage1": None
                 if s1 is None
                 else {"status": s1["status"], "changed": s1["changed"]},

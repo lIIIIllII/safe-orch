@@ -1237,3 +1237,15 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - **LIST 대상:** 주 충돌 L0 작업 ∩ 필요 자원 있음 ∩ RESOURCE 축 제약 없음 ∩ 미조회(5 수정). 기본안 B에서 C 고정 뒤 LIST 대상은 A뿐이고, A를 조회하면 LIST가 사라져 도구는 ASK·ESCALATE가 된다. 스크립트 E2E 경로(step 6·Solver 4·사람 라운드 1)는 그대로다.
 - **live_run 요약:** `--path B` 기록에 `first_solve_level`·`l0_first`를 넣고, 요약 줄이 path 기록이면 "L0 first n/N, alpha matches n/N, beta matches n/N"을 센다(이전에는 키가 없어 0/3).
 
+**무결성 hash와 실효 탐색 키의 구분 (schema_version 6, 기본안 B live run data/live_runs/20261001T135426Z.jsonl)**
+- 원인: 5회 중 2회가 MOVABILITY 수락 뒤 L0를 다시 풀었다. 수락은 context_version·task revision·Consent를 바꿔 snapshot_hash가 달라지고, 미시도 판정이 snapshot_hash를 포함한 SearchSpec hash로 되어 있어 L0가 미시도로 다시 열렸다. Solver 입력은 같았고 Solver 사용이 5/6까지 갔다.
+- **무결성 hash(`search_spec.hash`, A.11)는 그대로다.** snapshot_hash를 포함하고 C01·candidate_hash·Validator 재계산에 쓴다.
+- **실효 탐색 키(`search_spec.search_key`)를 따로 둔다.** "같은 실효 SearchSpec 미시도"(§11.7, A.11) 판정, Observation `untried_levels`·`untried_alternatives`, Available Actions, Gateway 재검사가 이 키를 쓴다. SearchSpec을 만들 때(`build_search_spec`) 계산해 기록한다(`domain/hashes.search_key`).
+  - 키 = canonical_hash(Solver 입력만): READY 작업의 task_id·구역·duration·시간창·필요 자원 유형·기준 배정·선후행·hazard_tags, 자원(유형·허용 Unit·가용 구간), 구역 관계, pack_hash(Rule), 근무 구간, Horizon, acting_unit, axes, resource_alternatives, time_limit_s.
+  - 넣지 않는 것: context_version·plan_revision 번호, Consent, fields, revision 번호, Hold, owner·work_type(hazard_tags로 대신), movable(axes로 대신).
+  - axes 정규화: resource 축이 true여도 그 작업의 resource_alternatives가 비어 있으면 false로 본다(Solver 입력이 같다). 두 축이 모두 false인 작업은 뺀다.
+  - **확인된 제약(작업·고정 축)은 넣는다.** 고정 작업이 범위 밖이면 그 범위의 Solver 입력은 같지만, 거절로 생긴 제약은 Case의 가정이 바뀐 것이고 0-2의 "C 고정 뒤 L0 재시도"가 정상 경로이므로 다른 키로 본다. 그래서 기본안 B 스크립트 경로(step 6·Solver 4)는 그대로다.
+- 결과: 수락 뒤 관찰에서 `untried_levels`가 비어 TRY·ESCALATE만 남는다. 철회로 READY 작업 집합이 바뀌거나 제약이 생기면 다른 키라 다시 시도할 수 있다.
+- live_run 요약: Beta가 없는 경로(B-decline)는 beta matches를 0/N이 아니라 "해당 없음"으로 표시하고, 기록의 `beta_matches_expected`는 null이다.
+- 스키마: `search_spec.search_key TEXT NOT NULL` 추가, schema_version 6. 로컬 DB는 reset이 필요하다.
+

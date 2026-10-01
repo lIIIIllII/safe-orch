@@ -1,4 +1,4 @@
--- SAFE-ORCH schema (설계서 §5.4, 우선순위 문서 부록 A.2·A.14·A.16·A.21). schema_version 5.
+-- SAFE-ORCH schema (설계서 §5.4, 우선순위 문서 부록 A.2·A.14·A.16·A.21). schema_version 6.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -114,6 +114,8 @@ CREATE TABLE search_spec (
     axes                  TEXT NOT NULL CHECK (json_valid(axes)),
     resource_alternatives TEXT NOT NULL CHECK (json_valid(resource_alternatives)),
     time_limit_s          INTEGER NOT NULL CHECK (time_limit_s > 0),
+    -- 실효 탐색 키(미시도 판정용, Solver 입력만). hash는 무결성용 (부록 A.21)
+    search_key            TEXT NOT NULL,
     FOREIGN KEY (site_id, acting_unit_id) REFERENCES work_unit (site_id, unit_id)
 );
 

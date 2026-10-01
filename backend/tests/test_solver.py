@@ -370,3 +370,56 @@ def test_register_stale_plan_discarded(with_a):
         tx.execute("UPDATE site SET plan_revision = plan_revision + 1")
     with pytest.raises(StaleError), db.write() as tx:
         register_solver_outcome(tx, snap, result, build_candidate(snap, spec, result))
+
+
+# ── 실효 탐색 키: 미시도 판정용 (A.21 "무결성 hash와 실효 탐색 키의 구분") ─────
+
+
+def _key(pack, snapshot, level="L0", try_resources=None):
+    spec = build_search_spec(snapshot, _conflict(pack, snapshot), "UA", level, try_resources)
+    return spec.search_key, spec.hash
+
+
+def test_search_key_ignores_versions_consents_and_revisions(with_a):
+    """Consent·context_version·plan_revision·revision 번호만 다르면 Solver 입력이 같다 → 같은 키."""
+    snapshot = take_snapshot(with_a)
+    facts = snapshot.facts()
+    bumped = with_facts(
+        snapshot,
+        context_version=facts.context_version + 5,
+        plan_revision=facts.plan_revision + 1,
+        consents=(),
+        tasks=tuple(t.model_copy(update={"revision": t.revision + 3}) for t in facts.tasks),
+    )
+    key, digest = _key(with_a, snapshot)
+    other_key, other_digest = _key(with_a, bumped)
+    assert key == other_key
+    assert digest != other_digest  # 무결성 hash는 snapshot_hash를 따라 달라진다
+
+
+def test_search_key_normalizes_resource_axis_without_alternatives(with_a, resource_movable_a):
+    """resource 축이 열려도 대체 자원이 없으면 Solver 입력이 같다(MOVABILITY 수락 직후의 L0)."""
+    pack = resource_movable_a
+    snapshot = take_snapshot(pack)
+    assert snapshot.facts().task_map()["A"].movable.resource is True
+    key, _ = _key(pack, snapshot)
+    closed = with_facts(
+        snapshot,
+        tasks=tuple(
+            t.model_copy(update={"movable": Movable(time=t.movable.time, resource=False)})
+            for t in snapshot.facts().tasks
+        ),
+    )
+    assert _key(pack, closed)[0] == key
+    assert _key(pack, snapshot, try_resources={"A": ["SITE-CR-01"]})[0] != key
+
+
+def test_search_key_changes_with_ready_set_and_constraints(with_a):
+    snapshot = take_snapshot(with_a)
+    key, _ = _key(with_a, snapshot)
+    facts = snapshot.facts()
+    # 철회로 READY 작업 집합이 바뀌면(충돌과 무관한 작업이라도) 다른 키
+    withdrawn = with_facts(snapshot, tasks=tuple(t for t in facts.tasks if t.task_id != "E"))
+    assert _key(with_a, withdrawn)[0] != key
+    # 확인된 제약이 생기면 다른 키(같은 Case의 가정이 바뀜, A.21 0-2의 L0 재시도)
+    assert _key(with_a, _fix(snapshot, "C"))[0] != key

@@ -202,7 +202,7 @@ def test_observation_keys_match_fingerprinted_keys(with_a):
     with db.read() as conn:
         data = build_observation(conn, with_a, "run_keys").data
     assert tuple(sorted(data)) == prompt.OBSERVATION_KEYS
-    assert all("spec_hash" not in a for a in data["attempts"])
+    assert all("search_key" not in a and "spec_hash" not in a for a in data["attempts"])
 
 
 def test_system_prompt_does_not_order_l0_first():
@@ -362,6 +362,12 @@ def test_live_run_summary_counts_path_b(monkeypatch, tmp_path, capsys):
     assert live_run.main(["--path", "B"]) == 0
     out = capsys.readouterr().out
     assert "L0 first 1/1, alpha matches 1/1, beta matches 1/1" in out
+    # B-decline은 Beta가 없는 경로: 0/N이 아니라 "해당 없음"
+    monkeypatch.setattr(
+        live_run, "run_path_b", lambda *a: {**record, "beta_matches_expected": None}
+    )
+    assert live_run.main(["--path", "B-decline"]) == 0
+    assert "beta matches 해당 없음" in capsys.readouterr().out
 
 
 def test_live_run_path_b_decline_ends_in_escalation(monkeypatch):
@@ -373,6 +379,7 @@ def test_live_run_path_b_decline_ends_in_escalation(monkeypatch):
     assert r["success"], r["success_criteria"]
     assert (r["run_status"], r["committed"], r["messages"]) == ("ESCALATED", None, 1)
     assert r["success_criteria"]["no_ask_or_try_after_decline"]
+    assert r["beta_matches_expected"] is None
 
 
 def test_live_run_path_needs_request_a(capsys):

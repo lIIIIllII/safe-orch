@@ -5,7 +5,7 @@ app.rules·app.validator를 import하지 않는다.
 
 from collections.abc import Mapping, Sequence
 
-from app.domain.hashes import search_spec_hash
+from app.domain.hashes import search_key, search_spec_hash
 from app.domain.ids import new_id
 from app.domain.models import Conflict, Movable, ScopeLevel, SearchSpec, Snapshot
 
@@ -90,4 +90,5 @@ def build_search_spec(
         axes=axes,
         resource_alternatives=alternatives,
         time_limit_s=TIME_LIMIT_S,
+        search_key=search_key(facts, acting_unit_id, axes, alternatives, TIME_LIMIT_S),
     )
