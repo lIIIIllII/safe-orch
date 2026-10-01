@@ -1327,3 +1327,12 @@
 - 실행(2026-10-01 18:09 UTC, `data/live_runs/20261001T180951Z.jsonl`, `--coord`): model `gpt-6-luna`(reasoning_effort none), prompt `replanning-p8`·`coordination-p1`·`event-response-p1`. **3/3 성공**. 세 회차 모두 PROPOSE(E, 60), 제안 CONFIRMED, Hold FACT_CONFIRMED, ER SUCCEEDED, Gamma(E 10:00, 변경 1·지연 15), R2, 통지 대상 {planner_b} 통지, 금지 Action·MALFORMED·LLM 오류 0.
   - #2·#3(9 step, 약 20,000 토큰, 21초): E:LOOKUP(PAINTING) → E:ANALYZE(E, 60) → E:PROPOSE(E, 60) → (확정·해제) → R:SOLVE(L0, Gamma) → C:SEND_CHANGE_REQUEST(E) → C:WAIT → (Planner B 수락) → C:REPORT → (승인 R2) → C:SEND_NOTICE(planner_b) → C:REPORT.
   - #1(16 step, 50,270 토큰, 39초): ER이 **같은 LOOKUP_TASKS(PAINTING)를 8번 반복**한 뒤 ANALYZE → PROPOSE(10번째 step = steps 한도 10). decision_summary는 매번 "구역이 특정되지 않아 다시 확인"이었다. 성공 기준은 충족했지만 한 step만 더 반복했으면 BUDGET_EXHAUSTED였다. 시연 안정성 위험으로 기록하고, 대응(같은 조건 조회 반복 막기 등)은 결정을 받은 뒤 한다.
+
+**S3 구현 기록** (화면)
+- Supervisor 받은 요청: 확인 메시지를 제안 유형으로 나눠 FACT_UPDATE면 "사실 수정 확인" 카드(서버 문구에 옛 값·새 값을 날짜·시각과 분으로, 표에 "시작 가능 시각 E · 10/12(월) 09:45 → 10/12(월) 10:00", Agent 설명 = 모델 evidence, 확정 / 폐기). 제약 초안 카드는 그대로.
+- Hold 목록: 그 Event의 사실 수정안(작업·필드·옛 값 → 새 값·상태)과 해제 버튼 둘("변경 없음 해제" NO_CHANGE, "사실 확인 후 해제" FACT_CONFIRMED). 판정은 서버가 하고(확정 전이면 `FACT_NOT_CONFIRMED`), 화면은 Supervisor 역할만 본다. 이전의 "사실 확정은 D5 이후" 문구를 지웠다.
+- state API: 받은 요청에 `fact`(필드·옛 값·새 값), Hold에 `fact_updates`. 테스트 1개(`test_state_shows_fact_update_in_inbox_and_hold`).
+- labels.ts: 메시지 유형 `FACT_UPDATE`("사실 수정 확인")와 답 문구(확정/폐기), `FACT_FIELD`(earliest_start = 시작 가능 시각), `FACT_NOT_CONFIRMED`, end_reason 접두어 `FACT_CONFIRMED:`·`HOLD_RELEASED:`. 신고 대응 Agent 이름은 이미 있었다.
+- Activity는 그대로다(신고 대응 Agent의 Budget도 Solver 한도가 없어 "—").
+- headless 확인(Chrome 154, CDP, 1920×1080, 스크립트 모델로 만든 단계별 DB, 워커 끈 서버): ① Supervisor 받은 요청: 사실 수정 확인 카드(서버 문구 "E(도장) 작업의 시작 가능 시각 10/12(월) 09:45(45분) → 10/12(월) 10:00(60분). 신고: “도장 준비 15분 늦어져 10시부터”…", 확정·폐기), 배지 1, 상단 "현장 Hold 중" 띠, Activity 신고 대응 Agent 사람 대기. ② 지연 신고 탭 Hold 목록: 사실 수정안 "확인 대기", 두 해제 버튼. ③ 확정 뒤: 수정안 "확인됨", 타임라인 E에 "시간창 위반" 충돌, 신고 대응 Agent 성공 "사실 수정 확정으로 종료", 배지 0.
+- 검사: pytest 472, `npm run build`·`npm run lint`, `verify_demo_values` 통과.

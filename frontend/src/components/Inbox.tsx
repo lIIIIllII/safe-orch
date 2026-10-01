@@ -3,7 +3,16 @@
 
 import { useState } from 'react'
 import type { InboxItem, SiteState } from '../types'
-import { AXIS, DECISION, DECISION_BY_TYPE, MESSAGE_STATUS, MESSAGE_TYPE, PROPOSAL_STATUS } from '../labels'
+import {
+  AXIS,
+  DECISION,
+  DECISION_BY_TYPE,
+  FACT_FIELD,
+  MESSAGE_STATUS,
+  MESSAGE_TYPE,
+  PROPOSAL_STATUS,
+} from '../labels'
+import { useEnv } from '../context'
 import { ANSWERABLE } from '../inbox'
 import type { Run } from './ReviewPanel'
 
@@ -26,14 +35,17 @@ export function Inbox({ state, busy, run }: Props) {
 
 function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: Run }) {
   const [comment, setComment] = useState('')
+  const { clock } = useEnv()
   const answerable = ANSWERABLE.includes(m.type)
+  // 확인 메시지는 제안 유형으로 나눈다: 제약 초안(A.24)과 사실 수정(A.25)
+  const kind = m.proposal_type === 'FACT_UPDATE' ? 'FACT_UPDATE' : m.type
   const open = m.status === 'OPEN' && answerable
   const done = m.status === 'LATE' || m.status === 'CANCELLED'
-  const words = DECISION_BY_TYPE[m.type] ?? DECISION
+  const words = DECISION_BY_TYPE[kind] ?? DECISION
   // 변경 요청의 이견은 사유가 필요하다(서버도 COMMENT_REQUIRED로 막는다, A.24)
   const needReason = m.type === 'CHANGE_REQUEST'
   const reply = (decision: 'ACCEPT' | 'DECLINE') =>
-    run(`${MESSAGE_TYPE[m.type] ?? '받은 요청'} ${words[decision]}`, `/messages/${m.message_id}/reply`, {
+    run(`${MESSAGE_TYPE[kind] ?? '받은 요청'} ${words[decision]}`, `/messages/${m.message_id}/reply`, {
       decision,
       comment,
     })
@@ -42,7 +54,7 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
     <article className={`inbox-item ${done ? 'inbox-done' : ''} ${open ? 'inbox-open' : ''}`}>
       <header className="row">
         <span className={`badge inbox-${answerable ? m.status.toLowerCase() : 'notice'}`}>{statusText}</span>
-        <strong className="inbox-title">{MESSAGE_TYPE[m.type] ?? m.type}</strong>
+        <strong className="inbox-title">{MESSAGE_TYPE[kind] ?? m.type}</strong>
         <span className="small muted">
           <code>{m.message_id}</code>
         </span>
@@ -81,7 +93,15 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
               </td>
             </tr>
           )}
-          {m.type === 'CONFIRMATION' && (
+          {kind === 'FACT_UPDATE' && m.fact && (
+            <tr>
+              <th>{FACT_FIELD[m.fact.field] ?? m.fact.field}</th>
+              <td>
+                {m.task_id ?? '—'} · {clock.format(m.fact.old_value)} → <b>{clock.format(m.fact.new_value)}</b>
+              </td>
+            </tr>
+          )}
+          {kind === 'CONFIRMATION' && (
             <tr>
               <th>고정</th>
               <td>

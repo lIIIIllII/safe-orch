@@ -208,6 +208,10 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
                 "allowed_values": payload.get("allowed_values", []),
                 # 제약 초안(FEEDBACK_CONSTRAINT)의 고정 축 (A.24)
                 "axes": payload.get("axes", []),
+                # 사실 수정(FACT_UPDATE)의 필드·옛 값·새 값 (A.25)
+                "fact": None
+                if "field" not in payload
+                else {k: payload[k] for k in ("field", "old_value", "new_value")},
             }
         )
     return out

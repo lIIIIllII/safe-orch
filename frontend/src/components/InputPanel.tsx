@@ -8,6 +8,7 @@ import { useEnv, workTypeName } from '../context'
 import type { Run } from './ReviewPanel'
 import { Inbox } from './Inbox'
 import { openInbox } from '../inbox'
+import { FACT_FIELD, PROPOSAL_STATUS } from '../labels'
 
 interface Props {
   state: SiteState
@@ -408,6 +409,7 @@ function EventForm({ state, roles, busy, run }: Props) {
 
 function HoldList({ state, roles, busy, run }: Props) {
   const isSup = roles.includes('SUPERVISOR')
+  const { clock } = useEnv()
   const [comment, setComment] = useState('')
   const name = new Map(state.actors.map((a) => [a.actor_id, a.name]))
   return (
@@ -423,9 +425,19 @@ function HoldList({ state, roles, busy, run }: Props) {
           <div className="small muted">
             {h.hold_id} · 생성 Context v{h.created_context_version} · {h.event_type}
           </div>
+          {h.fact_updates.length > 0 && (
+            <ul className="small hold-facts">
+              {h.fact_updates.map((f) => (
+                <li key={f.proposal_id}>
+                  사실 수정안 {f.task_id} {FACT_FIELD[f.field] ?? f.field} {clock.format(f.old_value)} →{' '}
+                  <b>{clock.format(f.new_value)}</b> · {PROPOSAL_STATUS[f.status] ?? f.status}
+                </li>
+              ))}
+            </ul>
+          )}
           <p className="small hold-note">
-            해제 사유 <b>변경 없음 (NO_CHANGE)</b>{' '}
-            <span className="muted">· 사실 확정(FACT_CONFIRMED)은 D5 이후</span>
+            해제 사유: <b>변경 없음(NO_CHANGE)</b> 또는 <b>사실 확인(FACT_CONFIRMED)</b>
+            <span className="muted"> · 사실 확인 해제는 이 신고의 사실 수정이 확정된 뒤에만 된다</span>
           </p>
           <div className="row">
             <input
@@ -438,14 +450,28 @@ function HoldList({ state, roles, busy, run }: Props) {
               disabled={!isSup || busy !== null}
               title={isSup ? undefined : 'Supervisor 권한 필요'}
               onClick={() =>
-                run('Hold 해제', `/holds/${h.hold_id}/release`, {
+                run('Hold 해제(변경 없음)', `/holds/${h.hold_id}/release`, {
                   resolution: 'NO_CHANGE',
                   expected_context_version: state.site.context_version,
                   comment,
                 })
               }
             >
-              해제
+              변경 없음 해제
+            </button>
+            <button
+              className="btn-primary"
+              disabled={!isSup || busy !== null}
+              title={isSup ? '판정은 서버가 한다(확정 전이면 FACT_NOT_CONFIRMED)' : 'Supervisor 권한 필요'}
+              onClick={() =>
+                run('Hold 해제(사실 확인)', `/holds/${h.hold_id}/release`, {
+                  resolution: 'FACT_CONFIRMED',
+                  expected_context_version: state.site.context_version,
+                  comment,
+                })
+              }
+            >
+              사실 확인 후 해제
             </button>
           </div>
         </div>

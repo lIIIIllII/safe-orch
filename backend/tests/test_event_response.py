@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage
 from scripted import Router, call, solve
 
 from app.agents.prompts import event_response as prompt
+from app.api.state import build_state
 from app.commands.approval import (
     ApproveRequest,
     RejectRequest,
@@ -423,3 +424,21 @@ def test_event_response_prompt_fingerprint_keys_and_no_pack_values(seeded, event
     for value in ("도장", "PAINTING", "D2", "YARD-01", "09:00"):
         assert value not in prompt.SYSTEM  # 템플릿에는 Pack 값이 없다 (A.23·A.25)
     assert "첫날 09:00" in prompt.render_system(seeded)
+
+
+def test_state_shows_fact_update_in_inbox_and_hold(seeded, event_response_on):
+    """state: Supervisor 받은 요청의 사실 수정(fact), Hold의 사실 수정안 목록 (A.25 화면)."""
+
+    pack = seeded
+    refs, _ = _to_proposal(pack)
+    with db.read() as conn:
+        sup = build_state(conn, pack, "supervisor")
+    [card] = [m for m in sup["inbox"] if m["type"] == "CONFIRMATION"]
+    assert (card["proposal_type"], card["fact"]) == (
+        "FACT_UPDATE",
+        {"field": "earliest_start", "old_value": 45, "new_value": 60},
+    )
+    [hold] = [h for h in sup["holds"] if h["hold_id"] == refs["hold_id"]]
+    assert [(f["task_id"], f["new_value"], f["status"]) for f in hold["fact_updates"]] == [
+        ("E", 60, "PENDING")
+    ]

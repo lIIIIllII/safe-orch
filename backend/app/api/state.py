@@ -24,7 +24,7 @@ from app.store.repos.consultations import (
     list_review_queue,
 )
 from app.store.repos.decisions import list_decisions
-from app.store.repos.messages import list_change_requests, list_inbox
+from app.store.repos.messages import list_change_requests, list_fact_updates, list_inbox
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import get_candidate, get_snapshot, list_validations
 from app.store.repos.resources import list_resources
@@ -363,7 +363,24 @@ def build_state(
         "review_queue": queue,
         # 대기열(QUEUED) 접수 순서 (A.21 0-1·7)
         "task_queue": queued_task_ids(conn, site_id),
-        "holds": holds,
+        # Hold마다 그 Event의 사실 수정안 (FACT_CONFIRMED 해제 판단, A.25)
+        "holds": [
+            {
+                **h,
+                "fact_updates": [
+                    {
+                        "proposal_id": p["proposal_id"],
+                        "task_id": p["target_task_id"],
+                        "field": p["payload"]["field"],
+                        "old_value": p["payload"]["old_value"],
+                        "new_value": p["payload"]["new_value"],
+                        "status": p["status"],
+                    }
+                    for p in list_fact_updates(conn, site_id, event_id=h["event_id"])
+                ],
+            }
+            for h in holds
+        ],
         "events": events,
         "runs": [run_summary(conn, rid) for rid in run_ids],
         "dispatch": {"pending": jobs.get("PENDING", 0), "failed": jobs.get("FAILED", 0)},
