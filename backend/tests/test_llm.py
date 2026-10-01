@@ -558,3 +558,47 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
     ]
     assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0}
     assert (r["run_status"], r["end_reason"]) == ("SUCCEEDED", "COMMITTED:1")
+
+
+def test_live_run_path_event_with_scripted_model(monkeypatch):
+    """--path event --coord(A.25): R1 스크립트 준비 → 신고 → ER 조회·분석·제안 → 확인·해제 → Gamma → 협의 → R2 → 통지."""
+
+    def report(text):
+        args = {"decision_summary": "보고", "summary": text}
+        return AIMessage(
+            content="", tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": text}]
+        )
+
+    router = Router(
+        replanning=[solve("L0")],
+        coordination=[
+            call("SEND_CHANGE_REQUEST", "요청", task_id="E", message="E 15분 지연"),
+            call("WAIT_FOR_REPLIES", "대기"),
+            report("협의 완료"),
+            call(
+                "SEND_NOTICE", "통지", actor_id="planner_b", task_ids=["E", "D"], message="E 10:00"
+            ),
+            report("통지 완료"),
+        ],
+        event_response=[
+            call("LOOKUP_TASKS", "조회", work_type="PAINTING"),
+            call("ANALYZE_IMPACT", "분석", task_id="E", new_earliest_start=60),
+            call(
+                "PROPOSE_FACT_UPDATE",
+                "제안",
+                task_id="E",
+                new_earliest_start=60,
+                evidence="도장 10시부터",
+            ),
+        ],
+    )
+    make = router.factory()
+    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    r = live_run.run_path_event(1, settings, "shipyard", False, coord=True)
+    assert r.get("error") is None, r.get("error")
+    c = r["success_criteria"]
+    assert r["success"], c
+    assert c["gamma_changed_delay"] == [1, 15] and c["noticed"] == ["planner_b"]
+    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0}
+    assert (r["run_status"], r["released"]) == ("SUCCEEDED", "APPLIED")

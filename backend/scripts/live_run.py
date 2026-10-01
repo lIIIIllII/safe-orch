@@ -23,6 +23,12 @@
   PASS 후보는 승인. 성공 = Alpha PASS ∧ C 담당자에게 C 변경 요청 ∧ DRAFT_CONSTRAINT(TASK_IMMOVABLE, C, 바뀐 축
   포함) ∧ 제약 source PROPOSAL ∧ Beta PASS ∧ R1 ∧ Replanning SUCCEEDED ∧ 통지 대상 전원에게 NOTICE ∧ 통지 Run
   SUCCEEDED ∧ 모든 Run에서 금지 Action·MALFORMED 0 ∧ Budget 안.
+- --path event(Scene 4 최소 경로, 부록 A.25) [--coord]: R1(기본안 B, Beta 확정)까지는 스크립트 응답으로 준비하고
+  (LLM 없음), EVENT_RESPONSE_ENABLED를 켠 뒤 Reporter가 demo_events[0]을 신고한다. 사람 역할: Supervisor가 사실
+  수정안을 확정하고 FACT_CONFIRMED로 해제, (--coord면 COORDINATION_ENABLED를 켜고 변경 요청에 담당자 수락, 아니면
+  Supervisor WAIVE) → 승인. 성공 = PROPOSE(E, 60) ∧ 제안 CONFIRMED ∧ Hold FACT_CONFIRMED ∧ Gamma PASS(E 60,
+  변경 1, 지연 15) ∧ R2 ∧ ER Run SUCCEEDED ∧ (--coord면 통지 대상 전원 통지) ∧ 신고 뒤 Run에서 금지 Action·
+  MALFORMED 0 ∧ Budget 안.
 """
 
 import argparse
@@ -41,6 +47,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 
 from app.agents.llm import model_settings, openai_model
 from app.agents.prompts.coordination import PROMPT_VERSION as COORDINATION_PROMPT_VERSION
+from app.agents.prompts.event_response import PROMPT_VERSION as EVENT_RESPONSE_PROMPT_VERSION
 from app.agents.prompts.replanning import PROMPT_VERSION
 from app.agents.specs.replanning import MAX_HUMAN_ROUNDS
 from app.commands.approval import (
@@ -51,6 +58,7 @@ from app.commands.approval import (
     reject_candidate,
     waive,
 )
+from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.messages import ReplyRequest, reply_message
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.config import REPO_ROOT, Settings, get_settings
@@ -71,7 +79,7 @@ from scripts import verify_demo_values as verify
 OUT_DIR = REPO_ROOT / "data" / "live_runs"
 RUN_DEADLINE_S = 300
 MAX_RUNS = 10
-PATHS = ("A", "B", "B-decline", "coord")
+PATHS = ("A", "B", "B-decline", "coord", "event")
 MAX_HUMAN_TURNS = 6  # 기본안 B에서 사람 응답 반복 상한(무한 반복 방지)
 
 
@@ -731,6 +739,347 @@ def _path_coord(record: dict[str, Any], settings: Settings, pack: Any, raw: bool
     )
 
 
+# ── Scene 4 최소 경로: Event Response (부록 A.25) ───────────────
+
+
+class _Script:
+    """R1 준비용 스크립트 응답(LLM 없음). 테스트의 ScriptedChatModel과 같은 프로토콜이다."""
+
+    model_name = "script-setup"
+
+    def __init__(self, replies: list[AIMessage]):
+        self.replies = list(replies)
+
+    def bind_tools(self, tools: Sequence[dict[str, Any]], **kwargs: Any) -> "_Script":
+        return self
+
+    def invoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
+        return self.replies.pop(0)
+
+
+def _call(name: str, **args: Any) -> AIMessage:
+    args = {"decision_summary": "R1 준비(스크립트)", **args}
+    return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": _key()}])
+
+
+def _setup_r1(pack: Any) -> None:
+    """기본안 B로 R1(Beta 확정)까지 스크립트로 준비한다: 거절(C 고정) → LIST → ASK → 수락 → TRY → 승인."""
+    site_id = pack.site_id
+    form, requester = _form_and_requester(pack, pack.new_task.task_id)
+    submit_task_request(pack, requester, _key(), form)
+    solve = [_call("SOLVE_WITH_SCOPE", level="L0"), _call("SOLVE_WITH_SCOPE", level="L1")]
+    run_until_idle(pack, model_factory=lambda: _Script(solve))
+    with db.read() as conn:
+        [run_id] = [r[0] for r in conn.execute("SELECT run_id FROM agent_run")]
+        _, alpha = _waiting(conn, run_id)
+        alpha_v = _pass_validation(conn, site_id, alpha)
+    x = pack.demo_rejections[0]
+    reject_candidate(
+        pack,
+        "supervisor",
+        _key(),
+        RejectRequest(
+            candidate_id=alpha,
+            validation_id=alpha_v.validation_id,
+            reason_code=x.reason_code,
+            target_task_ids=x.target_task_ids,
+            axes=x.axes,
+            comment=x.comment,
+        ),
+    )
+    ask = _call(
+        "ASK_TASK_OWNER",
+        task_id=pack.new_task.task_id,
+        axis="RESOURCE",
+        allowed_values=["SITE-CR-01"],
+        question="대체 자원 확인",
+    )
+    listing = _call("LIST_ASSIGNABLE_RESOURCES", task_id=pack.new_task.task_id)
+    run_until_idle(pack, model_factory=lambda: _Script([listing, ask]))
+    with db.read() as conn:
+        _, mid = _waiting(conn, run_id)
+        to = get_message(conn, site_id, mid)["to_actor_id"]
+    reply_message(pack, to, _key(), ReplyRequest(message_id=mid, decision="ACCEPT"))
+    try_ = _call(
+        "TRY_ALTERNATIVE_RESOURCE", task_id=pack.new_task.task_id, resource_id="SITE-CR-01"
+    )
+    run_until_idle(pack, model_factory=lambda: _Script([try_]))
+    with db.read() as conn:
+        _, beta = _waiting(conn, run_id)
+        beta_v = _pass_validation(conn, site_id, beta)
+        ctx = get_site(conn, site_id).context_version
+    out = approve_and_commit(
+        pack,
+        "supervisor",
+        _key(),
+        ApproveRequest(
+            candidate_id=beta, validation_id=beta_v.validation_id, expected_context_version=ctx
+        ),
+    )
+    if out.status != "APPLIED":
+        raise RuntimeError(f"R1 준비 실패: {out.reason_codes}")
+
+
+def run_path_event(index: int, settings: Settings, pack_name: str, raw: bool, coord: bool) -> dict:
+    """임시 DB에서 R1을 스크립트로 준비하고, 지연 신고부터 실제 모델로 Scene 4 최소 경로를 돌린다."""
+    tmp = tempfile.TemporaryDirectory(prefix="live_run_")
+    names = ("DB_PATH", "EVENT_RESPONSE_ENABLED", "COORDINATION_ENABLED")
+    old = {n: os.environ.get(n) for n in names}
+    os.environ["DB_PATH"] = str(Path(tmp.name) / "live.db")
+    os.environ["EVENT_RESPONSE_ENABLED"] = "false"
+    os.environ["COORDINATION_ENABLED"] = "false"
+    get_settings.cache_clear()
+    db.close()
+    record: dict[str, Any] = {"index": index, "request": "event", "path": "event", "coord": coord}
+    t0 = time.perf_counter()
+    try:
+        db.init_db()
+        pack = load_pack(pack_dir(pack_name))
+        with db.write() as tx:
+            seed_pack(tx, pack)
+        _setup_r1(pack)
+        # 신고부터 설정을 켠다 (R1 준비 중 Coordination이 시작하지 않게)
+        os.environ["EVENT_RESPONSE_ENABLED"] = "true"
+        os.environ["COORDINATION_ENABLED"] = "true" if coord else "false"
+        get_settings.cache_clear()
+        _path_event(record, settings, pack, raw, coord)
+    except Exception as e:  # noqa: BLE001 — 실패도 기록한다
+        record.update(success=False, error=f"{type(e).__name__}: {e}")
+    finally:
+        db.close()
+        for n, v in old.items():
+            if v is None:
+                os.environ.pop(n, None)
+            else:
+                os.environ[n] = v
+        get_settings.cache_clear()
+        tmp.cleanup()
+    record["total_seconds"] = round(time.perf_counter() - t0, 2)
+    return record
+
+
+def _path_event(
+    record: dict[str, Any], settings: Settings, pack: Any, raw: bool, coord: bool
+) -> None:
+    rec = _Recorder(time.monotonic() + RUN_DEADLINE_S * 2, raw)
+    site_id = pack.site_id
+    factory = lambda: _RecordingModel(openai_model(settings), rec)
+    with db.read() as conn:
+        before = {r[0] for r in conn.execute("SELECT run_id FROM agent_run")}
+        last_step = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM agent_step").fetchone()[0]
+    report = pack.demo_events[0]
+    out = receive_event(
+        pack,
+        "reporter",
+        _key(),
+        EventReport(source_event_id=_key(), event_type=report.event_type, text=report.text),
+    )
+    hold_id = out.result_refs["hold_id"]
+    events: list[dict[str, Any]] = [{"report": report.text, "status": out.status}]
+    committed = gamma = None
+    released = None
+    for _ in range(MAX_HUMAN_TURNS * 2):
+        run_until_idle(pack, model_factory=factory)
+        with db.read() as conn:
+            opened = _open_requests(conn)
+            hold = conn.execute("SELECT status FROM hold WHERE hold_id = ?", (hold_id,)).fetchone()[
+                0
+            ]
+            confirmed = conn.execute(
+                "SELECT COUNT(*) FROM proposal WHERE type = 'FACT_UPDATE' AND status = 'CONFIRMED'"
+            ).fetchone()[0]
+            rp = conn.execute(
+                "SELECT run_id FROM agent_run WHERE agent_type = 'REPLANNING' ORDER BY rowid DESC"
+            ).fetchone()[0]
+            run, ref = _waiting(conn, rp)
+            cand_v = (
+                _pass_validation(conn, site_id, ref)
+                if run.run_id not in before and run.wait_kind == "CANDIDATE_OUTCOME"
+                else None
+            )
+            view = consultation_view(conn, site_id, ref) if cand_v else None
+            ctx = get_site(conn, site_id).context_version
+        if opened:
+            m = opened[0]
+            out = reply_message(
+                pack,
+                m["to_actor_id"],
+                _key(),
+                ReplyRequest(
+                    message_id=m["message_id"], decision="ACCEPT", comment="live run 자동 수락"
+                ),
+            )
+            events.append({"reply": "ACCEPT", "type": m["type"], "status": out.status})
+            continue
+        if hold == "ACTIVE" and confirmed:
+            out = release_hold_command(
+                pack,
+                "supervisor",
+                _key(),
+                HoldRelease(
+                    hold_id=hold_id,
+                    resolution="FACT_CONFIRMED",
+                    expected_context_version=ctx,
+                    comment="live run 사실 확인 해제",
+                ),
+            )
+            released = out.status
+            events.append({"release": "FACT_CONFIRMED", "status": out.status})
+            continue
+        if cand_v is not None and view is not None:
+            gamma = ref
+            if view.items_status != "COMPLETE" and not coord:
+                pending = tuple(t for t, st in view.item_status.items() if st == "PENDING")
+                waive(
+                    pack,
+                    "supervisor",
+                    _key(),
+                    WaiveRequest(candidate_id=ref, task_ids=pending, comment="live run 자동 수용"),
+                )
+                with db.read() as conn:
+                    view = consultation_view(conn, site_id, ref)
+            if view.items_status == "COMPLETE":
+                out = approve_and_commit(
+                    pack,
+                    "supervisor",
+                    _key(),
+                    ApproveRequest(
+                        candidate_id=ref,
+                        validation_id=cand_v.validation_id,
+                        expected_context_version=ctx,
+                    ),
+                )
+                committed = {
+                    "candidate_id": ref,
+                    "status": out.status,
+                    "reasons": list(out.reason_codes),
+                }
+                events.append({"approve": ref, "status": out.status})
+                run_until_idle(pack, model_factory=factory)  # 통지 Run(--coord)
+        break
+
+    with db.read() as conn:
+        runs = [
+            get_run(conn, r[0])
+            for r in conn.execute("SELECT run_id FROM agent_run ORDER BY rowid")
+            if r[0] not in before
+        ]
+        order = [
+            (r[0], r[1])
+            for r in conn.execute(
+                "SELECT run_id, step_no FROM agent_step WHERE rowid > ? ORDER BY rowid",
+                (last_step,),
+            )
+        ]
+        by_run = {r.run_id: list_steps(conn, r.run_id) for r in runs}
+        steps = [next(s for s in by_run[rid] if s["step_no"] == no) for rid, no in order]
+        facts = conn.execute(
+            "SELECT target_task_id, payload, status FROM proposal WHERE type = 'FACT_UPDATE'"
+        ).fetchall()
+        hold_row = conn.execute(
+            "SELECT status, resolution FROM hold WHERE hold_id = ?", (hold_id,)
+        ).fetchone()
+        cur = conn.execute("SELECT to_actor_id, type FROM message ORDER BY rowid")
+        messages = [{"to": r[0], "type": r[1]} for r in cur.fetchall()]
+        plan_revision = get_site(conn, site_id).plan_revision
+        cand = get_candidate(conn, site_id, gamma) if gamma else None
+        gamma_step = next(
+            (s for s in steps if gamma and (s["tool_result"] or {}).get("candidate_id") == gamma),
+            None,
+        )
+    rows = _step_rows(steps, rec.calls)
+    for row, s in zip(rows, steps, strict=True):
+        row["run_id"] = s["run_id"]
+        row["agent"] = next(r.agent_type for r in runs if r.run_id == s["run_id"])
+    er = next((r for r in runs if r.agent_type == "EVENT_RESPONSE"), None)
+    proposes = [
+        s["action"]["args"]
+        for s in steps
+        if (s["action"] or {}).get("name") == "PROPOSE_FACT_UPDATE"
+        and s["guard"]["verdict"] == "ACCEPTED"
+    ]
+    notice_run = next(
+        (
+            r
+            for r in runs
+            if r.agent_type == "COORDINATION" and r.input_ref.get("phase") == "NOTICE"
+        ),
+        None,
+    )
+    targets = []
+    if notice_run is not None:
+        first = next((s for s in steps if s["run_id"] == notice_run.run_id), None)
+        targets = sorted(
+            t["actor_id"] for t in (first or {}).get("observation", {}).get("notice_targets", [])
+        )
+    noticed = sorted({m["to"] for m in messages if m["type"] == "NOTICE"} & set(targets))
+    placed = {a.task_id: a.start for a in cand.assignments} if cand else {}
+    guards = [(s["guard"] or {}).get("reason_code") for s in steps]
+    criteria: dict[str, Any] = {
+        "proposed_e_60": any(
+            p["task_id"] == "E" and p["new_earliest_start"] == 60 for p in proposes
+        ),
+        "fact_confirmed": any(r[0] == "E" and r[2] == "CONFIRMED" for r in facts),
+        "hold_fact_confirmed": tuple(hold_row) == ("RELEASED", "FACT_CONFIRMED"),
+        "er_succeeded": er is not None and er.status == "SUCCEEDED",
+        "gamma_e_60": placed.get("E") == 60,
+        "gamma_changed_delay": None
+        if gamma_step is None
+        else [
+            gamma_step["tool_result"]["stage1"]["changed"],
+            (gamma_step["tool_result"]["stage2"] or {}).get("delay"),
+        ],
+        "committed_r2": (committed or {}).get("status") == "APPLIED" and plan_revision == 2,
+        "notice_targets": targets,
+        "noticed": noticed,
+        "forbidden_actions": guards.count("ACTION_NOT_AVAILABLE"),
+        "malformed": guards.count("MALFORMED"),
+        "llm_errors": guards.count("LLM_ERROR"),
+        "within_budget": all(r.status != "BUDGET_EXHAUSTED" for r in runs),
+    }
+    keys = ["proposed_e_60", "fact_confirmed", "hold_fact_confirmed", "er_succeeded",
+            "gamma_e_60", "committed_r2", "within_budget"]  # fmt: skip
+    success = (
+        all(criteria[k] for k in keys)
+        and criteria["gamma_changed_delay"] == [1, 15]
+        and criteria["forbidden_actions"] == 0
+        and criteria["malformed"] == 0
+        and (not coord or (bool(targets) and noticed == targets))
+    )
+    record.update(
+        model_settings=model_settings(settings),
+        model=next((r["model_id"] for r in rows if r["model_id"]), None),
+        prompt_version=PROMPT_VERSION,
+        coordination_prompt_version=COORDINATION_PROMPT_VERSION,
+        event_response_prompt_version=EVENT_RESPONSE_PROMPT_VERSION,
+        success=success,
+        success_criteria=criteria,
+        step_count=len(steps),
+        propose_args=proposes,
+        released=released,
+        actions=[f"{row['agent'][0]}:{row['action'] or '-'}" for row in rows],
+        events=events,
+        steps=rows,
+        runs=[
+            {
+                "run_id": r.run_id,
+                "agent_type": r.agent_type,
+                "phase": r.input_ref.get("phase"),
+                "status": r.status,
+                "end_reason": r.end_reason,
+                "steps_used": r.steps_used,
+            }
+            for r in runs
+        ],
+        run_status=None if er is None else er.status,
+        end_reason=None if er is None else er.end_reason,
+        committed=committed,
+        tokens_in=sum(r["tokens_in"] for r in rows),
+        tokens_out=sum(r["tokens_out"] for r in rows),
+        llm_seconds=round(sum(c["ms"] for c in rec.calls) / 1000, 2),
+    )
+
+
 def _run_request(
     index: int,
     position: int,
@@ -859,9 +1208,9 @@ def _na(value: Any) -> Any:
 
 
 def _line(r: dict[str, Any]) -> str:
-    if r.get("path") == "coord":
+    if r.get("path") in ("coord", "event"):
         return (
-            f"#{r['index']} path coord success={r.get('success')} "
+            f"#{r['index']} path {r['path']}{' --coord' if r.get('coord') else ''} success={r.get('success')} "
             f"run={r.get('run_status')}/{r.get('end_reason')} steps={r.get('step_count')} "
             f"{r.get('total_seconds')}s  {' → '.join(r.get('actions', []))}  "
             f"criteria={r.get('success_criteria')}"
@@ -901,6 +1250,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--raw", action="store_true", help="prompt·응답 원문을 기록에 넣는다")
     parser.add_argument(
+        "--coord", action="store_true", help="--path event에서 Coordination도 켠다(A.25)"
+    )
+    parser.add_argument(
         "--path",
         choices=PATHS,
         default="A",
@@ -938,6 +1290,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch = run_once(i + 1, settings, pack_name, args.raw, requests)
         elif args.path == "coord":
             batch = [run_path_coord(i + 1, settings, pack_name, args.raw)]
+        elif args.path == "event":
+            batch = [run_path_event(i + 1, settings, pack_name, args.raw, args.coord)]
         else:
             batch = [run_path_b(i + 1, settings, pack_name, args.raw, args.path == "B-decline")]
         for r in batch:
@@ -954,6 +1308,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     n = len(records)
     if paths and paths[0]["path"] == "coord":
         print(f"success {ok}/{n} (기본안 A), tokens {tokens}")
+    elif paths and paths[0]["path"] == "event":
+        print(
+            f"success {ok}/{n} (Scene 4 최소 경로, coord={paths[0].get('coord')}), tokens {tokens}"
+        )
     elif paths:  # 기본안 B: Alpha·Beta 기대값 일치를 따로 센다 (B-decline에는 Beta가 없다)
         alpha = sum(1 for r in paths if r.get("alpha_matches_expected"))
         with_beta = [r for r in paths if r.get("beta_matches_expected") is not None]
