@@ -3,7 +3,7 @@ import shutil
 import httpx
 import pytest
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.domain.canonical import canonical_hash
 from app.domain.models import AgentRun, Snapshot, Task
 from app.packs.loader import confirmed_fields, load_pack, pack_dir
@@ -14,24 +14,43 @@ from app.store.repos.site import bump_context_version
 from app.store.repos.snapshots import create_snapshot
 from app.store.repos.tasks import insert_task_revision
 
-OPENAI_ENV = (
-    "OPENAI_API_KEY",
-    "OPENAI_MODEL",
-    "OPENAI_TEMPERATURE",
-    "OPENAI_SEED",
-    "OPENAI_REASONING_EFFORT",
-)
+# 테스트는 저장소 루트의 .env를 읽지 않는다. 개발자 .env가 테스트 결과를 바꾸지 못하게 한다 (A.28).
+Settings.model_config["env_file"] = None
+
+# 테스트 기준 설정 (A.28). 환경변수가 기본값보다 우선하므로, 셸에 어떤 값이 있어도 여기 값으로 고정한다.
+# DB_PATH는 테스트마다 다르므로 temp_db가 정한다. 다른 값이 필요한 테스트는 fixture에서 바꾼다.
+TEST_ENV = {
+    # 실제 API를 부르지 않는다 (A.17)
+    "OPENAI_API_KEY": "",
+    "OPENAI_MODEL": "",
+    "OPENAI_TEMPERATURE": "",
+    "OPENAI_SEED": "",
+    "OPENAI_REASONING_EFFORT": "",
+    "DEMO_MODE": "true",
+    "PACK": "shipyard",
+    "DISPATCH_WORKER": "false",  # 테스트는 run_until_idle로 직접 돌린다
+    "LANGSMITH_TRACING": "false",
+    # Agent 자동 시작은 끈다. 켜는 테스트는 coordination_on·event_response_on을 쓴다 (A.24·A.25·A.28)
+    "COORDINATION_ENABLED": "false",
+    "EVENT_RESPONSE_ENABLED": "false",
+}
+
+
+@pytest.fixture(autouse=True)
+def test_env(monkeypatch):
+    """테스트 기준 설정을 한 곳에서 정한다 (A.28)."""
+    for name, value in TEST_ENV.items():
+        monkeypatch.setenv(name, value)
+    get_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)
 def no_real_llm(monkeypatch):
     """테스트는 실제 API를 부르지 않는다 (부록 A.17).
 
-    1) 환경변수가 .env보다 우선하므로 OpenAI 설정을 모두 비운다.
-    2) 실제 네트워크 전송 계층만 막는다. TestClient는 자체 transport를 쓰므로 막히지 않는다.
+    OpenAI 설정은 test_env가 비운다. 여기서는 실제 네트워크 전송 계층만 막는다.
+    TestClient는 자체 transport를 쓰므로 막히지 않는다.
     """
-    for name in OPENAI_ENV:
-        monkeypatch.setenv(name, "")
 
     def blocked(*args, **kwargs):
         raise RuntimeError("network disabled in tests")
@@ -49,7 +68,6 @@ def temp_db(tmp_path, monkeypatch):
     """테스트마다 임시 DB 파일을 쓴다."""
     path = tmp_path / "test.db"
     monkeypatch.setenv("DB_PATH", str(path))
-    monkeypatch.setenv("DISPATCH_WORKER", "false")  # 테스트는 run_until_idle로 직접 돌린다
     get_settings.cache_clear()
     db.close()
     db.init_db()
@@ -153,23 +171,23 @@ def with_a(seeded):
 
 @pytest.fixture
 def coordination_on(monkeypatch):
-    """COORDINATION_ENABLED를 켠다(기본안 A, 부록 A.24). 설정 캐시를 앞뒤로 비운다."""
+    """COORDINATION_ENABLED를 켠다(기본안 A, 부록 A.24). 테스트 기준값은 꺼짐(test_env)."""
     from app.config import get_settings
 
     monkeypatch.setenv("COORDINATION_ENABLED", "true")
     get_settings.cache_clear()
     yield
-    monkeypatch.delenv("COORDINATION_ENABLED")
+    # 환경변수는 monkeypatch가 test_env 값(false)으로 되돌린다. 캐시만 비운다
     get_settings.cache_clear()
 
 
 @pytest.fixture
 def event_response_on(monkeypatch):
-    """EVENT_RESPONSE_ENABLED를 켠다(부록 A.25). 설정 캐시를 앞뒤로 비운다."""
+    """EVENT_RESPONSE_ENABLED를 켠다(부록 A.25). 테스트 기준값은 꺼짐(test_env)."""
     from app.config import get_settings
 
     monkeypatch.setenv("EVENT_RESPONSE_ENABLED", "true")
     get_settings.cache_clear()
     yield
-    monkeypatch.delenv("EVENT_RESPONSE_ENABLED")
+    # 환경변수는 monkeypatch가 test_env 값(false)으로 되돌린다. 캐시만 비운다
     get_settings.cache_clear()
