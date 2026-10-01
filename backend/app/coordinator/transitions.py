@@ -236,6 +236,12 @@ def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, 
     """START_RUN 처리 시점 재확인 (§11.5, A.16·A.24 2). agent_type별로 다르다."""
     site = get_site(tx, pack.site_id)
     assert site is not None
+    if payload["agent_type"] == "INTAKE":
+        # 요청한 task_id가 아직 없을 때만 (A.26 1). 열린 Case·Hold와 무관하다(폼과 같다).
+        return not tx.execute(
+            "SELECT 1 FROM task WHERE site_id = ? AND task_id = ?",
+            (pack.site_id, payload.get("task_id")),
+        ).fetchone()
     if payload["agent_type"] == "EVENT_RESPONSE":
         # 그 Event의 Hold가 아직 걸려 있을 때만 (A.25 1). 열린 Case와 무관하다.
         hold = get_hold(tx, pack.site_id, payload.get("hold_id") or "")

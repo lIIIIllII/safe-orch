@@ -85,11 +85,21 @@ def scenario_view(pack: LoadedPack) -> dict[str, Any]:
         }
         for x in pack.demo_rejections
     ]
+    intakes = [
+        {
+            "label": x.label,
+            "requester": x.requester,
+            "body": {"task_id": x.task_id, "text": x.text},
+            "answer": x.answer,
+        }
+        for x in pack.demo_intakes
+    ]
     return {
         "pack": pack.name,
         "task_requests": requests,
         "event_reports": events,
         "rejections": rejections,
+        "intake_requests": intakes,  # 자연어 작업 요청 (A.26)
     }
 
 

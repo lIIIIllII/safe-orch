@@ -19,6 +19,7 @@ from app.commands.approval import (
     waive,
 )
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
+from app.commands.intake import IntakeRequest, submit_intake
 from app.commands.messages import (
     ProposalDecision,
     ReplyRequest,
@@ -83,6 +84,15 @@ def post_task_request(
 ) -> JSONResponse:
     check_site(site_id, pack)
     return respond(submit_task_request(pack, actor.actor_id, key, form))
+
+
+@router.post("/sites/{site_id}/intakes")
+def post_intake(
+    site_id: str, body: IntakeRequest, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """자연어 작업 요청 → Work Intake Run (§18.2.4, 부록 A.26)."""
+    check_site(site_id, pack)
+    return respond(submit_intake(pack, actor.actor_id, key, body))
 
 
 @router.post("/tasks/{task_id}/withdraw")

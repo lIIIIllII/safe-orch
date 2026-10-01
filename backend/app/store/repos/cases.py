@@ -200,11 +200,16 @@ def register_coordination(
 
 
 def stale_active_runs(tx: sqlite3.Connection, pack: LoadedPack, end_reason: str) -> list[str]:
-    """열린 Run을 모두 STALE로(Event 접수, §10). 마지막 Run이 닫힐 때 대기열 1건을 올린다."""
+    """열린 Run을 STALE로(Event 접수, §10). 마지막 Run이 닫힐 때 대기열 1건을 올린다.
+
+    Work Intake Run은 뺀다: 폼이 Hold 중에도 접수되듯 Intake의 값은 아직 사실이 아니고, 완료할 때
+    검증을 다시 한다 (A.26 5).
+    """
     ids = [
         r[0]
         for r in tx.execute(
-            "SELECT run_id FROM agent_run WHERE site_id = ? AND status IN (?, ?) ORDER BY rowid",
+            "SELECT run_id FROM agent_run WHERE site_id = ? AND status IN (?, ?)"
+            " AND agent_type <> 'INTAKE' ORDER BY rowid",
             (pack.site_id, *ACTIVE),
         )
     ]

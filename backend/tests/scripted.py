@@ -66,11 +66,13 @@ class Router:
         replanning: Sequence[Reply] = (),
         coordination: Sequence[Reply] = (),
         event_response: Sequence[Reply] = (),
+        intake: Sequence[Reply] = (),
     ):
         self.queues = {
             "REPLANNING": list(replanning),
             "COORDINATION": list(coordination),
             "EVENT_RESPONSE": list(event_response),
+            "INTAKE": list(intake),
         }
         self.models: list[RoutedChatModel] = []
 
@@ -95,7 +97,9 @@ class RoutedChatModel(ScriptedChatModel):
         tools, kwargs = self._bound
         self.calls.append({"tools": tools, "kwargs": kwargs, "messages": list(messages)})
         names = {t["function"]["name"] for t in tools}
-        if "REPORT_TO_SUPERVISOR" in names:
+        if "LOOKUP_RESOURCE" in names:
+            kind = "INTAKE"
+        elif "REPORT_TO_SUPERVISOR" in names:
             kind = "COORDINATION"
         elif "ESCALATE" in names:
             kind = "EVENT_RESPONSE"

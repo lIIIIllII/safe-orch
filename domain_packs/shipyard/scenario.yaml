@@ -89,3 +89,17 @@ demo_events:
 # 구조화 거절 시연값 (Scene 3 기본안 B, 부록 A.19·A.20 2차). 화면의 거절 "시연값 채우기"가 쓴다.
 demo_rejections:
   - { label: C 작업 고정, reason_code: TASK_IMMOVABLE, target_task_ids: [C], axes: [TIME, RESOURCE], comment: "작업발판 연계 공정 확정" }
+
+# 자연어 작업 요청 시연값 (Work Intake, 부록 A.26). 명확한 요청은 new_task A와 같은 값이다.
+# answer는 모호한 요청에서 확인 질문을 받으면 요청자가 답하는 문장이다(live run·테스트의 사람 역할).
+demo_intakes:
+  - label: 자연어 요청(명확)
+    requester: planner_a
+    task_id: A
+    text: "B구역 인양 30분, A-CR-01 크레인으로 해 주세요. 첫날 9시에서 10시 사이에 시작하고 10시 반까지 끝나야 합니다."
+    answer: ""
+  - label: 자연어 요청(모호)
+    requester: planner_a
+    task_id: A
+    text: "인양 작업 30분 잡아 주세요. 첫날 9시에서 10시 사이 시작, 10시 반까지는 끝나야 해요."
+    answer: "B구역이고, 우리 A-CR-01 크레인을 씁니다."

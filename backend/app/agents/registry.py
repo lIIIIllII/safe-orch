@@ -7,15 +7,19 @@ agent_type마다 AgentSpec·prompt·Observation 계산(observer)·Action 실행�
 
 from app.agents.executors.coordination import CoordinationExecutor
 from app.agents.executors.event_response import EventResponseExecutor
+from app.agents.executors.intake import IntakeExecutor
 from app.agents.executors.replanning import ReplanningExecutor
 from app.agents.observers import coordination as coordination_observer
 from app.agents.observers import event_response as event_response_observer
+from app.agents.observers import intake as intake_observer
 from app.agents.observers import replanning as replanning_observer
 from app.agents.prompts import coordination as coordination_prompt
 from app.agents.prompts import event_response as event_response_prompt
+from app.agents.prompts import intake as intake_prompt
 from app.agents.prompts import replanning as replanning_prompt
 from app.agents.specs import coordination as coordination_spec
 from app.agents.specs import event_response as event_response_spec
+from app.agents.specs import intake as intake_spec
 from app.agents.specs import replanning as replanning_spec
 from app.agents.types import AgentBinding
 
@@ -40,5 +44,12 @@ BINDINGS: dict[str, AgentBinding] = {
         observer=event_response_observer,
         executor=EventResponseExecutor,
         exec_contract_version="event-response-a25",  # 기록만 (A.25)
+    ),
+    intake_spec.AGENT_TYPE: AgentBinding(
+        spec=intake_spec.SPEC,
+        prompt=intake_prompt,
+        observer=intake_observer,
+        executor=IntakeExecutor,
+        exec_contract_version="intake-a26",  # 기록만 (A.26)
     ),
 }

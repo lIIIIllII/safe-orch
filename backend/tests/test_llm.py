@@ -556,7 +556,7 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
         "CONFIRMATION",
         "QUESTION",
     ]
-    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0}
+    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
     assert (r["run_status"], r["end_reason"]) == ("SUCCEEDED", "COMMITTED:1")
 
 
@@ -600,5 +600,5 @@ def test_live_run_path_event_with_scripted_model(monkeypatch):
     c = r["success_criteria"]
     assert r["success"], c
     assert c["gamma_changed_delay"] == [1, 15] and c["noticed"] == ["planner_b"]
-    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0}
+    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
     assert (r["run_status"], r["released"]) == ("SUCCEEDED", "APPLIED")

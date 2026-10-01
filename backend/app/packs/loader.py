@@ -104,6 +104,16 @@ class DemoRejection(Frozen):
     comment: str = ""
 
 
+class DemoIntake(Frozen):
+    """scenario.yaml의 자연어 작업 요청 시연값 (Work Intake, 부록 A.26)."""
+
+    label: str = Field(min_length=1)
+    requester: str
+    task_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    answer: str = ""  # 확인 질문을 받으면 요청자가 답하는 문장(사람 역할)
+
+
 class LoadedPack(Frozen):
     name: str
     pack_hash: str
@@ -126,6 +136,7 @@ class LoadedPack(Frozen):
     demo_requests: tuple[DemoRequest, ...] = ()
     demo_events: tuple[DemoEvent, ...] = ()
     demo_rejections: tuple[DemoRejection, ...] = ()
+    demo_intakes: tuple[DemoIntake, ...] = ()
 
     def hazard_tags(self, work_type: str) -> tuple[str, ...]:
         wt = self.work_types.get(work_type)
@@ -673,6 +684,23 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             if tid not in known_tasks:
                 reasons.append(f"{where}: undefined task {tid!r}")
 
+    demo_intakes: list[DemoIntake] = []
+    by_actor = {a.actor_id: a for a in actors}
+    plan_ids = {t.task_id for t in tasks}
+    for i, x in enumerate(
+        _as_list(scen_doc.get("demo_intakes"), "scenario.yaml.demo_intakes", reasons)
+    ):
+        where = f"scenario.yaml.demo_intakes[{i}]"
+        intake = _model(DemoIntake, x, where, reasons)
+        if not intake:
+            continue
+        demo_intakes.append(intake)
+        requester = by_actor.get(intake.requester)
+        if requester is None or "UNIT_PLANNER" not in requester.roles:
+            reasons.append(f"{where}: requester {intake.requester!r} is not UNIT_PLANNER")
+        if intake.task_id in plan_ids:
+            reasons.append(f"{where}: task_id {intake.task_id!r} is a plan_r0 task")
+
     if reasons:
         raise PackError(reasons)
     try:
@@ -698,6 +726,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             demo_requests=tuple(demo_requests),
             demo_events=tuple(demo_events),
             demo_rejections=tuple(demo_rejections),
+            demo_intakes=tuple(demo_intakes),
         )
     except ValidationError as e:
         raise PackError([f"site.yaml: {err['loc']}: {err['msg']}" for err in e.errors()]) from e

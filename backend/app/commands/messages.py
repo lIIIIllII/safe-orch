@@ -31,7 +31,7 @@ from app.store.repos.runs import run_for_solver_result
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
-Decision = Literal["ACCEPT", "DECLINE"]
+Decision = Literal["ACCEPT", "DECLINE", "ANSWER"]  # ANSWER: 자유 텍스트 답 (A.26 3)
 
 
 class ReplyRequest(Body):
@@ -67,6 +67,14 @@ def _answer(
 ) -> Result:
     """③–⑥ 검사와 효과. ①·②는 호출한 쪽이 한다."""
     r = Result()
+    # 자유 텍스트 질문(제안 없는 QUESTION)에는 ANSWER만, 다른 메시지에는 ANSWER 불가 (A.26 3)
+    free_text = message["type"] == "QUESTION" and proposal is None
+    if free_text != (decision == "ANSWER"):
+        r.reject("INVALID_DECISION")
+        return r
+    if decision == "ANSWER" and not comment.strip():
+        r.reject("COMMENT_REQUIRED")
+        return r
     site_id = ctx.site_id
     refs: dict[str, Any] = {
         "message_id": message["message_id"],

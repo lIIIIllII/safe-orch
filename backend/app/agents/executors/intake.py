@@ -1,0 +1,251 @@
+"""Work Intake Action 실행기 (설계서 §18.2.4, 부록 A.26).
+
+ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 모든 Action은 tx 하나다:
+begin_step(활성·차감·STALE_OBSERVATION·재관찰·허용 판정) → 효과 → step 완료.
+값 검증과 작업 생성은 폼과 같은 함수(validate_task_request·create_requested_task)를 쓴다.
+확인 값은 확인 메시지를 만든 이 step의 결과(values)에 묶인다. 완료는 그 값과 같을 때만 된다(D01).
+승인·확정·Hold 해제·Proposal 확인 함수는 없다(I-01).
+"""
+
+import sqlite3
+from typing import Any
+
+from app.agents.observe import Observation
+from app.agents.specs import intake as spec
+from app.agents.tool_gateway import ACCEPTED, REJECTED, ToolGateway, _Parsed
+from app.agents.types import GatewayResult, StepMeta
+from app.commands.task_request import (
+    TaskRequestForm,
+    create_requested_task,
+    validate_task_request,
+)
+from app.domain.calendar import local_clock
+from app.domain.ids import new_id
+from app.packs.loader import LoadedPack
+from app.store import db
+from app.store.repos.messages import insert_message
+from app.store.repos.runs import charge
+from app.store.repos.site import get_site, list_actors
+
+FIELD_NAMES = {
+    "zone_id": "구역",
+    "duration": "작업 시간",
+    "window": "시작 범위·종료 한도",
+    "resource": "자원",
+}
+
+
+class IntakeExecutor:
+    def __init__(self, gateway: ToolGateway):
+        self.pack = gateway.pack
+        self.observer = gateway.binding.observer
+        # 공통 도우미 (ToolGateway)
+        self._complete = gateway._complete
+        self.begin_step = gateway.begin_step
+        self.wait_or_continue = gateway.wait_or_continue
+
+    def run(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
+        action = parsed.action
+        assert action is not None
+        with db.write() as tx:
+            rejected, obs = self.begin_step(
+                tx, run_id, step_no, meta, parsed, lambda o: self._permitted(o, action)
+            )
+            if rejected is not None:
+                return rejected
+            assert obs is not None
+            if isinstance(action, spec.LookupResource):
+                result = self.observer.lookup_resources(
+                    tx, self.pack, obs.run.acting_unit_id, action.resource_type
+                )
+                return self._done(
+                    tx, run_id, step_no, meta, parsed, GatewayResult("CONTINUE"), result
+                )
+            if isinstance(action, spec.AskClarification):
+                return self._ask(tx, run_id, step_no, meta, parsed, obs, action)
+            if isinstance(action, spec.RequestConfirmation):
+                return self._request_values_check(tx, run_id, step_no, meta, parsed, obs, action)
+            if isinstance(action, spec.CompleteTaskspec):
+                return self._complete_spec(tx, run_id, step_no, meta, parsed, obs, action)
+            assert isinstance(action, spec.Escalate)
+            outcome = GatewayResult("DONE", None, "ESCALATED", "ESCALATE")
+            return self._done(tx, run_id, step_no, meta, parsed, outcome, {"reason": action.reason})
+
+    def _permitted(self, obs: Observation, action: Any) -> bool:
+        available = obs.available
+        names = {
+            spec.LookupResource: "LOOKUP_RESOURCE",
+            spec.AskClarification: "ASK_CLARIFICATION",
+            spec.RequestConfirmation: "REQUEST_CONFIRMATION",
+            spec.CompleteTaskspec: "COMPLETE_TASKSPEC",
+            spec.Escalate: "ESCALATE",
+        }
+        return names.get(type(action)) in available
+
+    def _done(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        outcome: GatewayResult,
+        tool_result: dict[str, Any] | None,
+        state_changes: dict[str, Any] | None = None,
+        verdict: str = ACCEPTED,
+    ) -> GatewayResult:
+        self._complete(
+            tx,
+            run_id,
+            step_no,
+            meta,
+            parsed,
+            verdict=verdict,
+            reason=outcome.reason if outcome.kind in ("CONTINUE", "REJECTED") else None,
+            result_kind=outcome.kind,
+            tool_result=tool_result,
+            state_changes=state_changes,
+        )
+        return outcome
+
+    def _requester(self, tx: sqlite3.Connection, obs: Observation) -> Any:
+        actor_id = obs.data["request"]["requester_actor_id"]
+        return next(a for a in list_actors(tx, self.pack.site_id) if a.actor_id == actor_id)
+
+    def _form(self, obs: Observation, values: spec.TaskValues) -> TaskRequestForm:
+        return TaskRequestForm(task_id=obs.data["request"]["task_id"], **values.model_dump())
+
+    def _ask(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        obs: Observation,
+        action: spec.AskClarification,
+    ) -> GatewayResult:
+        """확인 질문(제안 없는 QUESTION) → 요청자. 답은 자유 텍스트(ANSWER)로 온다 (A.26 3)."""
+        site = get_site(tx, self.pack.site_id)
+        assert site is not None
+        request = obs.data["request"]
+        fields = ", ".join(FIELD_NAMES[f] for f in dict.fromkeys(action.field_ids))
+        body = f"작업 요청 {request['task_id']} 확인 질문: {fields}을(를) 알려 주세요. 답은 문장으로 적습니다."
+        message_id = new_id("msg")
+        insert_message(
+            tx,
+            self.pack.site_id,
+            message_id,
+            run_id=run_id,
+            step_no=step_no,
+            to_actor_id=request["requester_actor_id"],
+            type_="QUESTION",
+            proposal_id=None,
+            body=body,
+            agent_text=action.question,
+            context_version=site.context_version,
+        )
+        charge(tx, run_id, human_rounds=1)
+        outcome = self.wait_or_continue(tx, run_id, step_no, "MESSAGE", message_id)
+        result = {"message_id": message_id, "field_ids": list(action.field_ids), "body": body}
+        return self._done(
+            tx, run_id, step_no, meta, parsed, outcome, result, {"message_id": message_id}
+        )
+
+    def _request_values_check(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        obs: Observation,
+        action: spec.RequestConfirmation,
+    ) -> GatewayResult:
+        """값 확인 요청(CONFIRMATION) → 요청자. 폼 검증을 통과해야 나간다. 확인 값 = 이 step의 결과 values."""
+        site = get_site(tx, self.pack.site_id)
+        assert site is not None
+        form = self._form(obs, action.values)
+        codes = validate_task_request(tx, self.pack, site, self._requester(tx, obs), form)
+        values = action.values.model_dump()
+        if codes:
+            outcome = GatewayResult("REJECTED", "TASKSPEC_INVALID")
+            detail = {"reason_codes": codes, "values": values}
+            return self._done(tx, run_id, step_no, meta, parsed, outcome, detail, verdict=REJECTED)
+        request = obs.data["request"]
+        body = values_check_text(self.pack, request["task_id"], values)
+        message_id = new_id("msg")
+        insert_message(
+            tx,
+            self.pack.site_id,
+            message_id,
+            run_id=run_id,
+            step_no=step_no,
+            to_actor_id=request["requester_actor_id"],
+            type_="CONFIRMATION",
+            proposal_id=None,
+            body=body,
+            agent_text=action.message,
+            context_version=site.context_version,
+        )
+        charge(tx, run_id, human_rounds=1)
+        outcome = self.wait_or_continue(tx, run_id, step_no, "MESSAGE", message_id)
+        result = {"message_id": message_id, "values": values, "body": body}
+        return self._done(
+            tx, run_id, step_no, meta, parsed, outcome, result, {"message_id": message_id}
+        )
+
+    def _complete_spec(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        obs: Observation,
+        action: spec.CompleteTaskspec,
+    ) -> GatewayResult:
+        """확인 값과 같으면 폼과 같은 함수로 작업을 만든다(source_ref message:<mid>) (A.26 2)."""
+        last = obs.data["confirmations"][-1]
+        submitted = action.values.model_dump()
+        if submitted != last["values"]:
+            outcome = GatewayResult("REJECTED", "CONFIRMED_VALUE_MISMATCH")
+            detail = {"confirmed": last["values"], "submitted": submitted}
+            return self._done(tx, run_id, step_no, meta, parsed, outcome, detail, verdict=REJECTED)
+        site = get_site(tx, self.pack.site_id)
+        assert site is not None
+        actor = self._requester(tx, obs)
+        form = self._form(obs, action.values)
+        codes = validate_task_request(tx, self.pack, site, actor, form)
+        if codes:
+            outcome = GatewayResult("REJECTED", "TASKSPEC_INVALID")
+            detail = {"reason_codes": codes, "values": submitted}
+            return self._done(tx, run_id, step_no, meta, parsed, outcome, detail, verdict=REJECTED)
+        refs = create_requested_task(
+            tx, self.pack, site, actor, form, f"message:{last['message_id']}", "INTAKE"
+        )
+        outcome = GatewayResult("DONE", None, "SUCCEEDED", f"TASKSPEC_COMPLETE:{form.task_id}")
+        return self._done(
+            tx, run_id, step_no, meta, parsed, outcome, refs, {"task_id": form.task_id}
+        )
+
+
+def values_check_text(pack: LoadedPack, task_id: str, v: dict[str, Any]) -> str:
+    """값 확인 요청의 서버 문구: 값을 날짜·시각과 분으로, 확인의 효과(동의)를 함께 (A.26 2)."""
+
+    def at(m: int) -> str:
+        return f"{local_clock(pack.horizon_start_utc, pack.timezone, m)}({m}분)"
+
+    wt = pack.work_types.get(v["work_type"])
+    name = wt.display_name if wt else v["work_type"]
+    resource = (
+        f"{v['required_resource_type']} {v['requested_resource_id']}"
+        if v.get("requested_resource_id")
+        else "없음"
+    )
+    return (
+        f"작업 요청 {task_id} 값 확인: {name}, {v['zone_id']} 구역, {v['duration']}분, "
+        f"시작 {at(v['earliest_start'])}–{at(v['latest_start'])}, 종료 한도 {at(v['latest_end'])}, "
+        f"자원 {resource}. 확인하면 이 값이 작업 사실(확인됨)이 되고, 시작 범위와 요청 자원에 "
+        "동의한 것으로 기록됩니다."
+    )

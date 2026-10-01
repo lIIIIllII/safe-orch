@@ -320,7 +320,7 @@ def test_t51_error_run_can_continue_but_terminal_cannot(with_a):
 def test_registry_binds_replanning_spec_prompt_observer_executor():
     from app.agents.registry import BINDINGS
 
-    assert sorted(BINDINGS) == ["COORDINATION", "EVENT_RESPONSE", "REPLANNING"]  # A.24·A.25
+    assert sorted(BINDINGS) == ["COORDINATION", "EVENT_RESPONSE", "INTAKE", "REPLANNING"]
     assert all(t == b.spec.agent_type for t, b in BINDINGS.items())
     binding = BINDINGS["REPLANNING"]
     assert binding.spec.agent_type == spec.AGENT_TYPE == "REPLANNING"
@@ -336,13 +336,14 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
     assert runtime.exec_contract_version("REPLANNING") == "replanning-d5"
     assert runtime.exec_contract_version("COORDINATION") == "coordination-a24"
     assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-a25"
-    assert runtime.exec_contract_version("INTAKE") == "AGENT_TYPE_NOT_REGISTERED"
+    assert runtime.exec_contract_version("INTAKE") == "intake-a26"
+    assert runtime.exec_contract_version("ASSISTANT") == "AGENT_TYPE_NOT_REGISTERED"
 
 
 def test_unregistered_agent_type_ends_run_as_error_without_graph(with_a):
     """등록되지 않은 agent_type은 그래프를 부르지 않고 ERROR로 끝낸다(열린 Case로 남지 않음)."""
-    add_run(with_a, "run_intake", agent_type="INTAKE", input_ref=CONFLICT)
+    add_run(with_a, "run_assistant", agent_type="ASSISTANT", input_ref=CONFLICT)
     model = ScriptedChatModel([solve("L0")])
-    run = runtime.invoke(with_a, {"run_id": "run_intake"}, model)
-    assert (run.status, run.end_reason) == ("ERROR", "AGENT_TYPE_NOT_REGISTERED: INTAKE")
+    run = runtime.invoke(with_a, {"run_id": "run_assistant"}, model)
+    assert (run.status, run.end_reason) == ("ERROR", "AGENT_TYPE_NOT_REGISTERED: ASSISTANT")
     assert model.calls == [] and run.steps_used == 0 and _count("agent_step") == 0

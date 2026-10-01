@@ -459,3 +459,26 @@ def test_site_description_100_chars_loads(pack_copy):
 def test_horizon_start_must_be_iso_with_offset(pack_copy, value):
     _edit(pack_copy, "site.yaml", lambda d: d.update(horizon_start_utc=value))
     assert "horizon_start_utc must be an ISO time with offset" in _reasons(pack_copy)
+
+
+# ── 자연어 요청 시연값 (부록 A.26) ─────────────────────────────
+
+
+def test_demo_intakes_loaded(pack):
+    clear, vague = pack.demo_intakes
+    assert (clear.requester, clear.task_id, clear.answer) == ("planner_a", "A", "")
+    assert vague.answer and vague.task_id == "A"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (lambda x: x.update(requester="reporter"), "is not UNIT_PLANNER"),
+        (lambda x: x.update(task_id="B"), "is a plan_r0 task"),
+        (lambda x: x.update(text=""), "demo_intakes[0].text"),
+    ],
+    ids=["requester", "plan_task", "empty_text"],
+)
+def test_demo_intakes_rejected(pack_copy, mutate, expected):
+    _edit(pack_copy, "scenario.yaml", lambda d: mutate(d["demo_intakes"][0]))
+    assert expected in _reasons(pack_copy)
