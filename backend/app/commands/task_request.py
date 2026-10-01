@@ -5,13 +5,14 @@ critical field를 CONFIRMED(source_ref form:<form_id>)로 기록하고 Consent(�
 """
 
 import sqlite3
+from typing import Any
 
 from pydantic import Field
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
 from app.domain.calendar import has_work_slot
 from app.domain.ids import new_id
-from app.domain.models import Consent, Movable, Task
+from app.domain.models import Actor, Consent, Movable, Site, Task
 from app.packs.loader import LoadedPack, confirmed_fields
 from app.store.repos.cases import end_case_run, queued_task_ids, register_recheck, wake_run
 from app.store.repos.consents import insert_consent
@@ -45,13 +46,12 @@ class TaskRequestForm(Body):
     hazard_tags: tuple[str, ...] = Field(default=(), exclude=True)  # 받으면 버린다 (I-14, A.4)
 
 
-def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) -> Result:
+def validate_task_request(
+    tx: sqlite3.Connection, pack: LoadedPack, site: Site, actor: Actor, form: TaskRequestForm
+) -> list[str]:
+    """폼 검증 (§9.6, A.14·A.20·A.22). 폼과 Work Intake가 같이 쓴다(A.26). 사유를 검사 순서대로 모은다."""
     r = Result()
-    if not ctx.has_role("UNIT_PLANNER") or ctx.actor is None:
-        r.reject("NOT_AUTHORIZED")
-        return r
-    pack, site_id, actor = ctx.pack, ctx.site_id, ctx.actor
-
+    site_id = site.site_id
     if tx.execute(
         "SELECT 1 FROM task WHERE site_id = ? AND task_id = ?", (site_id, form.task_id)
     ).fetchone():
@@ -68,7 +68,7 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
         es < 0
         or es > form.latest_start
         or end_min > form.latest_end
-        or end_min > ctx.site.horizon_minutes
+        or end_min > site.horizon_minutes
     ):
         r.reject("INVALID_WINDOW")
     elif not has_work_slot(
@@ -102,11 +102,25 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
     }
     if any(p.task_id not in current for p in form.predecessors):
         r.reject("PREDECESSOR_NOT_FOUND")
-    if r.reason_codes or wt is None:
-        return r
+    return r.reason_codes
 
-    form_id = new_id("form")
-    source_ref = f"form:{form_id}"
+
+def create_requested_task(
+    tx: sqlite3.Connection,
+    pack: LoadedPack,
+    site: Site,
+    actor: Actor,
+    form: TaskRequestForm,
+    source_ref: str,
+    cause_kind: str = "FORM",
+) -> dict[str, Any]:
+    """검증을 통과한 요청으로 작업을 만든다 (§9.6, A.14·A.21). 폼과 Work Intake가 같이 쓴다(A.26).
+
+    critical field CONFIRMED(source_ref), Consent(시작 범위, 요청 자원), movable {time, not resource},
+    대기열 판단, Context +1, RECHECK. source_ref만 다르면 같은 작업이 된다.
+    """
+    site_id = site.site_id
+    wt = pack.work_types[form.work_type]
     data = form.model_dump()
     task = Task(
         **data,
@@ -125,7 +139,7 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
     if queued:
         task = task.model_copy(update={"lifecycle": "QUEUED"})
     insert_task_revision(tx, site_id, task)
-    context_version = ctx.site.context_version if queued else bump_context_version(tx, site_id)
+    context_version = site.context_version if queued else bump_context_version(tx, site_id)
 
     consents = [
         Consent(
@@ -153,15 +167,33 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
     for c in consents:
         insert_consent(tx, site_id, c, context_version)
     if not queued:
-        cause = {"kind": "FORM", "task_id": task.task_id, "actor_id": actor.actor_id}
+        cause = {"kind": cause_kind, "task_id": task.task_id, "actor_id": actor.actor_id}
         register_recheck(tx, site_id, cause)
-
-    r.refs = {
+    return {
         "task_id": task.task_id,
         "revision": 1,
         "queued": queued,
-        "form_id": form_id,
         "consent_ids": [c.consent_id for c in consents],
+    }
+
+
+def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) -> Result:
+    r = Result()
+    if not ctx.has_role("UNIT_PLANNER") or ctx.actor is None:
+        r.reject("NOT_AUTHORIZED")
+        return r
+    for code in validate_task_request(tx, ctx.pack, ctx.site, ctx.actor, form):
+        r.reject(code)
+    if r.reason_codes:
+        return r
+    form_id = new_id("form")
+    refs = create_requested_task(tx, ctx.pack, ctx.site, ctx.actor, form, f"form:{form_id}")
+    r.refs = {
+        "task_id": refs["task_id"],
+        "revision": refs["revision"],
+        "queued": refs["queued"],
+        "form_id": form_id,
+        "consent_ids": refs["consent_ids"],
     }
     return r
 
@@ -223,6 +255,9 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
         if run.agent_type == "COORDINATION":
             # Context가 올라 협의 중인 후보가 무효다 (A.24 9)
             end_case_run(tx, ctx.pack, run.run_id, "STALE", f"WITHDRAW:{task.task_id}")
+        elif run.agent_type != "REPLANNING":
+            # 다른 작업의 철회는 Event Response·Intake Run의 판단 근거가 아니다(깨우지 않는다, A.26 6)
+            continue
         elif task.task_id in (run.input_ref.get("conflict") or {}).get("task_ids", []):
             end_case_run(tx, ctx.pack, run.run_id, "STALE", f"WITHDRAW:{task.task_id}")
         else:

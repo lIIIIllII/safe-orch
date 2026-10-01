@@ -64,7 +64,7 @@ def choose_acting(
 def _acting_actor(
     tx: sqlite3.Connection, site_id: str, unit: str, cause: dict[str, Any]
 ) -> str | None:
-    if cause.get("kind") in ("FORM", "QUEUE"):
+    if cause.get("kind") in ("FORM", "QUEUE", "INTAKE"):
         return cause.get("actor_id")  # 요청자 (대기열에서 올라온 요청도 요청자가 재계획한다, A.21)
     planners = [
         a.actor_id

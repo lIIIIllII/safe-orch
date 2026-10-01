@@ -22,7 +22,12 @@ from app.commands.approval import (
 )
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.messages import ReplyRequest, reply_message
-from app.commands.task_request import TaskRequestForm, submit_task_request
+from app.commands.task_request import (
+    TaskRequestForm,
+    TaskWithdraw,
+    submit_task_request,
+    withdraw_task_request,
+)
 from app.coordinator.dispatcher import run_until_idle
 from app.store import db
 from app.store.repos.consultations import consultation_view
@@ -455,3 +460,24 @@ def test_same_lookup_keeps_last_result_only(seeded, event_response_on):
         {"work_type": "PAINTING", "zone_id": None},
     ]
     assert "같은 조건의 LOOKUP_TASKS는 같은 결과를 돌려준다" in prompt.SYSTEM
+
+
+def test_withdraw_of_other_request_does_not_wake_event_response(seeded, event_response_on):
+    """수정안 확인을 기다리는 ER Run은 다른 요청의 철회로 깨어나지 않는다 (A.25 이후 결함, A.26 6)."""
+
+    pack = seeded
+    _, er = _to_proposal(pack)
+    n1 = next(d for d in pack.demo_requests if d.task_id == "N1")
+    form = TaskRequestForm(**n1.model_dump(exclude={"label", "requester"}))
+    assert submit_task_request(pack, n1.requester, _key(), form).status == "APPLIED"
+    out = withdraw_task_request(pack, n1.requester, _key(), TaskWithdraw(task_id="N1"))
+    assert out.status == "APPLIED"
+    after = _runs("EVENT_RESPONSE")[0]
+    assert (after.status, after.wait_kind, after.wake_seq) == (
+        "WAITING_HUMAN",
+        "MESSAGE",
+        er.wake_seq,
+    )
+    with db.read() as conn:
+        jobs = list_jobs(conn, pack.site_id)
+    assert not [j for j in jobs if j["kind"] == "RESUME_RUN" and j["run_id"] == er.run_id]
