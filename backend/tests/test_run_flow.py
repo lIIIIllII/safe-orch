@@ -3,7 +3,7 @@
 import time
 import uuid
 
-from scripted import ScriptedChatModel, solve
+from scripted import ScriptedChatModel, escalate, solve
 
 from app.commands.approval import ApproveRequest, WaiveRequest, approve_and_commit, waive
 from app.commands.events import EventReport, receive_event
@@ -155,9 +155,11 @@ def test_incomplete_only_does_not_error(seeded, monkeypatch):
 
     monkeypatch.setattr(transitions, "validate", inject_incomplete)
     _submit_a(seeded)
-    run_until_idle(seeded, model_factory=_factory())
+    # C11만 걸린 비PASS는 ERROR가 아니라 Run을 깨운다(§11.5, A.21). 재개 뒤 남은 행동은 이관뿐이다.
+    run_until_idle(seeded, model_factory=_factory([*GATE_SCRIPT, escalate()]))
     [run] = _runs()
-    assert run.status == "WAITING_HUMAN"  # wake는 D5
+    assert (run.status, run.end_reason) == ("ESCALATED", "ESCALATE_NO_SOLUTION")
+    assert (run.wake_seq, run.handled_wake_seq, run.wait_generation) == (1, 1, 1)
 
 
 # ── 열린 Case·START_RUN 재확인 ─────────────────────────────────

@@ -16,6 +16,7 @@ from app.domain.models import AgentRun, Candidate, Conflict, SnapshotContent
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.store import db
+from app.store.repos.cases import claim_resume, end_case_run, wake_run
 from app.store.repos.dispatch import job_exists, mark_done, register_job, set_job_run
 from app.store.repos.events import list_active_holds
 from app.store.repos.plans import get_current_plan
@@ -28,15 +29,10 @@ from app.store.repos.records import (
     insert_validation,
     list_validations,
 )
-from app.store.repos.runs import (
-    ACTIVE,
-    end_run,
-    has_open_case,
-    insert_run,
-    run_for_solver_result,
-)
+from app.store.repos.runs import has_open_case, insert_run, run_for_solver_result
 from app.store.repos.site import get_site, list_actors
 from app.store.repos.snapshots import create_snapshot
+from app.store.repos.tasks import list_current_tasks
 from app.validator.validator import validate
 
 Job = dict[str, Any]
@@ -66,8 +62,8 @@ def choose_acting(
 def _acting_actor(
     tx: sqlite3.Connection, site_id: str, unit: str, cause: dict[str, Any]
 ) -> str | None:
-    if cause.get("kind") == "FORM":
-        return cause.get("actor_id")
+    if cause.get("kind") in ("FORM", "QUEUE"):
+        return cause.get("actor_id")  # 요청자 (대기열에서 올라온 요청도 요청자가 재계획한다, A.21)
     planners = [
         a.actor_id
         for a in list_actors(tx, site_id)
@@ -108,8 +104,9 @@ def _register_validate(tx: sqlite3.Connection, site_id: str, candidate_id: str) 
 
 
 def recheck(pack: LoadedPack, job: Job) -> None:
-    """ACTIVE Hold 없음 ∧ 열린 Case 없음 ∧ Plan이 현재 Context보다 뒤처짐일 때만: 충돌이면
-    START_RUN 등록, 없으면 RECONFIRM 후보 + VALIDATE. 한 write 트랜잭션 (부록 A.15·A.16)."""
+    """ACTIVE Hold 없음 ∧ 열린 Case 없음 ∧ (Plan이 현재 Context보다 뒤처짐 ∨ Plan 밖 READY 작업
+    있음)일 때만: 충돌이면 START_RUN 등록, 없으면 RECONFIRM 후보 + VALIDATE. 한 write 트랜잭션
+    (부록 A.15·A.16). START_RUN 키에 plan을 넣는다(확정은 context를 바꾸지 않는다, A.21 4)."""
     site_id = pack.site_id
     cause = job["payload"].get("cause") or {}
     with db.write() as tx:
@@ -117,11 +114,16 @@ def recheck(pack: LoadedPack, job: Job) -> None:
         plan = get_current_plan(tx, site_id)
         assert site is not None and plan is not None
         ctx, rev = site.context_version, site.plan_revision
-        start_key = f"START_RUN:REPLANNING:ctx{ctx}"
+        start_key = f"START_RUN:REPLANNING:ctx{ctx}:plan{rev}"
+        in_plan = {a.task_id for a in plan.assignments}
+        pending_requests = any(
+            t.lifecycle == "READY" and t.task_id not in in_plan
+            for t in list_current_tasks(tx, site_id, pack)
+        )
         if (
             list_active_holds(tx, site_id)
             or has_open_case(tx, site_id)
-            or plan.committed_context_version == ctx
+            or (plan.committed_context_version == ctx and not pending_requests)
         ):
             pass  # 재계획하지 않는다
         elif (existing := find_reconfirm_candidate(tx, site_id, ctx, rev)) is not None:
@@ -179,17 +181,20 @@ def validate_candidate(pack: LoadedPack, job: Job) -> None:
         if not stored and validation is not None:
             insert_validation(tx, site_id, validation)
             stored = [validation]
-        # Solver 후보가 C01–C10 FAIL이면 모델·검증 불일치로 Run ERROR (§8, A.13·A.16)
+        # Solver 후보가 C01–C10 FAIL이면 모델·검증 불일치로 Run ERROR (§8, A.13·A.16).
+        # C11만 걸린 INCOMPLETE(비PASS)는 Run을 깨운다 (§11.5, A.21 3).
         candidate = get_candidate(tx, site_id, candidate_id)
         if (
             candidate is not None
             and candidate.kind == "REPLAN"
             and candidate.solver_result_id is not None
-            and any(c.status == "FAIL" for v in stored for c in v.checks)
         ):
             run_id = run_for_solver_result(tx, candidate.solver_result_id)
-            if run_id is not None:
-                end_run(tx, run_id, "ERROR", "MODEL_VALIDATION_MISMATCH", ACTIVE)
+            failed = any(c.status == "FAIL" for v in stored for c in v.checks)
+            if run_id is not None and failed:
+                end_case_run(tx, pack, run_id, "ERROR", "MODEL_VALIDATION_MISMATCH")
+            elif run_id is not None and not any(v.status == "PASS" for v in stored):
+                wake_run(tx, site_id, run_id)
         if any(v.status == "PASS" for v in stored):
             register_job(
                 tx,
@@ -247,10 +252,32 @@ def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -
         model = model_factory()
     except Exception as e:  # noqa: BLE001 — 모델을 만들 수 없으면(키 없음 등) Run ERROR로 드러낸다
         with db.write() as tx:
-            end_run(tx, run_id, "ERROR", f"MODEL_UNAVAILABLE: {type(e).__name__}")
+            end_case_run(tx, pack, run_id, "ERROR", f"MODEL_UNAVAILABLE: {type(e).__name__}")
         return run_id
     runtime.invoke(pack, {"run_id": run_id}, model)
     return run_id
+
+
+def resume_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -> bool:
+    """RESUME_RUN: `WAITING_HUMAN ∧ wait_generation 일치` 조건부 claim과 job DONE을 tx 하나에서 한다.
+
+    0행이면 무효(이미 재개됨·세대 불일치·종료됨, §11.3(3)·I-17). 1행이면 tx 밖에서 같은 run_id로
+    그래프를 observe부터 새로 호출한다. 변화는 wake_seq로 보존된다.
+    """
+    run_id, generation = job["run_id"], job["wait_generation"]
+    with db.write() as tx:
+        claimed = claim_resume(tx, run_id, generation)
+        mark_done(tx, job["job_id"])
+    if not claimed:
+        return False
+    try:
+        model = model_factory()
+    except Exception as e:  # noqa: BLE001
+        with db.write() as tx:
+            end_case_run(tx, pack, run_id, "ERROR", f"MODEL_UNAVAILABLE: {type(e).__name__}")
+        return True
+    runtime.invoke(pack, {"run_id": run_id}, model)
+    return True
 
 
 HANDLERS = {

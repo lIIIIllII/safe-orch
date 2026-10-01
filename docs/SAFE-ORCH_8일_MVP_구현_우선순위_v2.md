@@ -1095,3 +1095,101 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - `GET /api/runs/{rid}/steps`는 SOLVE step의 `tool_result.stage2`에 `work_delay`를 붙여 내려준다. 조회 시 계산하고 AgentStep(불변 기록)에는 저장하지 않는다. 계산은 검토 패널과 같다: `solver_job → solver_result.stage2.solution` + `search_spec → snapshot`(기준 배정·근무 구간), `app/domain/calendar.py`의 `work_delay` 합(`api/state.py`의 `step_work_delays`). 2단계가 없거나 해가 없으면 붙이지 않거나 null이다.
 - Activity 카드는 검토 패널과 같은 형식("지연 1140분 (근무시간 기준 180분)", 두 값이 같으면 하나)이다(`delayText`). 위 "시각·지연·폼"의 "Activity step 카드는 달력 분 delay만"을 이것으로 바꾼다.
 - 테스트: N4 step 응답의 stage2 = `{status: OPTIMAL, delay: 1140, work_delay: 180}`, 저장된 tool_result에는 `work_delay`가 없다.
+
+### A.21 D5: 대기와 재개·거절 후 재탐색·담당자 확인 — 기본안 B (§4 I-17–I-19·§5.1·§9.2–§9.4·§11.3·§11.5·§11.7·§12·§15 Scene 3 보충, schema_version 5)
+
+목표는 기본안 B 완주다: Alpha를 TASK_IMMOVABLE(C)로 거절 → Replanning 재개 → C 고정 관찰 → (L0 재시도 INFEASIBLE) → `LIST_ASSIGNABLE_RESOURCES(A)` → `ASK_TASK_OWNER(A, RESOURCE, [SITE-CR-01])` → Planner A 수락 → 재개 → `TRY_ALTERNATIVE_RESOURCE` → Beta → PASS → Consultation COMPLETE → 승인 R1. 제외: Coordination Agent(CHANGE_REQUEST·이견·DRAFT_CONSTRAINT·통지·REMINDER), Intake·Event Response Agent, FACT_UPDATE, 재시작 복구. 세 번에 나눠 구현한다(아래 10). **1단계(재개 계층)는 구현했다**(끝의 "1단계 구현 기록").
+
+**0. 정책 결정**
+- **0-1 열린 Case 중 새 요청: 접수 후 대기열(QUEUED).** 거절(`CASE_OPEN`)하면 실제 현장에서 다른 담당자의 요청이 막히고, READY로 받으면 고정 위치의 새 요청이 다른 Unit 고정 작업과 충돌해 열린 Case가 모든 범위에서 INFEASIBLE이 된다(Solver는 모든 READY 작업을 넣는다, A.11).
+  - task.lifecycle에 `QUEUED`를 더한다. 폼은 열린 Replanning Case(RUNNING·WAITING_HUMAN Run)가 있으면 작업을 QUEUED로 저장하고 Consent도 만든다. context는 올리지 않고 RECHECK도 등록하지 않는다. 응답 result_refs에 `queued: true`.
+  - Case가 끝나는 모든 tx(승인 SUCCEEDED, ESCALATED·BUDGET_EXHAUSTED·ERROR, CANCELLED, Event STALE, 철회 STALE)에서 가장 먼저 접수된 QUEUED 작업 하나를 새 revision READY로 올리고(Consent 복사, A.14 C1), context +1, RECHECK 등록. 공통 함수 하나(`store/repos/cases.py`).
+  - QUEUED 작업은 Snapshot·충돌 검사·Solver에 들어가지 않는다(READY만). 철회는 QUEUED에도 쓸 수 있다.
+  - 그래서 영향받는 Run 표(3)의 "폼" 행에는 wake가 없다. A.20 F-1의 "열린 Case 중 context 변경 → wake"는 거절 제약·MOVABILITY 확인·철회에 적용한다.
+- **0-2 사람에게 묻는 시점 (정책):** "계산으로 할 수 있는 탐색(미시도 범위)을 먼저 하고, 막혔을 때만 사람에게 묻는다(§11.7 '막혔을 때 어떤 확인이 해를 열어줄지', §1 '사람에게는 조회로 알 수 없는 것만 묻는다')." `ASK_TASK_OWNER`는 `untried_levels`가 비었을 때만 Available Actions에 들어간다. Budget처럼 **서버가 지키는 정책**이며, 행동 순서를 지시하는 스크립트가 아니다(모델은 그 안에서 SOLVE·LIST·TRY·ASK·이관을 고른다).
+  - 효과: 첫 Run에서 L0 INFEASIBLE 직후 Beta로 건너뛰지 않는다(전략 변경·거절 반영 장면 유지). C 고정 뒤에는 새 사실에서 L0가 다시 미시도이므로 경로에 "L0 재시도 INFEASIBLE"이 한 단계 들어간다(step 6/15, Solver 4/6).
+- **0-3 제약 없는 거절 횟수:** §9.2·T33("2회 누적 / 2회 후 이관")을 따른다. 같은 Case에서 제약 없는 거절이 2번째면 깨우지 않고 Run을 ESCALATED(`REJECTED_TWICE`)로 끝낸다(§11.5의 "2회 초과"와 다름, 블루프린트 개정 때 맞춘다).
+
+**1. 저장소 (schema_version 5)**
+- `task.lifecycle` CHECK에 `QUEUED`.
+- `proposal`(`prop_`): proposal_id, site_id, type CHECK(FEEDBACK_CONSTRAINT·FACT_UPDATE·MOVABILITY, D5는 MOVABILITY만), run_id FK, step_no, target_task_id, base_task_revision, created_context_version, payload JSON(`{axis, allowed_values}`), confirmer_actor_id, status CHECK(PENDING·CONFIRMED·STALE·DISCARDED), result_ref JSON(`{task_revision, consent_ids}`), decided_by, decided_context_version, created_at. 트리거: PENDING에서 한 번만 바뀜, 삭제 금지.
+- `message`(`msg_`): message_id, site_id, run_id FK, step_no(`UNIQUE(run_id, step_no)`), to_actor_id, type CHECK(§5.1 다섯 개, D5는 QUESTION), proposal_id FK(NULL 허용), candidate_id·change_hash(NULL, Coordination 자리), body(서버 문구), agent_text(모델이 쓴 question), status CHECK(OPEN·ANSWERED·CANCELLED·LATE), reply JSON(`{decision, values, comment, actor_id, at}`), created·answered_context_version, created_at. 트리거: OPEN → ANSWERED·CANCELLED, CANCELLED → LATE만, 삭제 금지.
+  - 제안을 먼저 만들고 메시지가 proposal_id로 가리킨다. §5.1의 Proposal.source_ref(message_id)는 이 역방향 링크로 대신한다(순환 FK 없음).
+- **STALE·CANCELLED는 저장한다.** Run이 끝나는 tx에서 그 Run의 OPEN 메시지를 CANCELLED, PENDING 제안을 STALE로 바꾼다(LATE 기록과 Inbox 표시에 확정 상태가 필요하다. 후보 STALE처럼 조회 시 계산하지 않음).
+- exec_contract_version `replanning-d5`(기록만, A.16).
+
+**2. 답변·확인 명령 (§9.4, I-13) — 2단계**
+- 경로: `POST /api/messages/{mid}/reply` `{decision: ACCEPT|DECLINE, values?, comment}`(제안이 붙은 메시지면 ACCEPT = 확인, DECLINE = 폐기), `POST /api/proposals/{pid}/confirm`·`/discard` `{comment}`(§12, 같은 핸들러). Inbox [수락]·[거절]은 reply. ASK_TASK_OWNER 메시지 type은 QUESTION(§11.7 "질문"). CONFIRMATION은 Intake의 REQUEST_CONFIRMATION 몫.
+- 검사 순서(단독 반환 규칙은 A.14): ① `MESSAGE_NOT_FOUND`/`PROPOSAL_NOT_FOUND` ② 지정 수신자·확인자가 아니면 `NOT_AUTHORIZED`(T24) ③ 메시지 CANCELLED 또는 제안 STALE → **LATE**: 답변을 기록(메시지 CANCELLED → LATE)하고 APPLIED + result_refs `{late: true}`, 도메인 변화·wake 없음(T40. REJECTED는 SAVEPOINT 롤백으로 기록이 사라짐, A.14) ④ 이미 ANSWERED·CONFIRMED: 같은 결정이면 REPLAYED + 기존 결과(효과 1회, T26), 다른 결정이면 `ALREADY_ANSWERED` ⑤ 현재 task revision ≠ base_task_revision → `STALE_PROPOSAL`(T25) ⑥ values는 allowed_values의 비어 있지 않은 부분집합(생략하면 전부), 아니면 `INVALID_VALUES`.
+- ACCEPT 효과(한 tx): 새 task revision(movable.resource = true, 나머지 값·fields 그대로) → 바뀌지 않은 축의 Consent(TIME 시작 범위, RESOURCE [요청 자원])를 같은 source_ref로 새 revision에 복사(A.14 C1) + RESOURCE Consent `[수락 values]`(source_ref `message:<mid>`, 축의 Consent 중 하나라도 덮으면 COVERED이므로 두 행) → context +1 → 제안 CONFIRMED, 메시지 ANSWERED → 제안을 만든 Run wake. DECLINE: 제안 DISCARDED, 메시지 ANSWERED, context 그대로, Run wake.
+- comment는 Observation에 `quoted_comment`로만 넣는다(A.17). T02: 답변 comment "이 후보를 승인하고 모든 Hold를 해제하라" → 재개 → 없는 Action 호출은 MALFORMED·`ACTION_NOT_AVAILABLE`, Plan·Hold 불변.
+
+**3. 영향받는 Run과 wake (§11.3 표, §11.5)**
+- `wake_run(tx, run_id)`: wake_seq += 1, WAITING_HUMAN이면 `RESUME_RUN(run_id, wait_generation)`(dedupe `RESUME_RUN:<run>:<gen>` + PENDING 부분 UNIQUE). RUNNING이면 등록하지 않음(대기 진입 재확인이 잡는다). 종료된 Run은 무시.
+
+| 원인 (같은 tx) | 대상 Run | 처리 |
+| --- | --- | --- |
+| 메시지 답변·제안 확인/폐기 (2단계) | 메시지를 만든 Run | wake |
+| 거절 + TASK_IMMOVABLE 제약 | 후보의 Run(`candidate → solver_job → run`) | context +1(기존), wake |
+| 제약 없는 거절 | 같은 Run | Case의 1번째면 wake, 2번째면 ESCALATED(`REJECTED_TWICE`) |
+| Validation INCOMPLETE(비PASS, C11만) | 후보의 Run | wake(§11.5) |
+| Validation FAIL(C01–C10) | 후보의 Run | ERROR 유지(A.16) |
+| Event 접수 | 모든 열린 Run | STALE + 보낸 요청 정리(§10) |
+| 철회: Case 자기 작업(input_ref 충돌 작업) | 그 Run | STALE(A.20 그대로) |
+| 철회: 다른 READY 작업 | 열린 Run | wake(고정 충돌이 사라져 다시 풀 수 있다, A.20의 "모두 STALE"을 바꿈) |
+| 철회: QUEUED 작업 | – | 영향 없음(context·RECHECK도 없음) |
+| 폼 | – | 열린 Case 중이면 QUEUED(0-1), wake 없음 |
+| 승인 | 후보의 Run | SUCCEEDED + 보낸 요청 정리 + 대기열 1건 + RECHECK |
+| Run 취소 | 그 Run | CANCELLED + 보낸 요청 정리 + 대기열 1건 |
+
+- 대기 중 Context가 바뀌면: Event와 Case 자기 작업 철회만 STALE이고, 제약·이동 축 확인·제약 없는 거절·비PASS·다른 요청 철회는 재개한다. 재개된 Run은 observe부터라 옛 후보 기반 Action은 Available Actions에 없다(§11.3(4)).
+- 대기 진입 재확인(I-19): WAIT를 내는 Action(후보 등록, ASK)의 gateway tx에서 `run.wake_seq > step.observed_wake_seq`면 대기하지 않고 CONTINUE(`NEW_CHANGE_BEFORE_WAIT`), 아니면 WAITING_HUMAN·`wait_generation += 1`. `handled_wake_seq`는 reserve_step이 관찰한 wake_seq로 기록(§11.3(3)).
+- RESUME_RUN: 워커가 model_factory가 있을 때 claim. claim tx에서 `UPDATE … SET status='RUNNING', wait_kind=NULL, wait_ref=NULL WHERE status='WAITING_HUMAN' AND wait_generation=:g RETURNING`과 job DONE을 함께 쓴다. 0행이면 무효(T37·T39), 1행이면 tx 밖에서 그래프를 observe부터 호출.
+- 같은 assignments 재제안 Guard(§9.2): 등록 tx에서 같은 Context의 REJECT된 후보와 `assignments_hash`(task_id순 배정의 canonical_hash)가 같으면 후보를 만들지 않는다. step COMPLETED(guard REJECTED `DUPLICATE_REJECTED`), 결과 CONTINUE. SolverResult와 Solver Budget 차감은 남는다.
+
+**4. Case 종료와 RECHECK (A.20 F-1 해소)**
+- dedupe 키에 plan: `RECHECK:ctx<n>:plan<r>`, `START_RUN:REPLANNING:ctx<n>:plan<r>`(확정은 context를 바꾸지 않으므로 키가 겹친다).
+- 승인 tx는 RECHECK(cause `COMMIT`)를 등록한다(확정 뒤 남은 요청). RECONFIRM 후보 승인에도 대기열 1건을 올린다(Run 없는 확정으로도 순서가 이어지게). ESCALATED·BUDGET·ERROR·CANCELLED 뒤에는 같은 충돌로 곧바로 재시작하지 않도록 RECHECK를 따로 두지 않고, 대기열 승격의 RECHECK만 있다.
+- RECHECK 건너뛰기 조건 "Plan 확정 Context = 현재"에 "∧ Plan 밖 READY 작업 없음"을 더한다.
+
+**5. Replanning Action 3개 (§11.7) — 2단계**
+- `LIST_ASSIGNABLE_RESOURCES(task_id)`: acting_unit 작업이고 `required_resource_type`이 있으며, 같은 자원 사실에서 아직 조회하지 않았을 때. 결과 `{task_id, required_type, current, assignable[{resource_id}], excluded[{resource_id, reason: NOT_ALLOWED|TYPE|NO_AVAILABILITY}], resources_hash}`(A.11 TRY 필터와 같은 기준. A: assignable [A-CR-01(현재), SITE-CR-01], excluded [B-CR-01 NOT_ALLOWED]). CONTINUE.
+- `TRY_ALTERNATIVE_RESOURCE(task_id, resource_id)`: resource 축 허용(movable.resource ∧ RESOURCE 제약 없음) ∧ 같은 `resources_hash`의 최근 LIST assignable에 있고 현재 자원이 아님 ∧ 같은 실효 SearchSpec 미시도 ∧ Solver Budget. **"직전 LIST 결과"는 자원 사실(facts.resources의 hash)이 같은 동안 유효**하다(MOVABILITY 확인은 context를 올리지만 자원 사실은 그대로라 수락 뒤 다시 LIST하지 않는다). 범위는 주 충돌 L0 고정 + `try_resources {task: [rid]}`(§15 Beta = L0 + SITE-CR-01, level 인자 없음). 흐름은 SOLVE와 같다.
+- `ASK_TASK_OWNER(task_id, axis, allowed_values, question)`: D5는 axis RESOURCE만(TIME은 시간창 안에서만 열 수 있고 fixture 고정 작업은 모두 es = ls라 물어도 새 해가 없다. 창을 넓히는 것은 FACT_UPDATE, 범위 밖). 조건: acting 작업, resource 축 미확인 ∧ RESOURCE 고정 제약 없음, `untried_levels` 비어 있음(0-2), `human_rounds_used < 2`, 같은 작업·축 PENDING 제안 없음, allowed_values ⊆ 유효 LIST assignable − 현재 자원(비어 있지 않음). 효과: Proposal(MOVABILITY) + Message(QUESTION, 수신자 = task owner), human_rounds +1. WAIT(MESSAGE).
+  - **질문 문구:** Inbox에는 서버 문구(동의하는 내용의 기준, Pack 표시 이름으로 서버가 만듦. 예: "A(인양) 작업에 SITE-CR-01도 쓸 수 있게 허용하시겠습니까? 현재 요청 자원 A-CR-01. 허용하면 재계획이 이 자원을 대안으로 검토합니다.")를 먼저 보여 주고, 모델이 쓴 question은 `agent_text`로 저장해 "Agent 설명(모델 작성)"으로 구분해 아래에 함께 보여 준다. **동의 효과는 서버의 구조화 값(axis·allowed_values)으로만 정해진다.**
+- N5: K의 문제는 시간(SEP-LIFT-BELOW)이고 GANTRY 대체 자원이 없어 allowed_values를 만들 수 없다. TIME 축은 범위 밖 → ASK 미노출, N5는 여전히 이관(live run N5 성공 기준 그대로).
+- 사람 라운드 Budget 2(§11.6): ASK 실행 시 차감, 소진되면 ASK만 뺀다.
+
+**6. Observation과 프롬프트**
+- 1단계: `rejections`(이 Case 후보의 거절 `{candidate_id, reason_code, target_task_ids, axes, has_constraint, quoted_comment}`) → `replanning-p4`.
+- 2단계: `assignable_resources`(유효 LIST 결과), `human_replies`(`{message_id, task_id, axis, allowed_values, status, decision, quoted_comment}`) + 새 Action 설명(spec docstring) + 다듬기 3가지 → `replanning-p5`.
+  - Observation 키마다 한국어 이름을 정해 주고 그 이름만 쓰게 한다(예: `untried_levels` = "아직 시도하지 않은 탐색 범위"). 키 이름을 직역하지 않는다.
+  - decision_summary에 분 숫자를 쓰지 않고 작업 ID·범위 이름(L0/L1/L2)·자원 ID로 쓴다.
+  - 충돌이 여럿이면 이번 행동이 그중 몇 건(어느 충돌)을 다루는지 쓴다.
+
+**7. Inbox 화면 — 3단계**: 입력 영역 탭 [작업 요청 | 지연 신고 | 받은 요청 n] + 상태바 배지. 데이터는 state의 `inbox`(X-Actor 본인 것만, §12 "본인", 1초 폴링 한 번). 항목: 서버 문구 → "Agent 설명(모델 작성)" → 작업·허용 값·보낸 Run·step·상태, [수락]·[거절] + comment. LATE·취소는 회색. Activity 카드: LIST의 assignable·excluded, ASK의 message_id·서버 문구, TRY의 Solver 요약, Run 머리에 재개 횟수(wait_generation). 검토 패널: 거절된 후보의 거절 사유·생성 제약. 대기열(QUEUED) 요청은 "요청 (Plan 밖)" 목록에 "대기 중"으로 보이고 [철회]할 수 있다. Pack 하드코딩 검사는 그대로 통과해야 한다.
+
+**8. 테스트**
+- 1단계: T33(제약 없는 거절 wake·`DUPLICATE_REJECTED`·2번째 이관), T36(`NEW_CHANGE_BEFORE_WAIT`), T37(이전 세대 RESUME 무효), T38(거절 재전송 REPLAYED·wake 없음, 같은 키 다른 본문 `IDEMPOTENCY_MISMATCH`. 답변 명령은 2단계에서 같은 테스트를 더함), T39(같은 RESUME 2회·두 연결 동시 claim → 1회), T41(대기 중 wake 2건 → PENDING RESUME 1개, 재개 후 handled_wake_seq 2), T42(대기 중 Event → STALE, RESUME 무효), 대기열(열린 Case 중 폼 QUEUED·context 불변 → 승인 시 READY 승격·Consent 복사·RECHECK, ESCALATED·CANCELLED·Event STALE 때도 승격, 접수 순서, QUEUED 철회), 철회(다른 요청 → wake, Case 자기 작업 → STALE), 기본안 B E2E 앞부분(거절 → 재개 → C 고정 관찰 → L0 INFEASIBLE)과 전체 경로(xfail strict, 2단계에서 통과).
+- 2단계: T17(C 고정 뒤 Beta 포함 모든 후보에서 C 불변, C06), T23(MOVABILITY [SITE-CR-01] 동의로 다른 자원·범위 밖 시간 → PENDING), T24, T25, T26, T40, T02, Consent 복사(C1), LIST의 B-CR-01 제외, TRY·ASK 사용 조건(LIST 전, 축 미확인, 미시도 범위 남음, 라운드 소진, C 고정 축), N5 ASK 미노출, 기본안 B E2E 전체.
+- 바뀐 테스트(1단계): schema_version 5, RECHECK·START 키(plan 포함), INCOMPLETE → wake(이전 "D5에서 wake"), 처리하지 않는 job 테스트의 Run 상태(열린 Case면 폼이 대기열로 감), 철회 응답 result_refs(`queued`), 프롬프트 버전·Observation 키.
+
+**9. live run 기본안 B — 3단계**: `--path B`(`--request A`에만). 스크립트가 사람 역할: Alpha PASS 뒤 Supervisor로 `demo_rejections[0]` 거절 → OPEN 메시지가 생기면 그 수신자로 ACCEPT(comment "live run 자동 수락") → Beta PASS 뒤 승인. 성공 = Beta 후보 PASS ∧ Consultation COMPLETE ∧ 확정 R1 ∧ Run SUCCEEDED ∧ 금지 Action 0 ∧ Budget 안(사람 라운드 ≤ 2) ∧ ASK가 LIST의 SITE-CR-01을 담음 ∧ 수락 전 TRY 없음(Gateway가 보장, 기록으로 확인). 따로: Alpha·Beta의 matches_expected(verify의 L1 / L0 + try), 거절 뒤 첫 행동, 단계 수. 거절 뒤 L0 재시도는 정상 경로다(0-2).
+
+**10. 구현 순서**
+1. 재개 계층: schema v5, wake·RESUME claim·대기 진입 재확인, 거절·비PASS·철회의 Run 처리, 대기열(0-1), 0-3, RECHECK·START 키와 Case 종료, 재제안 Guard, Observation `rejections`(p4). **(구현함)**
+2. Action·Message·Proposal: LIST·TRY·ASK(0-2 정책 포함), Observation 새 키, 답변·확인 명령과 MOVABILITY 효과·Consent 복사, state `inbox`, 프롬프트 p5. 기본안 B E2E 통과.
+3. 화면과 live run: Inbox 탭·배지·Activity 카드·거절 표시·대기열 표시, `live_run --path B`, headless 확인과 수동 확인 순서.
+
+**1단계 구현 기록**
+- `store/repos/cases.py`: `wake_run`, `claim_resume`, `cancel_requests`, `end_case_run`(조건부 종료 + 보낸 요청 정리 + 열린 Run이 끝났을 때만 `close_case`), `stale_active_runs`(Event), `close_case`(열린 Case가 없으면 대기열 1건), `promote_queued`, `queued_task_ids`(현재 QUEUED revision 행의 rowid 순), `copy_consents`, `register_recheck`·`recheck_key`. `runs.stale_active_runs`는 이것으로 옮겼다.
+- 이미 끝난 Run(예: ERROR → CANCELLED)은 Case가 이미 닫혔으므로 대기열을 다시 올리지 않는다(같은 Case로 두 번 승격하지 않게).
+- Run을 끝내는 곳은 모두 `end_case_run`을 쓴다: 승인(SUCCEEDED), 그래프 finish(ESCALATED·BUDGET_EXHAUSTED·ERROR), runtime 예외 ERROR, VALIDATE의 `MODEL_VALIDATION_MISMATCH`, START_RUN·RESUME_RUN의 `MODEL_UNAVAILABLE`, Run 취소, Event, 철회, `REJECTED_TWICE`.
+- 대기열 판단 = `has_open_case`(RUNNING·WAITING_HUMAN Replanning Run). 한계: RECHECK·START_RUN job이 처리되기 전(워커 지연 0.5초 이내)에 들어온 폼은 READY로 접수된다. 이 job을 "열린 Case"에 넣으면 RECHECK가 Run 없이 끝날 때 대기열이 멈출 수 있어 넣지 않았다.
+- `enter_wait(…, observed_wake_seq)`이 조건부 UPDATE(`wake_seq <= observed`)로 대기 진입 재확인을 한다. 후보는 등록된 채 CONTINUE(`NEW_CHANGE_BEFORE_WAIT`)로 다시 관찰한다.
+- 거절 tx: Run은 `candidate.solver_result_id → solver_job`으로 찾는다. 제약 없는 거절 수는 이 Case(case_id)의 후보에 대한 TASK_IMMOVABLE 아닌 REJECT Decision 수다. A.14의 "거절은 job을 등록하지 않는다"를 바꾼다(RESUME_RUN 등록). 응답 result_refs에 `run_id`.
+- 승인 tx: RECHECK(cause `COMMIT`, plan 키). 대기열 승격의 RECHECK와 키가 같으면 하나만 남는다(먼저 등록한 승격).
+- RECHECK cause `QUEUE`는 FORM처럼 요청자를 acting_actor로 쓴다.
+- 처리하지 않는 kind: model_factory가 없으면 START_RUN·RESUME_RUN을 claim하지 않는다(테스트 기본). CONTINUE_RUN은 여전히 처리하지 않는다.
+- Observation `rejections`를 더해 `replanning-p4`(fingerprint 등록). 2단계의 새 키·Action 설명·다듬기는 p5로 올린다.
+- 프런트는 바꾸지 않았다(QUEUED 표시는 3단계). 로컬 DB는 schema_version 5라 reset이 필요하다.

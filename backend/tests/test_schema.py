@@ -1,4 +1,4 @@
-"""schema v4 제약·불변 트리거(부록 A.2, T51)와 init_db(부록 A.3)."""
+"""schema v5 제약·불변 트리거(부록 A.2, T51)와 init_db(부록 A.3)."""
 
 import json
 import sqlite3
@@ -43,9 +43,9 @@ def _insert_chain(tx: sqlite3.Connection, site_id: str) -> None:
 # ── A.3 init_db ────────────────────────────────────────────────
 
 
-def test_init_db_creates_v4_tables(temp_db):
+def test_init_db_creates_v5_tables(temp_db):
     with db.read() as conn:
-        assert db.get_schema_version(conn) == db.SCHEMA_VERSION == 4
+        assert db.get_schema_version(conn) == db.SCHEMA_VERSION == 5
         assert {
             "schema_meta",
             "site",

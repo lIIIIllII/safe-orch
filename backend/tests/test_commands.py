@@ -179,7 +179,7 @@ def test_gate_path(seeded):
     form = _submit_a(pack)
     ctx1 = _site(pack).context_version
     assert form.context_version == ctx1 == 1
-    assert ("RECHECK", "RECHECK:ctx1") in _jobs(pack)
+    assert ("RECHECK", "RECHECK:ctx1:plan0") in _jobs(pack)
 
     snap = take_snapshot(pack)
     conflicts = detect_conflicts(snap, snap.facts().check_assignments(), pack)
@@ -404,7 +404,7 @@ def test_hold_release_no_change_only(seeded):
     out = _release(seeded, hold_id)
     assert out.status == "APPLIED" and out.context_version == ctx + 1
     assert out.result_refs["recheck"] is True
-    assert ("RECHECK", f"RECHECK:ctx{ctx + 1}") in _jobs(seeded)
+    assert ("RECHECK", f"RECHECK:ctx{ctx + 1}:plan0") in _jobs(seeded)
     assert take_snapshot(seeded).facts().holds == ()
     assert _release(seeded, hold_id).reason_codes == ("HOLD_NOT_ACTIVE",)
 

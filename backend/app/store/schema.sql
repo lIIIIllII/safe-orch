@@ -1,4 +1,4 @@
--- SAFE-ORCH schema (설계서 §5.4, 우선순위 문서 부록 A.2·A.14·A.16). schema_version 4.
+-- SAFE-ORCH schema (설계서 §5.4, 우선순위 문서 부록 A.2·A.14·A.16·A.21). schema_version 5.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -85,7 +85,7 @@ CREATE TABLE task (
     predecessors           TEXT NOT NULL CHECK (json_valid(predecessors)),
     movable                TEXT NOT NULL CHECK (json_valid(movable)),
     fields                 TEXT NOT NULL CHECK (json_valid(fields)),
-    lifecycle              TEXT NOT NULL CHECK (lifecycle IN ('DRAFT', 'NEEDS_INFO', 'READY')),
+    lifecycle              TEXT NOT NULL CHECK (lifecycle IN ('DRAFT', 'NEEDS_INFO', 'READY', 'QUEUED')),
     PRIMARY KEY (site_id, task_id, revision),
     CHECK (earliest_start <= latest_start),
     CHECK (earliest_start + duration <= latest_end),
@@ -384,6 +384,64 @@ CREATE TABLE solver_job (
     FOREIGN KEY (run_id, step_no) REFERENCES agent_step (run_id, step_no),
     CHECK ((status = 'REGISTERED') = (solver_result_id IS NOT NULL))
 );
+
+-- 사람에게 보내는 제안·메시지 (§5.1·§9.4, 부록 A.21). D5는 MOVABILITY 제안과 QUESTION 메시지를 쓴다.
+-- 제안을 먼저 만들고 메시지가 proposal_id로 가리킨다(순환 FK 없음).
+CREATE TABLE proposal (
+    proposal_id             TEXT PRIMARY KEY,
+    site_id                 TEXT NOT NULL REFERENCES site (site_id),
+    type                    TEXT NOT NULL CHECK (type IN ('FEEDBACK_CONSTRAINT', 'FACT_UPDATE',
+                                                          'MOVABILITY')),
+    run_id                  TEXT NOT NULL REFERENCES agent_run (run_id),
+    step_no                 INTEGER NOT NULL CHECK (step_no >= 1),
+    target_task_id          TEXT NOT NULL,
+    base_task_revision      INTEGER NOT NULL CHECK (base_task_revision >= 1),
+    created_context_version INTEGER NOT NULL CHECK (created_context_version >= 0),
+    payload                 TEXT NOT NULL CHECK (json_valid(payload)),
+    confirmer_actor_id      TEXT NOT NULL,
+    status                  TEXT NOT NULL DEFAULT 'PENDING'
+                            CHECK (status IN ('PENDING', 'CONFIRMED', 'STALE', 'DISCARDED')),
+    result_ref              TEXT CHECK (result_ref IS NULL OR json_valid(result_ref)),
+    decided_by              TEXT,
+    decided_context_version INTEGER,
+    created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE message (
+    message_id                TEXT PRIMARY KEY,
+    site_id                   TEXT NOT NULL REFERENCES site (site_id),
+    run_id                    TEXT NOT NULL REFERENCES agent_run (run_id),
+    step_no                   INTEGER NOT NULL CHECK (step_no >= 1),
+    to_actor_id               TEXT NOT NULL,
+    type                      TEXT NOT NULL CHECK (type IN ('QUESTION', 'CONFIRMATION',
+                                                            'CHANGE_REQUEST', 'NOTICE', 'REMINDER')),
+    proposal_id               TEXT REFERENCES proposal (proposal_id),
+    candidate_id              TEXT,
+    change_hash               TEXT,
+    body                      TEXT NOT NULL,
+    agent_text                TEXT,
+    status                    TEXT NOT NULL DEFAULT 'OPEN'
+                              CHECK (status IN ('OPEN', 'ANSWERED', 'CANCELLED', 'LATE')),
+    reply                     TEXT CHECK (reply IS NULL OR json_valid(reply)),
+    created_context_version   INTEGER NOT NULL CHECK (created_context_version >= 0),
+    answered_context_version  INTEGER,
+    created_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (run_id, step_no)
+);
+
+-- 제안은 PENDING에서 한 번만 바뀐다. 메시지는 OPEN → ANSWERED·CANCELLED, CANCELLED → LATE만.
+CREATE TRIGGER proposal_transition BEFORE UPDATE ON proposal
+WHEN OLD.status <> 'PENDING' OR NEW.proposal_id <> OLD.proposal_id
+BEGIN SELECT RAISE(ABORT, 'proposal: only PENDING can change'); END;
+CREATE TRIGGER proposal_no_delete BEFORE DELETE ON proposal
+BEGIN SELECT RAISE(ABORT, 'proposal: no delete'); END;
+CREATE TRIGGER message_transition BEFORE UPDATE ON message
+WHEN NOT ((OLD.status = 'OPEN' AND NEW.status IN ('ANSWERED', 'CANCELLED'))
+          OR (OLD.status = 'CANCELLED' AND NEW.status = 'LATE'))
+     OR NEW.message_id <> OLD.message_id
+BEGIN SELECT RAISE(ABORT, 'message: invalid transition'); END;
+CREATE TRIGGER message_no_delete BEFORE DELETE ON message
+BEGIN SELECT RAISE(ABORT, 'message: no delete'); END;
 
 CREATE TRIGGER agent_run_no_revive BEFORE UPDATE ON agent_run
 WHEN OLD.status IN ('SUCCEEDED', 'ESCALATED', 'BUDGET_EXHAUSTED', 'STALE', 'CANCELLED')

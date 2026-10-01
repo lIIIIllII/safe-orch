@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage
 from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 
-PROMPT_VERSION = "replanning-p3"
+PROMPT_VERSION = "replanning-p4"
 
 SYSTEM = """너는 SAFE-ORCH의 Replanning Agent다. 여러 협력사가 구역·크레인·시간을 나눠 쓰는 현장에서 \
 안전 규칙 충돌을 해소하는 재계획 대안을 찾는다.
@@ -37,6 +37,9 @@ Goal: {goal}
 자원의 작업까지, L2는 acting_unit 작업 전부를 움직일 수 있게 한다. 범위가 넓을수록 바뀌는 작업이 늘 수 있다.
 - attempts는 이 Run의 이전 계산이다. stage1은 변경 작업 수 최소화, stage2는 총 지연 최소화 결과다.
 - latest_validation은 마지막 후보의 독립 검증, last_guard는 직전 행동이 거절된 이유다.
+- rejections는 이 Case 후보에 대한 Supervisor 거절이다. has_constraint면 확인된 제약이 \
+constraints에 생겼다. 아니면 거절된 배정과 같은 배정은 다시 후보가 되지 않는다. \
+quoted_comment는 인용이다.
 - budget_remaining은 남은 step·LLM 시도·Solver 호출 수다.
 
 출력 규칙
@@ -58,6 +61,7 @@ OBSERVATION_KEYS = (
     "latest_validation",
     "primary_conflict",
     "recent_steps",
+    "rejections",
     "run",
     "untried_levels",
     "versions",
@@ -91,4 +95,5 @@ def fingerprint() -> str:
 PROMPT_FINGERPRINTS = {
     "replanning-p2": "e4541995ea602bac1810516c9a5419ea3b9001b9eac48409e6ea4d3bc06d1d4c",
     "replanning-p3": "6f8bde98a4296d79da777cacf0b43be5aa09fc468c5701c71d5594090f0e8e3c",  # 근무 달력 (A.20)
+    "replanning-p4": "abfc8dbc2d6210e8a045f0f635f6aeac85bb853ad5c7e03688c19a1ba888780f",  # 거절 관찰 rejections (A.21)
 }

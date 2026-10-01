@@ -51,13 +51,15 @@ def reserve_step(
 ) -> int | None:
     """Run이 RUNNING이면 새 step_no를 발급해 RESERVED step을 만들고 step·LLM 시도를 1씩 차감한다.
 
-    observed = (context_version, plan_revision, wake_seq). RUNNING이 아니면 None.
+    observed = (context_version, plan_revision, wake_seq). 관찰한 wake_seq를 handled_wake_seq로
+    기록한다(§11.3(3)). RUNNING이 아니면 None.
     """
     row = tx.execute(
         "UPDATE agent_run SET last_step_no = last_step_no + 1, steps_used = steps_used + 1,"
-        " llm_attempts_used = llm_attempts_used + 1"
+        " llm_attempts_used = llm_attempts_used + 1,"
+        " handled_wake_seq = MAX(handled_wake_seq, ?)"
         " WHERE run_id = ? AND status = 'RUNNING' RETURNING last_step_no, site_id",
-        (run_id,),
+        (observed[2], run_id),
     ).fetchone()
     if row is None:
         return None
@@ -171,12 +173,16 @@ def charge(tx: sqlite3.Connection, run_id: str, **amounts: float) -> None:
             tx.execute(f"UPDATE agent_run SET {col} = {col} + ? WHERE run_id = ?", (amount, run_id))
 
 
-def enter_wait(tx: sqlite3.Connection, run_id: str, wait_kind: str, wait_ref: str) -> bool:
-    """RUNNING → WAITING_HUMAN, wait_generation += 1. wake_seq 재확인은 D5."""
+def enter_wait(
+    tx: sqlite3.Connection, run_id: str, wait_kind: str, wait_ref: str, observed_wake_seq: int
+) -> bool:
+    """대기 진입 재확인(I-19): 관찰 이후 새 변화(wake_seq)가 없을 때만 RUNNING → WAITING_HUMAN,
+    wait_generation += 1. 변화가 있으면 False(호출한 쪽이 NEW_CHANGE_BEFORE_WAIT로 다시 관찰)."""
     cur = tx.execute(
         "UPDATE agent_run SET status = 'WAITING_HUMAN', wait_kind = ?, wait_ref = ?,"
-        " wait_generation = wait_generation + 1 WHERE run_id = ? AND status = 'RUNNING'",
-        (wait_kind, wait_ref, run_id),
+        " wait_generation = wait_generation + 1"
+        " WHERE run_id = ? AND status = 'RUNNING' AND wake_seq <= ?",
+        (wait_kind, wait_ref, run_id, observed_wake_seq),
     )
     return cur.rowcount == 1
 
@@ -289,17 +295,16 @@ def has_open_case(conn: sqlite3.Connection, site_id: str) -> bool:
     )
 
 
-def stale_active_runs(tx: sqlite3.Connection, site_id: str, end_reason: str) -> list[str]:
-    """RUNNING·WAITING_HUMAN Run을 모두 STALE로 (Event 접수, §10). 바꾼 run_id 목록."""
-    return [
+def list_active_runs(conn: sqlite3.Connection, site_id: str) -> list[AgentRun]:
+    """RUNNING·WAITING_HUMAN Run (생성 순)."""
+    ids = [
         r[0]
-        for r in tx.execute(
-            "UPDATE agent_run SET status = 'STALE', end_reason = ?, wait_kind = NULL,"
-            " wait_ref = NULL WHERE site_id = ? AND status IN ('RUNNING', 'WAITING_HUMAN')"
-            " RETURNING run_id",
-            (end_reason, site_id),
-        ).fetchall()
+        for r in conn.execute(
+            "SELECT run_id FROM agent_run WHERE site_id = ? AND status IN (?, ?) ORDER BY rowid",
+            (site_id, *ACTIVE),
+        )
     ]
+    return [run for rid in ids if (run := get_run(conn, rid)) is not None]
 
 
 def abort_reserved(tx: sqlite3.Connection, run_id: str, reason: str) -> None:

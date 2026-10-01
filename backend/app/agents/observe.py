@@ -14,6 +14,7 @@ from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.solver.search_spec import SearchSpecError, build_search_spec
+from app.store.repos.decisions import list_case_rejections
 from app.store.repos.records import list_validations
 from app.store.repos.runs import get_run, list_attempts, list_steps, tried_spec_hashes
 from app.store.repos.site import get_site
@@ -162,6 +163,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         # spec_hash는 내부 계산(시도 여부)에만 쓰고 모델에는 보이지 않는다 (A.17)
         "attempts": [{k: v for k, v in a.items() if k != "spec_hash"} for a in attempts],
         "latest_validation": latest_validation,
+        # 이 Case 후보에 대한 Supervisor 거절. comment는 인용 데이터다 (§9.2, A.17·A.21)
+        "rejections": list_case_rejections(conn, run.case_id),
         "last_guard": last_guard,
         "recent_steps": recent,
         "budget_remaining": budget_remaining(run),

@@ -147,7 +147,7 @@ def test_gate_path_with_worker(seeded):
     run_until_idle(pack)
     [start] = _jobs(pack, "START_RUN")
     assert start["status"] == "PENDING" and start["attempts"] == 0  # 처리하는 쪽 없음(3단계)
-    assert start["dedupe_key"] == "START_RUN:REPLANNING:ctx1"
+    assert start["dedupe_key"] == "START_RUN:REPLANNING:ctx1:plan0"
     p = start["payload"]
     assert (p["agent_type"], p["acting_unit_id"], p["acting_actor_id"]) == (
         "REPLANNING",
@@ -366,7 +366,7 @@ def test_unhandled_kinds_are_not_claimed_and_do_not_block(seeded):
     from conftest import add_run
 
     sid = seeded.site_id
-    add_run(seeded, "r")
+    add_run(seeded, "r", status="ERROR")
     with db.write() as tx:
         register_job(tx, sid, "START_RUN", "START_RUN:x", {})
         register_job(tx, sid, "RESUME_RUN", "RESUME_RUN:r:1", run_id="r", wait_generation=1)

@@ -13,7 +13,7 @@ from app.commands.service import Body, CommandContext, CommandOutcome, Result, r
 from app.domain.canonical import canonical_hash
 from app.domain.ids import new_id
 from app.packs.loader import LoadedPack
-from app.store.repos.dispatch import register_job
+from app.store.repos.cases import register_recheck, stale_active_runs
 from app.store.repos.events import (
     get_event_by_source,
     get_hold,
@@ -22,7 +22,6 @@ from app.store.repos.events import (
     list_active_holds,
     release_hold,
 )
-from app.store.repos.runs import stale_active_runs
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import list_current_tasks
 
@@ -95,8 +94,9 @@ def _receive(tx: sqlite3.Connection, ctx: CommandContext, body: EventReport) -> 
         context_version,
     )
     # 열린 Case의 Run을 STALE로 (§10, §11.5). 실행 중인 그래프는 다음 RUNNING 확인에서 멈춘다.
+    # 보낸 요청은 CANCELLED, Case가 닫히면 대기열 1건이 READY로 올라간다(RECHECK는 Hold로 건너뜀, A.21).
     # 응답은 재전송 때와 같아야 하므로 run_id는 넣지 않는다(end_reason EVENT:<event_id>로 찾는다).
-    stale_active_runs(tx, site_id, f"EVENT:{event_id}")
+    stale_active_runs(tx, ctx.pack, f"EVENT:{event_id}")
     r.refs = {"event_id": event_id, "hold_id": hold_id, "event_context_version": context_version}
     return r
 
@@ -131,7 +131,7 @@ def _release(tx: sqlite3.Connection, ctx: CommandContext, body: HoldRelease) -> 
     recheck = not list_active_holds(tx, site_id)
     if recheck:
         cause = {"kind": "HOLD_RELEASE", "hold_id": body.hold_id, "task_id": hold["task_id"]}
-        register_job(tx, site_id, "RECHECK", f"RECHECK:ctx{context_version}", {"cause": cause})
+        register_recheck(tx, site_id, cause)
     r.refs = {"hold_id": body.hold_id, "recheck": recheck}
     r.audit_reason = body.resolution
     return r

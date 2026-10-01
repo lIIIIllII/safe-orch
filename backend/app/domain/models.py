@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 Role = Literal["UNIT_PLANNER", "REPORTER", "SUPERVISOR"]
 Relation = Literal["SAME", "ADJACENT", "BELOW"]
 StoredRelation = Literal["ADJACENT", "BELOW"]
-Lifecycle = Literal["DRAFT", "NEEDS_INFO", "READY"]
+Lifecycle = Literal["DRAFT", "NEEDS_INFO", "READY", "QUEUED"]  # QUEUED: 열린 Case 중 접수 (A.21)
 FieldStatus = Literal["PROPOSED", "CONFIRMED"]
 CandidateKind = Literal["REPLAN", "RECONFIRM"]
 ValidationStatus = Literal["PASS", "FAIL", "INCOMPLETE"]

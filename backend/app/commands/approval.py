@@ -12,12 +12,13 @@ from app.commands.service import Body, CommandContext, CommandOutcome, Result, r
 from app.domain.ids import new_id
 from app.domain.models import Axis, Candidate, FeedbackConstraint, Plan, Validation
 from app.packs.loader import LoadedPack
+from app.store.repos.cases import close_case, end_case_run, register_recheck, wake_run
 from app.store.repos.consultations import CandidateState, candidate_state, consultation_view
 from app.store.repos.decisions import insert_constraint, insert_decision
 from app.store.repos.events import list_active_holds
 from app.store.repos.plans import get_plan_by_candidate, insert_plan
 from app.store.repos.records import get_candidate, list_validations
-from app.store.repos.runs import ACTIVE, end_run, run_for_solver_result
+from app.store.repos.runs import get_run, run_for_solver_result
 from app.store.repos.site import bump_context_version, bump_plan_revision
 from app.store.repos.tasks import list_current_tasks
 
@@ -141,13 +142,17 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
         site.context_version,
     )
     # 후보를 만든 Replanning Run을 SUCCEEDED로 (§11.3(7), A.16). RECONFIRM 후보에는 Run이 없다.
+    # Case가 닫히면 대기열 1건을 올리고, 확정 뒤 남은 요청을 위해 RECHECK(plan 키)를 등록한다 (A.21).
     run_id = None
     if candidate.solver_result_id is not None:
         run_id = run_for_solver_result(tx, candidate.solver_result_id)
-        if run_id is not None and not end_run(
-            tx, run_id, "SUCCEEDED", f"COMMITTED:{plan_revision}", ACTIVE
+        if run_id is not None and not end_case_run(
+            tx, ctx.pack, run_id, "SUCCEEDED", f"COMMITTED:{plan_revision}"
         ):
             run_id = None
+    if run_id is None:
+        close_case(tx, ctx.pack)
+    register_recheck(tx, site_id, {"kind": "COMMIT", "plan_revision": plan_revision})
     r.refs = {
         "plan_revision": plan_revision,
         "decision_id": decision_id,
@@ -266,7 +271,35 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
             constraint_ids.append(fc.constraint_id)
     r.refs = {"decision_id": decision_id, "constraint_ids": constraint_ids}
     r.audit_reason = body.reason_code
+    # 후보를 만든 Replanning Run에 거절을 알린다 (§9.2·§11.3 표·§11.5, A.21 3).
+    # 제약 있는 거절은 wake, 제약 없는 거절은 Case의 2번째면 이관(T33), 아니면 wake.
+    run_id = (
+        run_for_solver_result(tx, candidate.solver_result_id)
+        if candidate.solver_result_id
+        else None
+    )
+    run = get_run(tx, run_id) if run_id else None
+    if run is not None:
+        if not immovable and _no_constraint_rejections(tx, run.case_id) >= MAX_PLAIN_REJECTIONS:
+            end_case_run(tx, ctx.pack, run.run_id, "ESCALATED", "REJECTED_TWICE")
+        else:
+            wake_run(tx, site_id, run.run_id)
+        r.refs["run_id"] = run.run_id
     return r
+
+
+MAX_PLAIN_REJECTIONS = 2  # Case당 제약 없는 거절이 2번째면 이관 (§9.2·T33, A.21 0-3)
+
+
+def _no_constraint_rejections(tx: sqlite3.Connection, case_id: str) -> int:
+    """이 Case의 후보에 대한 제약 없는 거절(TASK_IMMOVABLE이 아닌 REJECT) 수."""
+    return tx.execute(
+        "SELECT COUNT(*) FROM decision d JOIN candidate c ON c.candidate_id = d.candidate_id"
+        " JOIN solver_job j ON j.solver_result_id = c.solver_result_id"
+        " JOIN agent_run r ON r.run_id = j.run_id"
+        " WHERE r.case_id = ? AND d.type = 'REJECT' AND d.reason_code <> 'TASK_IMMOVABLE'",
+        (case_id,),
+    ).fetchone()[0]
 
 
 def reject_candidate(

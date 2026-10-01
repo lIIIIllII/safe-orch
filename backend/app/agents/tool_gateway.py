@@ -23,7 +23,13 @@ from app.solver.candidate import build_candidate
 from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store import db
 from app.store.repos.commands import insert_command_result
-from app.store.repos.records import StaleError, insert_search_spec, register_solver_outcome
+from app.store.repos.decisions import rejected_candidate_ids
+from app.store.repos.records import (
+    StaleError,
+    get_candidate,
+    insert_search_spec,
+    register_solver_outcome,
+)
 from app.store.repos.runs import (
     abort_step,
     charge,
@@ -292,6 +298,13 @@ class ToolGateway:
                 finish_solver_job(tx, run_id, step_no, "ABORTED")
                 return GatewayResult("INACTIVE")
             tool_result = _solver_summary(snapshot, level, search_spec.hash, result, candidate)
+            duplicate = candidate is not None and _rejected_duplicate(
+                tx, site_id, candidate.context_version, candidate.assignments
+            )
+            if duplicate:
+                # 같은 Context에서 거절된 배정을 다시 제안하지 않는다(§9.2, T33). 결과는 남기고 후보는 없다.
+                candidate = None
+                tool_result = {**tool_result, "candidate_id": None}
             try:
                 register_solver_outcome(tx, snapshot, result, candidate)
             except StaleError:
@@ -309,17 +322,37 @@ class ToolGateway:
                 )
                 return GatewayResult("CONTINUE", "STALE_SNAPSHOT")
             finish_solver_job(tx, run_id, step_no, "REGISTERED", result.solver_result_id)
+            if duplicate:
+                self._complete(
+                    tx,
+                    run_id,
+                    step_no,
+                    meta,
+                    parsed,
+                    verdict=REJECTED,
+                    reason="DUPLICATE_REJECTED",
+                    result_kind="CONTINUE",
+                    tool_result=tool_result,
+                    state_changes={"solver_result_id": result.solver_result_id},
+                )
+                return GatewayResult("CONTINUE", "DUPLICATE_REJECTED")
             changes = {
                 "snapshot_id": snapshot.snapshot_id,
                 "search_spec_id": search_spec.search_spec_id,
                 "solver_result_id": result.solver_result_id,
                 "candidate_id": None if candidate is None else candidate.candidate_id,
             }
+            step = get_step(tx, run_id, step_no)
+            assert step is not None
             if result.stage1.get("status") == "MODEL_INVALID":
                 outcome = GatewayResult("DONE", "MODEL_INVALID", "ERROR", "MODEL_INVALID")
-            elif candidate is not None:
-                enter_wait(tx, run_id, "CANDIDATE_OUTCOME", candidate.candidate_id)
+            elif candidate is not None and enter_wait(
+                tx, run_id, "CANDIDATE_OUTCOME", candidate.candidate_id, step["observed_wake_seq"]
+            ):
                 outcome = GatewayResult("WAIT")
+            elif candidate is not None:
+                # 관찰 이후 새 변화(wake)가 왔다: 대기하지 않고 다시 관찰한다 (§11.3(1)·I-19, T36)
+                outcome = GatewayResult("CONTINUE", "NEW_CHANGE_BEFORE_WAIT")
             else:
                 outcome = GatewayResult("CONTINUE")
             self._complete(
@@ -329,7 +362,7 @@ class ToolGateway:
                 meta,
                 parsed,
                 verdict=ACCEPTED,
-                reason=None,
+                reason=outcome.reason if outcome.kind == "CONTINUE" else None,
                 result_kind=outcome.kind,
                 tool_result=tool_result,
                 state_changes=changes,
@@ -354,3 +387,22 @@ def _solver_summary(
         "delay_optimality_unconfirmed": result.delay_optimality_unconfirmed,
         "candidate_id": None if candidate is None else candidate.candidate_id,
     }
+
+
+def assignments_hash(assignments: Any) -> str:
+    """task_id순 배정의 canonical hash (§9.2 assignments_hash)."""
+    return canonical_hash(
+        [a.model_dump(mode="json") for a in sorted(assignments, key=lambda a: a.task_id)]
+    )
+
+
+def _rejected_duplicate(
+    tx: sqlite3.Connection, site_id: str, context_version: int, assignments: Any
+) -> bool:
+    """같은 Context에서 거절된 후보와 배정이 같으면 True."""
+    target = assignments_hash(assignments)
+    for cid in rejected_candidate_ids(tx, site_id, context_version):
+        cand = get_candidate(tx, site_id, cid)
+        if cand is not None and assignments_hash(cand.assignments) == target:
+            return True
+    return False

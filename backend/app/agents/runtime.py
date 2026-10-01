@@ -20,11 +20,12 @@ from app.agents.types import GatewayResult, StepMeta
 from app.domain.models import AgentRun
 from app.packs.loader import LoadedPack
 from app.store import db
-from app.store.repos.runs import abort_reserved, end_run, get_run, reserve_step
+from app.store.repos.cases import end_case_run
+from app.store.repos.runs import abort_reserved, get_run, reserve_step
 
 log = logging.getLogger(__name__)
 
-EXEC_CONTRACT_VERSION = "replanning-3a"
+EXEC_CONTRACT_VERSION = "replanning-d5"  # 기록만 (A.16·A.21)
 __all__ = ["EXEC_CONTRACT_VERSION", "ModelFactory", "StoreRunPort", "invoke"]
 GRAPH_INPUT_KEYS = frozenset({"run_id"})
 
@@ -57,14 +58,15 @@ class StoreRunPort:
         return self.gateway.execute(run_id, step_no, message, meta)
 
     def finish(self, run_id: str, status: str, reason: str) -> None:
+        """Agent 행동에 의한 종료. Case가 닫히면 보낸 요청 정리와 대기열 승격 (A.21)."""
         with db.write() as tx:
-            end_run(tx, run_id, status, reason)
+            end_case_run(tx, self.pack, run_id, status, reason, ("RUNNING",))
 
 
-def _fail(run_id: str, reason: str) -> None:
+def _fail(pack: LoadedPack, run_id: str, reason: str) -> None:
     with db.write() as tx:
         abort_reserved(tx, run_id, reason)
-        end_run(tx, run_id, "ERROR", reason)
+        end_case_run(tx, pack, run_id, "ERROR", reason, ("RUNNING",))
 
 
 def invoke(pack: LoadedPack, graph_input: dict[str, Any], model: ChatModel) -> AgentRun:
@@ -76,10 +78,10 @@ def invoke(pack: LoadedPack, graph_input: dict[str, Any], model: ChatModel) -> A
     try:
         graph.invoke({"run_id": run_id}, {"recursion_limit": replanning_spec.RECURSION_LIMIT})
     except GraphRecursionError:
-        _fail(run_id, "RECURSION_LIMIT")
+        _fail(pack, run_id, "RECURSION_LIMIT")
     except Exception as e:  # 모델·도구 예외는 Run ERROR로 드러낸다
         log.exception("run %s failed", run_id)
-        _fail(run_id, f"EXCEPTION: {type(e).__name__}")
+        _fail(pack, run_id, f"EXCEPTION: {type(e).__name__}")
     with db.read() as conn:
         run = get_run(conn, run_id)
     assert run is not None

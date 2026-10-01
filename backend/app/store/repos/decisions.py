@@ -88,3 +88,43 @@ def list_constraints(conn: sqlite3.Connection, site_id: str) -> list[FeedbackCon
             conn, "SELECT * FROM feedback_constraint WHERE site_id = ? ORDER BY rowid", (site_id,)
         )
     ]
+
+
+def rejected_candidate_ids(
+    conn: sqlite3.Connection, site_id: str, context_version: int
+) -> list[str]:
+    """그 Context에서 만들어진 후보 중 거절된 것 (같은 assignments 재제안 Guard, §9.2)."""
+    return [
+        r["candidate_id"]
+        for r in rows(
+            conn,
+            "SELECT DISTINCT d.candidate_id FROM decision d"
+            " JOIN candidate c ON c.candidate_id = d.candidate_id"
+            " WHERE d.site_id = ? AND d.type = 'REJECT' AND c.context_version = ?",
+            (site_id, context_version),
+        )
+    ]
+
+
+def list_case_rejections(conn: sqlite3.Connection, case_id: str) -> list[dict[str, Any]]:
+    """이 Case의 후보에 대한 거절 (Observation rejections, §9.2·A.21). 자유 텍스트는 인용 필드로."""
+    found = rows(
+        conn,
+        "SELECT d.candidate_id, d.reason_code, d.target_task_ids, d.axes, d.comment"
+        " FROM decision d JOIN candidate c ON c.candidate_id = d.candidate_id"
+        " JOIN solver_job j ON j.solver_result_id = c.solver_result_id"
+        " JOIN agent_run r ON r.run_id = j.run_id"
+        " WHERE r.case_id = ? AND d.type = 'REJECT' ORDER BY d.rowid",
+        (case_id,),
+    )
+    return [
+        {
+            "candidate_id": r["candidate_id"],
+            "reason_code": r["reason_code"],
+            "target_task_ids": loads(r["target_task_ids"]),
+            "axes": loads(r["axes"]),
+            "has_constraint": r["reason_code"] == "TASK_IMMOVABLE",
+            "quoted_comment": r["comment"],
+        }
+        for r in found
+    ]

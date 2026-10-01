@@ -336,7 +336,8 @@ def test_withdraw_unblocks_later_requests(seeded):
     assert statuses == ["INFEASIBLE", "INFEASIBLE"]
 
     out = withdraw_task_request(pack, "planner_b", _key(), TaskWithdraw(task_id="N5"))
-    assert out.status == "APPLIED" and out.result_refs == {"task_id": "N5", "revision": 2}
+    assert out.status == "APPLIED"
+    assert out.result_refs == {"task_id": "N5", "revision": 2, "queued": False}
     with db.read() as conn:
         n5 = next(t for t in list_current_tasks(conn, pack.site_id, pack) if t.task_id == "N5")
         audit = conn.execute("SELECT command FROM audit ORDER BY rowid DESC LIMIT 1").fetchone()[0]

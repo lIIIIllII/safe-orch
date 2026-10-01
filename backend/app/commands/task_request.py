@@ -13,11 +13,11 @@ from app.domain.calendar import has_work_slot
 from app.domain.ids import new_id
 from app.domain.models import Consent, Movable, Task
 from app.packs.loader import LoadedPack, confirmed_fields
+from app.store.repos.cases import end_case_run, register_recheck, wake_run
 from app.store.repos.consents import insert_consent
-from app.store.repos.dispatch import register_job
 from app.store.repos.plans import get_current_plan
 from app.store.repos.resources import list_resources
-from app.store.repos.runs import stale_active_runs
+from app.store.repos.runs import has_open_case, list_active_runs
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
@@ -113,8 +113,13 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
         fields=confirmed_fields(data, wt.critical_fields, source_ref),
         lifecycle="READY",
     )
+    # 열린 Replanning Case 중이면 접수 후 대기열(QUEUED): Snapshot·충돌 검사에 들어가지 않으므로
+    # context를 올리지 않고 RECHECK도 없다. Case가 끝날 때 접수 순서로 READY가 된다 (A.21 0-1).
+    queued = has_open_case(tx, site_id)
+    if queued:
+        task = task.model_copy(update={"lifecycle": "QUEUED"})
     insert_task_revision(tx, site_id, task)
-    context_version = bump_context_version(tx, site_id)
+    context_version = ctx.site.context_version if queued else bump_context_version(tx, site_id)
 
     consents = [
         Consent(
@@ -141,12 +146,14 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
         )
     for c in consents:
         insert_consent(tx, site_id, c, context_version)
-    cause = {"kind": "FORM", "task_id": task.task_id, "actor_id": actor.actor_id}
-    register_job(tx, site_id, "RECHECK", f"RECHECK:ctx{context_version}", {"cause": cause})
+    if not queued:
+        cause = {"kind": "FORM", "task_id": task.task_id, "actor_id": actor.actor_id}
+        register_recheck(tx, site_id, cause)
 
     r.refs = {
         "task_id": task.task_id,
         "revision": 1,
+        "queued": queued,
         "form_id": form_id,
         "consent_ids": [c.consent_id for c in consents],
     }
@@ -170,10 +177,12 @@ class TaskWithdraw(Body):
 
 
 def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -> Result:
-    """해결하지 못한 요청(Plan에 없는 READY 작업)을 계산 대상에서 뺀다.
+    """해결하지 못한 요청(Plan에 없는 READY 작업) 또는 대기열(QUEUED) 작업을 계산 대상에서 뺀다.
 
-    남겨 두면 기준 위치에 고정 상수로 남아 이후 모든 Solver 호출이 INFEASIBLE이 된다.
-    새 revision(lifecycle NEEDS_INFO) + context +1 + RECHECK. 열린 Run은 Event처럼 STALE.
+    READY를 남겨 두면 기준 위치에 고정 상수로 남아 이후 모든 Solver 호출이 INFEASIBLE이 된다.
+    - READY: 새 revision(NEEDS_INFO) + context +1 + RECHECK. 이 작업을 다루는 열린 Run은 STALE(그 Case가
+      끝나 대기열이 올라감), 다른 열린 Run은 wake(고정 충돌이 사라져 다시 풀 수 있다, A.21 3).
+    - QUEUED: 사실에 들어간 적이 없으므로 새 revision(NEEDS_INFO)만. context·RECHECK·Run 영향 없음.
     """
     r = Result()
     site_id = ctx.site_id
@@ -181,7 +190,7 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
         (
             t
             for t in list_current_tasks(tx, site_id, ctx.pack)
-            if t.task_id == body.task_id and t.lifecycle == "READY"
+            if t.task_id == body.task_id and t.lifecycle in ("READY", "QUEUED")
         ),
         None,
     )
@@ -200,11 +209,17 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
     insert_task_revision(
         tx, site_id, task.model_copy(update={"revision": revision, "lifecycle": "NEEDS_INFO"})
     )
-    context_version = bump_context_version(tx, site_id)
-    stale_active_runs(tx, site_id, f"WITHDRAW:{task.task_id}")
+    r.refs = {"task_id": task.task_id, "revision": revision, "queued": task.lifecycle == "QUEUED"}
+    if task.lifecycle == "QUEUED":
+        return r
+    bump_context_version(tx, site_id)
+    for run in list_active_runs(tx, site_id):
+        if task.task_id in (run.input_ref.get("conflict") or {}).get("task_ids", []):
+            end_case_run(tx, ctx.pack, run.run_id, "STALE", f"WITHDRAW:{task.task_id}")
+        else:
+            wake_run(tx, site_id, run.run_id)
     cause = {"kind": "WITHDRAW", "task_id": task.task_id, "actor_id": ctx.actor_id}
-    register_job(tx, site_id, "RECHECK", f"RECHECK:ctx{context_version}", {"cause": cause})
-    r.refs = {"task_id": task.task_id, "revision": revision}
+    register_recheck(tx, site_id, cause)
     return r
 
 
