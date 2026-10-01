@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from scripted import Router, call, solve
 
 from app.agents.prompts import intake as prompt
+from app.api.state import build_state
 from app.commands.events import EventReport, receive_event
 from app.commands.intake import IntakeRequest, submit_intake
 from app.commands.messages import ReplyRequest, reply_message
@@ -384,3 +385,14 @@ def test_intake_prompt_fingerprint_keys_and_no_pack_values(seeded):
         assert value not in prompt.SYSTEM
     assert "같은 조건의 조회는 같은 결과를 돌려준다" in prompt.SYSTEM
     assert "첫날 09:00" in prompt.render_system(seeded)
+
+
+def test_state_inbox_has_intake_values(seeded):
+    """요청자 받은 요청: 작업 요청 값 확인에 확인 값(values)을 내려준다 (A.26 화면)."""
+
+    pack = seeded
+    _to_request(pack)
+    with db.read() as conn:
+        mine = build_state(conn, pack, "planner_a")["inbox"]
+    [card] = [m for m in mine if m["type"] == "CONFIRMATION"]
+    assert (card["proposal_id"], card["values"]) == (None, VALUES_A)

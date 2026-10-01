@@ -190,6 +190,14 @@ def list_case_replies(conn: sqlite3.Connection, case_id: str) -> list[dict[str, 
     return out
 
 
+def _step_values(conn: sqlite3.Connection, r: dict[str, Any]) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT tool_result FROM agent_step WHERE run_id = ? AND step_no = ?",
+        (r["run_id"], r["step_no"]),
+    ).fetchone()
+    return None if row is None else (loads(row[0]) or {}).get("values")
+
+
 def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[dict[str, Any]]:
     """X-Actor 본인에게 온 메시지 (§12 "본인", A.21 7). 서버 문구(body)와 모델 문구(agent_text)를 나눈다."""
     out = []
@@ -212,6 +220,10 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
                 "fact": None
                 if "field" not in payload
                 else {k: payload[k] for k in ("field", "old_value", "new_value")},
+                # 작업 요청 값 확인(제안 없는 CONFIRMATION): 그 메시지를 만든 AgentStep의 values (A.26)
+                "values": _step_values(conn, r)
+                if r["type"] == "CONFIRMATION" and r["proposal_id"] is None
+                else None,
             }
         )
     return out

@@ -1409,3 +1409,11 @@
   - 모호 3회(18:48 UTC, `data/live_runs/20261001T184859Z.jsonl`): **1/3 성공**. #1 성공(ASK 1 → LOOKUP → REQUEST → COMPLETE → Alpha). #2·#3 실패(ASK → LOOKUP → ASK → ASK → ESCALATE): 구역·자원을 답으로 받은 뒤 문장에 이미 있던 작업 시간·시간창을 "확인값이 아니다"라며 다시 물어 사람 라운드를 다 썼다.
   - 모든 회차 금지 Action·MALFORMED·LLM 오류 0, Budget 소진 없음(이관은 모델의 ESCALATE).
 - 원인(설계 누락, 수정은 결정을 받은 뒤): ① Observation에 **자원 유형 코드 목록이 없다**(작업 유형·구역만 줌). 모델이 "크레인" 같은 표현으로 조회해 빈 결과를 받고, 확인 값의 required_resource_type을 틀린다. ② "값 확인 요청에 요청자가 확인하면 그 값 전체가 확인된 값이 된다, 확인 질문의 답은 확인이 아니다"라는 **확인의 의미가 prompt에 사실로 적혀 있지 않다**. 모델이 값마다 질문으로 확인하려 해 사람 라운드(질문·확인 공유 3)를 소진한다.
+
+**S3 구현 기록** (화면)
+- 입력 영역 "자연어 요청" 탭(작업 ID + 요청 문장, 시연 버튼은 `/dev/scenario`의 `intake_requests`, 시연값 요청자가 현재 Actor와 다르면 경고만, UNIT_PLANNER만 보내기). 폼 탭은 그대로.
+- 받은 요청: 제안 없는 질문은 "작업 요청 확인 질문" 카드(답 입력란, 비면 "답변 보내기" 비활성, ANSWER), 제안 없는 확인은 "작업 요청 값 확인" 카드(작업 유형 표시 이름·구역·작업 시간, 시작 범위·종료 한도를 날짜·시각으로, 자원; 확인 / 거절). 담당자 확인 질문(MOVABILITY)의 "작업·축/허용 값" 행은 제안 있는 질문에만 보인다(처음에는 자유 질문 카드에도 빈 행이 나와 고쳤다).
+- state API: 받은 요청의 제안 없는 CONFIRMATION에 `values`(그 메시지를 만든 AgentStep 결과). 테스트 `test_state_inbox_has_intake_values`.
+- labels.ts: 메시지 종류 `FREE_QUESTION`·`TASKSPEC`과 답 문구(확인/거절), 결정 `ANSWER`(답변), 사유 `INVALID_DECISION`·`TASK_ID_IN_INTAKE`·`TASKSPEC_INVALID`, end_reason 접두어 `TASKSPEC_COMPLETE:`. 작업 접수 Agent 이름은 이미 있었다.
+- headless 확인(Chrome 154, CDP, 1920×1080, 스크립트 모델로 만든 단계별 DB, 워커 끈 서버): ① Planner A 자연어 요청 탭에서 "시연: 자연어 요청(명확)" → 작업 ID A·문장 채워짐, 보내기 켜짐. ② 모호한 요청 뒤 받은 요청: 확인 질문 카드(서버 문구 "작업 요청 A 확인 질문: 구역, 자원을(를) 알려 주세요…", Agent 설명, 답 입력란, 비어 있어 보내기 꺼짐), 배지 1, Activity 작업 접수 Agent 사람 대기. ③ 답 뒤 값 확인 카드(서버 문구에 값과 날짜·시각·분, 표 "인양 · B 구역 · 30분 / 10/12(월) 09:00 – 10/12(월) 10:00 · 종료 한도 10:30 / CRANE A-CR-01", 확인·거절), 답한 질문 카드는 버튼 없음.
+- 검사: pytest 495, `npm run build`·`npm run lint`, `verify_demo_values` 통과. **로컬 DB reset 필요(scenario.yaml 변경, 사용자가 한다).**

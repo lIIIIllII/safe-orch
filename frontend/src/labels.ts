@@ -35,6 +35,10 @@ export const REASON: Record<string, string> = {
   HOLD_NOT_ACTIVE: '이미 해제된 Hold',
   RESOLUTION_NOT_SUPPORTED: '지원하지 않는 해제 사유',
   FACT_NOT_CONFIRMED: '이 신고의 사실 수정이 아직 확정되지 않음',
+  // Work Intake (A.26)
+  INVALID_DECISION: '이 메시지에 쓸 수 없는 답(질문은 답변, 확인은 확인·거절)',
+  TASK_ID_IN_INTAKE: '같은 작업 ID로 진행 중인 자연어 요청 있음',
+  TASKSPEC_INVALID: '작업 요청 값이 검증을 통과하지 못함',
   // 폼
   TASK_ID_EXISTS: '같은 작업 ID 있음',
   FIELD_MISSING: '필수 확인 항목 누락',
@@ -153,6 +157,8 @@ export function endReason(code: string | null): string {
       return `${rest}이(가) 취소`
     case 'MODEL_UNAVAILABLE':
       return `모델 준비 실패: ${rest}`
+    case 'TASKSPEC_COMPLETE':
+      return `작업 요청 ${rest} 접수 완료`
     case 'FACT_CONFIRMED':
       return `사실 수정 확정으로 종료 (${rest})`
     case 'HOLD_RELEASED':
@@ -329,6 +335,7 @@ export const PROPOSAL_STATUS: Record<string, string> = {
 export const DECISION: Record<string, string> = {
   ACCEPT: '수락',
   DECLINE: '거절',
+  ANSWER: '답변',
 }
 
 /** 받은 요청 유형 (A.21·A.24) */
@@ -337,6 +344,8 @@ export const MESSAGE_TYPE: Record<string, string> = {
   CHANGE_REQUEST: '변경 요청',
   CONFIRMATION: '제약 초안 확인',
   FACT_UPDATE: '사실 수정 확인',
+  FREE_QUESTION: '작업 요청 확인 질문',
+  TASKSPEC: '작업 요청 값 확인',
   NOTICE: '확정 통지',
 }
 
@@ -345,6 +354,7 @@ export const DECISION_BY_TYPE: Record<string, Record<string, string>> = {
   CHANGE_REQUEST: { ACCEPT: '수락', DECLINE: '이견' },
   CONFIRMATION: { ACCEPT: '확정', DECLINE: '폐기' },
   FACT_UPDATE: { ACCEPT: '확정', DECLINE: '폐기' },
+  TASKSPEC: { ACCEPT: '확인', DECLINE: '거절' },
 }
 
 /** 사실 수정 필드 (A.25) */

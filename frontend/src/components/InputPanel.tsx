@@ -19,13 +19,16 @@ interface Props {
 }
 
 export function InputPanel(props: Props) {
-  const [tab, setTab] = useState<'task' | 'event' | 'inbox'>('task')
+  const [tab, setTab] = useState<'task' | 'intake' | 'event' | 'inbox'>('task')
   const unread = openInbox(props.state)
   return (
     <section className="panel inputs">
       <div className="tabs">
         <button className={tab === 'task' ? 'tab-on' : ''} onClick={() => setTab('task')}>
           작업 요청
+        </button>
+        <button className={tab === 'intake' ? 'tab-on' : ''} onClick={() => setTab('intake')}>
+          자연어 요청
         </button>
         <button className={tab === 'event' ? 'tab-on' : ''} onClick={() => setTab('event')}>
           지연 신고
@@ -38,6 +41,9 @@ export function InputPanel(props: Props) {
         {/* 탭을 바꿔도 입력 중인 값을 잃지 않게 둘 다 마운트한다 */}
         <div hidden={tab !== 'task'}>
           <TaskRequestForm {...props} />
+        </div>
+        <div hidden={tab !== 'intake'}>
+          <IntakeForm {...props} />
         </div>
         <div hidden={tab !== 'event'}>
           <EventForm {...props} />
@@ -333,6 +339,57 @@ function RequestList({ state, actorId, roles, busy, run }: Props) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function IntakeForm({ actorId, roles, busy, run }: Props) {
+  // 자연어 작업 요청 → Work Intake Agent (A.26). 값은 Agent가 묻고 요청자가 확인해야 확정된다.
+  const { siteId, scenario } = useEnv()
+  const [taskId, setTaskId] = useState('')
+  const [text, setText] = useState('')
+  const [requester, setRequester] = useState<string | null>(null)
+  const allowed = roles.includes('UNIT_PLANNER')
+  return (
+    <div className="form-grid">
+      <label>
+        작업 ID
+        <input value={taskId} onChange={(e) => setTaskId(e.target.value)} />
+      </label>
+      <p className="muted small">값은 작업 접수 Agent가 확인 질문과 값 확인으로 받습니다. 폼 탭은 그대로 쓸 수 있습니다.</p>
+      <label className="span2">
+        요청 문장
+        <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} />
+      </label>
+      <div className="row span2">
+        {/* 시연 문장은 scenario(DEMO_MODE)에서만 받는다 (A.26) */}
+        {scenario?.intake_requests?.map((x) => (
+          <button
+            key={x.label}
+            type="button"
+            onClick={() => {
+              setTaskId(x.body.task_id)
+              setText(x.body.text)
+              setRequester(x.requester)
+            }}
+          >
+            시연: {x.label}
+          </button>
+        ))}
+        <span className="spacer" />
+        <button
+          className="btn-primary"
+          disabled={!allowed || busy !== null || !taskId.trim() || !text.trim()}
+          title={allowed ? undefined : '공정 담당(UNIT_PLANNER) 권한 필요'}
+          onClick={() => void run('자연어 요청', `/sites/${siteId}/intakes`, { task_id: taskId, text })}
+        >
+          요청 보내기
+        </button>
+      </div>
+      {requester && requester !== actorId && (
+        <p className="warn small span2">시연값의 요청자는 {requester}입니다. 현재 Actor와 다릅니다(자동 전환하지 않음).</p>
+      )}
+      {!allowed && <p className="muted small span2">공정 담당(UNIT_PLANNER) 권한 필요</p>}
     </div>
   )
 }

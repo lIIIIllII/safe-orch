@@ -247,6 +247,19 @@ export interface InboxItem {
   axes: string[]
   /** 사실 수정안 (CONFIRMATION + FACT_UPDATE, A.25). 값은 Horizon 원점 기준 분 */
   fact: { field: string; old_value: number; new_value: number } | null
+  /** 작업 요청 값 확인 (제안 없는 CONFIRMATION, Work Intake, A.26). 시간은 분 */
+  values: IntakeValues | null
+}
+
+export interface IntakeValues {
+  work_type: string
+  zone_id: string
+  duration: number
+  earliest_start: number
+  latest_start: number
+  latest_end: number
+  required_resource_type: string | null
+  requested_resource_id: string | null
 }
 
 export interface AgentStep {
@@ -336,4 +349,6 @@ export interface Scenario {
     label: string
     body: { reason_code: string; target_task_ids: string[]; axes: string[]; comment: string }
   }[]
+  /** 자연어 작업 요청 시연값 (A.26) */
+  intake_requests?: { label: string; requester: string; body: { task_id: string; text: string }; answer: string }[]
 }
