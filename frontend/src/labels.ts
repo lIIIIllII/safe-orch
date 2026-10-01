@@ -1,4 +1,5 @@
 // 코드 → 한국어 문구 (부록 A.19). 화면은 문구와 원래 코드를 함께 보여 주고, 표에 없는 코드는 코드만 보여 준다.
+// Pack과 무관한 공통 코드(reason_code, 상태값, 기본 제약 id)만 둔다. 작업 유형·Pack Rule 이름은 meta에서 받는다 (A.20).
 
 export const REASON: Record<string, string> = {
   // 응답 status
@@ -25,6 +26,8 @@ export const REASON: Record<string, string> = {
   INVALID_REASON_CODE: '거절 사유 코드 오류',
   TARGET_REQUIRED: '작업 고정 거절은 대상 작업과 축 필요',
   TASK_NOT_FOUND: '대상 작업 없음',
+  // 요청 철회 (A.20)
+  TASK_IN_PLAN: '확정 계획에 있는 작업은 철회 불가',
   // Event·Hold
   SOURCE_BODY_MISMATCH: '같은 신고 ID에 다른 내용',
   HOLD_NOT_FOUND: 'Hold 없음',
@@ -39,6 +42,7 @@ export const REASON: Record<string, string> = {
   RESOURCE_TYPE_MISMATCH: '요청 자원 유형 불일치',
   RESOURCE_NOT_AUTHORIZED: '이 Unit이 쓸 수 없는 자원',
   INVALID_WINDOW: '시간창 모순',
+  WINDOW_OUTSIDE_WORK_HOURS: '시간창 안에 근무시간 시작 자리가 없음',
   PREDECESSOR_NOT_FOUND: '선행 작업 없음',
   // Run
   RUN_NOT_FOUND: 'Run 없음',
@@ -100,14 +104,12 @@ export const REASON: Record<string, string> = {
   RESOURCE_TYPE: '자원 유형 부적격',
   RESOURCE_AUTH: '자원 사용 권한 없음',
   AVAILABILITY: '가용 구간 밖',
+  CALENDAR: '근무시간 밖(근무 구간 하나에 들어가지 않음)',
   CAPACITY: '자원 겹침',
   FIELD_NOT_CONFIRMED: '필수 항목 미확인',
   CONFIRMED_VALUE_MISMATCH: '확인 값과 다름',
   HAZARD_TAGS_MISMATCH: '위험 태그가 Pack 도출값과 다름',
   UNMAPPED_RULE: '처리할 수 없는 Rule',
-  'SEP-LIFT-BELOW': '인양–하부 작업 분리',
-  'SEP-HOT-FLAM': '화기–인화성 작업 분리(15분)',
-  'CAP-RESOURCE': '자원 중복 배정 금지',
 }
 
 export function reason(code: string): string | undefined {
@@ -131,6 +133,8 @@ export function endReason(code: string | null): string {
       return `R${rest} 확정으로 종료`
     case 'EVENT':
       return `지연 신고로 중단 (${rest})`
+    case 'WITHDRAW':
+      return `요청 ${rest} 철회로 중단`
     case 'CANCELLED_BY':
       return `${rest}이(가) 취소`
     case 'MODEL_UNAVAILABLE':
@@ -170,7 +174,7 @@ export const CHECK_NAME: Record<string, string> = {
   C01: '무결성',
   C02: '작업 보존',
   C03: 'duration',
-  C04: '시간창',
+  C04: '시간창·근무시간',
   C05: '선후행',
   C06: '변경 범위',
   C07: '자원 적격',
@@ -262,13 +266,6 @@ export const ACTION_NAME: Record<string, string> = {
   LIST_ASSIGNABLE_RESOURCES: '사용 가능 자원 조회',
   TRY_ALTERNATIVE_RESOURCE: '대체 자원 시도',
   ASK_TASK_OWNER: '작업 담당자에게 확인 요청',
-}
-
-export const WORK_TYPE: Record<string, string> = {
-  LIFTING: '인양',
-  WORK_BELOW: '하부 작업',
-  HOT_WORK: '화기',
-  PAINTING: '도장',
 }
 
 export const ROLE: Record<string, string> = {

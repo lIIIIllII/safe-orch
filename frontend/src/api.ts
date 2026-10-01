@@ -1,9 +1,7 @@
 // API 호출 (부록 A.18·A.19). X-Actor는 Actor 전환 값, Idempotency-Key는 사용자 조작마다 새로 만든다.
 // 503과 응답을 받지 못한 네트워크 오류는 같은 키로 재시도한다(§12).
 
-import type { AgentStep, CommandResponse, SiteState } from './types'
-
-export const SITE_ID: string = import.meta.env.VITE_SITE_ID ?? 'YARD-01'
+import type { AgentStep, CommandResponse, Meta, Scenario, SiteEntry, SiteState } from './types'
 
 const MAX_RETRIES = 3
 
@@ -11,18 +9,45 @@ export function newKey(): string {
   return `ui-${crypto.randomUUID()}`
 }
 
-async function getJson<T>(path: string, actor: string): Promise<T> {
-  const res = await fetch(`/api${path}`, { headers: { 'X-Actor': actor } })
+class HttpError extends Error {
+  readonly status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+async function getJson<T>(path: string, actor: string | null): Promise<T> {
+  const res = await fetch(`/api${path}`, { headers: actor ? { 'X-Actor': actor } : {} })
   if (!res.ok) {
     const body = await res.json().catch(() => null)
     const codes: string[] = body?.reason_codes ?? []
-    throw new Error(`${res.status} ${codes.join(', ')}`.trim())
+    throw new HttpError(res.status, `${res.status} ${codes.join(', ')}`.trim())
   }
   return (await res.json()) as T
 }
 
-export function fetchState(actor: string): Promise<SiteState> {
-  return getJson<SiteState>(`/sites/${SITE_ID}/state`, actor)
+/** 현장 목록과 Actor (A.20 2차). X-Actor 없이 읽는다. site_id는 여기서 받는다. */
+export async function fetchSites(): Promise<SiteEntry[]> {
+  return (await getJson<{ sites: SiteEntry[] }>('/sites', null)).sites
+}
+
+export function fetchMeta(siteId: string, actor: string): Promise<Meta> {
+  return getJson<Meta>(`/sites/${siteId}/meta`, actor)
+}
+
+/** 시연값. DEMO_MODE가 아니면(404) null. */
+export async function fetchScenario(actor: string): Promise<Scenario | null> {
+  try {
+    return await getJson<Scenario>('/dev/scenario', actor)
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 404) return null
+    throw e
+  }
+}
+
+export function fetchState(siteId: string, actor: string): Promise<SiteState> {
+  return getJson<SiteState>(`/sites/${siteId}/state`, actor)
 }
 
 export function fetchSteps(actor: string, runId: string): Promise<AgentStep[]> {

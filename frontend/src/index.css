@@ -14,6 +14,9 @@
   --ub-bg: #d9f1e3;
   --site: #7a8494;
   --site-bg: #e6e9ee;
+  --u3: #8a4fc4;
+  --u3-bg: #efe3fa;
+  --off: rgba(106, 116, 130, 0.14);
 
   --pass: #1f8a4c;
   --pass-bg: #e2f5e9;
@@ -359,7 +362,63 @@ textarea {
 /* ── 타임라인 ─────────────────────────── */
 
 .timeline {
-  max-height: 460px;
+  max-height: 470px;
+}
+
+.timeline .panel-head {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.seg,
+.day-tabs {
+  display: flex;
+  gap: 0;
+}
+
+.seg button,
+.day-tabs button {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.seg button:first-child,
+.day-tabs button:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.seg button:last-child,
+.day-tabs button:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.seg-on,
+.day-on {
+  background: var(--primary);
+  color: #fff;
+  font-weight: 700;
+}
+
+.day-badge {
+  display: inline-block;
+  min-width: 16px;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #fff;
+  text-align: center;
+}
+
+.day-badge-conflict {
+  background: var(--conflict);
+}
+
+.day-badge-change {
+  background: #111;
 }
 
 .legend {
@@ -394,6 +453,11 @@ textarea {
 
 .lg-conflict::before {
   background: repeating-linear-gradient(45deg, rgba(221, 51, 51, 0.35) 0 3px, transparent 3px 6px);
+}
+
+.lg-off::before {
+  background: repeating-linear-gradient(-45deg, var(--off) 0 3px, transparent 3px 6px);
+  border: 1px solid var(--border);
 }
 
 .toggle {
@@ -434,50 +498,84 @@ textarea {
 .tl-label {
   font-size: 13px;
   font-weight: 600;
-  padding: 6px 6px 6px 0;
+  padding: 2px 6px 2px 0;
   align-self: center;
 }
 
 .tl-track {
-  display: grid;
   position: relative;
-  padding: 3px 0;
-  row-gap: 2px;
-  min-height: 32px;
-  background-image: repeating-linear-gradient(
-    90deg,
-    #e3e7ec 0 1px,
-    transparent 1px var(--tick)
-  );
+  min-height: 22px;
+  overflow: hidden;
 }
 
-.tl-axis .tl-track {
-  min-height: 20px;
-  background: none;
+.tl-axis-track {
+  height: 34px;
+  overflow: visible;
 }
 
-.tl-tick {
+.tl-day-label {
+  font-size: 12px;
+  color: var(--primary);
+}
+
+/* 비근무: 회색 사선. 전체 보기의 밤은 접힌 띠(고정 폭) */
+.tl-off {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(-45deg, var(--off) 0 4px, transparent 4px 8px);
+  z-index: 0;
+}
+
+.tl-night {
+  background: repeating-linear-gradient(-45deg, rgba(106, 116, 130, 0.3) 0 3px, transparent 3px 6px);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+.tl-grid {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid #eef0f3;
+  z-index: 0;
+}
+
+.tl-grid-major {
+  border-left-color: #dde2e8;
+}
+
+.tl-tick,
+.tl-day {
+  position: absolute;
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
   transform: translateX(-50%);
 }
 
-.tl-tick:first-child {
-  transform: none;
+.tl-tick {
+  bottom: 0;
 }
 
-.tl-tick:last-child {
-  transform: translateX(-100%);
+.tl-day {
+  top: 0;
+  transform: none;
+  padding-left: 3px;
+  font-weight: 700;
+  color: var(--primary);
 }
 
 .tl-conflict {
+  position: absolute;
+  top: 0;
+  bottom: 0;
   overflow: visible;
   background: repeating-linear-gradient(45deg, rgba(221, 51, 51, 0.22) 0 4px, transparent 4px 8px);
   border-left: 2px solid var(--conflict);
   border-right: 2px solid var(--conflict);
   z-index: 0;
-  position: relative;
 }
 
 .tl-conflict span {
@@ -496,10 +594,10 @@ textarea {
 
 .bar {
   z-index: 1;
-  position: relative;
+  position: absolute;
   border-radius: 4px;
-  font-size: 12px;
-  padding: 2px 6px;
+  font-size: 11px;
+  padding: 0 4px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -514,20 +612,39 @@ textarea {
   text-overflow: ellipsis;
 }
 
-.unit-a {
+/* Unit 색은 state.units 순서로 받는다(Pack의 Unit ID를 쓰지 않음, A.20) */
+.unit-0 {
   --c: var(--ua);
   --cbg: var(--ua-bg);
 }
 
-.unit-b {
+.unit-1 {
   --c: var(--ub);
   --cbg: var(--ub-bg);
 }
 
-.unit-site,
-.unit-other {
+.unit-2 {
   --c: var(--site);
   --cbg: var(--site-bg);
+}
+
+.unit-3 {
+  --c: var(--u3);
+  --cbg: var(--u3-bg);
+}
+
+/* 근무시간 밖 배치(CALENDAR 위반)와 보기 범위에서 잘린 막대 */
+.bar-night {
+  outline: 2px solid var(--conflict);
+  outline-offset: -1px;
+}
+
+.bar-clip-l {
+  border-left-style: dotted;
+}
+
+.bar-clip-r {
+  border-right-style: dotted;
 }
 
 .bar-plan {
@@ -911,4 +1028,38 @@ textarea {
 
 .hold-note {
   margin: 4px 0 0;
+}
+
+/* ── 시연 확장 2차 (부록 A.20) ─────────── */
+
+.row.tight {
+  margin-top: 0;
+  gap: 4px;
+}
+
+.row.tight select {
+  flex: 1;
+  min-width: 0;
+}
+
+input.time {
+  width: 72px;
+  flex: none;
+}
+
+.warn {
+  margin: 0;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--incomplete-bg);
+  color: var(--incomplete);
+}
+
+.requests {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.request {
+  font-size: 13px;
 }

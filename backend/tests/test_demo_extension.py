@@ -493,3 +493,39 @@ def test_withdraw_api(client, seeded):
     assert post("planner_b", "X9").status_code == 404
     res = post("planner_b", "N5")
     assert res.status_code == 200 and res.json()["result_refs"]["revision"] == 2
+
+
+# ── 2차: 현장 목록·거절 시연값 (A.20 2차) ──────────────────────
+
+
+def test_sites_api_without_actor(client, seeded):
+    res = client.get("/api/sites")
+    assert res.status_code == 200, res.text
+    [site] = res.json()["sites"]
+    assert (site["site_id"], site["pack"]) == (seeded.site_id, seeded.name)
+    supervisors = [a["actor_id"] for a in site["actors"] if "SUPERVISOR" in a["roles"]]
+    assert supervisors == ["supervisor"]
+
+
+def test_dev_scenario_rejections(client, seeded):
+    res = client.get("/api/dev/scenario", headers={"X-Actor": "supervisor"})
+    [rej] = res.json()["rejections"]
+    assert rej["body"] == {
+        "reason_code": "TASK_IMMOVABLE",
+        "target_task_ids": ["C"],
+        "axes": ["TIME", "RESOURCE"],
+        "comment": "작업발판 연계 공정 확정",
+    }
+
+
+def test_demo_rejection_target_must_exist(pack_copy):
+    import yaml
+
+    from app.packs.loader import PackError, load_pack
+
+    f = pack_copy / "scenario.yaml"
+    data = yaml.safe_load(f.read_text(encoding="utf-8"))
+    data["demo_rejections"][0]["target_task_ids"] = ["X9"]
+    f.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    with pytest.raises(PackError, match="undefined task 'X9'"):
+        load_pack(pack_copy)

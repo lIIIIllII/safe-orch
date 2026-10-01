@@ -73,7 +73,24 @@ def scenario_view(pack: LoadedPack) -> dict[str, Any]:
         }
         for e in pack.demo_events
     ]
-    return {"pack": pack.name, "task_requests": requests, "event_reports": events}
+    rejections = [
+        {
+            "label": x.label,
+            "body": {
+                "reason_code": x.reason_code,
+                "target_task_ids": list(x.target_task_ids),
+                "axes": list(x.axes),
+                "comment": x.comment,
+            },
+        }
+        for x in pack.demo_rejections
+    ]
+    return {
+        "pack": pack.name,
+        "task_requests": requests,
+        "event_reports": events,
+        "rejections": rejections,
+    }
 
 
 @router.get("/dev/scenario")

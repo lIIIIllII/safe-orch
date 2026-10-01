@@ -2,7 +2,7 @@
 // 승인 버튼은 권한만 보고 켠다. STALE·Hold여도 막지 않고 서버의 거절 사유를 보여 준다.
 
 import { useState } from 'react'
-import type { CandidateView, CommandOutcome, SiteState } from '../types'
+import type { CandidateView, CommandOutcome, CommandResponse, SiteState } from '../types'
 import {
   CANDIDATE_KIND,
   CANDIDATE_STATUS,
@@ -15,10 +15,12 @@ import {
   SOLVER_STATUS,
   VALIDATION_BADGE,
 } from '../labels'
-import { span } from '../time'
+import { delayText } from '../time'
+import { useEnv } from '../context'
 import { Code, OutcomeBox, ValidationBadge } from './common'
 
-export type Run = (label: string, path: string, body: unknown) => Promise<void>
+/** 명령 실행. 응답(실패 시 null)을 돌려준다. 결과 영역 표시는 App이 한다. */
+export type Run = (label: string, path: string, body: unknown) => Promise<CommandResponse | null>
 
 interface Props {
   state: SiteState
@@ -92,7 +94,7 @@ function CandidateDetail({
   busy,
   run,
 }: Props & { candidate: CandidateView }) {
-  const origin = state.site.horizon_start_utc
+  const { clock, scenario } = useEnv()
   const actorName = new Map(state.actors.map((a) => [a.actor_id, a.name]))
   const v = c.validation
   const items = c.consultation?.items ?? []
@@ -106,7 +108,7 @@ function CandidateDetail({
   const [rejComment, setRejComment] = useState('')
   const needSup = isSupervisor ? undefined : 'Supervisor 권한 필요'
   const assign = (a: { start: number; end: number; resource_id: string | null }) =>
-    `${span(origin, a.start, a.end)}${a.resource_id ? ` · ${a.resource_id}` : ''}`
+    `${clock.span(a.start, a.end)}${a.resource_id ? ` · ${a.resource_id}` : ''}`
   const toggle = (list: string[], x: string) =>
     list.includes(x) ? list.filter((y) => y !== x) : [...list, x]
 
@@ -140,6 +142,7 @@ function CandidateDetail({
                 <td>{assign(ch.before)}</td>
                 <td>→</td>
                 <td className="strong">{assign(ch.after)}</td>
+                <td className="small">{ch.delay > 0 ? `지연 ${delayText(ch.delay, ch.work_delay)}` : ''}</td>
               </tr>
             ))}
           </tbody>
@@ -167,8 +170,9 @@ function CandidateDetail({
                 <td>
                   {c.solver.stage2 ? (
                     <>
-                      {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 지연{' '}
-                      {c.solver.stage2.delay ?? '—'}분 <code>{c.solver.stage2.status}</code>
+                      {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 총 지연{' '}
+                      {delayText(c.solver.stage2.delay, c.solver.stage2.work_delay)}{' '}
+                      <code>{c.solver.stage2.status}</code>
                     </>
                   ) : (
                     '실행 안 함'
@@ -248,12 +252,14 @@ function CandidateDetail({
             <button
               disabled={!isSupervisor || busy !== null}
               title={needSup}
-              onClick={() =>
-                run('협의 항목 수용(WAIVE)', `/consultations/${c.candidate_id}/waive`, {
+              onClick={async () => {
+                const r = await run('협의 항목 수용(WAIVE)', `/consultations/${c.candidate_id}/waive`, {
                   task_ids: waiveIds,
                   comment: waiveComment,
                 })
-              }
+                // 수용된 항목을 다시 보내 ITEM_NOT_WAIVABLE이 나지 않게 선택을 비운다 (A.20 2차)
+                if (r && (r.status === 'APPLIED' || r.status === 'REPLAYED')) setWaiveIds([])
+              }}
             >
               선택 항목 수용
             </button>
@@ -326,17 +332,21 @@ function CandidateDetail({
           </label>
         </div>
         <div className="row">
-          <button
-            type="button"
-            onClick={() => {
-              setRejReason('TASK_IMMOVABLE')
-              setRejTargets(['C'])
-              setRejAxes(['TIME', 'RESOURCE'])
-              setRejComment('작업발판 연계 공정 확정')
-            }}
-          >
-            시연값 채우기
-          </button>
+          {/* 시연값은 scenario(DEMO_MODE)에서만 받는다 (A.20 2차) */}
+          {scenario?.rejections.map((x) => (
+            <button
+              key={x.label}
+              type="button"
+              onClick={() => {
+                setRejReason(x.body.reason_code)
+                setRejTargets(x.body.target_task_ids)
+                setRejAxes(x.body.axes)
+                setRejComment(x.body.comment)
+              }}
+            >
+              시연값: {x.label}
+            </button>
+          ))}
           <button
             className="btn-warn"
             disabled={!isSupervisor || busy !== null}

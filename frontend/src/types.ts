@@ -1,4 +1,4 @@
-// GET /api/sites/{id}/state 응답 타입 (부록 A.18). 서버가 dict를 돌려주므로 직접 쓴다 (부록 A.19).
+// API 응답 타입 (부록 A.18·A.20). 서버가 dict를 돌려주므로 직접 쓴다 (부록 A.19).
 
 export type Role = 'UNIT_PLANNER' | 'REPORTER' | 'SUPERVISOR'
 
@@ -78,7 +78,7 @@ export interface Conflict {
 export interface SolverView {
   scope_level: string
   stage1: { status: string; changed: number | null }
-  stage2: { status: string; delay: number | null } | null
+  stage2: { status: string; delay: number | null; work_delay: number | null } | null
   chosen_stage: number | null
   minimal_change: boolean
   delay_optimality_unconfirmed: boolean
@@ -110,7 +110,14 @@ export interface CandidateView {
   base_plan_revision: number
   display_status: 'COMMITTED' | 'REJECTED' | 'STALE' | 'OPEN'
   assignments: Assignment[]
-  changes: { task_id: string; before: Assignment; after: Assignment }[]
+  /** delay = 달력 분(§7), work_delay = 근무 분. 서버가 조회 시 계산한다 (A.20). */
+  changes: {
+    task_id: string
+    before: Assignment
+    after: Assignment
+    delay: number
+    work_delay: number
+  }[]
   solver: SolverView | null
   validation: {
     validation_id: string
@@ -216,4 +223,53 @@ export interface CommandOutcome {
   label: string
   actor_id: string
   response: CommandResponse
+}
+
+/** GET /api/sites (A.20 2차). X-Actor 없이 읽는 입구. */
+export interface SiteEntry {
+  site_id: string
+  pack: string
+  actors: { actor_id: string; name: string; roles: Role[] }[]
+}
+
+/** GET /api/sites/{id}/meta (A.20). 화면은 Pack 값을 여기서만 받는다. */
+export interface Meta {
+  pack: string
+  pack_hash: string
+  work_types: Record<string, { display_name: string; hazard_tags: string[]; critical_fields: string[] }>
+  rules: { rule_id: string; type: string; display_name: string }[]
+  timezone: string
+  horizon_start_utc: string
+  horizon_minutes: number
+  work_intervals: [number, number][]
+  zones: string[]
+  zone_relations: { zone_a: string; zone_b: string; relation: string }[]
+  resources: Resource[]
+}
+
+/** 작업 요청 폼 본문 (시각은 원점 기준 분). */
+export interface TaskForm {
+  task_id: string
+  work_type: string
+  zone_id: string
+  duration: number
+  earliest_start: number
+  latest_start: number
+  latest_end: number
+  required_resource_type: string | null
+  requested_resource_id: string | null
+}
+
+/** GET /api/dev/scenario (DEMO_MODE, A.20). */
+export interface Scenario {
+  pack: string
+  task_requests: { label: string; requester: string; form: TaskForm }[]
+  event_reports: {
+    label: string
+    body: { event_type: 'DELAY' | 'OTHER'; text: string; target_task_id: string | null }
+  }[]
+  rejections: {
+    label: string
+    body: { reason_code: string; target_task_ids: string[]; axes: string[]; comment: string }
+  }[]
 }

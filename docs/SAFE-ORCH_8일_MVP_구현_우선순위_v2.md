@@ -856,7 +856,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - 상태바 48px: Pack·site, Plan R#, Context v#, ACTIVE Hold 수, dispatch 대기/실패, Actor 선택, 조회 상태. 오른쪽 끝에 다른 버튼과 떨어뜨려 "시연 초기화"(확인 창 → `/dev/reset` `{confirm: "RESET safe_orch", start: "R0"}`).
 - 본문: 좌 약 1140px(위 타임라인, 아래 Activity | 입력·Hold 목록), 우 약 780px(검토 패널). 페이지 스크롤 없이 패널 안에서 스크롤한다. 기본 글자 15px.
 - Hold 목록은 탭 밖에 항상 보인다. 입력 탭은 [작업 요청 | 지연 신고].
-- Actor를 바꿔도 선택한 후보·Run·입력 중인 폼을 유지한다. `?actor=<actor_id>` URL 인자로 첫 Actor를 정할 수 있다(창 두 개를 다른 Actor로). 기본 Actor는 `supervisor`, site_id는 `VITE_SITE_ID`(기본 `YARD-01`).
+- Actor를 바꿔도 선택한 후보·Run·입력 중인 폼을 유지한다. `?actor=<actor_id>` URL 인자로 첫 Actor를 정할 수 있다(창 두 개를 다른 Actor로). 기본 Actor는 `supervisor`, site_id는 `VITE_SITE_ID`(기본 `YARD-01`). (A.20 2차에서 둘 다 `GET /api/sites`로 바꿈)
 
 **타임라인**
 - 09:00–12:00, 1분 = CSS grid 1칸(`horizon_minutes`칸). 15분 눈금, 30분 라벨. 시각은 `horizon_start_utc + 분`을 `Asia/Seoul`로 변환한다. 가상 시각이므로 현재 시각 선은 없다.
@@ -902,7 +902,7 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - 프런트 테스트 러너는 두지 않는다. 화면은 판정을 하지 않고 안전 로직은 pytest가 맡는다. 검사는 `npm run build`(tsc 포함)·`npm run lint`(oxlint)와 백엔드 `uv run pytest`다.
 
 **실행 방법**
-- 백엔드: `backend/.env`에 `OPENAI_API_KEY`, `OPENAI_MODEL`(날짜 붙은 스냅샷 ID), 모델 종류에 맞는 `OPENAI_TEMPERATURE`·`OPENAI_SEED` 또는 `OPENAI_REASONING_EFFORT`(A.17). `DEMO_MODE`·`DISPATCH_WORKER`는 기본 true.
+- 백엔드: 저장소 루트의 `.env`(설정은 `REPO_ROOT/.env`를 읽는다. `.env.example` 참고)에 `OPENAI_API_KEY`, `OPENAI_MODEL`(날짜 붙은 스냅샷 ID), 모델 종류에 맞는 `OPENAI_TEMPERATURE`·`OPENAI_SEED` 또는 `OPENAI_REASONING_EFFORT`(A.17). `DEMO_MODE`·`DISPATCH_WORKER`는 기본 true.
   - `cd backend && uv run uvicorn app.main:app --port 8000` (녹화·수동 확인 때는 `--reload` 없이. 재시작하면 워커 스레드가 실행 중인 그래프를 끊는다)
 - DB가 비어 있으면(처음 한 번) 서버를 끈 채 `cd backend && uv run python -m scripts.reset_db`로 seed한다. "시연 초기화"(`/dev/reset`)는 X-Actor가 actor 테이블에 있어야 하므로 seed된 DB에서만 동작한다.
 - 프런트: `cd frontend && npm install`(처음 한 번) → `npm run dev` → http://localhost:5173 (Vite proxy `/api` → 8000).
@@ -1023,3 +1023,59 @@ AI Agent 기술설명서(1쪽)는 아래 6요소 매핑 표 하나를 중심으�
 - 타임라인: [하루 | 3일] 전환, 날짜 탭(그날 충돌·후보 변경 수 배지, 자동 이동 없음). 하루 보기는 08:00–18:00, 08–09·17–18 회색 사선 "비근무", 15분 눈금·30분 라벨. 3일 보기는 근무 구간을 잇고 밤은 24px 사선 띠로 접는다. 1분 = grid 1칸을 분→x 절대 위치로 바꾼다. 행 12개(구역 8 + 자원 4).
 - 지연 표시 "총 지연 1140분 (근무시간 기준 180분)"(값은 서버의 work_delay), labels: `CALENDAR`, `WINDOW_OUTSIDE_WORK_HOURS`, `TASK_IN_PLAN`, end_reason `WITHDRAW:`. 철회 버튼(Plan 밖 READY 작업, 담당자·SUPERVISOR).
 - 3분 영상: 문제 0:00–0:20 → A 요청 0:20–0:40 → Agent 판단 0:40–1:50 → Beta 확정 1:50–2:05 → **확장 2:05–2:30**(3일 보기, N3 충돌 2건 → 10/14 11:00 승인, N4 → 10/14 09:00 "1140분 · 근무 180분", 달력이 없으면 17:15) → 안전 경계 2:30–2:50 → 결과 2:50–3:00. 모자라면 N4만 남기고 N1·N2·N5는 실시연·보고서에 쓴다.
+
+#### A.20 2차: 화면 (구현)
+
+범위: 위 "2차에서 할 것"의 화면. D5 기능은 제외한다. 백엔드는 현장 목록과 거절 시연값만 작게 더했다.
+
+**원칙: 화면은 Pack을 모른다**
+- 화면 코드에 Pack 값을 두지 않는다. 읽는 곳은 `GET /api/sites`, `GET /api/sites/{id}/meta`, `GET /api/dev/scenario`, state뿐이다.
+  - 시간대·원점·근무 구간은 meta의 `timezone`·`horizon_start_utc`·`work_intervals`로 계산한다(`src/time.ts`의 `Clock`). 540, 08:00–18:00, 시간대 이름 같은 상수는 없다. 현장 날짜 + HH:MM → 분은 `Intl`로 그 시각의 시간대 오프셋을 구해 두 번 맞춘다(일광절약 경계 포함).
+  - 작업 유형 목록·표시 이름·critical_fields와 Rule 표시 이름은 meta에서 받는다(`src/context.ts`의 `EnvContext`). `labels.ts`에는 Pack과 무관한 공통 코드(reason_code, 상태값, 기본 제약 id)만 남겼다(`WORK_TYPE`·Pack Rule 문구 삭제).
+  - Unit 색은 state.units 순서의 index(`unit-0`…`unit-3`)로 정한다(Unit ID 상수 삭제).
+  - 시연값(A, N1–N5), 신고 문구, 거절 시연값은 `/api/dev/scenario`에서 받는다. DEMO_MODE가 아니면(404) 시연 메뉴를 모두 숨긴다.
+  - site_id와 첫 Actor는 `GET /api/sites`에서 받는다. `VITE_SITE_ID`와 기본값을 없앴다. 첫 Actor = `?actor=`가 있으면 그것, 없으면 첫 SUPERVISOR(없으면 첫 Actor). A.19의 "기본 Actor supervisor"를 이 규칙으로 바꾼다.
+- 검사: `frontend/scripts/check-pack-literals.mjs`를 `npm run lint`(oxlint 다음)에 넣었다. `domain_packs/*/` YAML에서 zone·resource·task·work_type·rule_id·site_id·timezone ID를 읽고(npm 라이브러리 없이 필요한 키만 정규식), `frontend/src`의 따옴표·템플릿 문자열에 그 ID가 토큰으로 나오면 실패한다. 한두 글자 ID는 오탐이 많아 길이 3 이상만 본다(지금 13개). 확인: 이전 커밋 화면 코드에 돌리면 `'YARD-01'`, `'LIFTING'`, `'A-CR-01'`, Pack Rule 3개, `'Asia/Seoul'`을 잡는다.
+
+**백엔드 추가 (작게)**
+- `GET /api/sites`: `{sites: [{site_id, pack, actors[{actor_id, name, roles}]}]}`. 화면의 입구라 health처럼 X-Actor 없이 읽는다. Actor 목록은 데모 인증(X-Actor 선택)에 쓰는 공개 정보다.
+- scenario.yaml `demo_rejections`(label, reason_code, target_task_ids, axes, comment)와 `/api/dev/scenario`의 `rejections`. 기존 거절 폼의 "시연값 채우기"가 작업 C를 하드코딩하고 있어서 옮겼다. 값은 A.19 그대로다(TASK_IMMOVABLE, C, TIME·RESOURCE, "작업발판 연계 공정 확정"). 로더는 대상 작업이 있는지 본다.
+
+**타임라인** (`components/Timeline.tsx`, 위치 계산은 `src/scale.ts`)
+- "1분 = grid 1칸"을 버리고 분 → x(퍼센트 + 고정 px, CSS `calc`)로 그린다.
+- [하루 | 전체 N일] 전환 + 날짜 탭. 탭 배지는 그날 몫의 충돌 수(빨강)와 선택 후보의 변경 수(검정)다. 그날 몫 = 근무 시작 1시간 전부터 다음 근무일의 같은 지점 전까지. 자동으로 날짜를 옮기지 않는다.
+- 하루 보기 범위 = 그날 근무 구간 앞뒤 1시간(`VIEW_MARGIN_MIN` 60). 앞뒤는 회색 사선 "비근무"다. 15분 선, 30분 라벨. 그날 몫인데 범위 밖인 막대는 가장자리 ◀/▶ 표시로 그리고, 정확한 시각은 제목(title)에 둔다.
+- 전체 보기는 근무 구간을 잇고, 근무일 사이 밤은 24px 사선 띠로 접는다. 1시간 선, 3시간 라벨, 근무일마다 날짜 머리말을 둔다. 막대가 좁아 Gate 배지가 작업 ID를 가리므로 전체 보기에서는 배지를 빼고 제목에만 둔다.
+- 근무시간 밖 배치(CALENDAR 위반) 막대는 빨간 외곽선이다. 보기 범위에서 잘린 쪽은 점선 테두리다.
+- 보기는 URL `?view=day&day=N`(1부터) / `?view=all`에 남는다(녹화·화면 확인 재현용). 행 높이를 줄여(차선 18px) 1920×1080에서 행 12개(구역 8 + 자원 4)가 스크롤 없이 보인다.
+
+**시각·지연·폼**
+- 시각 표기는 `10/13(화) 14:00`이다(meta 시간대). 날짜를 넘으면 `10/13(화) 14:00 → 10/14(수) 09:00`.
+- 지연: 서버의 `delay`·`work_delay`를 함께 보여 준다. 같으면 하나만 보이고, 다르면 "1140분 (근무시간 기준 180분)"이다. 표시 위치는 검토 패널의 변경점 줄과 Solver 2단계다. 화면에서 계산하지 않는다. Activity step 카드는 step 기록(tool_result)을 보여 주므로 달력 분 `delay`만 있다.
+- 작업 요청 폼: 시각마다 근무일 select + HH:MM, 옆에 "= N분". 근무시간 목록은 한 줄로 보인다.
+  - 근무시간 밖 요청 시작은 막지 않고 호박색 안내만 한다("접수되면 CALENDAR로 재계획, 시간창에 자리가 없으면 서버가 거절"). 시간창 슬롯 판정은 서버(`WINDOW_OUTSIDE_WORK_HOURS`)가 한다.
+  - 작업 유형·구역·자원 목록은 meta에서 받는다.
+- "시연값 ▾": scenario의 요청을 `ID · label — 요청자`로 보여 주고 고르면 폼을 채운다. 현재 Actor가 요청자와 다르면 경고만 한다(자동 전환 없음). 열린 재계획 Run(REPLANNING, RUNNING·WAITING_HUMAN)이 있으면 "재검사되지 않음"을 경고한다.
+- 지연 신고와 거절 폼의 시연 버튼도 scenario 값으로 바꿨다(문구별 버튼).
+- 요청 철회: 입력 영역에 "요청 (Plan 밖)" 목록을 둔다(READY이고 Plan에 없는 작업). [철회]는 작업 담당자나 SUPERVISOR일 때 켜지고, 그 밖에는 비활성 + 안내다(A.19 원칙: 숨기지 않음).
+- WAIVE가 APPLIED·REPLAYED면 협의 체크 선택을 비운다. 이미 수용된 항목을 다시 보내 `ITEM_NOT_WAIVABLE`이 나던 문제를 고쳤다. `Run`이 응답을 돌려주도록 바꿨다.
+- labels 추가: `CALENDAR`, `WINDOW_OUTSIDE_WORK_HOURS`, `TASK_IN_PLAN`, end_reason `WITHDRAW:`, C04 이름 "시간창·근무시간".
+
+**확인**
+- `npm run build`·`npm run lint`(Pack 하드코딩 검사 포함)·backend `uv run pytest` 통과.
+- 1920×1080 headless Chrome. 임시 DB + 워커 끔 + 스크립트 모델로 단계를 진행하며 `npx vite preview`(proxy `/api` → 8000) 화면을 찍었다.
+  1. 하루 10/12: A 장면 Alpha 검토 대기. B 구역 SEP-LIFT-BELOW 띠, A·C 후보 겹쳐 보기, 08–09·17–18 비근무, 탭 배지, 12행 모두 보임.
+  2. 하루 10/13: Alpha·N1 확정 뒤 N2 후보. F 구역·SITE-GC-01의 K·N1(11:00), G·G2의 SEP-HOT-FLAM 띠, N2 → 11:15 후보.
+  3. 전체 3일: 밤 띠 2개, 날짜 머리말, 09·12·15 라벨.
+  4. N4: 전체 보기에서 10/13 14:00 요청과 W 도장 충돌 띠, 후보 → 10/14(수) 09:00. 검토 패널 "지연 1140분 (근무시간 기준 180분)".
+
+**수동 확인 순서 (클릭 조작, 실제 모델 또는 스크립트)**
+1. "시연 초기화" → 타임라인 하루 10/12, 탭 배지 없음. 작업 요청 탭 "시연값 ▾"에 A·N1–N5와 요청자가 보인다.
+2. Actor = Supervisor인 채 "N3"를 고른다 → "요청자는 Planner B" 경고. Actor = Planner B로 바꾸면 경고가 사라진다. 시각 칸 옆 "= 2880분" 등이 보인다.
+3. A 장면 진행(A.19 수동 확인 1.2–1.6). 수용 성공 뒤 협의 체크가 비워지고, 수용된 항목이 다시 선택되지 않으므로 `ITEM_NOT_WAIVABLE`이 나지 않는다(빈 선택으로 누르면 서버가 `INVALID_BODY`로 답한다).
+4. Alpha 검토 대기 중 다른 시연값을 고르면 "열린 재계획 Run … 재검사되지 않음" 경고가 보인다.
+5. 승인 → N1(Planner A) 제출 → 10/13 탭 배지 → 하루 10/13에서 CAP-RESOURCE 띠와 11:00 후보 → 승인. N2·N3도 같다. N3은 충돌 띠 2개(10/14).
+6. N4 제출 → [전체 3일]에서 다음 날 09:00 후보, 검토 패널 지연 "1140분 (근무시간 기준 180분)" → 승인.
+7. (선택) N5(Planner B) → 이관 → "요청 (Plan 밖)"에 N5 → Planner A로는 [철회] 비활성, Planner B 또는 Supervisor로 [철회] → APPLIED, Context +1, 목록에서 빠짐.
+8. 근무시간 밖 입력: 시작 가능 시각을 18:00으로 넣으면 호박색 안내가 나오고, 시간창 전체를 밤으로 두고 제출하면 `WINDOW_OUTSIDE_WORK_HOURS`가 결과 영역에 보인다.
+9. 거절 펼치기 → "시연값: C 작업 고정" 버튼이 scenario 값을 채운다.

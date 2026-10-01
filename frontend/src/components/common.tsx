@@ -1,9 +1,11 @@
 import type { CommandOutcome } from '../types'
 import { REASON, VALIDATION_BADGE } from '../labels'
+import { ruleName, useEnv } from '../context'
 
-/** 한국어 문구 + 원래 코드. 표에 없으면 코드만. */
+/** 한국어 문구 + 원래 코드. Pack Rule은 meta 표시 이름, 공통 코드는 코드표. 둘 다 없으면 코드만. */
 export function Code({ code }: { code: string }) {
-  const text = REASON[code]
+  const { meta } = useEnv()
+  const text = ruleName(meta, code) ?? REASON[code]
   return (
     <span className="code-label">
       {text && <span>{text}</span>}

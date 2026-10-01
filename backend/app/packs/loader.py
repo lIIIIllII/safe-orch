@@ -92,6 +92,16 @@ class DemoEvent(Frozen):
     target_task_id: str | None = None
 
 
+class DemoRejection(Frozen):
+    """scenario.yaml의 구조화 거절 시연값 (부록 A.20 2차). 사유 코드는 명령이 검사한다."""
+
+    label: str = Field(min_length=1)
+    reason_code: str = Field(min_length=1)
+    target_task_ids: tuple[str, ...] = ()
+    axes: tuple[Literal["TIME", "RESOURCE"], ...] = ()
+    comment: str = ""
+
+
 class LoadedPack(Frozen):
     name: str
     pack_hash: str
@@ -112,6 +122,7 @@ class LoadedPack(Frozen):
     new_task: NewTaskRequest
     demo_requests: tuple[DemoRequest, ...] = ()
     demo_events: tuple[DemoEvent, ...] = ()
+    demo_rejections: tuple[DemoRejection, ...] = ()
 
     def hazard_tags(self, work_type: str) -> tuple[str, ...]:
         wt = self.work_types.get(work_type)
@@ -565,6 +576,18 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         demo_events.append(ev)
         if ev.target_task_id is not None and ev.target_task_id not in known_tasks:
             reasons.append(f"{where}: undefined task {ev.target_task_id!r}")
+    demo_rejections: list[DemoRejection] = []
+    for i, x in enumerate(
+        _as_list(scen_doc.get("demo_rejections"), "scenario.yaml.demo_rejections", reasons)
+    ):
+        where = f"scenario.yaml.demo_rejections[{i}]"
+        rej = _model(DemoRejection, x, where, reasons)
+        if not rej:
+            continue
+        demo_rejections.append(rej)
+        for tid in rej.target_task_ids:
+            if tid not in known_tasks:
+                reasons.append(f"{where}: undefined task {tid!r}")
 
     if reasons:
         raise PackError(reasons)
@@ -589,6 +612,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             new_task=new_task,
             demo_requests=tuple(demo_requests),
             demo_events=tuple(demo_events),
+            demo_rejections=tuple(demo_rejections),
         )
     except ValidationError as e:
         raise PackError([f"site.yaml: {err['loc']}: {err['msg']}" for err in e.errors()]) from e

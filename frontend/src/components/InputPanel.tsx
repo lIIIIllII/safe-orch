@@ -2,14 +2,14 @@
 // 클라이언트는 형식(시각·숫자 변환)만 확인하고 업무 규칙은 서버 판정을 보여 준다.
 
 import { useState } from 'react'
-import { SITE_ID, newKey } from '../api'
+import { newKey } from '../api'
 import type { SiteState } from '../types'
-import { WORK_TYPE } from '../labels'
-import { clockToMinute, minuteToClock } from '../time'
+import { useEnv, workTypeName } from '../context'
 import type { Run } from './ReviewPanel'
 
 interface Props {
   state: SiteState
+  actorId: string
   roles: string[]
   busy: string | null
   run: Run
@@ -35,67 +35,148 @@ export function InputPanel(props: Props) {
         <div hidden={tab !== 'event'}>
           <EventForm {...props} />
         </div>
+        <RequestList {...props} />
         <HoldList {...props} />
       </div>
     </section>
   )
 }
 
-const EMPTY_FORM = {
-  task_id: '',
-  work_type: '',
-  zone_id: '',
-  duration: '',
-  earliest_start: '',
-  latest_start: '',
-  latest_end: '',
-  required_resource_type: '',
-  requested_resource_id: '',
+interface FormState {
+  task_id: string
+  work_type: string
+  zone_id: string
+  duration: string
+  es_day: string
+  es_time: string
+  ls_day: string
+  ls_time: string
+  le_day: string
+  le_time: string
+  required_resource_type: string
+  requested_resource_id: string
 }
 
-const DEMO_A = {
-  task_id: 'A',
-  work_type: 'LIFTING',
-  zone_id: 'B',
-  duration: '30',
-  earliest_start: '09:00',
-  latest_start: '10:00',
-  latest_end: '10:30',
-  required_resource_type: 'CRANE',
-  requested_resource_id: 'A-CR-01',
-}
+type TimeField = 'es' | 'ls' | 'le'
 
-function TaskRequestForm({ state, roles, busy, run }: Props) {
-  const [f, setF] = useState(EMPTY_FORM)
-  const origin = state.site.horizon_start_utc
-  const allowed = roles.includes('UNIT_PLANNER')
-  // Pack work_type은 state에 없으므로 현재 작업의 work_type과 시연 A의 LIFTING을 합친다 (부록 A.19)
-  const workTypes = [...new Set(['LIFTING', ...state.tasks.map((t) => t.work_type)])]
-  const resourceTypes = [...new Set(state.resources.map((r) => r.resource_type))]
-  const set = (k: keyof typeof EMPTY_FORM) => (e: { target: { value: string } }) =>
-    setF({ ...f, [k]: e.target.value })
-  const clock = (v: string) => (v.trim() ? clockToMinute(origin, v) : null)
-  const hint = (v: string) => {
-    const m = clock(v)
-    return v.trim() ? (m === null ? '형식 HH:MM' : `= ${m}분`) : ''
+function emptyForm(firstDay: string): FormState {
+  return {
+    task_id: '',
+    work_type: '',
+    zone_id: '',
+    duration: '',
+    es_day: firstDay,
+    es_time: '',
+    ls_day: firstDay,
+    ls_time: '',
+    le_day: firstDay,
+    le_time: '',
+    required_resource_type: '',
+    requested_resource_id: '',
   }
+}
+
+/** 작업 요청 폼. 시각은 근무일 select + HH:MM, 옆에 "= N분" (A.20 2차). 근무시간 밖은 막지 않고 안내만 한다. */
+function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
+  const { siteId, meta, clock, scenario } = useEnv()
+  const firstDay = clock.workDays[0]?.key ?? ''
+  const [f, setF] = useState<FormState>(() => emptyForm(firstDay))
+  const [demo, setDemo] = useState<number | null>(null)
+  const allowed = roles.includes('UNIT_PLANNER')
+  const resourceTypes = [...new Set(meta.resources.map((r) => r.resource_type))]
+  const actorName = new Map(state.actors.map((a) => [a.actor_id, a.name]))
+  const set = (k: keyof FormState) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
+  const minute = (field: TimeField): number | null => {
+    const time = f[`${field}_time`]
+    return time.trim() ? clock.toMinute(f[`${field}_day`], time) : null
+  }
+  const hint = (field: TimeField) => {
+    if (!f[`${field}_time`].trim()) return ''
+    const m = minute(field)
+    return m === null ? '형식 HH:MM' : `= ${m}분`
+  }
+  // 근무일 select: 근무 구간의 날짜. 시연값이 근무일이 아닌 날짜를 쓰면 그 날짜도 넣는다.
+  const dayOptions = (value: string) => {
+    const opts = clock.workDays.map((d) => ({ key: d.key, label: d.label }))
+    return opts.some((o) => o.key === value) || !value ? opts : [...opts, { key: value, label: value }]
+  }
+  const timeInput = (field: TimeField, label: string) => (
+    <label>
+      {label} <span className="hint">{hint(field)}</span>
+      <span className="row tight">
+        <select value={f[`${field}_day`]} onChange={set(`${field}_day`)}>
+          {dayOptions(f[`${field}_day`]).map((o) => (
+            <option key={o.key} value={o.key}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <input className="time" placeholder="HH:MM" value={f[`${field}_time`]} onChange={set(`${field}_time`)} />
+      </span>
+    </label>
+  )
+  const fillDemo = (i: number) => {
+    const req = scenario?.task_requests[i]
+    if (!req) return
+    const r = req.form
+    const at = (m: number) => ({ day: clock.dateKey(m), time: clock.hm(m) })
+    const [es, ls, le] = [at(r.earliest_start), at(r.latest_start), at(r.latest_end)]
+    setDemo(i)
+    setF({
+      task_id: r.task_id,
+      work_type: r.work_type,
+      zone_id: r.zone_id,
+      duration: String(r.duration),
+      es_day: es.day,
+      es_time: es.time,
+      ls_day: ls.day,
+      ls_time: ls.time,
+      le_day: le.day,
+      le_time: le.time,
+      required_resource_type: r.required_resource_type ?? '',
+      requested_resource_id: r.requested_resource_id ?? '',
+    })
+  }
+  const demoReq = demo === null ? null : (scenario?.task_requests[demo] ?? null)
+  const openRun = state.runs.some(
+    (r) => r.agent_type === 'REPLANNING' && (r.status === 'RUNNING' || r.status === 'WAITING_HUMAN'),
+  )
+  const es = minute('es')
+  const dur = f.duration.trim() ? Number(f.duration) : null
+  const outside = es !== null && dur !== null && Number.isFinite(dur) && !clock.inWork(es, es + dur)
   const submit = () => {
     const body = {
       task_id: f.task_id,
       work_type: f.work_type,
       zone_id: f.zone_id,
-      duration: f.duration.trim() ? Number(f.duration) : null,
-      earliest_start: clock(f.earliest_start),
-      latest_start: clock(f.latest_start),
-      latest_end: clock(f.latest_end),
+      duration: dur,
+      earliest_start: es,
+      latest_start: minute('ls'),
+      latest_end: minute('le'),
       required_resource_type: f.required_resource_type || null,
       requested_resource_id: f.requested_resource_id || null,
       predecessors: [],
     }
-    void run('작업 요청', `/sites/${SITE_ID}/task-requests`, body)
+    void run('작업 요청', `/sites/${siteId}/task-requests`, body)
   }
   return (
     <div className="form-grid">
+      {scenario && (
+        <label className="span2">
+          시연값 ▾
+          <select
+            value={demo === null ? '' : String(demo)}
+            onChange={(e) => (e.target.value === '' ? setDemo(null) : fillDemo(Number(e.target.value)))}
+          >
+            <option value="">선택 안 함</option>
+            {scenario.task_requests.map((r, i) => (
+              <option key={r.form.task_id} value={i}>
+                {r.form.task_id} · {r.label} — 요청자 {actorName.get(r.requester) ?? r.requester}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label>
         작업 ID
         <input value={f.task_id} onChange={set('task_id')} />
@@ -104,9 +185,9 @@ function TaskRequestForm({ state, roles, busy, run }: Props) {
         작업 유형
         <select value={f.work_type} onChange={set('work_type')}>
           <option value="">선택</option>
-          {workTypes.map((w) => (
+          {Object.entries(meta.work_types).map(([w, wt]) => (
             <option key={w} value={w}>
-              {WORK_TYPE[w] ?? w} ({w})
+              {wt.display_name} ({w})
             </option>
           ))}
         </select>
@@ -115,7 +196,7 @@ function TaskRequestForm({ state, roles, busy, run }: Props) {
         구역
         <select value={f.zone_id} onChange={set('zone_id')}>
           <option value="">선택</option>
-          {state.zones.map((z) => (
+          {meta.zones.map((z) => (
             <option key={z} value={z}>
               {z}
             </option>
@@ -126,18 +207,13 @@ function TaskRequestForm({ state, roles, busy, run }: Props) {
         소요(분)
         <input inputMode="numeric" value={f.duration} onChange={set('duration')} />
       </label>
-      <label>
-        시작 가능 {minuteToClock(origin, 0)}~ <span className="hint">{hint(f.earliest_start)}</span>
-        <input placeholder="HH:MM" value={f.earliest_start} onChange={set('earliest_start')} />
-      </label>
-      <label>
-        시작 늦어도 <span className="hint">{hint(f.latest_start)}</span>
-        <input placeholder="HH:MM" value={f.latest_start} onChange={set('latest_start')} />
-      </label>
-      <label>
-        종료 늦어도 <span className="hint">{hint(f.latest_end)}</span>
-        <input placeholder="HH:MM" value={f.latest_end} onChange={set('latest_end')} />
-      </label>
+      <p className="muted small span2">
+        근무시간{' '}
+        {clock.workDays.map((d) => `${d.label} ${clock.hm(d.lo)}–${clock.hm(d.hi)}`).join(' · ')}
+      </p>
+      {timeInput('es', '시작 가능')}
+      {timeInput('ls', '시작 늦어도')}
+      {timeInput('le', '종료 늦어도')}
       <label>
         필요 자원 유형
         <select value={f.required_resource_type} onChange={set('required_resource_type')}>
@@ -153,18 +229,38 @@ function TaskRequestForm({ state, roles, busy, run }: Props) {
         요청 자원
         <select value={f.requested_resource_id} onChange={set('requested_resource_id')}>
           <option value="">없음</option>
-          {state.resources.map((r) => (
+          {meta.resources.map((r) => (
             <option key={r.resource_id} value={r.resource_id}>
-              {r.resource_id}
+              {r.resource_id} ({r.resource_type})
             </option>
           ))}
         </select>
       </label>
+      {outside && (
+        <p className="warn small span2">
+          요청 시작이 근무시간 밖입니다. 접수되면 근무시간 충돌(CALENDAR)로 재계획되고, 시간창에 근무시간 자리가 없으면
+          서버가 거절합니다.
+        </p>
+      )}
+      {demoReq && demoReq.requester !== actorId && (
+        <p className="warn small span2">
+          이 시연값의 요청자는 {actorName.get(demoReq.requester) ?? demoReq.requester}입니다. 현재 Actor로 보내면 그
+          Actor의 작업이 됩니다(경고만).
+        </p>
+      )}
+      {openRun && (
+        <p className="warn small span2">
+          열린 재계획 Run이 있어 지금 요청을 보내도 재검사되지 않습니다. 먼저 후보를 확정하거나 Run을 취소하세요.
+        </p>
+      )}
       <div className="row span2">
-        <button type="button" onClick={() => setF(DEMO_A)}>
-          시연값 A 채우기
-        </button>
-        <button type="button" onClick={() => setF(EMPTY_FORM)}>
+        <button
+          type="button"
+          onClick={() => {
+            setF(emptyForm(firstDay))
+            setDemo(null)
+          }}
+        >
           비우기
         </button>
         <span className="spacer" />
@@ -182,7 +278,42 @@ function TaskRequestForm({ state, roles, busy, run }: Props) {
   )
 }
 
+/** Plan 밖 READY 작업(해결 전 요청)과 철회 (A.20 F-2). 작업 담당자나 SUPERVISOR만 버튼이 켜진다. */
+function RequestList({ state, actorId, roles, busy, run }: Props) {
+  const { meta, clock } = useEnv()
+  const inPlan = new Set(state.plan.assignments.map((a) => a.task_id))
+  const pending = state.tasks.filter((t) => t.lifecycle === 'READY' && !inPlan.has(t.task_id))
+  const name = new Map(state.actors.map((a) => [a.actor_id, a.name]))
+  const isSup = roles.includes('SUPERVISOR')
+  return (
+    <div className="requests">
+      <h3>요청 (Plan 밖) {pending.length}건</h3>
+      {pending.length === 0 && <p className="muted">없음</p>}
+      {pending.map((t) => {
+        const can = isSup || t.owner_actor_id === actorId
+        return (
+          <div key={t.task_id} className="row request">
+            <span className="grow">
+              <b>{t.task_id}</b> {workTypeName(meta, t.work_type)} · {t.zone_id} ·{' '}
+              {clock.span(t.earliest_start, t.earliest_start + t.duration)}
+              <span className="muted small"> — {name.get(t.owner_actor_id) ?? t.owner_actor_id}</span>
+            </span>
+            <button
+              disabled={!can || busy !== null}
+              title={can ? '계산 대상에서 뺍니다(NEEDS_INFO)' : '작업 담당자 또는 Supervisor 권한 필요'}
+              onClick={() => run(`요청 ${t.task_id} 철회`, `/tasks/${t.task_id}/withdraw`, { comment: '' })}
+            >
+              철회
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function EventForm({ state, roles, busy, run }: Props) {
+  const { siteId, meta, scenario } = useEnv()
   const [type, setType] = useState<'DELAY' | 'OTHER'>('DELAY')
   const [target, setTarget] = useState('')
   const [text, setText] = useState('')
@@ -190,7 +321,7 @@ function EventForm({ state, roles, busy, run }: Props) {
   const submit = () => {
     // source_event_id는 제출마다 새로. 503 재시도는 run 안에서 같은 본문·같은 키로 한다.
     const sourceId = newKey()
-    void run('지연 신고', `/sites/${SITE_ID}/events`, {
+    void run('지연 신고', `/sites/${siteId}/events`, {
       source_event_id: sourceId,
       event_type: type,
       text,
@@ -212,7 +343,7 @@ function EventForm({ state, roles, busy, run }: Props) {
           <option value="">지정 안 함 (현장 전체 Hold)</option>
           {state.tasks.map((t) => (
             <option key={t.task_id} value={t.task_id}>
-              {t.task_id} {WORK_TYPE[t.work_type] ?? t.work_type}
+              {t.task_id} {workTypeName(meta, t.work_type)}
             </option>
           ))}
         </select>
@@ -222,9 +353,20 @@ function EventForm({ state, roles, busy, run }: Props) {
         <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} />
       </label>
       <div className="row span2">
-        <button type="button" onClick={() => setText('도장 준비 15분 늦어져 10시부터')}>
-          시연 문구
-        </button>
+        {/* 신고 문구는 scenario(DEMO_MODE)에서만 받는다 (A.20 2차) */}
+        {scenario?.event_reports.map((e) => (
+          <button
+            key={e.label}
+            type="button"
+            onClick={() => {
+              setType(e.body.event_type)
+              setText(e.body.text)
+              setTarget(e.body.target_task_id ?? '')
+            }}
+          >
+            시연: {e.label}
+          </button>
+        ))}
         <span className="spacer" />
         <button
           className="btn-warn"
