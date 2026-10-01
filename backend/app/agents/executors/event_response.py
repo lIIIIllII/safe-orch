@@ -19,7 +19,9 @@ from app.domain.ids import new_id
 from app.packs.loader import LoadedPack
 from app.store import db
 from app.store.repos.cases import supervisor_actor
+from app.store.repos.events import get_event
 from app.store.repos.messages import insert_message, insert_proposal
+from app.store.repos.runs import charge
 from app.store.repos.site import get_site
 from app.store.repos.tasks import list_current_tasks
 
@@ -57,6 +59,8 @@ class EventResponseExecutor:
                 )
             if isinstance(action, spec.ProposeFactUpdate):
                 return self._propose(tx, run_id, step_no, meta, parsed, obs, action)
+            if isinstance(action, spec.AskReporter):
+                return self._ask_reporter(tx, run_id, step_no, meta, parsed, obs, action)
             assert isinstance(action, spec.Escalate)
             outcome = GatewayResult("DONE", None, "ESCALATED", "ESCALATE")
             return self._done(tx, run_id, step_no, meta, parsed, outcome, {"reason": action.reason})
@@ -73,6 +77,8 @@ class EventResponseExecutor:
             return "PROPOSE_FACT_UPDATE" in available and action.new_earliest_start in c[
                 "PROPOSE"
             ].get(action.task_id, [])
+        if isinstance(action, spec.AskReporter):
+            return "ASK_REPORTER" in available
         return isinstance(action, spec.Escalate)
 
     def _done(
@@ -99,6 +105,45 @@ class EventResponseExecutor:
             state_changes=state_changes,
         )
         return outcome
+
+    def _ask_reporter(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        obs: Observation,
+        action: spec.AskReporter,
+    ) -> GatewayResult:
+        """신고자에게 되묻기(제안 없는 QUESTION). 답은 자유 텍스트(ANSWER)로 오고 이 Run을 깨운다 (A.25 S4)."""
+        site = get_site(tx, self.pack.site_id)
+        assert site is not None
+        event = obs.data["event"]
+        reporter = get_event(tx, self.pack.site_id, event["event_id"])["reporter_actor_id"]
+        body = (
+            f"신고 확인 질문: “{event['quoted_text']}”에 대해 알려 주세요. 답은 문장으로 적습니다."
+        )
+        message_id = new_id("msg")
+        insert_message(
+            tx,
+            self.pack.site_id,
+            message_id,
+            run_id=run_id,
+            step_no=step_no,
+            to_actor_id=reporter,
+            type_="QUESTION",
+            proposal_id=None,
+            body=body,
+            agent_text=action.question,
+            context_version=site.context_version,
+        )
+        charge(tx, run_id, human_rounds=1)
+        outcome = self.wait_or_continue(tx, run_id, step_no, "MESSAGE", message_id)
+        result = {"message_id": message_id, "to_actor_id": reporter, "body": body}
+        return self._done(
+            tx, run_id, step_no, meta, parsed, outcome, result, {"message_id": message_id}
+        )
 
     def _propose(
         self,

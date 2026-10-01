@@ -70,6 +70,7 @@ def scenario_view(pack: LoadedPack) -> dict[str, Any]:
                 "text": e.text,
                 "target_task_id": e.target_task_id,
             },
+            "answer": e.answer,
         }
         for e in pack.demo_events
     ]

@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage
 from scripted import Router, call, solve
 
 from app.agents.prompts import event_response as prompt
+from app.agents.specs import event_response as spec
 from app.api.state import build_state
 from app.commands.approval import (
     ApproveRequest,
@@ -481,3 +482,60 @@ def test_withdraw_of_other_request_does_not_wake_event_response(seeded, event_re
     with db.read() as conn:
         jobs = list_jobs(conn, pack.site_id)
     assert not [j for j in jobs if j["kind"] == "RESUME_RUN" and j["run_id"] == er.run_id]
+
+
+def test_ambiguous_report_asks_reporter_then_proposes(seeded, event_response_on):
+    """시각이 없는 신고 → ASK_REPORTER → 신고자 자유 텍스트 답(ANSWER) → 분석 → 수정안 (A.25 S4)."""
+    pack = seeded
+    vague = pack.demo_events[1]
+    _r1(pack)
+    refs = _report(pack, vague.text)
+    ask = call(
+        "ASK_REPORTER", "이유: 시각이 없다/다음: 답을 본다", question="몇 시부터 가능한가요?"
+    )
+    run_until_idle(pack, model_factory=Router(event_response=[_lookup(), ask]).factory())
+    [er] = _runs("EVENT_RESPONSE")
+    assert (er.status, er.wait_kind, er.human_rounds_used) == ("WAITING_HUMAN", "MESSAGE", 1)
+    [question] = _messages("QUESTION")[-1:]
+    assert (question["to_actor_id"], question["proposal_id"]) == ("reporter", None)
+    assert vague.text in question["body"]
+    # 자유 텍스트 질문에는 ANSWER만
+    assert _reply(pack, "reporter", question["message_id"], "ACCEPT").reason_codes == (
+        "INVALID_DECISION",
+    )
+    out = _reply(pack, "reporter", question["message_id"], "ANSWER", vague.answer)
+    assert out.status == "APPLIED"
+    run_until_idle(
+        pack, model_factory=Router(event_response=[_analyze(75), _propose(75)]).factory()
+    )
+    steps = _steps(er.run_id)
+    obs = steps[2]["observation"]
+    assert obs["reporter_replies"] == [
+        {"message_id": question["message_id"], "status": "ANSWERED", "quoted_answer": vague.answer}
+    ]
+    assert [s["action"]["name"] for s in steps] == [
+        "LOOKUP_TASKS",
+        "ASK_REPORTER",
+        "ANALYZE_IMPACT",
+        "PROPOSE_FACT_UPDATE",
+    ]
+    assert steps[2]["tool_result"]["new_clock"] == "10/12(월) 10:15"
+    [fu] = _proposals("FACT_UPDATE")
+    assert (fu["target_task_id"], fu["status"]) == ("E", "PENDING")
+    assert _hold(pack, refs["hold_id"])["status"] == "ACTIVE"
+
+
+def test_ask_reporter_closed_while_question_open_or_proposal_pending(seeded, event_response_on):
+    """답을 기다리는 동안·수정안 확인 대기 중에는 ASK_REPORTER가 열리지 않는다."""
+    _, er = _to_proposal(seeded)  # 수정안 확인 대기
+    obs = _steps(er.run_id)[-1]["observation"]
+    pending = {**obs, "proposals": [{"task_id": "E", "new_value": 60, "status": "PENDING"}]}
+    assert "ASK_REPORTER" not in spec.available_actions(pending)
+    asking = {
+        **obs,
+        "proposals": [],
+        "reporter_replies": [{"message_id": "m", "status": "OPEN", "quoted_answer": None}],
+    }
+    assert "ASK_REPORTER" not in spec.available_actions(asking)
+    free = {**obs, "proposals": [], "reporter_replies": []}
+    assert "ASK_REPORTER" in spec.available_actions(free)

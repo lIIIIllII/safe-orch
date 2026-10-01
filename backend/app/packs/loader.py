@@ -92,6 +92,7 @@ class DemoEvent(Frozen):
     event_type: Literal["DELAY", "OTHER"]
     text: str = Field(min_length=1)
     target_task_id: str | None = None
+    answer: str = ""  # 되묻기(ASK_REPORTER)에 신고자가 답하는 문장(사람 역할, A.25 S4)
 
 
 class DemoRejection(Frozen):

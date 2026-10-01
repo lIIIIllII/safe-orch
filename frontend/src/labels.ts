@@ -344,7 +344,7 @@ export const MESSAGE_TYPE: Record<string, string> = {
   CHANGE_REQUEST: '변경 요청',
   CONFIRMATION: '제약 초안 확인',
   FACT_UPDATE: '사실 수정 확인',
-  FREE_QUESTION: '작업 요청 확인 질문',
+  FREE_QUESTION: '확인 질문(답 입력)',
   TASKSPEC: '작업 요청 값 확인',
   NOTICE: '확정 통지',
 }

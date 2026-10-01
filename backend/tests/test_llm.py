@@ -636,3 +636,27 @@ def test_live_run_path_intake_with_scripted_model(monkeypatch, ambiguous):
     assert r["success"], r["success_criteria"]
     assert r["asks"] == (1 if ambiguous else 0)
     assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
+
+
+def test_live_run_path_event_ambiguous_with_scripted_model(monkeypatch):
+    """--path event --ambiguous (A.25 S4): 모호 신고 → ASK_REPORTER → 답 → E 10:15 수정안 → Gamma(지연 30) → R2."""
+    router = Router(
+        replanning=[solve("L0")],
+        event_response=[
+            call("ASK_REPORTER", "되묻기", question="몇 시부터?"),
+            call("LOOKUP_TASKS", "조회", work_type="PAINTING"),
+            call("ANALYZE_IMPACT", "분석", task_id="E", new_earliest_start=75),
+            call(
+                "PROPOSE_FACT_UPDATE", "제안", task_id="E", new_earliest_start=75, evidence="10:15"
+            ),
+        ],
+    )
+    make = router.factory()
+    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    r = live_run.run_path_event(1, settings, "shipyard", False, coord=False, ambiguous=True)
+    assert r.get("error") is None, r.get("error")
+    c = r["success_criteria"]
+    assert r["success"], c
+    assert (c["asks"], c["gamma_changed_delay"]) == (1, [1, 30])
+    assert next(e["reply"] for e in r["events"] if "reply" in e) == "ANSWER"

@@ -829,7 +829,9 @@ def _setup_r1(pack: Any) -> None:
         raise RuntimeError(f"R1 준비 실패: {out.reason_codes}")
 
 
-def run_path_event(index: int, settings: Settings, pack_name: str, raw: bool, coord: bool) -> dict:
+def run_path_event(
+    index: int, settings: Settings, pack_name: str, raw: bool, coord: bool, ambiguous: bool = False
+) -> dict:
     """임시 DB에서 R1을 스크립트로 준비하고, 지연 신고부터 실제 모델로 Scene 4 최소 경로를 돌린다."""
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
     names = ("DB_PATH", "EVENT_RESPONSE_ENABLED", "COORDINATION_ENABLED")
@@ -839,7 +841,13 @@ def run_path_event(index: int, settings: Settings, pack_name: str, raw: bool, co
     os.environ["COORDINATION_ENABLED"] = "false"
     get_settings.cache_clear()
     db.close()
-    record: dict[str, Any] = {"index": index, "request": "event", "path": "event", "coord": coord}
+    record: dict[str, Any] = {
+        "index": index,
+        "request": "event",
+        "path": "event-ambiguous" if ambiguous else "event",
+        "coord": coord,
+        "ambiguous": ambiguous,
+    }
     t0 = time.perf_counter()
     try:
         db.init_db()
@@ -851,7 +859,7 @@ def run_path_event(index: int, settings: Settings, pack_name: str, raw: bool, co
         os.environ["EVENT_RESPONSE_ENABLED"] = "true"
         os.environ["COORDINATION_ENABLED"] = "true" if coord else "false"
         get_settings.cache_clear()
-        _path_event(record, settings, pack, raw, coord)
+        _path_event(record, settings, pack, raw, coord, ambiguous)
     except Exception as e:  # noqa: BLE001 — 실패도 기록한다
         record.update(success=False, error=f"{type(e).__name__}: {e}")
     finally:
@@ -868,7 +876,12 @@ def run_path_event(index: int, settings: Settings, pack_name: str, raw: bool, co
 
 
 def _path_event(
-    record: dict[str, Any], settings: Settings, pack: Any, raw: bool, coord: bool
+    record: dict[str, Any],
+    settings: Settings,
+    pack: Any,
+    raw: bool,
+    coord: bool,
+    ambiguous: bool = False,
 ) -> None:
     rec = _Recorder(time.monotonic() + RUN_DEADLINE_S * 2, raw)
     site_id = pack.site_id
@@ -876,7 +889,10 @@ def _path_event(
     with db.read() as conn:
         before = {r[0] for r in conn.execute("SELECT run_id FROM agent_run")}
         last_step = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM agent_step").fetchone()[0]
-    report = pack.demo_events[0]
+    # 모호 신고(시각 없음)는 demo_events[1], 되물으면 신고자가 answer로 답한다 (A.25 S4)
+    report = pack.demo_events[1 if ambiguous else 0]
+    expected_new = 75 if ambiguous else 60  # 10:15 / 10:00 (verify_demo_values Delta·Gamma)
+    expected_delay = 30 if ambiguous else 15
     out = receive_event(
         pack,
         "reporter",
@@ -910,15 +926,18 @@ def _path_event(
             ctx = get_site(conn, site_id).context_version
         if opened:
             m = opened[0]
+            # 신고자 되묻기(제안 없는 질문)에는 scenario의 답 문장으로 ANSWER, 나머지는 수락
+            answer = report.answer or f"신고 문장 그대로입니다: {report.text}"
+            decision, comment = (
+                ("ANSWER", answer) if m["type"] == "QUESTION" else ("ACCEPT", "live run 자동 수락")
+            )
             out = reply_message(
                 pack,
                 m["to_actor_id"],
                 _key(),
-                ReplyRequest(
-                    message_id=m["message_id"], decision="ACCEPT", comment="live run 자동 수락"
-                ),
+                ReplyRequest(message_id=m["message_id"], decision=decision, comment=comment),
             )
-            events.append({"reply": "ACCEPT", "type": m["type"], "status": out.status})
+            events.append({"reply": decision, "type": m["type"], "status": out.status})
             continue
         if hold == "ACTIVE" and confirmed:
             out = release_hold_command(
@@ -1025,13 +1044,19 @@ def _path_event(
     placed = {a.task_id: a.start for a in cand.assignments} if cand else {}
     guards = [(s["guard"] or {}).get("reason_code") for s in steps]
     criteria: dict[str, Any] = {
+        "asks": sum(
+            1
+            for s in steps
+            if (s["action"] or {}).get("name") == "ASK_REPORTER"
+            and s["guard"]["verdict"] == "ACCEPTED"
+        ),
         "proposed_e_60": any(
-            p["task_id"] == "E" and p["new_earliest_start"] == 60 for p in proposes
+            p["task_id"] == "E" and p["new_earliest_start"] == expected_new for p in proposes
         ),
         "fact_confirmed": any(r[0] == "E" and r[2] == "CONFIRMED" for r in facts),
         "hold_fact_confirmed": tuple(hold_row) == ("RELEASED", "FACT_CONFIRMED"),
         "er_succeeded": er is not None and er.status == "SUCCEEDED",
-        "gamma_e_60": placed.get("E") == 60,
+        "gamma_e_60": placed.get("E") == expected_new,
         "gamma_changed_delay": None
         if gamma_step is None
         else [
@@ -1050,7 +1075,8 @@ def _path_event(
             "gamma_e_60", "committed_r2", "within_budget"]  # fmt: skip
     success = (
         all(criteria[k] for k in keys)
-        and criteria["gamma_changed_delay"] == [1, 15]
+        and criteria["gamma_changed_delay"] == [1, expected_delay]
+        and (not ambiguous or criteria["asks"] >= 1)
         and criteria["forbidden_actions"] == 0
         and criteria["malformed"] == 0
         and (not coord or (bool(targets) and noticed == targets))
@@ -1411,7 +1437,7 @@ def _na(value: Any) -> Any:
 
 
 def _line(r: dict[str, Any]) -> str:
-    if r.get("path") in ("coord", "event", "intake", "intake-ambiguous"):
+    if r.get("path") in ("coord", "event", "event-ambiguous", "intake", "intake-ambiguous"):
         return (
             f"#{r['index']} path {r['path']}{' --coord' if r.get('coord') else ''} success={r.get('success')} "
             f"run={r.get('run_status')}/{r.get('end_reason')} steps={r.get('step_count')} "
@@ -1499,7 +1525,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.path == "intake":
             batch = [run_path_intake(i + 1, settings, pack_name, args.raw, args.ambiguous)]
         elif args.path == "event":
-            batch = [run_path_event(i + 1, settings, pack_name, args.raw, args.coord)]
+            batch = [
+                run_path_event(i + 1, settings, pack_name, args.raw, args.coord, args.ambiguous)
+            ]
         else:
             batch = [run_path_b(i + 1, settings, pack_name, args.raw, args.path == "B-decline")]
         for r in batch:
@@ -1519,7 +1547,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif paths and paths[0]["path"].startswith("intake"):
         asks = [r.get("asks") for r in paths]
         print(f"success {ok}/{n} ({paths[0]['path']}), asks {asks}, tokens {tokens}")
-    elif paths and paths[0]["path"] == "event":
+    elif paths and paths[0]["path"].startswith("event"):
         print(
             f"success {ok}/{n} (Scene 4 최소 경로, coord={paths[0].get('coord')}), tokens {tokens}"
         )

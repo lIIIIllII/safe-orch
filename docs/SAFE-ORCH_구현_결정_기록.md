@@ -1425,3 +1425,11 @@
 - 관찰 읽는 법(사실): "작업 ID는 구역이 아니다", 자원 유형 줄, "요청 문장과 확인 질문의 답은 확인 값이 아니다. 값 확인 요청에 요청자가 확인하면 그 values 전체가 확인된다." 행동 순서 지시 없음. 템플릿 fingerprint `fcfca39e…`(p1 줄 유지).
 - 테스트 495 → 498: 실행 시 enum과 정적 스키마의 Pack 값 없음·관찰 resource_types, 로더 2개. live run 기록에 `request_rejections`.
 - 재실행(model `gpt-6-luna`, `intake-p2`): 명확 **3/3**(`data/live_runs/20261001T190156Z.jsonl`) — ASK [0, 0, 0], Intake step [2, 3, 2], REQUEST 거절 없음. 모호 **2/3**(`20261001T190230Z.jsonl`) — ASK [1, 1, 3], Intake step [3, 4, 4], REQUEST 거절 없음. 모호 #3은 구역·자원 답을 받은 뒤 문장에 있던 작업 시간·시간창을 "확인되지 않음"이라며 두 번 더 물어 사람 라운드를 다 쓰고 이관했다(REQUEST 0회).
+
+**S4 구현 기록** (A.25 Event Response `ASK_REPORTER`, A.26 ANSWER 재사용)
+- spec: `ASK_REPORTER(question)` — 사람 라운드 남음 ∧ 답을 기다리는 질문 없음 ∧ 확인 대기 수정안 없음. WAIT(MESSAGE). 실행기: 제안 없는 QUESTION → 그 Event의 신고자(서버 문구 "신고 확인 질문: “<신고 문장>”에 대해 알려 주세요…", 모델 문장은 agent_text), 사람 라운드 +1. 답은 ANSWER(자유 텍스트)로 오고 ER Run을 깨운다(A.26 규칙 그대로, ACCEPT·DECLINE은 `INVALID_DECISION`).
+- Observation `reporter_replies`(질문 상태와 `quoted_answer`, 인용). 서버는 답에서 값을 뽑지 않는다. prompt `event-response-p3`(신고자 답 줄 추가, 템플릿 fingerprint `67c93218…`). LOOKUP_ZONE·LOOKUP_TASKS(Intake)는 하지 않았다.
+- scenario.yaml: `demo_events[1]`(도장 추가 지연, "도장 또 늦어진대요")에 `answer: "도장 준비가 10시 15분부터 됩니다"`(되물으면 신고자가 답하는 문장). `DemoEvent.answer`, `/dev/scenario` event_reports에 `answer`. **Intake 변경(demo_intakes·resource_types)과 합쳐 로컬 DB reset 한 번이면 된다.**
+- 화면: 신고자에게 가는 질문도 제안 없는 질문 카드(답 입력)로 보인다. 카드 제목 문구를 "작업 요청 확인 질문" → "확인 질문(답 입력)"으로 일반화했다.
+- 테스트 498 → 501: 모호 신고 → LOOKUP → ASK_REPORTER(신고자, ACCEPT는 `INVALID_DECISION`) → ANSWER → ANALYZE(E, 10:15) → PROPOSE(E, 75), 질문 대기·수정안 대기 중 ASK_REPORTER 닫힘, live run 스크립트(`--ambiguous`).
+- live run `--path event --coord --ambiguous` 3회(2026-10-01 19:06 UTC, `data/live_runs/20261001T190620Z.jsonl`, `event-response-p3`): **2/3 성공**. #1·#3: ASK_REPORTER 2회(시각 → 대상) → LOOKUP(PAINTING) → ANALYZE(E, 10:15) → PROPOSE(E, 75) → 확정·해제 → Gamma(E 10:15, 변경 1·지연 30) → 협의(Planner B 수락) → R2 → 통지, ER 5 step, 약 25,000 토큰. #2 실패: ASK_REPORTER 2회(시각+구역 → 구역) 뒤 ESCALATE("10시 15분은 확인됐지만 구역을 특정할 수 없음"), 조회 0회, ER 3 step. 스크립트 신고자는 두 번째 질문에도 같은 답 문장을 보냈다. 금지 Action·MALFORMED·LLM 오류 0. 이 실행의 기록 `events[].reply`는 로그 버그로 "ACCEPT"로 적혔다(실제 답은 ANSWER였고 판정에 영향 없음, 실행 뒤 고침).

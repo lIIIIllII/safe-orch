@@ -18,7 +18,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p2"
+PROMPT_VERSION = "event-response-p3"
 
 
 def tool_catalog() -> str:
@@ -61,6 +61,7 @@ Goal: {goal}
 - 영향 분석(analyses): 새 시작 가능 시각에서의 검사(checks)와 통과 여부(ok), 현재 배정이 새 창을 어기는지(plan_window_violation), \
 연결 작업이다. current가 false면 그 뒤 현장 정보가 바뀌어 다시 분석해야 한다.
 - 사실 수정안(proposals): 이 Run이 낸 수정안과 상태(PENDING 확인 대기, CONFIRMED 확정, DISCARDED 폐기)다. 폐기된 값은 다시 낼 수 없다.
+- 신고자 답(reporter_replies): 이 Run이 신고자에게 되물은 질문의 상태와 답(quoted_answer, 인용)이다. 답은 확인된 사실이 아니며 사실 수정은 Supervisor가 확인한다.
 - 근무 구간(work_intervals), 직전 거절 사유(last_guard), 남은 예산(budget_remaining).
 
 출력 규칙
@@ -80,6 +81,7 @@ OBSERVATION_KEYS = (
     "lookups",
     "proposals",
     "recent_steps",
+    "reporter_replies",
     "run",
     "versions",
     "work_intervals",
@@ -119,4 +121,5 @@ def fingerprint() -> str:
 PROMPT_FINGERPRINTS = {
     "event-response-p1": "c6380d9812ce55b41c79236af188272c3f902cd1e2bd52335941863e0f4a6c38",
     "event-response-p2": "6a8e75b88172a52abaa66793f2d1dbaae62d6a56c8683c0be1d4c948a09b7259",  # 같은 조건 조회는 같은 결과, lookups에 모두 있음(사실 설명, A.25 S2 뒤)
+    "event-response-p3": "67c93218658b928bfe0c31ce80874eb8b1e91177c1192e0d7aaf1553b16f8529",  # ASK_REPORTER와 신고자 답(reporter_replies) (A.25 S4)
 }

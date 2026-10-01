@@ -1,7 +1,7 @@
 """Event Response AgentSpec (설계서 §18.2.1·§18.2.3, 부록 A.25). 순수 데이터: Goal, Action 스키마, Budget.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
-Action(최소 경로): LOOKUP_TASKS, ANALYZE_IMPACT, PROPOSE_FACT_UPDATE, ESCALATE. ASK_REPORTER는 S4다.
+Action: LOOKUP_TASKS, ANALYZE_IMPACT, PROPOSE_FACT_UPDATE, ASK_REPORTER(S4), ESCALATE.
 Hold 해제·사실 직접 적용은 할 수 없다. 사실 수정은 Supervisor가 확인해야 효력이 생긴다(I-01·I-13).
 """
 
@@ -74,6 +74,16 @@ class ProposeFactUpdate(Action):
     )
 
 
+class AskReporter(Action):
+    """신고 내용이 모호할 때(대상·새 시작 가능 시각 등) 신고자에게 되묻는다. 답은 자유 텍스트로 온다."""
+
+    OPENS = (
+        "사람 확인 라운드가 남았고, 답을 기다리는 질문이나 확인을 기다리는 사실 수정안이 없을 때"
+    )
+
+    question: str = Field(min_length=1, max_length=TEXT_MAX, description="신고자에게 보이는 질문")
+
+
 class Escalate(Action):
     """대상 작업을 정할 수 없거나 신고가 지연이 아니거나 수정안을 만들 수 없을 때 사유와 함께 이관한다."""
 
@@ -86,12 +96,14 @@ ACTIONS: dict[str, type[Action]] = {
     "LOOKUP_TASKS": LookupTasks,
     "ANALYZE_IMPACT": AnalyzeImpact,
     "PROPOSE_FACT_UPDATE": ProposeFactUpdate,
+    "ASK_REPORTER": AskReporter,
     "ESCALATE": Escalate,
 }
 FLOW = {
     "LOOKUP_TASKS": "CONTINUE",
     "ANALYZE_IMPACT": "CONTINUE",
     "PROPOSE_FACT_UPDATE": "WAIT",
+    "ASK_REPORTER": "WAIT",
     "ESCALATE": "DONE",
 }
 
@@ -114,10 +126,14 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
             values = propose.setdefault(a["task_id"], [])
             if a["new_earliest_start"] not in values:
                 values.append(a["new_earliest_start"])
+    asking = any(q["status"] == "OPEN" for q in obs["reporter_replies"])
+    rounds = obs["budget_remaining"].get("human_rounds", 0) > 0
     return {
         "LOOKUP": not pending,
         "ANALYZE": [] if pending else looked,
         "PROPOSE": {} if pending else propose,
+        # 신고자 되묻기: 답을 기다리는 질문·확인 대기 수정안이 없고 사람 라운드가 남을 때 (A.25 S4)
+        "ASK": rounds and not pending and not asking,
     }
 
 
@@ -134,6 +150,8 @@ def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "task_id": sorted(c["PROPOSE"]),
             "new_earliest_start": sorted({v for vs in c["PROPOSE"].values() for v in vs}),
         }
+    if c["ASK"]:
+        out["ASK_REPORTER"] = {}
     out["ESCALATE"] = {}
     return out
 

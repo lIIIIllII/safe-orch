@@ -15,7 +15,7 @@ from app.domain.calendar import has_work_slot, local_clock
 from app.packs.loader import LoadedPack
 from app.rules.engine import separation_links
 from app.store.repos.events import get_event, get_hold
-from app.store.repos.messages import list_fact_updates
+from app.store.repos.messages import list_fact_updates, list_run_messages
 from app.store.repos.plans import get_current_plan
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
@@ -193,6 +193,18 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "lookups": lookups,
         "analyses": analyses,
         "proposals": proposals,
+        # 신고자에게 되물은 질문과 답(quoted_answer, 인용). 서버는 답에서 값을 뽑지 않는다 (A.25 S4)
+        "reporter_replies": [
+            {
+                "message_id": m["message_id"],
+                "status": m["status"],
+                "quoted_answer": (m["reply"] or {}).get("comment")
+                if (m["reply"] or {}).get("decision") == "ANSWER"
+                else None,
+            }
+            for m in list_run_messages(conn, run_id)
+            if m["type"] == "QUESTION"
+        ],
         "work_intervals": [list(iv) for iv in pack.work_intervals],
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),
