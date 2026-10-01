@@ -24,7 +24,7 @@ from app.store.repos.consultations import (
     list_review_queue,
 )
 from app.store.repos.decisions import list_decisions
-from app.store.repos.messages import list_inbox
+from app.store.repos.messages import list_change_requests, list_inbox
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import get_candidate, get_snapshot, list_validations
 from app.store.repos.resources import list_resources
@@ -162,10 +162,16 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
     view = consultation_view(conn, site_id, candidate_id)
     consultation = None
     if view is not None:
+        # 항목별 마지막 변경 요청과 담당자 답(이견 문장은 인용으로만, A.24)
+        requests = {r["change_hash"]: r for r in list_change_requests(conn, site_id, candidate_id)}
         consultation = {
             "status": view.status,
             "items": [
-                {**i.model_dump(mode="json"), "item_status": view.item_status[i.task_id]}
+                {
+                    **i.model_dump(mode="json"),
+                    "item_status": view.item_status[i.task_id],
+                    "request": _request_view(requests.get(i.change_hash)),
+                }
                 for i in view.items
             ],
         }
@@ -403,3 +409,25 @@ def get_run_steps(run_id: str, actor: ActorDep) -> list[dict[str, Any]]:
         if isinstance(stage2, dict):
             stage2["work_delay"] = delays.get(s["step_no"])
     return steps
+
+
+def _request_view(r: dict[str, Any] | None) -> dict[str, Any] | None:
+    """검토 패널용 변경 요청 요약 (A.24). comment는 담당자가 쓴 인용이다."""
+    if r is None:
+        return None
+    reply = r["reply"] or {}
+    draft = r["draft"]
+    return {
+        "message_id": r["message_id"],
+        "to_actor_id": r["to_actor_id"],
+        "status": r["status"],
+        "decision": reply.get("decision"),
+        "quoted_comment": reply.get("comment") or None,
+        "draft": None
+        if draft is None
+        else {
+            "proposal_id": draft["proposal_id"],
+            "status": draft["status"],
+            "axes": draft["payload"].get("axes", []),
+        },
+    }

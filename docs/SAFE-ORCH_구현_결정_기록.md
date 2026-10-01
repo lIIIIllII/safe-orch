@@ -1257,3 +1257,13 @@
 **S2 구현 기록** (live run `--path coord`)
 - `scripts/live_run.py --path coord`: COORDINATION_ENABLED를 켠 임시 DB에서 요청 A. 사람 역할 스크립트: 변경 요청 → 이견(`demo_rejections[0].comment`), 제약 초안 → 확정, 담당자 질문 → 수락, 동의가 끝난 PASS 후보 → 승인. 여러 Run의 step은 예약 순서(agent_step rowid)로 모아 모델 호출 기록과 맞춘다. 기록에 `runs`(Run별 상태)·`draft_args`·`coordination_prompt_version`을 더했다. 스크립트 모델 테스트 1개(`test_live_run_path_coord_with_scripted_model`).
 - 실행(2026-10-01 17:41 UTC, `data/live_runs/20261001T174106Z.jsonl`): model `gpt-6-luna`(reasoning_effort none), prompt `replanning-p8`·`coordination-p1`. **3/3 성공**(완주 판정 충족). 세 회차 모두 같은 12 step: R:SOLVE(L0) → R:SOLVE(L1, Alpha) → C:SEND_CHANGE_REQUEST(C) → C:WAIT → (A2 이견) → C:DRAFT_CONSTRAINT → C:WAIT → (A2 확정) → R:LIST → R:ASK → (Planner A 수락) → R:TRY(Beta) → (승인 R1) → C:SEND_NOTICE(planner_a) → C:SEND_NOTICE(planner_b) → C:REPORT_TO_SUPERVISOR. 금지 Action 0, MALFORMED 0, LLM 오류 0, 통지 대상 {planner_a, planner_b} 전원 통지. 회차당 토큰 약 31,000, 27.6–29.5초. 초안 축은 세 회차 모두 TIME을 포함했다(draft_ok, 인자 기록은 이 실행 뒤에 더했다).
+
+**S3 구현 기록** (화면)
+- 받은 요청 카드 3종(`Inbox.tsx`의 `InboxCard`만 교체): 변경 요청(수락 / 이견, 이견은 사유를 적어야 버튼이 켜진다. 서버도 `COMMENT_REQUIRED`), 제약 초안 확인(고정 작업·축, 확정 / 폐기), 확정 통지(버튼 없음, 녹색 "확정 통지" 배지). 기존 담당자 확인 질문 카드는 그대로. 서버 문구 → Agent 설명(모델 작성) 순서도 그대로.
+- 받은 요청 배지(`inbox.ts`): 답할 수 있는 유형(QUESTION·CHANGE_REQUEST·CONFIRMATION)의 OPEN만 센다. 통지는 세지 않는다.
+- 검토 패널 협의 표: item 상태 아래에 인용된 이견 문장("이견(인용): …")과 제약 초안의 축·상태.
+- state API: 협의 항목에 `request`(마지막 변경 요청의 상태·결정·quoted_comment·초안 축·상태), 받은 요청에 `candidate_id`·`axes`. 테스트 1개(`test_state_shows_item_request_and_inbox_types`).
+- labels.ts: 메시지 유형(`MESSAGE_TYPE`), 유형별 답 문구(`DECISION_BY_TYPE`: 변경 요청 수락/이견, 초안 확정/폐기), end_reason `REPORT_TO_SUPERVISOR`·`ESCALATE`와 접두어 `CONSTRAINT:`·`REJECTED:`, `COMMENT_REQUIRED` 문구를 "사유 필요(수용·이견)"로. item 상태(ACCEPTED·OBJECTED·OBJECTION_DRAFT_PENDING)·BLOCKED 문구는 이미 있었다.
+- Activity는 기존 step 카드 그대로다. Coordination Run 머리의 Budget은 Solver·사람 확인 한도가 없어 "—"로 보인다(화면 수정 범위 밖).
+- headless 확인(Chrome 154, CDP, 1920×1080, 스크립트 모델로 단계별 DB를 만들어 워커를 끈 서버로 표시): ① Foreman A2 받은 요청: 변경 요청 카드(서버 문구 "시작 10/12 10:00 → 10/12 10:30", Agent 설명, 후보 ID), 이견 버튼은 사유가 비면 비활성, 배지 1, 검토 패널 C "담당자 동의 필요". ② 이견 입력 뒤: 제약 초안 확인 카드(C · 자원·시간 축, 확정/폐기), 답한 변경 요청 카드(버튼 없음), 검토 패널 "협의 이견으로 막힘", C "이견 제약 초안 확인 대기" + 인용된 이견 + "제약 초안 자원·시간 고정 · 확인 대기". 카드 제목이 두 줄로 꺾여 한 줄로 고쳤다. ③ Planner B 받은 요청: 확정 통지 카드(서버 문구 "계획 R1이 확정되었습니다. B(하부 작업) 10/12 09:00–10:00 B 구역 — 안전 규칙 '인양–하부 작업 분리'로 A(인양) 10/12 10:00–10:30와 겹치지 않게 유지", 버튼 없음), 배지 0. Activity에는 협의 Agent 2개(STALE "담당자가 제약을 확정해 후보 무효", 성공 "Supervisor에게 보고하고 종료")와 재계획 Agent 성공(R1).
+- 검사: pytest 458, `npm run build`·`npm run lint` 통과.

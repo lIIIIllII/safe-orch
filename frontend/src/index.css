@@ -1248,6 +1248,12 @@ input.time {
   color: var(--primary);
 }
 
+/* 확정 통지: 답을 받지 않는 메시지 (A.24) */
+.badge.inbox-notice {
+  background: var(--pass-bg);
+  color: var(--pass);
+}
+
 .badge.inbox-late,
 .badge.inbox-cancelled {
   background: var(--stale-bg);
@@ -1298,4 +1304,9 @@ input.time {
   border-style: solid;
   border-width: 0 10px 10px 0;
   border-color: transparent var(--stale) transparent transparent;
+}
+
+/* 받은 요청 카드 제목은 한 줄로 (A.24) */
+.inbox-title {
+  white-space: nowrap;
 }

@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage
 from scripted import Router, call, solve
 
 from app.agents.prompts import coordination as prompt
+from app.api.state import build_state
 from app.commands.approval import (
     ApproveRequest,
     RejectRequest,
@@ -474,3 +475,30 @@ def test_coordination_prompt_fingerprint_and_keys(seeded, coordination_on):
     system = prompt.render_system(seeded)
     assert seeded.site_description in system and "첫날 09:00" in system
     assert "이견이면" not in system  # 초안을 지시하지 않는다 (A.24)
+
+
+def test_state_shows_item_request_and_inbox_types(seeded, coordination_on):
+    """state: 검토 패널 항목의 변경 요청·인용된 이견·초안 축, Inbox의 후보·초안 축 (A.24 화면)."""
+
+    pack = seeded
+    rp, _ = _alpha_consulting(pack)
+    cr = _objected(pack)
+    run_until_idle(
+        pack, model_factory=Router(coordination=[_draft(cr["message_id"]), _wait()]).factory()
+    )
+    with db.read() as conn:
+        a2 = build_state(conn, pack, "foreman_a2")
+    cand = next(c for c in a2["candidates"] if c["candidate_id"] == rp.wait_ref)
+    item = next(i for i in cand["consultation"]["items"] if i["task_id"] == "C")
+    assert item["item_status"] == "OBJECTION_DRAFT_PENDING"
+    assert (item["request"]["decision"], item["request"]["quoted_comment"]) == (
+        "DECLINE",
+        OBJECTION,
+    )
+    assert item["request"]["draft"]["axes"] == ["RESOURCE", "TIME"]
+    by_type = {m["type"]: m for m in a2["inbox"]}
+    assert by_type["CHANGE_REQUEST"]["candidate_id"] == rp.wait_ref
+    assert (by_type["CONFIRMATION"]["status"], by_type["CONFIRMATION"]["axes"]) == (
+        "OPEN",
+        ["RESOURCE", "TIME"],
+    )

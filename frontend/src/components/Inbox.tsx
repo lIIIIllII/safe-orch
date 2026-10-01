@@ -3,7 +3,8 @@
 
 import { useState } from 'react'
 import type { InboxItem, SiteState } from '../types'
-import { AXIS, DECISION, MESSAGE_STATUS, PROPOSAL_STATUS } from '../labels'
+import { AXIS, DECISION, DECISION_BY_TYPE, MESSAGE_STATUS, MESSAGE_TYPE, PROPOSAL_STATUS } from '../labels'
+import { ANSWERABLE } from '../inbox'
 import type { Run } from './ReviewPanel'
 
 interface Props {
@@ -25,20 +26,29 @@ export function Inbox({ state, busy, run }: Props) {
 
 function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: Run }) {
   const [comment, setComment] = useState('')
-  const open = m.status === 'OPEN'
+  const answerable = ANSWERABLE.includes(m.type)
+  const open = m.status === 'OPEN' && answerable
   const done = m.status === 'LATE' || m.status === 'CANCELLED'
+  const words = DECISION_BY_TYPE[m.type] ?? DECISION
+  // 변경 요청의 이견은 사유가 필요하다(서버도 COMMENT_REQUIRED로 막는다, A.24)
+  const needReason = m.type === 'CHANGE_REQUEST'
   const reply = (decision: 'ACCEPT' | 'DECLINE') =>
-    run(`받은 요청 ${DECISION[decision]}`, `/messages/${m.message_id}/reply`, { decision, comment })
+    run(`${MESSAGE_TYPE[m.type] ?? '받은 요청'} ${words[decision]}`, `/messages/${m.message_id}/reply`, {
+      decision,
+      comment,
+    })
+  const statusText = answerable ? (MESSAGE_STATUS[m.status] ?? m.status) : (MESSAGE_TYPE[m.type] ?? m.type)
   return (
     <article className={`inbox-item ${done ? 'inbox-done' : ''} ${open ? 'inbox-open' : ''}`}>
       <header className="row">
-        <span className={`badge inbox-${m.status.toLowerCase()}`}>{MESSAGE_STATUS[m.status] ?? m.status}</span>
+        <span className={`badge inbox-${answerable ? m.status.toLowerCase() : 'notice'}`}>{statusText}</span>
+        <strong className="inbox-title">{MESSAGE_TYPE[m.type] ?? m.type}</strong>
         <span className="small muted">
-          {m.type} · <code>{m.message_id}</code>
+          <code>{m.message_id}</code>
         </span>
       </header>
       <div className="server-block">
-        <div className="block-label">서버 문구 (동의 내용의 기준)</div>
+        <div className="block-label">서버 문구 ({answerable ? '답의 기준' : '확정 내용'})</div>
         <p>{m.body}</p>
       </div>
       {m.agent_text && (
@@ -49,46 +59,73 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
       )}
       <table className="tbl small">
         <tbody>
-          <tr>
-            <th>작업</th>
-            <td>
-              {m.task_id ?? '—'} · {m.axis ? (AXIS[m.axis] ?? m.axis) : '—'} 축
-            </td>
-          </tr>
-          <tr>
-            <th>허용 값</th>
-            <td>{m.allowed_values.join(', ') || '—'}</td>
-          </tr>
+          {m.type === 'QUESTION' && (
+            <>
+              <tr>
+                <th>작업</th>
+                <td>
+                  {m.task_id ?? '—'} · {m.axis ? (AXIS[m.axis] ?? m.axis) : '—'} 축
+                </td>
+              </tr>
+              <tr>
+                <th>허용 값</th>
+                <td>{m.allowed_values.join(', ') || '—'}</td>
+              </tr>
+            </>
+          )}
+          {m.type === 'CHANGE_REQUEST' && (
+            <tr>
+              <th>후보</th>
+              <td>
+                <code>{m.candidate_id ?? '—'}</code>
+              </td>
+            </tr>
+          )}
+          {m.type === 'CONFIRMATION' && (
+            <tr>
+              <th>고정</th>
+              <td>
+                {m.task_id ?? '—'} · {m.axes.map((a) => AXIS[a] ?? a).join('·') || '—'} 축
+              </td>
+            </tr>
+          )}
           <tr>
             <th>보낸 Run</th>
             <td>
               <code>{m.run_id}</code> · step {m.step_no} · Context v{m.created_context_version}
             </td>
           </tr>
-          <tr>
-            <th>상태</th>
-            <td>
-              {MESSAGE_STATUS[m.status] ?? m.status}
-              {m.proposal_status && ` · 제안 ${PROPOSAL_STATUS[m.proposal_status] ?? m.proposal_status}`}
-              {m.reply &&
-                ` · 답 ${DECISION[m.reply.decision] ?? m.reply.decision}${m.reply.comment ? ` “${m.reply.comment}”` : ''}`}
-            </td>
-          </tr>
+          {answerable && (
+            <tr>
+              <th>상태</th>
+              <td>
+                {MESSAGE_STATUS[m.status] ?? m.status}
+                {m.proposal_status && ` · 제안 ${PROPOSAL_STATUS[m.proposal_status] ?? m.proposal_status}`}
+                {m.reply &&
+                  ` · 답 ${words[m.reply.decision] ?? m.reply.decision}${m.reply.comment ? ` “${m.reply.comment}”` : ''}`}
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
       {open && (
         <div className="row">
           <input
             className="grow"
-            placeholder="사유(선택)"
+            placeholder={needReason ? '이견 사유(이견이면 필수)' : '사유(선택)'}
             value={comment}
             onChange={(e) => setComment(e.target.value)}
           />
           <button className="btn-primary" disabled={busy !== null} onClick={() => void reply('ACCEPT')}>
-            수락
+            {words.ACCEPT}
           </button>
-          <button className="btn-warn" disabled={busy !== null} onClick={() => void reply('DECLINE')}>
-            거절
+          <button
+            className="btn-warn"
+            disabled={busy !== null || (needReason && !comment.trim())}
+            title={needReason && !comment.trim() ? '이견 사유를 적어야 합니다' : undefined}
+            onClick={() => void reply('DECLINE')}
+          >
+            {words.DECLINE}
           </button>
         </div>
       )}

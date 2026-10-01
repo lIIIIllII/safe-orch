@@ -11,6 +11,7 @@ import {
   CHECK_STATUS,
   CONSULTATION_STATUS,
   ITEM_STATUS,
+  PROPOSAL_STATUS,
   REJECT_REASON,
   SCOPE_LEVEL,
   SOLVER_STATUS,
@@ -265,7 +266,18 @@ function CandidateDetail({
                   <td className="small">
                     {assign(it.before)} → {assign(it.after)}
                   </td>
-                  <td>{ITEM_STATUS[it.item_status] ?? it.item_status}</td>
+                  <td>
+                    {ITEM_STATUS[it.item_status] ?? it.item_status}
+                    {it.request?.quoted_comment && (
+                      <div className="small muted">이견(인용): “{it.request.quoted_comment}”</div>
+                    )}
+                    {it.request?.draft && (
+                      <div className="small muted">
+                        제약 초안 {it.request.draft.axes.map((a) => AXIS[a] ?? a).join('·')} 고정 ·{' '}
+                        {PROPOSAL_STATUS[it.request.draft.status] ?? it.request.draft.status}
+                      </div>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

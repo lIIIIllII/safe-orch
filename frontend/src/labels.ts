@@ -21,7 +21,7 @@ export const REASON: Record<string, string> = {
   CONSULTATION_NOT_FOUND: '협의 정보가 아직 없음',
   ITEM_NOT_FOUND: '협의 항목에 없는 작업',
   ITEM_NOT_WAIVABLE: '동의 대기 항목만 수용 가능',
-  COMMENT_REQUIRED: '수용 사유 필요',
+  COMMENT_REQUIRED: '사유 필요(수용·이견)',
   // 거절
   INVALID_REASON_CODE: '거절 사유 코드 오류',
   TARGET_REQUIRED: '작업 고정 거절은 대상 작업과 축 필요',
@@ -90,6 +90,8 @@ export const REASON: Record<string, string> = {
   RECURSION_LIMIT: '반복 한도 초과(오류)',
   CANCELLED: '취소됨',
   REJECTED_TWICE: '제약 없는 거절 2회로 이관',
+  REPORT_TO_SUPERVISOR: 'Supervisor에게 보고하고 종료',
+  ESCALATE: '이관',
   // Validator check 사유
   CANDIDATE_HASH_MISMATCH: '후보 hash 불일치',
   SNAPSHOT_REF_MISMATCH: 'Snapshot 참조 불일치',
@@ -150,6 +152,10 @@ export function endReason(code: string | null): string {
       return `${rest}이(가) 취소`
     case 'MODEL_UNAVAILABLE':
       return `모델 준비 실패: ${rest}`
+    case 'CONSTRAINT':
+      return `담당자가 제약을 확정해 후보 무효 (${rest})`
+    case 'REJECTED':
+      return `후보 거절로 중단 (${rest})`
     case 'AGENT_TYPE_NOT_REGISTERED':
       return `등록되지 않은 Agent 유형: ${rest}`
     case 'EXCEPTION':
@@ -318,6 +324,20 @@ export const PROPOSAL_STATUS: Record<string, string> = {
 export const DECISION: Record<string, string> = {
   ACCEPT: '수락',
   DECLINE: '거절',
+}
+
+/** 받은 요청 유형 (A.21·A.24) */
+export const MESSAGE_TYPE: Record<string, string> = {
+  QUESTION: '담당자 확인 질문',
+  CHANGE_REQUEST: '변경 요청',
+  CONFIRMATION: '제약 초안 확인',
+  NOTICE: '확정 통지',
+}
+
+/** 유형별 답 버튼·답 표시 문구 (A.24). 변경 요청의 DECLINE은 이견, 제약 초안의 ACCEPT는 확정이다. */
+export const DECISION_BY_TYPE: Record<string, Record<string, string>> = {
+  CHANGE_REQUEST: { ACCEPT: '수락', DECLINE: '이견' },
+  CONFIRMATION: { ACCEPT: '확정', DECLINE: '폐기' },
 }
 
 export const AXIS: Record<string, string> = {

@@ -100,6 +100,15 @@ export interface ConsultationItem {
   change_hash: string
   base_status: string
   item_status: string
+  /** 마지막 변경 요청과 담당자 답 (Coordination, A.24). quoted_comment는 담당자가 쓴 인용이다. */
+  request: {
+    message_id: string
+    to_actor_id: string
+    status: string
+    decision: string | null
+    quoted_comment: string | null
+    draft: { proposal_id: string; status: string; axes: string[] } | null
+  } | null
 }
 
 /** 거절된 후보의 거절 사유와 그 거절로 생긴 제약 (A.21 7). */
@@ -223,6 +232,10 @@ export interface InboxItem {
   task_id: string | null
   axis: string | null
   allowed_values: string[]
+  /** 변경 요청이 묶인 후보 (CHANGE_REQUEST, A.24) */
+  candidate_id: string | null
+  /** 제약 초안의 고정 축 (CONFIRMATION + FEEDBACK_CONSTRAINT, A.24) */
+  axes: string[]
 }
 
 export interface AgentStep {

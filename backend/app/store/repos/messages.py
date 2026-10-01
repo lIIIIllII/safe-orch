@@ -152,7 +152,7 @@ def decide_proposal(
 
 _JOINED = (
     "SELECT m.message_id, m.run_id, m.step_no, m.to_actor_id, m.type, m.status, m.body,"
-    " m.agent_text, m.reply, m.created_context_version, m.answered_context_version,"
+    " m.agent_text, m.reply, m.created_context_version, m.answered_context_version, m.candidate_id,"
     " p.proposal_id, p.type AS proposal_type, p.status AS proposal_status, p.target_task_id,"
     " p.payload FROM message m LEFT JOIN proposal p ON p.proposal_id = m.proposal_id"
 )
@@ -206,6 +206,8 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
                 "task_id": r.pop("target_task_id"),
                 "axis": payload.get("axis"),
                 "allowed_values": payload.get("allowed_values", []),
+                # 제약 초안(FEEDBACK_CONSTRAINT)의 고정 축 (A.24)
+                "axes": payload.get("axes", []),
             }
         )
     return out
