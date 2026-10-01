@@ -5,6 +5,7 @@
 """
 
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -36,6 +37,7 @@ PACK_FILES = ("pack.yaml", "rules.yaml", "site.yaml", "plan_r0.yaml", "scenario.
 EVALUATORS = {"SEPARATION", "CAPACITY"}
 RULE_RELATIONS = {"SAME", "ADJACENT", "BELOW"}
 FIXTURE_SOURCE_REF = "fixture:plan_r0"
+SITE_DESCRIPTION_MAX = 100  # 부록 A.23
 
 
 class PackError(Exception):
@@ -108,6 +110,7 @@ class LoadedPack(Frozen):
     work_types: dict[str, WorkType]
     rules: tuple[Rule, ...]
     site_id: str
+    site_description: str  # Replanning System prompt의 현장 설명 (부록 A.23)
     timezone: str  # IANA (부록 A.20)
     horizon_start_utc: str
     horizon_minutes: int
@@ -483,6 +486,29 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             ZoneInfo(timezone)
         except (ZoneInfoNotFoundError, ValueError):
             reasons.append(f"site.yaml: unknown timezone {timezone!r}")
+    # prompt 현장 설명 (부록 A.23). System을 str.format으로 렌더링하므로 중괄호를 막는다.
+    site_description = site_doc.get("site_description")
+    if not isinstance(site_description, str) or not site_description.strip():
+        reasons.append("site.yaml: site_description missing (one line, <= 100 chars)")
+    elif (
+        len(site_description.splitlines()) != 1
+        or len(site_description) > SITE_DESCRIPTION_MAX
+        or "{" in site_description
+        or "}" in site_description
+    ):
+        reasons.append(
+            f"site.yaml: site_description must be one line, <= {SITE_DESCRIPTION_MAX} chars,"
+            " without braces"
+        )
+    # 원점 시각은 horizon_start_utc + timezone으로 계산한다 (부록 A.23)
+    start_utc = site_doc.get("horizon_start_utc")
+    try:
+        if datetime.fromisoformat(str(start_utc)).tzinfo is None:
+            raise ValueError("no timezone")
+    except ValueError:
+        reasons.append(
+            f"site.yaml: horizon_start_utc must be an ISO time with offset, got {start_utc!r}"
+        )
     horizon = site_doc.get("horizon_minutes")
     raw_work = site_doc.get("work_intervals")
     if not isinstance(raw_work, list) or not raw_work:
@@ -656,6 +682,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             work_types=work_types,
             rules=tuple(rules),
             site_id=site_doc.get("site_id"),
+            site_description=site_description,
             timezone=timezone,
             horizon_start_utc=site_doc.get("horizon_start_utc"),
             horizon_minutes=site_doc.get("horizon_minutes"),

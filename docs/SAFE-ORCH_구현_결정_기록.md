@@ -1150,3 +1150,18 @@
 - 기존 테스트 수정은 import 경로 2곳뿐이다: `test_llm.py`의 `build_observation`(→ `observers.replanning`), `test_agents.py`의 `tool_gateway.cpsat` monkeypatch(→ `cpsat` 모듈).
 - prompt는 `replanning-p7` 그대로이고 fingerprint 테스트가 통과한다. 기본안 B E2E step 5·Solver 3·사람 라운드 1 그대로. `verify_demo_values`·`npm run build`·`npm run lint` 통과.
 - 남은 것(2단계): site.yaml `site_description`, 로더 검증, `render_system(pack)`, p8, prompt 테스트, live run `--path B` 1회, reset 안내.
+
+**2단계 구현 기록** (모델 입력 바이트 변화 0, prompt 라벨 p7 → p8)
+- 바뀐 파일:
+  - `domain_packs/shipyard/site.yaml`: `site_description: "여러 협력사가 구역·크레인·시간을 나눠 쓰는 현장"`. pack_hash가 바뀐다.
+  - `packs/loader.py`: `LoadedPack.site_description`, 검사(필수·비어 있지 않은 한 줄·100자 이하·중괄호 금지, `SITE_DESCRIPTION_MAX = 100`), `horizon_start_utc`가 오프셋 있는 ISO 시각인지 검사.
+  - `agents/prompts/replanning.py`: 템플릿에 `{site_description}`·`{origin_time}`, `origin_time(pack)`(horizon_start_utc + timezone → HH:MM), `render_system(pack)`, `PROMPT_VERSION = "replanning-p8"`, p8 fingerprint(템플릿 기준), `P7_RENDERED_SYSTEM_HASH`(p7 System 렌더링 결과의 hash).
+  - `agents/graph.py`: `build_graph(..., system_text)`로 렌더링된 System을 받는다(graph는 Pack을 모른다). `agents/runtime.py`: `binding.prompt.render_system(pack)`을 넘긴다.
+- 테스트: 433 → 447(+14).
+  - prompt(4): shipyard 렌더링 = p7(hash 상수)·원점 09:00, 템플릿·Goal·머리말·전체 도구 스키마에 Pack 값 없음(토큰 경계 검색. actor 이름은 역할 이름 "Supervisor"와 겹쳐 대상에서 뺐고 actor_id는 검사한다), 렌더링 결과에 설명·원점이 각 1번, 두 번째 Pack(설명 변경·원점 08:00) 렌더링. 같은 검사를 p7 렌더링 System에 돌리면 설명과 "09:00"이 잡히는 것을 확인했다(검사가 비어 있지 않음).
+  - 로더(10): 설명 로드, 누락·공백·여러 줄·101자·중괄호 거절, 100자 통과, horizon_start_utc 형식(공백 구분·오프셋 없음·문자열) 거절.
+  - 바뀐 테스트: prompt 버전 기대값 2곳(p7 → p8), `test_system_lists_every_action_with_open_condition`·"L0부터" 검사는 렌더링 결과로 본다.
+  - 골든 테스트: 기록의 prompt_version 라벨만 p8 → p7로 되돌려 hash하면 1단계 값과 같다(라벨이 실제로 있는지도 확인). 모델이 받은 System·Human·도구는 치환 없이 같다.
+- `verify_demo_values`·`npm run build`·`npm run lint` 통과.
+- live run `--path B` 1회(2026-10-01 17:09 UTC, `data/live_runs/20261001T170950Z.jsonl`): model `gpt-6-luna`(reasoning_effort none), prompt `replanning-p8`, success 1/1, Run SUCCEEDED(`COMMITTED:1`), step 5: SOLVE L0(INFEASIBLE, CONTINUE) → SOLVE L1(Alpha, WAIT) → (거절) LIST → ASK(WAIT) → (수락) TRY(Beta, WAIT) → 승인. 금지 Action 0, MALFORMED 0, LLM 오류 0, alpha·beta 기대값 일치, 토큰 16,245, 16.3초.
+- 로컬 DB: site.yaml이 바뀌어 pack_hash가 다르므로 기존 DB로는 기동이 거절된다. reset이 필요하다(A.3, 사용자가 한다).

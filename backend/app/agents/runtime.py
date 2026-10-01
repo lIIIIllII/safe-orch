@@ -92,7 +92,8 @@ def invoke(pack: LoadedPack, graph_input: dict[str, Any], model: ChatModel) -> A
         _fail(pack, run_id, f"{NOT_REGISTERED}: {run.agent_type}")
         return _reload(run_id)
     port = StoreRunPort(pack, binding)
-    graph = graph_module.build_graph(port, model, binding.spec, binding.prompt)
+    system_text = binding.prompt.render_system(pack)
+    graph = graph_module.build_graph(port, model, binding.spec, binding.prompt, system_text)
     try:
         graph.invoke({"run_id": run_id}, {"recursion_limit": binding.spec.recursion_limit})
     except GraphRecursionError:

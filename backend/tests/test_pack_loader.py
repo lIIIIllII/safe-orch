@@ -419,3 +419,43 @@ def test_demo_request_predecessors_key_not_accepted(pack_copy):
         lambda d: d["demo_requests"][0].update(predecessors=[{"task_id": "B"}]),
     )
     assert "scenario.yaml.demo_requests[0].predecessors: Extra inputs" in _reasons(pack_copy)
+
+
+# ── prompt 현장 문구 (부록 A.23) ───────────────────────────────
+
+
+def test_site_description_loaded(pack):
+    assert pack.site_description == "여러 협력사가 구역·크레인·시간을 나눠 쓰는 현장"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, "site_description missing"),
+        ("  ", "site_description missing"),
+        ("첫 줄" + chr(10) + "둘째 줄", "site_description must be one line"),
+        ("가" * 101, "site_description must be one line, <= 100 chars"),
+        ("{goal} 현장", "without braces"),
+    ],
+    ids=["missing", "blank", "multiline", "too_long", "braces"],
+)
+def test_site_description_rejected(pack_copy, value, expected):
+    def mutate(d):
+        if value is None:
+            d.pop("site_description")
+        else:
+            d["site_description"] = value
+
+    _edit(pack_copy, "site.yaml", mutate)
+    assert expected in _reasons(pack_copy)
+
+
+def test_site_description_100_chars_loads(pack_copy):
+    _edit(pack_copy, "site.yaml", lambda d: d.update(site_description="가" * 100))
+    assert load_pack(pack_copy).site_description == "가" * 100
+
+
+@pytest.mark.parametrize("value", ["2026-10-12 09:00", "2026-10-12T00:00:00", "not a time"])
+def test_horizon_start_must_be_iso_with_offset(pack_copy, value):
+    _edit(pack_copy, "site.yaml", lambda d: d.update(horizon_start_utc=value))
+    assert "horizon_start_utc must be an ISO time with offset" in _reasons(pack_copy)

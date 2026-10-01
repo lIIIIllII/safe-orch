@@ -1,6 +1,9 @@
 # shipyard 현장 (설계서 §15, 부록 A.5·A.20).
 # 시간은 Horizon 원점(10/12 09:00) 기준 정수 분, 1440분 = 하루. 날짜·시각 문자열은 따옴표로 감싼다.
 site_id: YARD-01                            # 가정
+# Replanning System prompt의 현장 설명 (부록 A.23). 한 줄, 100자 이하, 중괄호 금지.
+# Horizon 원점 시각은 따로 두지 않고 horizon_start_utc + timezone으로 계산한다.
+site_description: "여러 협력사가 구역·크레인·시간을 나눠 쓰는 현장"
 timezone: "Asia/Seoul"                      # IANA. 화면의 날짜·시각 변환용 (A.20)
 horizon_start_utc: "2026-10-12T00:00:00Z"   # = 10/12(월) 09:00 KST, 가정
 horizon_minutes: 3360                       # 10/12(월) 09:00 – 10/14(수) 17:00 (A.20)

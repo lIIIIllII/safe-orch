@@ -1,8 +1,12 @@
 """실제 모델 연결 (설계서 §11.2·§11.6, 부록 A.17). 실제 API는 부르지 않는다."""
 
+import json
+import re
+
 import httpx
 import openai
 import pytest
+import yaml
 from conftest import add_run
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
@@ -12,13 +16,21 @@ from app.agents import llm, runtime
 from app.agents.observers.replanning import build_observation
 from app.agents.prompts import replanning as prompt
 from app.config import Settings
+from app.domain.canonical import canonical_hash
 from app.main import app
+from app.packs.loader import load_pack
 from app.store import db
 from app.store.repos.runs import list_steps
 from scripts import live_run
 
 REQ = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
 CONFLICT = {"conflict": {"rule_id": "SEP-LIFT-BELOW", "task_ids": ["A", "B"]}}
+
+
+def _edit_yaml(path, mutate):
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    mutate(data)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
 def _conn_error():
@@ -215,8 +227,76 @@ def test_observation_keys_match_fingerprinted_keys(with_a):
     assert all("search_key" not in a and "spec_hash" not in a for a in data["attempts"])
 
 
-def test_system_prompt_does_not_order_l0_first():
-    assert "L0부터" not in prompt.SYSTEM
+def test_system_prompt_does_not_order_l0_first(pack):
+    assert "L0부터" not in prompt.render_system(pack)
+
+
+# ── 현장 문구의 Pack화 (부록 A.23) ─────────────────────────────
+
+
+def test_shipyard_rendered_system_equals_p7(pack):
+    """p8 템플릿을 shipyard로 렌더링하면 p7 System과 글자까지 같다(모델 입력 바이트가 같다)."""
+    assert canonical_hash(prompt.render_system(pack)) == prompt.P7_RENDERED_SYSTEM_HASH
+    assert prompt.origin_time(pack) == "09:00"
+
+
+def _pack_values(p) -> list[str]:
+    """prompt 템플릿에 들어가면 안 되는 Pack 값. 사람 이름(actor name)은 역할 이름과 겹쳐 뺀다."""
+    values = [p.site_id, p.timezone, p.horizon_start_utc, p.site_description, prompt.origin_time(p)]
+    values += [r.resource_id for r in p.resources] + [z.zone_id for z in p.zones]
+    values += [u.unit_id for u in p.units] + [u.name for u in p.units]
+    values += [a.actor_id for a in p.actors]
+    values += [r.rule_id for r in p.rules] + [r.display_name for r in p.rules]
+    values += [*p.work_types] + [w.display_name for w in p.work_types.values()]
+    values += [t.task_id for t in p.tasks] + [p.new_task.task_id]
+    values += [d.task_id for d in p.demo_requests]
+    return sorted(set(values))
+
+
+def _found(values: list[str], text: str) -> list[str]:
+    """토큰 경계로 찾는다(짧은 ID가 다른 낱말의 일부로 잡히지 않게)."""
+    return [
+        v for v in values if re.search(rf"(?<![0-9A-Za-z_-]){re.escape(v)}(?![0-9A-Za-z_-])", text)
+    ]
+
+
+def test_prompt_template_has_no_pack_values(pack):
+    """렌더링 전 템플릿·Goal·머리말·전체 도구 스키마에 Pack 값이 없다 (§18.2.6, A.23)."""
+    tools = prompt.spec.tool_schemas(
+        {
+            name: {"level": list(prompt.spec.LEVELS)} if name == "SOLVE_WITH_SCOPE" else {}
+            for name in prompt.spec.ACTIONS
+        }
+    )
+    texts = {
+        "system": prompt.SYSTEM,
+        "goal": prompt.spec.GOAL,
+        "header": prompt.OBS_HEADER,
+        "tools": json.dumps(tools, ensure_ascii=False),
+    }
+    assert {k: _found(_pack_values(pack), v) for k, v in texts.items()} == {k: [] for k in texts}
+    assert "{site_description}" in prompt.SYSTEM and "{origin_time}" in prompt.SYSTEM
+
+
+def test_rendered_system_contains_site_values_once(pack):
+    system = prompt.render_system(pack)
+    assert system.count(pack.site_description) == 1
+    assert system.count(f"첫날 {prompt.origin_time(pack)}") == 1
+    assert "{" not in system.replace("{{", "")  # 빈 자리 없음
+
+
+def test_second_pack_renders_its_own_site_values(pack, pack_copy):
+    """두 번째 Pack(설명·원점 변경)으로 렌더링하면 그 값이 들어가고 shipyard 값은 없다."""
+
+    def mutate(d):
+        d["site_description"] = "여러 공정 팀이 라인·지게차·시간을 나눠 쓰는 공장"
+        d["horizon_start_utc"] = "2026-10-11T23:00:00Z"  # Asia/Seoul 08:00
+
+    _edit_yaml(pack_copy / "site.yaml", mutate)
+    other = load_pack(pack_copy)
+    system = prompt.render_system(other)
+    assert other.site_description in system and "첫날 08:00" in system
+    assert pack.site_description not in system and "첫날 09:00" not in system
 
 
 # ── 네트워크 차단·live run ─────────────────────────────────────
@@ -400,7 +480,7 @@ def test_live_run_path_needs_request_a(capsys):
 def test_system_lists_every_action_with_open_condition(pack):
     """System의 "도구 전체와 열리는 조건" 절은 spec에서 생성한다. Pack 값은 넣지 않는다 (A.21 p7)."""
     catalog = prompt.tool_catalog()
-    system = prompt.SYSTEM.format(goal="g")
+    system = prompt.render_system(pack)
     assert catalog in system
     for name, model in prompt.spec.ACTIONS.items():
         assert model.OPENS and f"- {name}: " in catalog and model.OPENS in catalog

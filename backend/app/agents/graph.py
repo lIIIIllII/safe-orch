@@ -53,9 +53,12 @@ class State(TypedDict, total=False):
     end: tuple[str, str] | None
 
 
-def build_graph(port: RunPort, model: ChatModel, spec: AgentSpec, prompt: ModuleType) -> Any:
-    """spec: AgentSpec(goal, tool_schemas), prompt: SYSTEM·PROMPT_VERSION·render_observation (A.23)."""
-    system = SystemMessage(prompt.SYSTEM.format(goal=spec.goal))
+def build_graph(
+    port: RunPort, model: ChatModel, spec: AgentSpec, prompt: ModuleType, system_text: str
+) -> Any:
+    """spec: AgentSpec(tool_schemas), prompt: PROMPT_VERSION·render_observation,
+    system_text: runtime이 Pack 값으로 렌더링한 System (graph는 Pack을 모른다, A.23)."""
+    system = SystemMessage(system_text)
 
     def observe(state: State) -> State:
         obs = port.observe(state["run_id"])
