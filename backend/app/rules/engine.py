@@ -156,7 +156,13 @@ def detect_conflicts(
 
     snapshot에 없는 작업의 배정은 건너뛴다(작업 보존은 Validator C02).
     """
-    facts = snapshot.facts()
+    return conflicts_in(snapshot.facts(), assignments, pack)
+
+
+def conflicts_in(
+    facts: SnapshotContent, assignments: Iterable[Assignment], pack: LoadedPack
+) -> list[Conflict]:
+    """detect_conflicts와 같은 검사를 사실(SnapshotContent)에 직접 한다(시간창 선택지 스캔, A.29)."""
     tasks = facts.task_map()
     pairs = sorted(
         ((tasks[a.task_id], a) for a in assignments if a.task_id in tasks),
