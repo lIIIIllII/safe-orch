@@ -22,8 +22,15 @@
 - Agent 자동 시작 설정(COORDINATION_ENABLED·EVENT_RESPONSE_ENABLED)은 경로가 명시한다(.env·기본값과 무관, A.28):
   A·B·B-decline·intake = 둘 다 끔, coord = Coordination만, B --coord = Coordination만, event = Event Response
   (--coord면 Coordination도). 기록 agent_flags에 남긴다.
-- --path B-decline: 같은 흐름에서 ACCEPT 대신 DECLINE(comment "live run 자동 거절"). 성공 = Alpha PASS ∧ ASK
-  1회 ∧ DECLINE 적용 ∧ 거절 뒤 ASK·TRY 없음 ∧ Run ESCALATED ∧ 금지 Action 0 ∧ Budget 안.
+- --path B-decline(A.29 6에서 재정의): 같은 흐름에서 모든 질문에 DECLINE(comment "live run 자동 거절"). 자원 질문을
+  거절하면 자원 경로가 닫혀 시간창 질문이 열린다. 성공 = Alpha PASS ∧ 자원 질문 1회 ∧ 시간창 질문 1회 ∧ DECLINE 적용 ∧
+  마지막 거절 뒤 ASK·시간창 질문·TRY 없음 ∧ Run ESCALATED ∧ 금지 Action 0 ∧ Budget 안.
+- --path B-time(A.29): 같은 흐름에서 자원 질문(MOVABILITY)은 DECLINE, 시간창 질문(FACT_UPDATE OWNER)은 ACCEPT
+  → 넓힌 창의 후보가 PASS ∧ 협의 완료면 승인. 성공 = Alpha PASS ∧ 자원 질문 1회(LIST 결과의 대체 자원) ∧ 시간창 질문
+  1회(값 = 그 step의 서버 선택지) ∧ 수락 뒤 SOLVE ∧ 후보가 verify 기대값(expected_window: A 10:30 A-CR-01, 변경 1,
+  지연 90)과 같음 ∧ PASS ∧ 협의 완료 ∧ R1 ∧ Run SUCCEEDED ∧ 금지 Action 0 ∧ Budget 안.
+- --request(경로 A)의 사람 역할(A.29 6): Run이 담당자 질문(시간창 넓히기 등)을 기다리면 그 수신자로 DECLINE한다.
+  해가 없는 요청(N5)의 기대값은 그대로 이관이다. 답은 기록 human_replies에 남는다.
 - --path coord(기본안 A, 부록 A.24): COORDINATION_ENABLED를 켠 임시 DB에서 요청 A만. 스크립트가 사람 역할을
   한다: 변경 요청에는 이견(demo_rejections[0].comment), 제약 초안에는 확정, 담당자 질문에는 수락, 동의가 끝난
   PASS 후보는 승인. 성공 = Alpha PASS ∧ C 담당자에게 C 변경 요청 ∧ DRAFT_CONSTRAINT(TASK_IMMOVABLE, C, 바뀐 축
@@ -86,7 +93,7 @@ from app.solver import cpsat
 from app.store import db
 from app.store.repos.consultations import consultation_view
 from app.store.repos.decisions import list_constraints
-from app.store.repos.messages import get_message
+from app.store.repos.messages import get_message, get_proposal
 from app.store.repos.records import get_candidate, get_snapshot, list_validations
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.seed import seed_pack
@@ -97,7 +104,7 @@ from scripts import verify_demo_values as verify
 OUT_DIR = REPO_ROOT / "data" / "live_runs"
 RUN_DEADLINE_S = 300
 MAX_RUNS = 10
-PATHS = ("A", "B", "B-decline", "coord", "event", "intake")
+PATHS = ("A", "B", "B-decline", "B-time", "coord", "event", "intake")
 MAX_HUMAN_TURNS = 6  # 기본안 B에서 사람 응답 반복 상한(무한 반복 방지)
 
 
@@ -344,18 +351,25 @@ def _waiting(conn: Any, run_id: str) -> tuple[Any, str | None]:
 
 
 def run_path_b(
-    index: int, settings: Settings, pack_name: str, raw: bool, decline: bool, coord: bool = False
+    index: int,
+    settings: Settings,
+    pack_name: str,
+    raw: bool,
+    decline: bool,
+    coord: bool = False,
+    window: bool = False,
 ) -> dict:
-    """임시 DB에서 요청 A로 기본안 B(또는 B-decline)를 끝까지 돌린다. 기록 1개.
+    """임시 DB에서 요청 A로 기본안 B(또는 B-decline·B-time)를 끝까지 돌린다. 기록 1개.
 
-    coord면 Coordination을 켠다(운영 기본값의 기본안 B, A.28).
+    coord면 Coordination을 켠다(운영 기본값의 기본안 B, A.28). window면 자원 질문은 거절하고 시간창 질문은
+    수락한다(B-time, A.29).
     """
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
     old_env = _set_env({"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(coord, False)})
     get_settings.cache_clear()
     db.close()
     real_solve = cpsat.solve
-    path = "B-decline" if decline else ("B-coord" if coord else "B")
+    path = "B-decline" if decline else ("B-time" if window else ("B-coord" if coord else "B"))
     record: dict[str, Any] = {
         "index": index,
         "request": "A",
@@ -368,7 +382,7 @@ def run_path_b(
         pack = load_pack(pack_dir(pack_name))
         with db.write() as tx:
             seed_pack(tx, pack)
-        _path_b(record, settings, pack, pack_name, raw, decline, real_solve, coord)
+        _path_b(record, settings, pack, pack_name, raw, decline, real_solve, coord, window)
         record["l0_first"] = record.get("first_solve_level") == "L0"
     except Exception as e:  # noqa: BLE001 — 실패도 기록한다
         record.update(success=False, error=f"{type(e).__name__}: {e}")
@@ -390,6 +404,7 @@ def _path_b(
     decline: bool,
     real_solve: Any,
     coord: bool = False,
+    window: bool = False,
 ) -> None:
     rec = _Recorder(time.monotonic() + RUN_DEADLINE_S * 2, raw)
     site_id = pack.site_id
@@ -437,17 +452,31 @@ def _path_b(
                     get_message(conn, site_id, ref) if run.wait_kind == "MESSAGE" and ref else None
                 )
                 cand_v = _pass_validation(conn, site_id, ref) if message is None else None
+                proposal = (
+                    get_proposal(conn, site_id, message["proposal_id"])
+                    if message is not None and message["proposal_id"]
+                    else None
+                )
             if message is not None and message["status"] == "OPEN":
-                decision = "DECLINE" if decline else "ACCEPT"
-                comment = "live run 자동 거절" if decline else "live run 자동 수락"
+                # B-time: 자원 질문(MOVABILITY)은 거절, 시간창 질문(FACT_UPDATE OWNER)은 수락 (A.29)
+                refuse = decline or (window and (proposal or {}).get("type") == "MOVABILITY")
+                decision = "DECLINE" if refuse else "ACCEPT"
+                comment = "live run 자동 거절" if refuse else "live run 자동 수락"
                 out = reply_message(
                     pack,
                     message["to_actor_id"],
                     _key(),
                     ReplyRequest(message_id=ref, decision=decision, comment=comment),
                 )
-                reply_status = out.status
-                events.append({"reply": decision, "message_id": ref, "status": out.status})
+                reply_status = out.status if reply_status in (None, "APPLIED") else reply_status
+                events.append(
+                    {
+                        "reply": decision,
+                        "message_id": ref,
+                        "proposal_type": (proposal or {}).get("type"),
+                        "status": out.status,
+                    }
+                )
                 continue
             if cand_v is not None:
                 beta, beta_v = ref, cand_v
@@ -510,6 +539,21 @@ def _path_b(
         if a["resource_id"] != s["tool_result"]["current"]
     }
     asked = [v for s in ask_steps for v in s["action"]["args"]["allowed_values"]]
+    window_steps = [s for s in steps if (s["action"] or {}).get("name") == "ASK_WINDOW_CHANGE"
+                    and s["guard"]["verdict"] == "ACCEPTED"]  # fmt: skip
+
+    def server_option(s: dict[str, Any]) -> bool:
+        """시간창 질문의 값이 그 step 관찰의 서버 선택지와 같은가 (A.29 5)."""
+        task_id = s["action"]["args"]["task_id"]
+        opt = next((o for o in s["observation"]["window_options"] if o["task_id"] == task_id), None)
+        new = {c["field"]: c["new_value"] for c in s["tool_result"].get("changes", [])}
+        return opt is not None and new == {
+            k: opt["proposed"][k] for k in ("latest_start", "latest_end")
+        }
+
+    window_asked = [
+        (s["action"]["args"]["task_id"], s["observation"]["window_options"]) for s in window_steps
+    ]
     tries = [s for s in steps if (s["action"] or {}).get("name") == "TRY_ALTERNATIVE_RESOURCE"]
     accepted = lambda s: any(h["decision"] == "ACCEPT" for h in s["observation"]["human_replies"])
     reject_step = next((s for s in steps if s["observation"]["rejections"]), None)
@@ -524,21 +568,30 @@ def _path_b(
         "ask_uses_listed_alternative": bool(asked) and set(asked) <= list_alts,
         "reply_applied": reply_status == "APPLIED",
     }
+    criteria.update(
+        window_ask_count=len(window_steps),
+        window_value_is_server_option=bool(window_steps) and all(map(server_option, window_steps)),
+    )
     if decline:
-        after = [
-            s for s in steps if s["step_no"] > max((a["step_no"] for a in ask_steps), default=0)
-        ]
+        # A.29 6: 자원 질문과 시간창 질문을 모두 거절한 뒤 이관한다
+        last_ask = max((a["step_no"] for a in [*ask_steps, *window_steps]), default=0)
+        after = [s for s in steps if s["step_no"] > last_ask]
         criteria.update(
             no_ask_or_try_after_decline=not any(
-                (s["action"] or {}).get("name") in ("ASK_TASK_OWNER", "TRY_ALTERNATIVE_RESOURCE")
+                (s["action"] or {}).get("name")
+                in ("ASK_TASK_OWNER", "ASK_WINDOW_CHANGE", "TRY_ALTERNATIVE_RESOURCE")
                 and s["guard"]["verdict"] == "ACCEPTED"
                 for s in after
             ),
             escalated=run.status == "ESCALATED",
         )
         keys = ("alpha_pass", "reply_applied", "no_ask_or_try_after_decline", "escalated",
-                "within_budget")  # fmt: skip
-        success = all(criteria[k] for k in keys) and criteria["ask_count"] == 1
+                "within_budget", "window_value_is_server_option")  # fmt: skip
+        success = (
+            all(criteria[k] for k in keys)
+            and criteria["ask_count"] == 1
+            and criteria["window_ask_count"] == 1
+        )
     else:
         criteria.update(
             beta_pass=beta_v is not None,
@@ -549,7 +602,24 @@ def _path_b(
         )
         keys = ("beta_pass", "consultation_complete", "committed_r1", "run_succeeded",
                 "within_budget", "ask_uses_listed_alternative", "no_try_before_accept")  # fmt: skip
+        if window:
+            # B-time (A.29): 시간창 수락 뒤 SOLVE로 후보. TRY는 없다(자원 질문을 거절했다)
+            last_window = max((s["step_no"] for s in window_steps), default=None)
+            criteria.update(
+                solve_after_window_accept=last_window is not None
+                and any(
+                    (s["action"] or {}).get("name") == "SOLVE_WITH_SCOPE"
+                    and s["step_no"] > last_window
+                    for s in steps
+                ),
+                no_try=not tries,
+            )
+            keys = ("beta_pass", "consultation_complete", "committed_r1", "run_succeeded",
+                    "within_budget", "ask_uses_listed_alternative", "solve_after_window_accept",
+                    "window_value_is_server_option", "no_try")  # fmt: skip
         success = all(criteria[k] for k in keys)
+        if window:
+            success = success and criteria["window_ask_count"] == 1 and criteria["ask_count"] == 1
     if coord:
         # Coordination을 켠 기본안 B (A.28): Alpha 협의 Run은 거절로 STALE, 확정 뒤 통지 대상 전원 통지
         coords = [r for r in runs if r.agent_type == "COORDINATION"]
@@ -588,6 +658,30 @@ def _path_b(
     try_res = {task_a.id: sorted(set(asked))} if asked else {}
     frozen = set(pack.demo_rejections[0].target_task_ids)
     exp_beta = verify.expected_try(world_model, world, task_a, try_res, frozen) if try_res else None
+    expected_beta = {"L0": exp_beta} if exp_beta is not None else None
+    if window:
+        # B-time: 넓힌 창(서버 선택지)의 범위별 기대값. 후보를 낸 SOLVE의 범위와 비교한다 (A.29)
+        expected_beta = None
+        if window_asked:
+            task_id, options = window_asked[-1]
+            opt = next(o for o in options if o["task_id"] == task_id)
+            expected_beta = verify.expected_window(
+                world_model,
+                world,
+                task_a,
+                frozen,
+                (opt["proposed"]["latest_start"], opt["proposed"]["latest_end"]),
+            )
+    beta_match = (
+        None
+        if decline
+        else beta_actual is not None
+        and expected_beta is not None
+        and _matches(expected_beta, beta_actual, False)
+    )
+    if window:
+        criteria["candidate_matches_expected"] = beta_match
+        success = success and bool(beta_match)
     record.update(
         model_settings=model_settings(settings),
         model=next((r["model_id"] for r in rows if r["model_id"]), None),
@@ -596,12 +690,8 @@ def _path_b(
         success_criteria=criteria,
         alpha_matches_expected=alpha_actual is not None
         and _matches({"L1": exp_alpha}, alpha_actual, False),
-        # B-decline은 Beta가 없는 경로라 None(해당 없음)
-        beta_matches_expected=None
-        if decline
-        else beta_actual is not None
-        and exp_beta is not None
-        and _matches({"L0": exp_beta}, beta_actual, False),
+        # B-decline은 Beta가 없는 경로라 None(해당 없음). B-time은 넓힌 창의 후보(A.29)
+        beta_matches_expected=beta_match,
         # 첫 SOLVE의 level (--path A와 같은 키로 요약에 집계한다)
         first_solve_level=next(
             (
@@ -1479,7 +1569,39 @@ def _run_request(
             "status": submitted.status,
             "reason_codes": list(submitted.reason_codes),
         }
-        run_until_idle(pack, model_factory=lambda: _RecordingModel(openai_model(settings), rec))
+        factory = lambda: _RecordingModel(openai_model(settings), rec)
+        run_until_idle(pack, model_factory=factory)
+        # 사람 역할: Run이 담당자 질문(시간창 넓히기 등)을 기다리면 그 수신자로 거절한다 (A.29 6)
+        human_replies: list[dict[str, Any]] = []
+        for _ in range(MAX_HUMAN_TURNS):
+            with db.read() as conn:
+                ids = [r[0] for r in conn.execute("SELECT run_id FROM agent_run ORDER BY rowid")]
+                new = [rid for rid in ids if rid not in before]
+                waiting = get_run(conn, new[-1]) if new else None
+                message = (
+                    get_message(conn, pack.site_id, waiting.wait_ref)
+                    if waiting is not None
+                    and waiting.status == "WAITING_HUMAN"
+                    and waiting.wait_kind == "MESSAGE"
+                    else None
+                )
+            if message is None or message["status"] != "OPEN":
+                break
+            out = reply_message(
+                pack,
+                message["to_actor_id"],
+                _key(),
+                ReplyRequest(
+                    message_id=message["message_id"],
+                    decision="DECLINE",
+                    comment="live run 자동 거절",
+                ),
+            )
+            human_replies.append(
+                {"message_id": message["message_id"], "reply": "DECLINE", "status": out.status}
+            )
+            run_until_idle(pack, model_factory=factory)
+        record["human_replies"] = human_replies
 
         with db.read() as conn:
             new = [
@@ -1622,7 +1744,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--path",
         choices=PATHS,
         default="A",
-        help="B: 기본안 B(거절 → 담당자 확인 수락 → Beta 승인), B-decline: 확인을 거절 → 이관. 요청 A만",
+        help="B: 기본안 B(거절 → 담당자 확인 수락 → Beta 승인), B-decline: 자원·시간창 확인을 모두 거절 → 이관, "
+        "B-time: 자원 확인 거절 → 시간창 넓히기 수락 → 승인(A.29). 요청 A만",
     )
     args = parser.parse_args(argv)
     if not 1 <= args.runs <= MAX_RUNS:
@@ -1665,8 +1788,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_path_event(i + 1, settings, pack_name, args.raw, args.coord, args.ambiguous)
             ]
         else:
-            decline = args.path == "B-decline"
-            batch = [run_path_b(i + 1, settings, pack_name, args.raw, decline, args.coord)]
+            decline, window = args.path == "B-decline", args.path == "B-time"
+            batch = [run_path_b(i + 1, settings, pack_name, args.raw, decline, args.coord, window)]
         for r in batch:
             records.append(r)
             with out.open("a", encoding="utf-8") as f:

@@ -384,6 +384,27 @@ def test_live_run_no_solution_request_succeeds_by_escalation(monkeypatch):
     assert r["success_criteria"]["pass_reached"] is False
 
 
+def test_live_run_n5_requester_declines_window_question(monkeypatch):
+    """--request N5(A.29 6): 시간창 질문이 오면 요청자 역할이 거절하고, 이관이면 기대값(ESCALATE)대로 성공."""
+    ask = call("ASK_WINDOW_CHANGE", "시간창 확인", task_id="N5", question="11:00부터 해도 되나요?")
+    script = _shared_script(
+        solve("L0"),
+        solve("L2"),
+        call("LIST_ASSIGNABLE_RESOURCES", "K 자원 조회", task_id="K"),
+        ask,
+        escalate(),
+    )
+    monkeypatch.setattr(live_run, "openai_model", script)
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    [r] = live_run.run_once(1, settings, "shipyard", False, ["N5"])
+    assert r.get("error") is None, r.get("error")
+    assert [h["reply"] for h in r["human_replies"]] == ["DECLINE"]
+    assert r["run_status"] == "ESCALATED" and r["success"] and r["matches_expected"], r[
+        "success_criteria"
+    ]
+    assert r["success_criteria"]["forbidden_actions"] == 0
+
+
 def test_live_run_rejects_unknown_request(capsys):
     with pytest.raises(SystemExit):
         live_run.main(["--request", "N1,X9"])
@@ -529,16 +550,51 @@ def test_live_run_summary_counts_path_b(monkeypatch, tmp_path, capsys):
     assert "beta matches 해당 없음" in capsys.readouterr().out
 
 
+def _ask_window():
+    return call("ASK_WINDOW_CHANGE", "시간창 확인", task_id="A", question="10:30부터 해도 되나요?")
+
+
 def test_live_run_path_b_decline_ends_in_escalation(monkeypatch):
-    """--path B-decline: 스크립트가 거절 → 같은 질문 미노출 → 이관이면 성공."""
+    """--path B-decline(A.29 6): 자원 질문 거절 → 시간창 질문 → 거절 → 다시 묻지 않고 이관이면 성공."""
+    monkeypatch.setattr(live_run, "openai_model", _plan_b_script(_ask_window(), escalate()))
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    r = live_run.run_path_b(1, settings, "shipyard", False, decline=True)
+    assert r.get("error") is None, r.get("error")
+    c = r["success_criteria"]
+    assert r["success"], c
+    assert (r["run_status"], r["committed"], r["messages"]) == ("ESCALATED", None, 2)
+    assert (c["ask_count"], c["window_ask_count"]) == (1, 1)
+    assert c["no_ask_or_try_after_decline"] and c["window_value_is_server_option"]
+    assert [e.get("reply") for e in r["events"] if "reply" in e] == ["DECLINE", "DECLINE"]
+    assert r["beta_matches_expected"] is None
+
+
+def test_live_run_path_b_decline_without_window_ask_fails(monkeypatch):
+    """B-decline 재정의: 자원 질문 거절 뒤 시간창 질문 없이 이관하면 성공이 아니다."""
     monkeypatch.setattr(live_run, "openai_model", _plan_b_script(escalate()))
     settings = Settings(openai_api_key="sk-test", openai_model="m")
     r = live_run.run_path_b(1, settings, "shipyard", False, decline=True)
     assert r.get("error") is None, r.get("error")
-    assert r["success"], r["success_criteria"]
-    assert (r["run_status"], r["committed"], r["messages"]) == ("ESCALATED", None, 1)
-    assert r["success_criteria"]["no_ask_or_try_after_decline"]
-    assert r["beta_matches_expected"] is None
+    assert r["success"] is False and r["success_criteria"]["window_ask_count"] == 0
+
+
+def test_live_run_path_b_time_with_scripted_model(monkeypatch):
+    """--path B-time(A.29): 자원 질문 거절 → 시간창 질문 수락 → L0 → A 10:30 A-CR-01 → 승인 R1."""
+    monkeypatch.setattr(live_run, "openai_model", _plan_b_script(_ask_window(), solve("L0")))
+    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    r = live_run.run_path_b(1, settings, "shipyard", False, decline=False, window=True)
+    assert r.get("error") is None, r.get("error")
+    c = r["success_criteria"]
+    assert r["success"], c
+    assert (r["path"], r["run_status"], r["end_reason"]) == ("B-time", "SUCCEEDED", "COMMITTED:1")
+    assert [(e.get("reply"), e.get("proposal_type")) for e in r["events"] if "reply" in e] == [
+        ("DECLINE", "MOVABILITY"),
+        ("ACCEPT", "FACT_UPDATE"),
+    ]
+    assert c["solve_after_window_accept"] and c["no_try"] and c["candidate_matches_expected"]
+    assert r["beta"]["moved"] == {"A": [90, "A-CR-01"]}
+    assert (r["beta"]["changed"], r["beta"]["delay"]) == (1, 90)
+    assert (r["human_rounds_used"], r["solver_calls_used"]) == (2, 3)
 
 
 def test_live_run_path_needs_request_a(capsys):

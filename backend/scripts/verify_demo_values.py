@@ -394,6 +394,20 @@ def expected_try(
     return expected(w, fixed, replace(req, mr=True), try_res, ("L0",))["L0"]
 
 
+def expected_window(
+    w: World,
+    others: list[T],
+    req: T,
+    frozen: set[str],
+    window: tuple[int, int],
+    levels: tuple[str, ...] = ("L0", "L1", "L2"),
+) -> dict[str, dict[str, Any]]:
+    """시간창 완화(A.29) 뒤 기대값: frozen 작업 고정, req 창 = window(latest_start, latest_end), 자원 축 미확인."""
+    fixed = [replace(t, mt=False, mr=False) if t.id in frozen else t for t in others]
+    ls, le = window
+    return expected(w, fixed, replace(req, ls=ls, le=le), None, levels)
+
+
 def expected_fact(
     w: World, world: list[T], task_id: str, new_es: int, levels: tuple[str, ...] = ("L0",)
 ) -> dict[str, dict[str, Any]]:
@@ -477,6 +491,19 @@ def main() -> None:
         print(d.id)
         world = apply(world, d, solve_request(w, world, d, levels=("L0",))["L0"][3])
     print("최종 충돌:", conflicts(w, sorted(world, key=lambda t: t.id)))
+
+    print("\n시간창 완화 (C 고정 + SITE-CR-01 거절 → A 창 넓힘, A.29):")
+    for window in ((90, 120), (89, 120), (90, 119)):
+        r = expected_window(w, fixture, a, {"C"}, window, ("L0",))["L0"]
+        print(
+            f"  창 {w.clock(window[0])}/{w.clock(window[1])}: L0 {r['status']}"
+            f" 변경 {r['changed']} 지연 {r['delay']} {r['moved']}"
+        )
+    n5 = next(d for d in demos if d.id == "N5")
+    r = expected_window(w, fixture, n5, set(), (1560, 1620), ("L0",))["L0"]
+    print(
+        f"  N5 창 {w.clock(1560)}/{w.clock(1620)}: L0 {r['status']} 변경 {r['changed']} {r['moved']}"
+    )
 
     print("\nScene 4 사실 수정 (R1 = Beta 확정 기준, A.25):")
     r1 = r1_world(w, fixture, a)

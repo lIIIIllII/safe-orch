@@ -276,7 +276,6 @@ def test_n5_asks_window_after_resource_route_then_escalates_on_decline(seeded):
         pack,
         model_factory=_factory(
             solve("L0"),
-            solve("L1"),
             solve("L2"),
             call("LIST_ASSIGNABLE_RESOURCES", "K 자원 조회", task_id="K"),
             _ask_window("N5"),
@@ -284,9 +283,10 @@ def test_n5_asks_window_after_resource_route_then_escalates_on_decline(seeded):
     )
     [run] = _runs()
     steps = _steps(run.run_id)
-    assert "ASK_WINDOW_CHANGE" not in _names(steps[3])  # K 조회 전(자원 경로 열림)
-    assert _names(steps[4]) == ["ASK_WINDOW_CHANGE", "ESCALATE_NO_SOLUTION"]
-    [option] = steps[4]["observation"]["window_options"]
+    assert [s["guard"]["reason_code"] for s in steps] == [None] * 4
+    assert "ASK_WINDOW_CHANGE" not in _names(steps[2])  # K 조회 전(자원 경로 열림)
+    assert _names(steps[3]) == ["ASK_WINDOW_CHANGE", "ESCALATE_NO_SOLUTION"]
+    [option] = steps[3]["observation"]["window_options"]
     assert (option["task_id"], option["fit_start"], option["proposed"]["latest_end"]) == (
         "N5",
         1560,
