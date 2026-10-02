@@ -983,7 +983,10 @@ def test_ask_conditions_rounds_fixed_axis_and_values(seeded):
 
 
 def test_n5_never_exposes_ask(seeded):
-    """N5: K의 GANTRY 대체 자원이 없어 allowed_values를 만들 수 없다 → ASK 미노출, 이관."""
+    """N5: K의 GANTRY 대체 자원이 없어 allowed_values를 만들 수 없다 → 자원 질문(ASK_TASK_OWNER) 미노출.
+
+    자원 경로가 닫혀 N5의 시간창 질문(ASK_WINDOW_CHANGE)은 열린다(A.29 6, test_window_ask). 여기서는 이관한다.
+    """
     pack = seeded
     assert _submit(pack, "N5").status == "APPLIED"
     run_until_idle(
@@ -1006,6 +1009,7 @@ def test_n5_never_exposes_ask(seeded):
         [{"resource_id": "SITE-GC-01"}],
     )
     assert "ASK_TASK_OWNER" not in _names(last)
+    assert "ASK_WINDOW_CHANGE" in _names(last)
     assert (run.status, run.human_rounds_used) == ("ESCALATED", 0)
 
 

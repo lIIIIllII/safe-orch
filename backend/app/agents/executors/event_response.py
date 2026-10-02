@@ -166,6 +166,7 @@ class EventResponseExecutor:
         )
         event = obs.data["event"]
         payload = {
+            "origin": "EVENT",  # 확인자 Supervisor·Hold 조건·earliest_start만 (A.29 3)
             "event_id": event["event_id"],
             "hold_id": (event["hold"] or {}).get("hold_id"),
             "field": "earliest_start",

@@ -13,10 +13,12 @@ from typing import Any
 from app.agents import observe as common
 from app.agents.observe import budget_remaining
 from app.agents.specs import replanning as spec
+from app.domain.calendar import local_clock
 from app.domain.canonical import canonical_hash
 from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
+from app.rules.window import widen_option
 from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store.repos.decisions import list_case_rejections
 from app.store.repos.messages import list_case_replies
@@ -123,6 +125,44 @@ def try_search_key(
     except SearchSpecError:
         return None
     return spec_.search_key
+
+
+def window_options(
+    facts: SnapshotContent, pack: LoadedPack, data: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """시간창 선택지 (A.29 5). 맡은 충돌 L0의 acting 작업 중 시간 축이 움직이고 TIME이 고정되지 않은 것마다
+    해가 열리는 가장 좁은 창 하나(대상 작업만 옮기고 나머지는 고정한 계산). 분 옆에 현장 날짜·시각을 둔다.
+    """
+    frozen = {(c["task_id"], axis) for c in data["constraints"] for axis in c["frozen_axes"]}
+    l0 = set((data["primary_conflict"] or {}).get("task_ids", []))
+
+    def clocked(window: dict[str, int]) -> dict[str, Any]:
+        return {
+            **window,
+            **{
+                f"{k}_clock": local_clock(pack.horizon_start_utc, pack.timezone, v)
+                for k, v in window.items()
+            },
+        }
+
+    out = []
+    for t in data["acting_tasks"]:
+        tid = t["task_id"]
+        if tid not in l0 or not t["movable"]["time"] or (tid, "TIME") in frozen:
+            continue
+        option = widen_option(facts, pack, tid)
+        if option is not None:
+            out.append(
+                {
+                    **option,
+                    "fit_start_clock": local_clock(
+                        pack.horizon_start_utc, pack.timezone, option["fit_start"]
+                    ),
+                    "current": clocked(option["current"]),
+                    "proposed": clocked(option["proposed"]),
+                }
+            )
+    return out
 
 
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:
@@ -236,6 +276,12 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "budget_remaining": budget_remaining(run, spec.SPEC),
         "work_intervals": [list(iv) for iv in facts.work_intervals],  # 근무 달력 (A.20)
     }
+    # 시간창 선택지는 자원 경로까지 닫혔을 때만 계산한다(그 밖에는 빈 목록, A.29 2·5)
+    data["window_options"] = (
+        window_options(facts, pack, data)
+        if spec.window_gate({**data, "window_options": []})
+        else []
+    )
     return Observation(
         run=run,
         versions=(site.context_version, site.plan_revision, run.wake_seq),

@@ -2,7 +2,8 @@
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터(untried_levels 등)만 보고 계산한다.
 Action: SOLVE_WITH_SCOPE, LIST_ASSIGNABLE_RESOURCES, TRY_ALTERNATIVE_RESOURCE, ASK_TASK_OWNER,
-ESCALATE_NO_SOLUTION (A.21 5). ASK는 계산으로 시도할 범위가 없을 때만 연다(A.21 0-2, 서버 정책).
+ASK_WINDOW_CHANGE(A.29), ESCALATE_NO_SOLUTION (A.21 5). ASK는 계산으로 시도할 범위가 없을 때만 연다
+(A.21 0-2, 서버 정책). 시간창 질문은 자원 경로까지 닫힌 뒤에만 연다(A.29 2).
 모듈 이름(GOAL, ACTIONS, tool_schemas 등)은 그대로 두고, 그 값으로 SPEC(AgentSpec)을 만든다 (A.23).
 """
 
@@ -96,6 +97,20 @@ class AskTaskOwner(Action):
     question: str = Field(min_length=1, description="담당자에게 보일 설명 (한국어)")
 
 
+class AskWindowChange(Action):
+    """작업 담당자에게 시간창을 넓혀도 되는지 묻고 답을 기다린다. 넓힐 값은 서버가 계산한 선택지
+    (window_options)이고, 담당자가 확인하면 시간창이 바뀌어 탐색 범위가 다시 열린다."""
+
+    OPENS = (
+        "아직 시도하지 않은 탐색 범위가 없고, 자원 조회·대체 자원 시도·자원 확인 질문으로 열 수 있는 것이 "
+        "남아 있지 않으며, 시간창을 넓히면 자리가 생기는 작업(시간창 선택지)이 있고, 사람 확인 라운드가 "
+        "남아 있을 때"
+    )
+
+    task_id: str = Field(description="시간창을 넓힐지 물을 작업 (시간창 선택지가 있는 작업)")
+    question: str = Field(min_length=1, description="담당자에게 보일 설명 (한국어)")
+
+
 class EscalateNoSolution(Action):
     """탐색 범위 확대, 자원 조회, 대체 자원 시도, 담당자 확인으로 열 수 있는 대안이 남아 있지 않을 때만
     사유를 붙여 사람에게 넘기고 Run을 끝낸다."""
@@ -110,6 +125,7 @@ ACTIONS: dict[str, type[Action]] = {
     "LIST_ASSIGNABLE_RESOURCES": ListAssignableResources,
     "TRY_ALTERNATIVE_RESOURCE": TryAlternativeResource,
     "ASK_TASK_OWNER": AskTaskOwner,
+    "ASK_WINDOW_CHANGE": AskWindowChange,
     "ESCALATE_NO_SOLUTION": EscalateNoSolution,
 }
 FLOW = {
@@ -117,6 +133,7 @@ FLOW = {
     "LIST_ASSIGNABLE_RESOURCES": "CONTINUE",
     "TRY_ALTERNATIVE_RESOURCE": "CANDIDATE_OR_CONTINUE",
     "ASK_TASK_OWNER": "WAIT",
+    "ASK_WINDOW_CHANGE": "WAIT",
     "ESCALATE_NO_SOLUTION": "DONE",
 }
 
@@ -129,6 +146,7 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
     TRY: 자원 축 허용(movable.resource ∧ RESOURCE 제약 없음) 작업의 유효 조회 결과 중 미시도 대체 자원.
     ASK: 자원 축 미확인 ∧ RESOURCE 제약 없음 ∧ 같은 작업·축의 열린 질문 없음, 값은 조회 결과 − 현재 자원
     − 이 Case에서 담당자가 거절(DECLINE)한 값. 거절당한 질문을 같은 사람에게 다시 보내지 않는다.
+    WINDOW: 작업 → 시간창 선택지 값. 자원 경로가 닫힌 뒤에만 연다(window_gate, A.29 2).
     """
     acting = {t["task_id"]: t for t in obs["acting_tasks"]}
     frozen = {(c["task_id"], axis) for c in obs["constraints"] for axis in c["frozen_axes"]}
@@ -158,7 +176,7 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
             if values:
                 ask[tid] = values
     l0 = set((obs["primary_conflict"] or {}).get("task_ids", []))
-    return {
+    out: dict[str, Any] = {
         "LIST": [
             tid
             for tid, t in acting.items()
@@ -170,6 +188,45 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
         "TRY": try_,
         "ASK": ask,
     }
+    # 시간창 질문: 자원 경로가 닫힌 뒤에만, 서버 선택지 중 이 Case에서 거절되지 않은 것 (A.29 2)
+    out["WINDOW"] = (
+        {
+            o["task_id"]: window_key(o)
+            for o in obs.get("window_options", [])
+            if o["task_id"] in acting
+            and o["task_id"] in l0
+            and acting[o["task_id"]]["movable"]["time"]
+            and (o["task_id"], "TIME") not in frozen
+            and (o["task_id"], "TIME", window_key(o)) not in declined
+        }
+        if window_gate(obs, out)
+        else {}
+    )
+    return out
+
+
+def window_key(option: dict[str, Any]) -> str:
+    """시간창 선택지의 값 표기 "<새 latest_start>/<새 latest_end>" (질문 allowed_values, A.29 3)."""
+    p = option["proposed"]
+    return f"{p['latest_start']}/{p['latest_end']}"
+
+
+def window_gate(obs: dict[str, Any], c: dict[str, Any] | None = None) -> bool:
+    """시간창 질문의 선택지 밖 조건 (A.29 2). 미시도 범위 없음 ∧ 사람 라운드 남음 ∧ 자원 경로가 닫힘
+    (자원 조회 대상·미시도 대체 자원·RESOURCE 질문 값 없음) ∧ 답을 기다리는 질문 없음.
+
+    observer는 이 조건이 갖춰졌을 때만 선택지를 계산한다.
+    """
+    if c is None:
+        c = choices({**obs, "window_options": []})
+    return (
+        not obs["untried_levels"]
+        and obs["budget_remaining"]["human_rounds"] > 0
+        and not c["LIST"]
+        and not c["TRY"]
+        and not c["ASK"]
+        and not any(h["status"] == "OPEN" for h in obs["human_replies"])
+    )
 
 
 def _union(groups: dict[str, list[str]]) -> list[str]:
@@ -197,6 +254,8 @@ def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "axis": ["RESOURCE"],
             "allowed_values": _union(c["ASK"]),
         }
+    if c["WINDOW"]:
+        out["ASK_WINDOW_CHANGE"] = {"task_id": sorted(c["WINDOW"])}
     out["ESCALATE_NO_SOLUTION"] = {}
     return out
 

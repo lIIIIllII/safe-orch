@@ -4,7 +4,10 @@
 CommandResult(created_at 제외), 모델이 받은 입력(System·Human 메시지, 바인딩한 도구, bind 인자)이다.
 uuid4 ID와 hash는 실행마다 달라지므로 등장 순서대로 치환한 뒤 hash한다.
 p8(현장 문구를 Pack에서 받음)은 렌더링한 System이 p7과 글자까지 같고 기록의 prompt_version 라벨만
-다르다. 그래서 라벨만 p7로 되돌려 hash한다(A.23 2단계). 모델 입력 바이트는 치환 없이 같다.
+다르다. 그래서 라벨만 p7로 되돌려 hash한다(A.23 2단계).
+p9(A.29 시간창 질문)는 의도한 변경이다. 이 경로들에서는 시간창 질문이 열리지 않으므로(자원 경로가 열려 있거나
+사람 확인 라운드 전) 바인딩한 도구는 같고, System의 A.29 문구(prompt.to_p7)·빈 window_options·라벨
+(prompt_version, exec_contract_version)만 다르다. 그것만 되돌려 같은 hash인지 확인한다(골든 값은 그대로).
 """
 
 import json
@@ -16,6 +19,7 @@ import openai
 from langchain_core.messages import AIMessage
 from scripted import ScriptedChatModel, call, escalate, solve
 
+from app.agents.prompts import replanning as prompt
 from app.commands.approval import (
     ApproveRequest,
     RejectRequest,
@@ -34,7 +38,10 @@ PREFIXED_ID = re.compile(r"(?<![0-9a-z_])([a-z]+)_[0-9a-f]{32}(?![0-9a-f])")
 BARE_ID = re.compile(r"(?<![0-9a-f_])[0-9a-f]{32}(?![0-9a-f])")
 HASH = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 REQ = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-PROMPT_LABEL = ('"replanning-p8"', '"replanning-p7"')  # (현재, 골든을 만든 버전)
+PROMPT_LABEL = ('"replanning-p9"', '"replanning-p7"')  # (현재, 골든을 만든 버전)
+CONTRACT_LABEL = ('"replanning-a29"', '"replanning-d5"')  # exec_contract_version (A.29)
+# A.29에서 Observation에 더한 키. 이 경로에서는 늘 빈 목록이다(모델 입력은 공백 없이, DB는 기본 구분자)
+EMPTY_WINDOW_OPTIONS = ('\\"window_options\\":[],', '\\"window_options\\": [], ')
 
 # 리팩터링 전 코드(부록 A.22 커밋 10898a7 기준)에서 만든 값
 GOLDEN = {
@@ -74,7 +81,15 @@ class Recorder:
     def inputs(self) -> list[dict]:
         return [
             {
-                "messages": [[type(m).__name__, m.content] for m in c["messages"]],
+                "messages": [
+                    [
+                        type(m).__name__,
+                        prompt.to_p7(m.content)
+                        if type(m).__name__ == "SystemMessage"
+                        else m.content,
+                    ]
+                    for m in c["messages"]
+                ],
                 "tools": c["tools"],
                 "kwargs": c["kwargs"],
             }
@@ -101,9 +116,15 @@ def _dump(rec: Recorder) -> dict:
 
 def _digest(rec: Recorder) -> str:
     text = json.dumps(_dump(rec), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    current, golden = PROMPT_LABEL
-    assert current in text and golden not in text
-    return canonical_hash(normalize(text.replace(current, golden)))
+    for current, golden in (PROMPT_LABEL, CONTRACT_LABEL):
+        assert current in text and golden not in text
+        text = text.replace(current, golden)
+    # 모든 관찰에 빈 window_options가 있다(그 밖의 값이면 되돌리지 못해 hash가 달라진다)
+    assert all(form in text for form in EMPTY_WINDOW_OPTIONS)
+    for form in EMPTY_WINDOW_OPTIONS:
+        text = text.replace(form, "")
+    assert "window_options" not in text
+    return canonical_hash(normalize(text))
 
 
 def _key():

@@ -236,8 +236,10 @@ def test_system_prompt_does_not_order_l0_first(pack):
 
 
 def test_shipyard_rendered_system_equals_p7(pack):
-    """p8 템플릿을 shipyard로 렌더링하면 p7 System과 글자까지 같다(모델 입력 바이트가 같다)."""
-    assert canonical_hash(prompt.render_system(pack)) == prompt.P7_RENDERED_SYSTEM_HASH
+    """p9 템플릿을 shipyard로 렌더링하고 A.29 문구(to_p7)만 빼면 p7 System과 글자까지 같다."""
+    rendered = prompt.render_system(pack)
+    assert canonical_hash(rendered) != prompt.P7_RENDERED_SYSTEM_HASH
+    assert canonical_hash(prompt.to_p7(rendered)) == prompt.P7_RENDERED_SYSTEM_HASH
     assert prompt.origin_time(pack) == "09:00"
 
 

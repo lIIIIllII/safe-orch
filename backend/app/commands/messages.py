@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
+from app.domain import fact_update
 from app.domain.ids import new_id
 from app.domain.models import Consent, FeedbackConstraint, FieldRecord, Movable
 from app.packs.loader import LoadedPack
@@ -125,15 +126,18 @@ def _answer(
             r.reject("STALE_PROPOSAL")
             return r
         if proposal["type"] == "FACT_UPDATE" and decision == "ACCEPT":
-            # 사실 수정: 현재 값 == old_value이고 그 Event의 Hold가 아직 걸려 있어야 한다 (A.25 3)
+            # 사실 수정: 바꿀 필드의 현재 값 == old_value 전부 (A.25 3). Hold 조건은 origin EVENT만 (A.29 3)
             payload = proposal["payload"]
-            if getattr(task, payload["field"]) != payload["old_value"]:
+            if any(
+                getattr(task, c["field"]) != c["old_value"] for c in fact_update.changes(payload)
+            ):
                 r.reject("STALE_PROPOSAL")
                 return r
-            hold = get_hold(tx, site_id, payload.get("hold_id") or "")
-            if hold is None or hold["status"] != "ACTIVE":
-                r.reject("HOLD_NOT_ACTIVE")
-                return r
+            if fact_update.rule(payload).needs_hold:
+                hold = get_hold(tx, site_id, payload.get("hold_id") or "")
+                if hold is None or hold["status"] != "ACTIVE":
+                    r.reject("HOLD_NOT_ACTIVE")
+                    return r
         # ⑥ values는 allowed_values의 비어 있지 않은 부분집합
         allowed = list(proposal["payload"].get("allowed_values", []))
         if (
@@ -155,7 +159,7 @@ def _answer(
     fact = None
     if proposal is not None and decision == "ACCEPT" and proposal["type"] == "FACT_UPDATE":
         assert task is not None
-        fact = _confirm_fact_update(tx, ctx, task, proposal)
+        fact = _confirm_fact_update(tx, ctx, task, proposal, message["message_id"])
         context_version = fact.pop("context_version")
         decide_proposal(
             tx, proposal["proposal_id"], "CONFIRMED", ctx.actor_id, context_version, fact
@@ -187,8 +191,9 @@ def _answer(
         _reply_record(ctx, decision, chosen, comment),
         context_version,
     )
-    if fact is not None:
-        # 사실 수정 확정: Event Response Run은 할 일을 마쳤다(도메인 사실에 의한 종료, A.25 3)
+    if fact is not None and fact_update.rule(proposal["payload"]).ends_run:
+        # 사실 수정 확정(origin EVENT): Event Response Run은 할 일을 마쳤다(도메인 사실에 의한 종료, A.25 3).
+        # origin OWNER는 끝내지 않고 아래에서 제안을 만든 Replanning Run을 깨운다 (A.29 3)
         assert proposal is not None
         end_case_run(
             tx,
@@ -221,33 +226,49 @@ def _answer(
 
 
 def _confirm_fact_update(
-    tx: sqlite3.Connection, ctx: CommandContext, task: Any, proposal: dict[str, Any]
+    tx: sqlite3.Connection,
+    ctx: CommandContext,
+    task: Any,
+    proposal: dict[str, Any],
+    message_id: str,
 ) -> dict[str, Any]:
-    """사실 수정 확정 (§18.2.3, A.25 3). 새 task revision(earliest_start = 새 값) → Context +1.
+    """사실 수정 확정 (§18.2.3, A.25 3·A.29 3). 새 task revision(바꿀 필드 = 새 값) → Context +1.
 
-    시간창이 바뀌었으므로 TIME Consent는 복사하지 않고 RESOURCE만 복사한다(A.14 C1).
-    critical field window의 확인 값도 새 값으로 바꾼다(출처 proposal:<id>, Supervisor 확인. 바꾸지 않으면
+    시간창이 바뀌었으므로 TIME Consent는 복사하지 않고 RESOURCE만 복사한다(A.14 C1). origin OWNER는
+    담당자가 넓힌 창에 동의한 것이므로 새 TIME Consent(시작 범위 = 새 창, 출처 message:<mid>)를 만든다.
+    critical field window의 확인 값도 새 값으로 바꾼다(출처 proposal:<id>. 바꾸지 않으면
     Validator C11이 CONFIRMED_VALUE_MISMATCH로 막는다, A.8·A.25).
     """
     payload = proposal["payload"]
+    rule = fact_update.rule(payload)
+    updates = {c["field"]: c["new_value"] for c in fact_update.changes(payload)}
+    # 바꿀 수 있는 필드는 origin이 정한다. 제안은 서버가 만들므로 어긋나면 코드 오류다.
+    assert set(updates) <= rule.fields, (fact_update.origin(payload), sorted(updates))
     revision = task.revision + 1
     fields = dict(task.fields)
     if "window" in fields:
-        window = {**fields["window"].value, payload["field"]: payload["new_value"]}
+        window = {**fields["window"].value, **updates}
         fields["window"] = FieldRecord(
             value=window, status="CONFIRMED", source_ref=f"proposal:{proposal['proposal_id']}"
         )
-    insert_task_revision(
-        tx,
-        ctx.site_id,
-        task.model_copy(
-            update={"revision": revision, payload["field"]: payload["new_value"], "fields": fields}
-        ),
-    )
+    new_task = task.model_copy(update={"revision": revision, **updates, "fields": fields})
+    insert_task_revision(tx, ctx.site_id, new_task)
     context_version = bump_context_version(tx, ctx.site_id)
     consent_ids = copy_consents(
         tx, ctx.site_id, task.task_id, task.revision, revision, context_version, ("RESOURCE",)
     )
+    if rule.new_time_consent:
+        consent = Consent(
+            consent_id=new_id("cns"),
+            task_id=task.task_id,
+            task_revision=revision,
+            owner_actor_id=task.owner_actor_id,
+            axis="TIME",
+            scope={"start_min": new_task.earliest_start, "start_max": new_task.latest_start},
+            source_ref=f"message:{message_id}",
+        )
+        insert_consent(tx, ctx.site_id, consent, context_version)
+        consent_ids = [*consent_ids, consent.consent_id]
     return {
         "task_revision": revision,
         "consent_ids": consent_ids,

@@ -3,7 +3,8 @@
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 공통 판정(MALFORMED·LLM 오류·
 STALE_OBSERVATION·연속 2회·step 완료 기록)은 ToolGateway에 있고, 이 클래스는 그 도우미를 받아 쓴다.
 SOLVE_WITH_SCOPE·TRY_ALTERNATIVE_RESOURCE는 예약 tx → tx 밖 Solver → 등록 tx, 나머지는 tx 하나다.
-ASK_TASK_OWNER는 MOVABILITY 제안과 질문 메시지를 만들고 대기한다(A.21 5).
+ASK_TASK_OWNER는 MOVABILITY 제안과 질문 메시지를 만들고 대기한다(A.21 5). ASK_WINDOW_CHANGE는 시간창을
+넓히는 FACT_UPDATE(origin OWNER) 제안과 질문 메시지를 만들고 대기한다(A.29 3).
 관찰 계산은 binding.observer로 쓴다(observers를 import하지 않는다, A.23).
 승인·확정·Hold 해제·Proposal 확인·Validation 등록 함수는 없다(I-01).
 """
@@ -15,6 +16,7 @@ from app.agents.observe import Observation
 from app.agents.specs import replanning as spec
 from app.agents.tool_gateway import ACCEPTED, REJECTED, ToolGateway, _Parsed
 from app.agents.types import GatewayResult, StepMeta
+from app.domain.calendar import local_clock
 from app.domain.canonical import canonical_hash
 from app.domain.ids import new_id
 from app.domain.models import Snapshot, Task
@@ -55,7 +57,7 @@ class ReplanningExecutor:
     def run(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
         if parsed.name in ("SOLVE_WITH_SCOPE", "TRY_ALTERNATIVE_RESOURCE"):
             return self._solve(run_id, step_no, meta, parsed)
-        if parsed.name in ("LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER"):
+        if parsed.name in ("LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER", "ASK_WINDOW_CHANGE"):
             return self._single_tx(run_id, step_no, meta, parsed)
         return self._escalate(run_id, step_no, meta, parsed)
 
@@ -73,6 +75,8 @@ class ReplanningExecutor:
         if isinstance(action, spec.AskTaskOwner):
             asks = set(c["ASK"].get(action.task_id, []))
             return "ASK_TASK_OWNER" in available and set(action.allowed_values) <= asks
+        if isinstance(action, spec.AskWindowChange):
+            return "ASK_WINDOW_CHANGE" in available and action.task_id in c["WINDOW"]
         return False
 
     def _single_tx(
@@ -91,6 +95,13 @@ class ReplanningExecutor:
             tasks = {t.task_id: t for t in list_current_tasks(tx, self.pack.site_id, self.pack)}
             if isinstance(action, spec.AskTaskOwner):
                 return self._ask(tx, run_id, step_no, meta, parsed, action, tasks[action.task_id])
+            if isinstance(action, spec.AskWindowChange):
+                option = next(
+                    o for o in obs.data["window_options"] if o["task_id"] == action.task_id
+                )
+                return self._ask_window(
+                    tx, run_id, step_no, meta, parsed, action, tasks[action.task_id], option
+                )
             assert isinstance(action, spec.ListAssignableResources)
             facts = self.observer.current_snapshot(tx, self.pack).facts()
             result = self.observer.assignable_resources(
@@ -172,6 +183,84 @@ class ReplanningExecutor:
                 "message_id": message_id,
                 "to_actor_id": task.owner_actor_id,
                 "body": body,
+            },
+            state_changes={"proposal_id": proposal_id, "message_id": message_id},
+        )
+        return outcome
+
+    def _ask_window(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        action: spec.AskWindowChange,
+        task: Task,
+        option: dict[str, Any],
+    ) -> GatewayResult:
+        """시간창 FACT_UPDATE(origin OWNER) 제안 → 질문 메시지(수신자 = 작업 담당자) → 사람 라운드 차감 →
+        대기 (A.29 3). 넓힐 값은 이 tx에서 다시 계산한 서버 선택지다. 모델의 question은 agent_text로만 둔다.
+        """
+        site_id = self.pack.site_id
+        site = get_site(tx, site_id)
+        assert site is not None
+        proposed = option["proposed"]
+        payload = {
+            "origin": "OWNER",
+            "axis": "TIME",
+            "allowed_values": [spec.window_key(option)],
+            "changes": [
+                {"field": f, "old_value": getattr(task, f), "new_value": proposed[f]}
+                for f in ("latest_start", "latest_end")
+            ],
+            "fit_start": option["fit_start"],
+        }
+        proposal_id, message_id = new_id("prop"), new_id("msg")
+        insert_proposal(
+            tx,
+            site_id,
+            proposal_id,
+            type_="FACT_UPDATE",
+            run_id=run_id,
+            step_no=step_no,
+            target_task_id=task.task_id,
+            base_task_revision=task.revision,
+            context_version=site.context_version,
+            payload=payload,
+            confirmer_actor_id=task.owner_actor_id,
+        )
+        body = window_change_text(self.pack, task, payload)
+        insert_message(
+            tx,
+            site_id,
+            message_id,
+            run_id=run_id,
+            step_no=step_no,
+            to_actor_id=task.owner_actor_id,
+            type_="QUESTION",
+            proposal_id=proposal_id,
+            body=body,
+            agent_text=action.question,
+            context_version=site.context_version,
+        )
+        charge(tx, run_id, human_rounds=1)
+        outcome = self.wait_or_continue(tx, run_id, step_no, "MESSAGE", message_id)
+        self._complete(
+            tx,
+            run_id,
+            step_no,
+            meta,
+            parsed,
+            verdict=ACCEPTED,
+            reason=outcome.reason,
+            result_kind=outcome.kind,
+            tool_result={
+                "proposal_id": proposal_id,
+                "message_id": message_id,
+                "to_actor_id": task.owner_actor_id,
+                "body": body,
+                "changes": payload["changes"],
             },
             state_changes={"proposal_id": proposal_id, "message_id": message_id},
         )
@@ -338,6 +427,24 @@ def movability_text(pack: LoadedPack, task: Task, values: list[str]) -> str:
         f"{task.task_id}({name}) 작업에 {', '.join(values)}도 쓸 수 있게 허용하시겠습니까? "
         f"현재 요청 자원 {task.requested_resource_id}. "
         "허용하면 재계획이 이 자원을 대안으로 검토합니다."
+    )
+
+
+def window_change_text(pack: LoadedPack, task: Task, payload: dict[str, Any]) -> str:
+    """시간창 질문의 서버 문구(동의 내용의 기준, A.29 3). 분이 아니라 현장 날짜·시각으로 쓴다."""
+    name = pack.work_types[task.work_type].display_name
+    at = {c["field"]: c for c in payload["changes"]}
+
+    def clock(minute: int) -> str:
+        return local_clock(pack.horizon_start_utc, pack.timezone, minute)
+
+    ls, le = at["latest_start"], at["latest_end"]
+    return (
+        f"{task.task_id}({name}) 작업의 시간창을 넓히시겠습니까? "
+        f"시작 한도 {clock(ls['old_value'])} → {clock(ls['new_value'])}, "
+        f"종료 한도 {clock(le['old_value'])} → {clock(le['new_value'])}. "
+        "넓히면 재계획이 넓힌 시간창 안에서 다시 계산합니다"
+        f"(지금 현장 정보로는 {clock(payload['fit_start'])} 시작 자리가 있습니다)."
     )
 
 

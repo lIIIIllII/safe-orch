@@ -29,7 +29,7 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=replanning_prompt,
         observer=replanning_observer,
         executor=ReplanningExecutor,
-        exec_contract_version="replanning-d5",  # 기록만 (A.16·A.21)
+        exec_contract_version="replanning-a29",  # 기록만 (A.16·A.21·A.29)
     ),
     coordination_spec.AGENT_TYPE: AgentBinding(
         spec=coordination_spec.SPEC,
