@@ -1620,3 +1620,29 @@ live run에 남은 실패 두 유형 대응. 모호 신고(A.26 S4 #2)는 LOOKUP
 **테스트 원칙**: 기본안 B 경로에서는 TIME 질문이 열리지 않아 모델 입력의 도구 목록·Run·step 기록이 같다. 골든 테스트(A.23)는 값을 바꾸지 않고, p9에서 더한 것(System의 새 도구 줄·규칙 문구·관찰 읽는 법 줄, 빈 `window_options`, prompt_version·exec_contract_version 라벨)만 되돌려 같은 hash인지 확인한다. exec_contract_version `replanning-d5` → `replanning-a29`.
 
 **단계**: S1 창 선택지 스캔(순수 함수) + CP-SAT 교차 테스트 → S2 Agent·명령(spec·Observation·executor·prompt p9·FACT_UPDATE origin·영향받는 Run·E2E·N5·B-decline 테스트) → S3 화면(받은 요청 카드 origin별, Activity, labels) → S4 live run(`--path B-time` 3회, B-decline·N5 재정의, 회귀) → 결과 보고 후 멈춤. 단계마다 커밋·push.
+
+**구현 기록** (S1 `af6ba45`, S2 `a42fe19`, S3 `b0b8cbe`·`56315db`, S4 준비 `1697ea8`)
+- S1: `app/rules/window.py` `widen_option`(Rule Engine 검사 본문을 `engine.conflicts_in`으로 분리, 동작 그대로). 테스트 `tests/test_window.py`: A 10:30/11:00, 1분 줄인 창(10:29/11:00·10:30/10:59)과 원래 창은 CP-SAT(verify) INFEASIBLE, N5 11:00/12:00, 넓힐 필요 없음(N1)·나머지끼리 충돌(C)이면 없음. 스캔 1회 약 0.03초.
+- S2: `specs/replanning.py` `AskWindowChange`·`choices["WINDOW"]`·`window_gate`·`window_key`, `observers/replanning.py` `window_options`(window_gate가 참일 때만 계산), `executors/replanning.py` `_ask_window`·`window_change_text`, `domain/fact_update.py`(origin 규칙 표), `commands/messages.py`(확인은 origin 규칙만 본다), ER 제안에 `origin: "EVENT"`, prompt `replanning-p9`(fingerprint `46f802d4…`, `to_p7`로 A.29 문구를 빼면 p7 렌더링 hash와 같다), exec_contract `replanning-a29`. 골든 값은 그대로이고 A.29 문구·빈 window_options·라벨만 되돌려 같은 hash다(기본안 B·Gateway 거절 경로에서 시간창 질문이 열리지 않음을 함께 확인). 테스트 `tests/test_window_ask.py`(E2E·거절 → 이관·N5·여는 조건·origin별 확인·폐기·STALE(LATE)·STALE_PROPOSAL·NOT_AUTHORIZED).
+- S3: state inbox `fact = {origin, changes}`, 받은 요청 카드 origin별(OWNER = "시간창 넓히기 확인", 시작 한도·종료 한도 옛 값 → 새 값, 넓히기 수락·거절), Activity `ASK_WINDOW_CHANGE` 카드, labels. headless(Chrome, 스크립트 모델 DB)로 요청자 카드·Activity 카드·수락 뒤 후보(A 10:30–11:00 A-CR-01, Validation 통과, 협의 완료 "기존 동의 범위")를 확인했다.
+- S4 준비: live run `--path B-time`, B-decline 재정의, `--request`의 요청자 역할(담당자 질문이면 거절, 기록 `human_replies`), `verify_demo_values.expected_window`. pytest 543, `npm run build`·`lint` 통과.
+
+**S4 live run** (2026-10-02, model `gpt-6-luna`, reasoning_effort none, `replanning-p9`·`coordination-p1`·`event-response-p5`·`intake-p3`)
+
+| 경로 | 결과 | 흐름 | 기록 |
+|---|---|---|---|
+| `--path B-time` (새 경로) | **3/3** | 세 회차 모두 SOLVE(L0) → SOLVE(L1, Alpha) → (거절) → LIST → ASK_TASK_OWNER → (거절) → ASK_WINDOW_CHANGE(값 = 서버 선택지 90/120) → (수락) → SOLVE(L0) → A 10:30 A-CR-01(변경 1·지연 90, verify 일치) → PASS·협의 완료 → R1. step 6, Solver 3, 사람 라운드 2, 약 21,200 토큰·15–18초 | `data/live_runs/20261002T060032Z.jsonl` |
+| `--path B-decline` (재정의) | **2/3** | #1·#2: … → ASK_TASK_OWNER → ASK_WINDOW_CHANGE → (거절) → ESCALATE. #3 실패: 거절 직후 ESCALATE(아래) | `20261002T060130Z.jsonl` |
+| `--request N5` (재정의) | **3/3** | L0 → L2 → LIST(K) → ASK_WINDOW_CHANGE(N5) → (요청자 거절) → ESCALATE. 기대값 ESCALATE 일치 | `20261002T060208Z.jsonl` |
+| `--path B` (회귀) | **2/3** | #1·#2 기존 흐름(step 5, Beta, R1). #3 실패: 거절 직후 ESCALATE(아래) | `20261002T060307Z.jsonl` |
+| `--path B --coord` | 1/1 | 기존 흐름 | `20261002T060338Z.jsonl` |
+| `--path coord` | 1/1 | 기본안 A, step 12 | `20261002T060401Z.jsonl` |
+| `--path event --coord` | 1/1 | EVENT origin 확인·FACT_CONFIRMED·Gamma·R2·통지. ER ASK_REPORTER 2회(A.27 남은 문제 그대로) | `20261002T060429Z.jsonl` |
+| `--path intake` | 1/1 | Alpha 기대값 일치 | `20261002T060455Z.jsonl` |
+
+- 모든 회차 금지 Action·MALFORMED·LLM 오류 0, Budget 안. 시간창 질문의 값은 모든 회차 서버 선택지와 같았다.
+
+**남은 실패: 거절 직후 이관 (B #3, B-decline #3)** — 원인만 기록한다(대응은 결정 뒤)
+- 현상: Alpha를 C 고정으로 거절한 뒤 재개된 첫 step에서 LIST(A)가 열려 있었는데(도구 = LIST_ASSIGNABLE_RESOURCES·ESCALATE_NO_SOLUTION, 자원 경로가 열려 있어 시간창 질문은 닫힘) 모델이 ESCALATE를 골랐다. decision_summary: "L0 불가능, L1 후보가 확인된 제약으로 거절됐고 추가 탐색·자원 경로가 없음"(B #3), "자원·범위 대안이 남지 않아 담당자 검토 요청"(B-decline #3). 시간창 질문 단계까지 가지 못했으므로 A.29 기능 자체의 실패는 아니다.
+- 이전 버전과 비교(기록 전체의 기본안 B 계열, 거절 뒤 첫 Action): p6 SOLVE 3, p7 SOLVE 7·LIST 7, p8 LIST 5 → **거절 직후 이관 0/22**. p9: LIST 8·ESCALATE 2 → **2/10**.
+- 이 step에서 모델 입력이 p8과 다른 곳은 A.29에서 더한 것뿐이다(골든 테스트로 확인): System의 규칙 문구("시간창은 작업 담당자가 넓히기를 확인한 경우에만 바뀐다"), 도구 줄 `ASK_WINDOW_CHANGE`(열리는 조건 "… 자원 조회·대체 자원 시도·자원 확인 질문으로 열 수 있는 것이 남아 있지 않으며 …"), 관찰 읽는 법의 시간창 선택지 줄("자원 경로가 남아 있으면 비어 있다")과 질문 값 줄, 관찰의 빈 `window_options`. 따라서 이 추가가 이관 판단을 늘렸을 가능성이 높다(추정). 어느 문구가 원인인지는 확인하지 않았다. 표본이 작아(10회) 우연일 가능성도 남는다(p8 기준 이관률이 0이 아니라면 2/10은 드물지만 불가능하지 않다).
