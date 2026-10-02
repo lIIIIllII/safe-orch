@@ -28,6 +28,7 @@ from test_resume import (
 )
 
 from app.agents.specs import replanning as spec
+from app.api.state import build_state
 from app.commands.runs import CancelRun, cancel_run
 from app.coordinator.dispatcher import run_until_idle
 from app.domain import fact_update
@@ -175,6 +176,28 @@ def test_resource_decline_then_window_accept_to_r1(seeded):
     assert view.items_status == "COMPLETE"  # A: 새 TIME Consent가 10:30을 덮는다
     assert _approve(pack, done.wait_ref).status == "APPLIED"
     assert (_run(run.run_id).status, _site(pack).plan_revision) == ("SUCCEEDED", 1)
+
+
+def test_state_inbox_shows_owner_window_change(seeded):
+    """요청자 받은 요청: origin OWNER 카드(시작 한도·종료 한도 옛 값 → 새 값), 서버 문구 (A.29 3·S3)."""
+    pack = seeded
+    run = _window_waiting(pack)
+    with db.read() as conn:
+        state = build_state(conn, pack, "planner_a")
+    [card] = [m for m in state["inbox"] if m["message_id"] == run.wait_ref]
+    assert (card["type"], card["proposal_type"], card["status"], card["body"]) == (
+        "QUESTION",
+        "FACT_UPDATE",
+        "OPEN",
+        WINDOW_TEXT,
+    )
+    assert card["fact"] == {
+        "origin": "OWNER",
+        "changes": [
+            {"field": "latest_start", "old_value": 60, "new_value": 90},
+            {"field": "latest_end", "old_value": 90, "new_value": 120},
+        ],
+    }
 
 
 def test_window_decline_then_escalate(seeded):

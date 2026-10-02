@@ -38,10 +38,13 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
   const { clock, meta } = useEnv()
   const answerable = ANSWERABLE.includes(m.type)
   // 확인 메시지는 제안 유형으로 나눈다: 제약 초안(A.24)과 사실 수정(A.25)
+  // 사실 수정은 origin으로 나눈다: 신고(EVENT, Supervisor 확인)와 시간창 넓히기(OWNER, 담당자 확인) (A.29)
   // 제안 없는 질문은 자유 텍스트 답, 제안 없는 확인은 작업 요청 값 확인이다 (A.26)
   const kind =
     m.proposal_type === 'FACT_UPDATE'
-      ? 'FACT_UPDATE'
+      ? m.fact?.origin === 'OWNER'
+        ? 'WINDOW_CHANGE'
+        : 'FACT_UPDATE'
       : m.type === 'QUESTION' && !m.proposal_id
         ? 'FREE_QUESTION'
         : m.type === 'CONFIRMATION' && !m.proposal_id
@@ -127,14 +130,15 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
               </tr>
             </>
           )}
-          {kind === 'FACT_UPDATE' && m.fact && (
-            <tr>
-              <th>{FACT_FIELD[m.fact.field] ?? m.fact.field}</th>
-              <td>
-                {m.task_id ?? '—'} · {clock.format(m.fact.old_value)} → <b>{clock.format(m.fact.new_value)}</b>
-              </td>
-            </tr>
-          )}
+          {(kind === 'FACT_UPDATE' || kind === 'WINDOW_CHANGE') &&
+            m.fact?.changes.map((c) => (
+              <tr key={c.field}>
+                <th>{FACT_FIELD[c.field] ?? c.field}</th>
+                <td>
+                  {m.task_id ?? '—'} · {clock.format(c.old_value)} → <b>{clock.format(c.new_value)}</b>
+                </td>
+              </tr>
+            ))}
           {kind === 'CONFIRMATION' && (
             <tr>
               <th>고정</th>

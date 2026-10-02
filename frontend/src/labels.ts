@@ -296,6 +296,7 @@ export const ACTION_NAME: Record<string, string> = {
   LIST_ASSIGNABLE_RESOURCES: '사용 가능 자원 조회',
   TRY_ALTERNATIVE_RESOURCE: '대체 자원 시도',
   ASK_TASK_OWNER: '작업 담당자에게 확인 요청',
+  ASK_WINDOW_CHANGE: '작업 담당자에게 시간창 넓히기 확인',
 }
 
 export const ROLE: Record<string, string> = {
@@ -344,6 +345,7 @@ export const MESSAGE_TYPE: Record<string, string> = {
   CHANGE_REQUEST: '변경 요청',
   CONFIRMATION: '제약 초안 확인',
   FACT_UPDATE: '사실 수정 확인',
+  WINDOW_CHANGE: '시간창 넓히기 확인',
   FREE_QUESTION: '확인 질문(답 입력)',
   TASKSPEC: '작업 요청 값 확인',
   NOTICE: '확정 통지',
@@ -354,12 +356,15 @@ export const DECISION_BY_TYPE: Record<string, Record<string, string>> = {
   CHANGE_REQUEST: { ACCEPT: '수락', DECLINE: '이견' },
   CONFIRMATION: { ACCEPT: '확정', DECLINE: '폐기' },
   FACT_UPDATE: { ACCEPT: '확정', DECLINE: '폐기' },
+  WINDOW_CHANGE: { ACCEPT: '넓히기 수락', DECLINE: '거절' },
   TASKSPEC: { ACCEPT: '확인', DECLINE: '거절' },
 }
 
 /** 사실 수정 필드 (A.25) */
 export const FACT_FIELD: Record<string, string> = {
   earliest_start: '시작 가능 시각',
+  latest_start: '시작 한도',
+  latest_end: '종료 한도',
 }
 
 export const AXIS: Record<string, string> = {

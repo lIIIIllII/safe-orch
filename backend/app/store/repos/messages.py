@@ -7,6 +7,7 @@ OPEN → ANSWERED·CANCELLED, CANCELLED → LATE). Run 종료 시 정리는 case
 import sqlite3
 from typing import Any
 
+from app.domain import fact_update
 from app.store.repos._rows import dumps, loads, rows
 
 
@@ -216,10 +217,10 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
                 "allowed_values": payload.get("allowed_values", []),
                 # 제약 초안(FEEDBACK_CONSTRAINT)의 고정 축 (A.24)
                 "axes": payload.get("axes", []),
-                # 사실 수정(FACT_UPDATE)의 필드·옛 값·새 값 (A.25)
+                # 사실 수정(FACT_UPDATE)의 origin과 바꿀 필드·옛 값·새 값 (A.25·A.29 3). 화면은 origin으로 카드를 나눈다
                 "fact": None
-                if "field" not in payload
-                else {k: payload[k] for k in ("field", "old_value", "new_value")},
+                if r["proposal_type"] != "FACT_UPDATE"
+                else {"origin": fact_update.origin(payload), "changes": fact_update.changes(payload)},
                 # 작업 요청 값 확인(제안 없는 CONFIRMATION): 그 메시지를 만든 AgentStep의 values (A.26)
                 "values": _step_values(conn, r)
                 if r["type"] == "CONFIRMATION" and r["proposal_id"] is None

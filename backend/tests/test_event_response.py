@@ -446,7 +446,10 @@ def test_state_shows_fact_update_in_inbox_and_hold(seeded, event_response_on):
     [card] = [m for m in sup["inbox"] if m["type"] == "CONFIRMATION"]
     assert (card["proposal_type"], card["fact"]) == (
         "FACT_UPDATE",
-        {"field": "earliest_start", "old_value": 45, "new_value": 60},
+        {
+            "origin": "EVENT",
+            "changes": [{"field": "earliest_start", "old_value": 45, "new_value": 60}],
+        },
     )
     [hold] = [h for h in sup["holds"] if h["hold_id"] == refs["hold_id"]]
     assert [(f["task_id"], f["new_value"], f["status"]) for f in hold["fact_updates"]] == [

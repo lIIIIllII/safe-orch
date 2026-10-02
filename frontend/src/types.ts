@@ -245,8 +245,9 @@ export interface InboxItem {
   candidate_id: string | null
   /** 제약 초안의 고정 축 (CONFIRMATION + FEEDBACK_CONSTRAINT, A.24) */
   axes: string[]
-  /** 사실 수정안 (CONFIRMATION + FACT_UPDATE, A.25). 값은 Horizon 원점 기준 분 */
-  fact: { field: string; old_value: number; new_value: number } | null
+  /** 사실 수정안 (FACT_UPDATE, A.25·A.29). origin EVENT = 신고(Supervisor 확인), OWNER = 시간창(담당자 확인).
+   * 값은 Horizon 원점 기준 분 */
+  fact: { origin: 'EVENT' | 'OWNER'; changes: { field: string; old_value: number; new_value: number }[] } | null
   /** 작업 요청 값 확인 (제안 없는 CONFIRMATION, Work Intake, A.26). 시간은 분 */
   values: IntakeValues | null
 }

@@ -9,6 +9,7 @@ import {
   AGENT_TYPE,
   AXIS,
   EXCLUDE_REASON,
+  FACT_FIELD,
   RESULT_KIND,
   RUN_STATUS,
   SCOPE_LEVEL,
@@ -18,6 +19,7 @@ import {
   endReason,
 } from '../labels'
 import { Code } from './common'
+import { useEnv } from '../context'
 import { delayText } from '../time'
 import type { Run } from './ReviewPanel'
 
@@ -248,6 +250,31 @@ function AskResult({ tr, args }: { tr: Record<string, unknown>; args: Record<str
   )
 }
 
+/** 시간창 넓히기 질문 (A.29): 받는 사람·작업, 바꿀 필드의 옛 값 → 새 값(서버 선택지), 서버 문구 */
+function WindowAskResult({ tr, args }: { tr: Record<string, unknown>; args: Record<string, unknown> }) {
+  const { clock } = useEnv()
+  const changes = Array.isArray(tr.changes)
+    ? (tr.changes as { field: string; old_value: number; new_value: number }[])
+    : []
+  return (
+    <>
+      <p>
+        메시지 <code>{String(tr.message_id)}</code> → {String(tr.to_actor_id)} · 작업 {String(args.task_id)} ·{' '}
+        {changes
+          .map((c) => `${FACT_FIELD[c.field] ?? c.field} ${clock.format(c.old_value)} → ${clock.format(c.new_value)}`)
+          .join(' · ')}
+      </p>
+      <p className="ask-body">서버 문구: {String(tr.body)}</p>
+      {typeof args.question === 'string' && (
+        <div className="model-block">
+          <div className="block-label">Agent 설명(모델 작성)</div>
+          <p>{args.question}</p>
+        </div>
+      )}
+    </>
+  )
+}
+
 function StepCard({ s }: { s: AgentStep }) {
   const args = { ...(s.action?.args ?? {}) }
   delete args.decision_summary
@@ -285,6 +312,7 @@ function StepCard({ s }: { s: AgentStep }) {
           'to_actor_id',
           'body',
           'try_resources',
+          'changes',
         ].includes(k),
     ),
   )
@@ -337,6 +365,7 @@ function StepCard({ s }: { s: AgentStep }) {
           )}
           {name === 'LIST_ASSIGNABLE_RESOURCES' && 'assignable' in tr && <ListResult tr={tr} />}
           {name === 'ASK_TASK_OWNER' && 'message_id' in tr && <AskResult tr={tr} args={args} />}
+          {name === 'ASK_WINDOW_CHANGE' && 'message_id' in tr && <WindowAskResult tr={tr} args={args} />}
           {name === 'TRY_ALTERNATIVE_RESOURCE' && isRecord(tr.try_resources) && (
             <p>
               대체 자원 시도{' '}
