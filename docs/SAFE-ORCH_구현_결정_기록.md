@@ -1693,3 +1693,25 @@ live run에 남은 실패 두 유형 대응. 모호 신고(A.26 S4 #2)는 LOOKUP
 4. A.21 0-2·A.27 표 Replanning 행: 이관 조건을 더한다.
 
 **단계**: S0 결정 기록(이 항목, A.29 정정) → S1 코드·테스트 → S2 live run 검사 → S3 live run(B 5, B-decline 3, B-time 3, N5 3, B --coord·coord·event --coord·intake 각 1, `--request N1,N2,N3,N4` 1회) → 결과 보고 후 멈춤. 단계마다 커밋·push.
+
+**구현 기록** (S0 `c823802`, S1 `605ec67`, S2 `fcb8469`)
+- S1: `specs/replanning.py`(`available_actions`: 다른 키가 없을 때만 이관, LIST·ASK에 Solver 조건, `window_gate`에 Solver 조건, OPENS 네 곳), `executors/replanning.py`(`_escalate`가 `_permitted`로 이 tx에서 다시 확인), prompt `replanning-p10`(fingerprint `93bd629d…`, `to_p9`·`P9_RENDERED_SYSTEM_HASH` `0f9bc5c9…`), exec_contract `replanning-a30`, ER OPENS 주석.
+- 테스트: 골든 값 그대로(System `to_p7(to_p9(…))` + 빠진 ESCALATE 도구를 목록 끝에 다시 붙이는 구조 정규화, 붙인 곳에 다른 도구가 있었음을 assert). conftest autouse `replanning_invariants`(모든 테스트의 Replanning AgentStep 전부)와 그 검사가 옛 계약을 잡는지 테스트. 합성 상태 `tests/test_escalate_policy.py` 9개. 도우미 `tests/closing.py`(`ClosingModel`·`close_to_escalation`·`cancel_running`), conftest `solver_limit`.
+- 기존 테스트 수정(커밋 `605ec67` 메시지에 목록과 사유): ① 이관이 대상 → Solver 한도로 닫음 6개, ② (b) 닫힐 때까지 진행 7개, ② (b) 대신 Solver 한도 3개(t36·t41·incomplete_only: 진행하면 새 후보 대기가 생겨 테스트 대상인 대기 세대·재개·비PASS wake가 바뀐다), ② (a) Supervisor 취소 3개, ③ 도구 목록·문구 다수.
+- S2: live run 기록 `steps[].tools`와 `escalate_only_when_alone`을 모든 경로의 성공 조건에 AND. pytest 552.
+
+**S3 live run** (2026-10-02, model `gpt-6-luna`, reasoning_effort none, `replanning-p10`·`coordination-p1`·`event-response-p5`·`intake-p3`)
+
+| 경로 | 결과 | 흐름 | 기록 |
+|---|---|---|---|
+| `--path B` | **5/5** | 다섯 회차 모두 SOLVE(L0) → SOLVE(L1) → (거절) → LIST → ASK → (수락) → TRY → Beta → R1. 거절 뒤 첫 Action LIST 5/5. 약 16,600 토큰·9–13초 | `data/live_runs/20261002T072118Z.jsonl` |
+| `--path B-decline` | **3/3** | … → LIST → ASK → ASK_WINDOW_CHANGE → (거절) → ESCALATE(도구 = 이관 하나) | `20261002T072216Z.jsonl` |
+| `--path B-time` | **3/3** | … → ASK → ASK_WINDOW_CHANGE → (수락) → SOLVE(L0) → A 10:30 A-CR-01(verify 일치) → R1 | `20261002T072302Z.jsonl` |
+| `--request N5` | **3/3** | L0 → L2 → LIST(K) → ASK_WINDOW_CHANGE → (요청자 거절) → ESCALATE(도구 = 이관 하나). 기대값 ESCALATE 일치 | `20261002T072347Z.jsonl` |
+| `--path B --coord` | 1/1 | 기존 흐름 | `20261002T072426Z.jsonl` |
+| `--path coord` | 1/1 | 기본안 A, step 12 | `20261002T072454Z.jsonl` |
+| `--path event --coord` | 1/1 | ER ASK_REPORTER 1회(A.27 남은 문제 그대로), Gamma·R2·통지 | `20261002T072522Z.jsonl` |
+| `--path intake` | 1/1 | Alpha 기대값 일치 | `20261002T072552Z.jsonl` |
+| `--request N1,N2,N3,N4` | 4/4 | 모두 L0 한 번에 후보, 기대값 일치·확정 | `20261002T072605Z.jsonl` |
+
+- 25회 모두 성공. 모든 회차 금지 Action·MALFORMED·LLM 오류 0, Budget 안, `escalate_only_when_alone` 참(이관 step 6개 모두 도구가 이관 하나). 거절 직후 이관은 구조상 일어날 수 없고(그 step의 도구는 LIST 하나) 이번 8회(B 5·B-decline 3)에서도 거절 뒤 첫 Action은 모두 LIST였다.
