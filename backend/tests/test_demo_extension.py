@@ -7,9 +7,10 @@ D 표(N1–N5)와 §15 값(L0·Alpha·Beta)을 확장 fixture에서 재현하고
 import uuid
 
 import pytest
+from closing import ClosingModel, close_to_escalation
 from conftest import take_snapshot, with_facts
 from fastapi.testclient import TestClient
-from scripted import ScriptedChatModel, escalate, solve
+from scripted import ScriptedChatModel, solve
 
 from app.commands.approval import ApproveRequest, WaiveRequest, approve_and_commit, waive
 from app.commands.task_request import (
@@ -332,12 +333,17 @@ def test_withdraw_unblocks_later_requests(seeded):
     """N5 이관 → N1이 INFEASIBLE(N5가 고정 상수로 남음) → N5 철회 → N1이 정상 해결."""
     pack = seeded
     _submit(pack, "N5")
-    run_until_idle(pack, model_factory=_factory(solve("L0"), solve("L2"), escalate()))
+    # 이관은 열린 조회·질문이 모두 닫힌 뒤에만(A.30): 그 뒤는 조회·질문(거절)을 거쳐 이관한다
+    model = ClosingModel([solve("L0"), solve("L2")])
+    run_until_idle(pack, model_factory=lambda: model)
+    close_to_escalation(pack, _runs()[0].run_id, model)
     [n5_run] = _runs()
     assert (n5_run.status, n5_run.acting_unit_id) == ("ESCALATED", "UB")
 
     _submit(pack, "N1")
-    run_until_idle(pack, model_factory=_factory(solve("L0"), solve("L2"), escalate()))
+    model = ClosingModel([solve("L0"), solve("L2")])
+    run_until_idle(pack, model_factory=lambda: model)
+    close_to_escalation(pack, _runs()[-1].run_id, model)
     n1_run = _runs()[-1]
     assert n1_run.status == "ESCALATED"
     with db.read() as conn:

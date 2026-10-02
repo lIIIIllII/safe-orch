@@ -236,10 +236,13 @@ def test_system_prompt_does_not_order_l0_first(pack):
 
 
 def test_shipyard_rendered_system_equals_p7(pack):
-    """p9 템플릿을 shipyard로 렌더링하고 A.29 문구(to_p7)만 빼면 p7 System과 글자까지 같다."""
+    """p10 템플릿을 shipyard로 렌더링하고 A.30 문구(to_p9)를 되돌리면 p9, A.29 문구(to_p7)까지 빼면 p7
+    System과 글자까지 같다 (A.29·A.30)."""
     rendered = prompt.render_system(pack)
-    assert canonical_hash(rendered) != prompt.P7_RENDERED_SYSTEM_HASH
-    assert canonical_hash(prompt.to_p7(rendered)) == prompt.P7_RENDERED_SYSTEM_HASH
+    assert canonical_hash(rendered) != prompt.P9_RENDERED_SYSTEM_HASH
+    p9 = prompt.to_p9(rendered)
+    assert canonical_hash(p9) == prompt.P9_RENDERED_SYSTEM_HASH
+    assert canonical_hash(prompt.to_p7(p9)) == prompt.P7_RENDERED_SYSTEM_HASH
     assert prompt.origin_time(pack) == "09:00"
 
 
@@ -369,23 +372,11 @@ def test_live_run_requests_in_sequence(monkeypatch):
 
 
 def test_live_run_no_solution_request_succeeds_by_escalation(monkeypatch):
-    """--request N5: 모든 범위 INFEASIBLE이 기대값이므로 후보 없음 + ESCALATE_NO_SOLUTION 종료가 성공."""
-    monkeypatch.setattr(
-        live_run, "openai_model", _scripted_each_run(solve("L0"), solve("L2"), escalate())
-    )
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
-    [r] = live_run.run_once(1, settings, "shipyard", False, ["N5"])
-    assert r.get("error") is None, r.get("error")
-    assert r["expected_outcome"] == "ESCALATE"
-    assert {e["status"] for e in r["expected"].values()} == {"INFEASIBLE"}
-    assert (r["actual"], r["committed"]) == (None, None)
-    assert r["run_status"] == "ESCALATED" and r["end_reason"].startswith("ESCALATE_NO_SOLUTION")
-    assert r["success"] and r["matches_expected"]
-    assert r["success_criteria"]["pass_reached"] is False
+    """--request N5: 모든 범위 INFEASIBLE이 기대값이므로 후보 없음 + ESCALATE_NO_SOLUTION 종료가 성공.
 
-
-def test_live_run_n5_requester_declines_window_question(monkeypatch):
-    """--request N5(A.29 6): 시간창 질문이 오면 요청자 역할이 거절하고, 이관이면 기대값(ESCALATE)대로 성공."""
+    이관은 다른 Action이 모두 닫힌 뒤에만 열린다(A.30): K 조회 → 시간창 질문 → 요청자 역할이 거절(A.29 6)
+    → 이관.
+    """
     ask = call("ASK_WINDOW_CHANGE", "시간창 확인", task_id="N5", question="11:00부터 해도 되나요?")
     script = _shared_script(
         solve("L0"),
@@ -398,11 +389,14 @@ def test_live_run_n5_requester_declines_window_question(monkeypatch):
     settings = Settings(openai_api_key="sk-test", openai_model="m")
     [r] = live_run.run_once(1, settings, "shipyard", False, ["N5"])
     assert r.get("error") is None, r.get("error")
-    assert [h["reply"] for h in r["human_replies"]] == ["DECLINE"]
-    assert r["run_status"] == "ESCALATED" and r["success"] and r["matches_expected"], r[
-        "success_criteria"
-    ]
+    assert r["expected_outcome"] == "ESCALATE"
+    assert {e["status"] for e in r["expected"].values()} == {"INFEASIBLE"}
+    assert (r["actual"], r["committed"]) == (None, None)
+    assert r["run_status"] == "ESCALATED" and r["end_reason"].startswith("ESCALATE_NO_SOLUTION")
+    assert r["success"] and r["matches_expected"]
+    assert r["success_criteria"]["pass_reached"] is False
     assert r["success_criteria"]["forbidden_actions"] == 0
+    assert [h["reply"] for h in r["human_replies"]] == ["DECLINE"]
 
 
 def test_live_run_rejects_unknown_request(capsys):
@@ -613,7 +607,7 @@ def test_system_lists_every_action_with_open_condition(pack):
     ids = [r.resource_id for r in pack.resources] + [r.rule_id for r in pack.rules]
     ids += [*pack.work_types, *(t.task_id for t in pack.tasks)]
     assert not [i for i in ids if len(i) >= 3 and i in catalog]
-    assert "조회·확인으로 열 수 있는 대안" in system
+    assert "서버가 다른 도구를 모두 닫았을 때만 열린다" in system  # 이관 규칙 줄 (A.30)
 
 
 def test_live_run_path_coord_with_scripted_model(monkeypatch):

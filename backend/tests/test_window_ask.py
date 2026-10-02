@@ -88,7 +88,7 @@ def test_resource_decline_then_window_accept_to_r1(seeded):
     run = _window_waiting(pack)
     steps = _steps(run.run_id)
     s_win = steps[-1]
-    assert _names(s_win) == ["ASK_WINDOW_CHANGE", "ESCALATE_NO_SOLUTION"]
+    assert _names(s_win) == ["ASK_WINDOW_CHANGE"]  # 이관은 닫혀 있다 (A.30)
     [option] = s_win["observation"]["window_options"]
     assert (option["task_id"], option["fit_start"], option["fit_start_clock"]) == (
         "A",
@@ -285,7 +285,7 @@ def test_n5_asks_window_after_resource_route_then_escalates_on_decline(seeded):
     steps = _steps(run.run_id)
     assert [s["guard"]["reason_code"] for s in steps] == [None] * 4
     assert "ASK_WINDOW_CHANGE" not in _names(steps[2])  # K 조회 전(자원 경로 열림)
-    assert _names(steps[3]) == ["ASK_WINDOW_CHANGE", "ESCALATE_NO_SOLUTION"]
+    assert _names(steps[3]) == ["ASK_WINDOW_CHANGE"]
     [option] = steps[3]["observation"]["window_options"]
     assert (option["task_id"], option["fit_start"], option["proposed"]["latest_end"]) == (
         "N5",

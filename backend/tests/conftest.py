@@ -191,3 +191,65 @@ def event_response_on(monkeypatch):
     yield
     # 환경변수는 monkeypatch가 test_env 값(false)으로 되돌린다. 캐시만 비운다
     get_settings.cache_clear()
+
+
+# ── Replanning 이관 불변식 (부록 A.30) ─────────────────────────
+
+ESCALATE = "ESCALATE_NO_SOLUTION"
+NEEDS_SOLVER = {
+    "SOLVE_WITH_SCOPE",
+    "TRY_ALTERNATIVE_RESOURCE",
+    "LIST_ASSIGNABLE_RESOURCES",
+    "ASK_TASK_OWNER",
+    "ASK_WINDOW_CHANGE",
+}
+
+
+def replanning_invariant_violations() -> list[str]:
+    """이 DB의 모든 Replanning AgentStep에서 A.30 불변식을 검사한다. 위반 설명 목록.
+
+    ① ESCALATE_NO_SOLUTION이 바인딩되었으면 도구는 그것 하나뿐이다.
+    ② 관찰의 남은 Solver 호출이 0이면 SOLVE·TRY·LIST·ASK·시간창 질문이 없다.
+    """
+    import json
+    import sqlite3
+
+    try:
+        with db.read() as conn:
+            rows = conn.execute(
+                "SELECT s.run_id, s.step_no, s.available_actions, s.observation FROM agent_step s"
+                " JOIN agent_run r ON r.run_id = s.run_id WHERE r.agent_type = 'REPLANNING'"
+            ).fetchall()
+    except sqlite3.OperationalError:  # 스키마 없는 DB(초기화 전·옛 DB 시험)
+        return []
+    out = []
+    for run_id, step_no, tools, observation in rows:
+        names = [t["function"]["name"] for t in json.loads(tools or "[]")]
+        if ESCALATE in names and names != [ESCALATE]:
+            out.append(f"{run_id}#{step_no}: ESCALATE with others {names}")
+        budget = (json.loads(observation or "{}") or {}).get("budget_remaining") or {}
+        if budget.get("solver_calls", 1) <= 0 and NEEDS_SOLVER & set(names):
+            out.append(f"{run_id}#{step_no}: solver 0 but {names}")
+    return out
+
+
+@pytest.fixture(autouse=True)
+def replanning_invariants(temp_db):
+    """모든 테스트가 만든 Replanning 관찰에서 A.30 불변식을 확인한다(temp_db보다 먼저 정리된다)."""
+    yield
+    violations = replanning_invariant_violations()
+    assert not violations, violations
+
+
+@pytest.fixture
+def solver_limit(monkeypatch):
+    """Replanning Solver 호출 한도를 줄인다. 다 쓰면 이관만 남는다(A.30 3: 조회·질문도 닫힌다).
+
+    이관이 테스트 대상이거나, 다른 Action을 진행하면 새 후보 대기가 생겨 테스트 대상이 바뀌는 경우에 쓴다.
+    """
+    from app.agents.specs import replanning as spec
+
+    def set_limit(n: int) -> None:
+        monkeypatch.setitem(spec.SPEC.budget, "solver_calls", n)
+
+    return set_limit

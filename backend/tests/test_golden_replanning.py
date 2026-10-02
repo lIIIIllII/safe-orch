@@ -8,6 +8,10 @@ p8(현장 문구를 Pack에서 받음)은 렌더링한 System이 p7과 글자까
 p9(A.29 시간창 질문)는 의도한 변경이다. 이 경로들에서는 시간창 질문이 열리지 않으므로(자원 경로가 열려 있거나
 사람 확인 라운드 전) 바인딩한 도구는 같고, System의 A.29 문구(prompt.to_p7)·빈 window_options·라벨
 (prompt_version, exec_contract_version)만 다르다. 그것만 되돌려 같은 hash인지 확인한다(골든 값은 그대로).
+p10(A.30 이관은 다른 Action이 모두 닫혔을 때만)도 의도한 변경이다. System의 A.30 문구(prompt.to_p9)와,
+다른 도구가 열린 step에서 빠진 ESCALATE_NO_SOLUTION 도구만 다르다. 모델 입력 tools와 AgentStep
+available_actions의 빠진 자리(목록 끝)에 p9 ESCALATE 스키마를 다시 붙이고(붙인 곳에는 다른 도구가 하나
+이상 있었음을 확인), 라벨을 되돌려 같은 hash인지 확인한다.
 """
 
 import json
@@ -20,6 +24,7 @@ from langchain_core.messages import AIMessage
 from scripted import ScriptedChatModel, call, escalate, solve
 
 from app.agents.prompts import replanning as prompt
+from app.agents.specs import replanning as spec
 from app.commands.approval import (
     ApproveRequest,
     RejectRequest,
@@ -31,6 +36,7 @@ from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.canonical import canonical_hash
 from app.store import db
+from app.store.repos._rows import dumps
 from app.store.repos.records import list_validations
 from app.store.repos.site import get_site
 
@@ -38,8 +44,9 @@ PREFIXED_ID = re.compile(r"(?<![0-9a-z_])([a-z]+)_[0-9a-f]{32}(?![0-9a-f])")
 BARE_ID = re.compile(r"(?<![0-9a-f_])[0-9a-f]{32}(?![0-9a-f])")
 HASH = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 REQ = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-PROMPT_LABEL = ('"replanning-p9"', '"replanning-p7"')  # (현재, 골든을 만든 버전)
-CONTRACT_LABEL = ('"replanning-a29"', '"replanning-d5"')  # exec_contract_version (A.29)
+PROMPT_LABEL = ('"replanning-p10"', '"replanning-p7"')  # (현재, 골든을 만든 버전)
+CONTRACT_LABEL = ('"replanning-a30"', '"replanning-d5"')  # exec_contract_version (A.29·A.30)
+ESCALATE = "ESCALATE_NO_SOLUTION"
 # A.29에서 Observation에 더한 키. 이 경로에서는 늘 빈 목록이다(모델 입력은 공백 없이, DB는 기본 구분자)
 EMPTY_WINDOW_OPTIONS = ('\\"window_options\\":[],', '\\"window_options\\": [], ')
 
@@ -64,6 +71,16 @@ def normalize(text: str) -> str:
     return BARE_ID.sub(lambda m: token("id", m.group(0)), text)
 
 
+def with_escalate(tools: list[dict], added: list[int]) -> list[dict]:
+    """A.30 이전에는 언제나 끝에 있던 ESCALATE 도구를 다시 붙인다. 붙인 곳에는 다른 도구가 있어야 한다."""
+    if any(t["function"]["name"] == ESCALATE for t in tools):
+        return tools
+    assert tools, "ESCALATE만 빠진 빈 도구 목록은 없다(다른 도구가 하나 이상 있어야 한다)"
+    added.append(len(tools))
+    # docstring을 바꾸지 않았으므로 지금 스키마가 p9 스키마와 같다 (A.30 문구는 OPENS·규칙 줄만)
+    return [*tools, spec.tool_schemas({ESCALATE: {}})[0]]
+
+
 class Recorder:
     """ScriptedChatModel 팩토리. 만든 모델을 모두 모아 모델 입력을 기록한다."""
 
@@ -78,19 +95,19 @@ class Recorder:
 
         return make
 
-    def inputs(self) -> list[dict]:
+    def inputs(self, added: list[int]) -> list[dict]:
         return [
             {
                 "messages": [
                     [
                         type(m).__name__,
-                        prompt.to_p7(m.content)
+                        prompt.to_p7(prompt.to_p9(m.content))
                         if type(m).__name__ == "SystemMessage"
                         else m.content,
                     ]
                     for m in c["messages"]
                 ],
-                "tools": c["tools"],
+                "tools": with_escalate(c["tools"], added),
                 "kwargs": c["kwargs"],
             }
             for model in self.models
@@ -104,18 +121,24 @@ def _table(conn, sql: str) -> list[dict]:
     return [{k: v for k, v in zip(cols, r) if k != "created_at"} for r in cur.fetchall()]
 
 
-def _dump(rec: Recorder) -> dict:
+def _dump(rec: Recorder, added: list[int] | None = None) -> dict:
+    added = [] if added is None else added
     with db.read() as conn:
         runs = _table(conn, "SELECT * FROM agent_run ORDER BY rowid")
         steps = _table(conn, "SELECT * FROM agent_step ORDER BY rowid")
         results = _table(
             conn, "SELECT * FROM command_result WHERE actor_id LIKE 'run:%' ORDER BY rowid"
         )
-    return {"runs": runs, "steps": steps, "command_results": results, "model": rec.inputs()}
+    for s in steps:  # 저장 형식(_rows.dumps) 그대로 다시 쓴다
+        s["available_actions"] = dumps(with_escalate(json.loads(s["available_actions"]), added))
+    return {"runs": runs, "steps": steps, "command_results": results, "model": rec.inputs(added)}
 
 
 def _digest(rec: Recorder) -> str:
-    text = json.dumps(_dump(rec), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    added: list[int] = []
+    text = json.dumps(_dump(rec, added), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    # A.30: 다른 도구가 열린 step에서는 ESCALATE가 빠진다(이 경로들에서 모든 step이 그렇다)
+    assert added and all(n >= 1 for n in added)
     for current, golden in (PROMPT_LABEL, CONTRACT_LABEL):
         assert current in text and golden not in text
         text = text.replace(current, golden)

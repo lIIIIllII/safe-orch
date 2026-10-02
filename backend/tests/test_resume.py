@@ -8,6 +8,7 @@ import threading
 import uuid
 
 import pytest
+from closing import ClosingModel, cancel_running, close_to_escalation
 from fastapi.testclient import TestClient
 from scripted import ScriptedChatModel, call, escalate, solve
 
@@ -185,11 +186,20 @@ def test_plan_b_reject_with_constraint_wakes_and_resumes(seeded):
     [resume] = _jobs(pack, "RESUME_RUN")
     assert (resume["status"], resume["dedupe_key"]) == ("PENDING", f"RESUME_RUN:{run.run_id}:1")
 
-    run_until_idle(pack, model_factory=_factory(escalate()))
+    # 이관은 조회·확인이 모두 닫힌 뒤에만 열린다(A.30): 닫힐 때까지 진행한다(사람 역할은 거절)
+    close_to_escalation(pack, run.run_id)
     done = _run(run.run_id)
     assert (done.status, done.end_reason) == ("ESCALATED", "ESCALATE_NO_SOLUTION")
-    assert (done.handled_wake_seq, done.wait_generation, done.solver_calls_used) == (1, 1, 2)
-    [s3] = _steps(run.run_id)[2:]
+    # 거절 1 + 답 2 → wake 3, 대기 = Alpha·자원 질문·시간창 질문
+    assert (done.handled_wake_seq, done.wait_generation, done.solver_calls_used) == (3, 3, 2)
+    steps = _steps(run.run_id)
+    assert [(s["action"] or {}).get("name") for s in steps][2:] == [
+        "LIST_ASSIGNABLE_RESOURCES",
+        "ASK_TASK_OWNER",
+        "ASK_WINDOW_CHANGE",
+        "ESCALATE_NO_SOLUTION",
+    ]
+    s3 = steps[2]
     obs = s3["observation"]
     assert obs["rejections"] == [
         {
@@ -203,8 +213,8 @@ def test_plan_b_reject_with_constraint_wakes_and_resumes(seeded):
     ]
     assert [c["task_id"] for c in obs["constraints"]] == ["C"]
     assert obs["untried_levels"] == []
-    assert _names(s3) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
-    assert s3["action"]["name"] == "ESCALATE_NO_SOLUTION"
+    assert _names(s3) == ["LIST_ASSIGNABLE_RESOURCES"]  # 이관은 닫혀 있다 (A.30)
+    assert _names(steps[-1]) == ["ESCALATE_NO_SOLUTION"]
 
 
 def _ask_waiting(pack):
@@ -282,9 +292,9 @@ def test_plan_b_full_e2e(seeded):
     }
     # LIST 전에는 TRY·ASK가 없고, LIST 뒤(자원 축 미확인·미시도 범위 없음)에는 ASK가 열린다.
     # LIST 대상은 주 충돌 L0 작업 중 RESOURCE가 막히지 않은 A뿐이다(C는 제약 고정, Q는 무관, A.21 p7).
-    assert _names(s_list) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
+    assert _names(s_list) == ["LIST_ASSIGNABLE_RESOURCES"]  # 이관은 닫혀 있다 (A.30)
     assert _enum(s_list, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A"]
-    assert _names(s_ask) == ["ASK_TASK_OWNER", "ESCALATE_NO_SOLUTION"]
+    assert _names(s_ask) == ["ASK_TASK_OWNER"]
     assert s_ask["observation"]["untried_levels"] == []
     assert waiting.human_rounds_used == 1
 
@@ -332,7 +342,7 @@ def test_plan_b_full_e2e(seeded):
     s_try = steps[4]
     assert s_try["tool_result"]["try_resources"] == {"A": ["SITE-CR-01"]}
     # 자원 축이 확인됐다(ASK 없음). 수락으로 context·Consent가 바뀌어도 Solver 입력이 같아 L0는 다시 열리지 않는다
-    assert _names(s_try) == ["TRY_ALTERNATIVE_RESOURCE", "ESCALATE_NO_SOLUTION"]
+    assert _names(s_try) == ["TRY_ALTERNATIVE_RESOURCE"]
     assert s_try["observation"]["untried_levels"] == []
     obs = s_try["observation"]
     assert obs["assignable_resources"][0]["untried_alternatives"] == ["SITE-CR-01"]
@@ -377,13 +387,13 @@ def test_accept_does_not_reopen_tried_levels(seeded):
     ctx = _site(pack).context_version
     assert _reply(pack, waiting.wait_ref).status == "APPLIED"
     assert _site(pack).context_version == ctx + 1
-    model = ScriptedChatModel([solve("L0", "다시 계산"), escalate()])
+    model = ScriptedChatModel([solve("L0", "다시 계산"), cancel_running(pack)])
     run_until_idle(pack, model_factory=lambda: model)
     s_l0, s_end = _steps(waiting.run_id)[4:]
     assert s_l0["observation"]["untried_levels"] == []
-    assert _names(s_l0) == ["TRY_ALTERNATIVE_RESOURCE", "ESCALATE_NO_SOLUTION"]
+    assert _names(s_l0) == ["TRY_ALTERNATIVE_RESOURCE"]
     assert s_l0["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
-    assert s_end["action"]["name"] == "ESCALATE_NO_SOLUTION"
+    assert (s_end["status"], s_end["abort_reason"]) == ("ABORTED", "CANCELLED")
     assert _run(waiting.run_id).solver_calls_used == 2  # Alpha까지의 L0·L1만
 
 
@@ -437,13 +447,13 @@ def test_t33_reject_without_constraint_wakes_and_blocks_same_assignments(seeded)
     assert _site(pack).context_version == ctx  # 제약 없는 거절은 Context를 바꾸지 않는다
     assert _run(run.run_id).wake_seq == 1
     # 재개: L2는 C까지 넣지만 같은 배정(N1 11:00)이 나온다 → Guard가 후보를 만들지 않는다
-    run_until_idle(pack, model_factory=_factory(solve("L2"), escalate()))
+    run_until_idle(pack, model_factory=_factory(solve("L2"), cancel_running(pack)))
     s2, s3 = _steps(run.run_id)[1:]
     assert s2["observation"]["rejections"][0]["has_constraint"] is False
     assert s2["observation"]["rejections"][0]["quoted_comment"] == "오후가 좋다"
     assert s2["guard"] == {"verdict": "REJECTED", "reason_code": "DUPLICATE_REJECTED"}
     assert (s2["result_kind"], s2["tool_result"]["candidate_id"]) == ("CONTINUE", None)
-    assert s3["action"]["name"] == "ESCALATE_NO_SOLUTION"
+    assert (s3["status"], s3["abort_reason"]) == ("ABORTED", "CANCELLED")
     with db.read() as conn:
         n = conn.execute("SELECT COUNT(*) FROM candidate").fetchone()[0]
     assert n == 1
@@ -478,9 +488,10 @@ def test_t33_second_plain_rejection_escalates(seeded, monkeypatch):
 # ── T36–T39·T41·T42: 대기와 재개 ───────────────────────────────
 
 
-def test_t36_change_before_wait_is_not_lost(seeded):
+def test_t36_change_before_wait_is_not_lost(seeded, solver_limit):
     """답변(변화)이 RUNNING 중에 오면 대기하지 않고 다시 관찰한다 (NEW_CHANGE_BEFORE_WAIT)."""
     pack = seeded
+    solver_limit(2)  # L0·L1 뒤 이관만 열린다 (A.30)
 
     def wake_then_l1():
         with db.write() as tx:
@@ -560,8 +571,9 @@ def test_t39_concurrent_claim_from_two_connections(seeded):
     assert sorted(results) == [False, True]
 
 
-def test_t41_two_changes_one_resume(seeded):
+def test_t41_two_changes_one_resume(seeded, solver_limit):
     pack = seeded
+    solver_limit(2)  # Alpha(L0·L1) 뒤 이관만 열린다 (A.30)
     run = _alpha_waiting(pack)
     with db.write() as tx:
         assert wake_run(tx, pack.site_id, run.run_id)
@@ -638,8 +650,9 @@ def _queue_n1_during_alpha(pack):
     return run
 
 
-def test_queue_promoted_when_case_escalates(seeded):
+def test_queue_promoted_when_case_escalates(seeded, solver_limit):
     pack = seeded
+    solver_limit(2)  # Alpha(L0·L1) 뒤 이관만 열린다 (A.30)
     run = _queue_n1_during_alpha(pack)
     _reject(pack, run.wait_ref, "PREFERENCE")
     run_until_idle(pack, model_factory=_factory(escalate()))
@@ -844,22 +857,26 @@ def test_decline_discards_and_wakes_without_context_change(seeded):
         1,
     )
     # 거절당한 질문은 다시 보내지 않는다: SITE-CR-01을 거절했으므로 ASK 미노출 → 이관 (A.21 3단계)
-    run_until_idle(
-        pack, model_factory=_factory(_ask_a(), escalate("담당자가 대체 자원을 거절했다"))
-    )
-    retry, last = _steps(waiting.run_id)[-2:]
+    # 이관은 다른 Action이 닫힌 뒤에만(A.30): 시간창 질문(A.29)까지 거절한 뒤 이관한다
+    close_to_escalation(pack, waiting.run_id, ClosingModel([_ask_a()]))
+    steps = _steps(waiting.run_id)
+    retry, last = steps[4], steps[-1]
     assert "ASK_TASK_OWNER" not in _names(retry) and "ASK_TASK_OWNER" not in _names(last)
     assert retry["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
-    [reply] = last["observation"]["human_replies"]
+    assert [(s["action"] or {}).get("name") for s in steps[5:]] == [
+        "ASK_WINDOW_CHANGE",
+        "ESCALATE_NO_SOLUTION",
+    ]
+    reply = last["observation"]["human_replies"][0]
     assert (reply["decision"], reply["quoted_comment"]) == ("DECLINE", "크레인 일정이 없다")
     ended = _run(waiting.run_id)
     assert (ended.status, ended.end_reason, ended.human_rounds_used) == (
         "ESCALATED",
         "ESCALATE_NO_SOLUTION",
-        1,
+        2,
     )
     with db.read() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM message").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM message").fetchone()[0] == 2
 
 
 def test_declined_values_are_removed_from_ask_choices(seeded):
@@ -887,7 +904,7 @@ def test_t02_injected_comment_cannot_trigger_approval(seeded):
         [
             call("APPROVE_AND_COMMIT", "승인한다", candidate_id="x"),
             call("TRY_ALTERNATIVE_RESOURCE", "B 크레인", task_id="A", resource_id="B-CR-01"),
-            escalate(),
+            _try_beta(),  # 이관은 닫혀 있다(A.30). 남은 Action으로 진행해 Beta를 기다린다
         ]
     )
     run_until_idle(pack, model_factory=lambda: model)
@@ -907,7 +924,8 @@ def test_t02_injected_comment_cannot_trigger_approval(seeded):
         decisions = conn.execute("SELECT COUNT(*) FROM decision WHERE type = 'APPROVE'").fetchone()
         holds = conn.execute("SELECT COUNT(*) FROM hold").fetchone()
     assert (_site(pack).plan_revision, decisions[0], holds[0]) == (0, 0, 0)
-    assert _run(waiting.run_id).status == "ESCALATED"
+    ended = _run(waiting.run_id)
+    assert (ended.status, ended.wait_kind) == ("WAITING_HUMAN", "CANDIDATE_OUTCOME")
 
 
 # ── 2단계: LIST·TRY·ASK 사용 조건 (A.21 0-2·5) ─────────────────
@@ -923,15 +941,16 @@ def test_ask_needs_tried_levels_and_list_and_open_axis(seeded):
             call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
             _ask_a(),
             _try_beta(),
-            escalate(),
+            cancel_running(pack),
         ),
     )
     [run] = _runs()
-    s1, s2, s3, _ = _steps(run.run_id)
-    assert _names(s1) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
+    s1, s2, s3, s4 = _steps(run.run_id)
+    assert (s4["status"], s4["abort_reason"]) == ("ABORTED", "CANCELLED")
+    assert _names(s1) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES"]  # 이관은 닫혀 있다
     assert s2["observation"]["untried_levels"] == ["L0", "L1", "L2"]
     assert _enum(s1, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A"]
-    assert _names(s2) == ["SOLVE_WITH_SCOPE", "ESCALATE_NO_SOLUTION"]
+    assert _names(s2) == ["SOLVE_WITH_SCOPE"]
     assert s2["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"  # ASK
     assert s3["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"  # TRY (자원 축 미확인)
     assert s2["observation"]["assignable_resources"][0]["untried_alternatives"] == []
@@ -989,18 +1008,14 @@ def test_n5_never_exposes_ask(seeded):
     """
     pack = seeded
     assert _submit(pack, "N5").status == "APPLIED"
-    run_until_idle(
-        pack,
-        model_factory=_factory(
-            solve("L0"),
-            solve("L1"),
-            solve("L2"),
-            call("LIST_ASSIGNABLE_RESOURCES", "K 자원 조회", task_id="K"),
-            escalate(),
-        ),
-    )
+    model = ClosingModel([solve("L0"), solve("L2")])  # 그 뒤 K 조회 → N5 시간창 질문(거절) → 이관
+    run_until_idle(pack, model_factory=lambda: model)
     [run] = _runs()
-    last = _steps(run.run_id)[-1]
+    close_to_escalation(pack, run.run_id, model)
+    run = _run(run.run_id)
+    steps = _steps(run.run_id)
+    assert not [s for s in steps if "ASK_TASK_OWNER" in _names(s)]
+    last = steps[-1]
     assert last["observation"]["untried_levels"] == []
     [listing] = last["observation"]["assignable_resources"]
     assert (listing["task_id"], listing["current"], listing["assignable"]) == (
@@ -1008,9 +1023,9 @@ def test_n5_never_exposes_ask(seeded):
         "SITE-GC-01",
         [{"resource_id": "SITE-GC-01"}],
     )
-    assert "ASK_TASK_OWNER" not in _names(last)
-    assert "ASK_WINDOW_CHANGE" in _names(last)
-    assert (run.status, run.human_rounds_used) == ("ESCALATED", 0)
+    assert _names(last) == ["ESCALATE_NO_SOLUTION"]
+    assert [(s["action"] or {}).get("name") for s in steps][-2] == "ASK_WINDOW_CHANGE"
+    assert (run.status, run.human_rounds_used) == ("ESCALATED", 1)
 
 
 # ── 대기열 순서 (A.21 0-1) ─────────────────────────────────────

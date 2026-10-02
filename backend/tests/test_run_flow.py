@@ -143,7 +143,8 @@ def test_solver_candidate_fail_marks_run_error(seeded, monkeypatch):
     assert not _jobs(seeded, "BUILD_CONSULTATION")
 
 
-def test_incomplete_only_does_not_error(seeded, monkeypatch):
+def test_incomplete_only_does_not_error(seeded, monkeypatch, solver_limit):
+    solver_limit(2)  # Alpha(L0·L1) 뒤 이관만 열린다 (A.30)
     real = transitions.validate
 
     def inject_incomplete(*args):

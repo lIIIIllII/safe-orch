@@ -77,6 +77,9 @@ class ReplanningExecutor:
             return "ASK_TASK_OWNER" in available and set(action.allowed_values) <= asks
         if isinstance(action, spec.AskWindowChange):
             return "ASK_WINDOW_CHANGE" in available and action.task_id in c["WINDOW"]
+        if isinstance(action, spec.EscalateNoSolution):
+            # 다른 Action이 모두 닫혔을 때만 (A.30 1)
+            return "ESCALATE_NO_SOLUTION" in available
         return False
 
     def _single_tx(
@@ -269,11 +272,15 @@ class ReplanningExecutor:
     def _escalate(
         self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed
     ) -> GatewayResult:
+        action = parsed.action
+        assert isinstance(action, spec.EscalateNoSolution)
         with db.write() as tx:
-            rejected, _ = self.begin_step(tx, run_id, step_no, meta, parsed)
+            # 이 tx에서 다시 관찰해 다른 Action이 열려 있으면 ACTION_NOT_AVAILABLE (A.30 1)
+            rejected, _ = self.begin_step(
+                tx, run_id, step_no, meta, parsed, lambda o: self._permitted(o, action)
+            )
             if rejected is not None:
                 return rejected
-            assert isinstance(parsed.action, spec.EscalateNoSolution)
             self._complete(
                 tx,
                 run_id,

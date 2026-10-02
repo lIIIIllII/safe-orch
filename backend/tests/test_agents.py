@@ -4,6 +4,7 @@ import json
 import sqlite3
 
 import pytest
+from closing import ClosingModel, close_to_escalation
 from conftest import add_run
 from langchain_core.messages import AIMessage
 from scripted import ScriptedChatModel, call, escalate, solve
@@ -65,7 +66,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p9",
+        "replanning-p10",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -100,14 +101,31 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
 def test_same_effective_spec_is_not_retried_site_wide(with_a):
     _run(with_a, [solve("L0"), solve("L1")])
     # 같은 사실 위의 새 Run: L0·L1·L2 모두 같은 실효 SearchSpec을 이미 시도했다
-    run, steps, model = _run(with_a, [solve("L2"), escalate()], run_id="run_2")
-    # 계산 Action은 없다. 자원 조회(A·C)는 Solver를 부르지 않으므로 남는다 (A.21 5)
-    assert model.tool_names(0) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
+    add_run(with_a, "run_2", input_ref=CONFLICT)
+    model = ClosingModel(
+        [solve("L2")]
+    )  # L2 다음은 열린 조회·질문을 차례로(사람은 거절), 그 뒤 이관
+    runtime.invoke(with_a, {"run_id": "run_2"}, model)
+    close_to_escalation(with_a, "run_2", model)
+    with db.read() as conn:
+        steps = list_steps(conn, "run_2")
+    # 계산 Action은 없다. 자원 조회는 남고, 이관은 조회·확인이 모두 닫힌 뒤에만 열린다 (A.21 5·A.30)
+    assert model.tool_names(0) == ["LIST_ASSIGNABLE_RESOURCES"]
     assert _guards(steps)[0] == ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE")
+    with db.read() as conn:
+        run = get_run(conn, "run_2")
+        steps = list_steps(conn, "run_2")
+    assert [(s["action"] or {}).get("name") for s in steps][1:] == [
+        "LIST_ASSIGNABLE_RESOURCES",
+        "ASK_TASK_OWNER",
+        "ASK_WINDOW_CHANGE",
+        "ESCALATE_NO_SOLUTION",
+    ]
     assert run.status == "ESCALATED" and run.solver_calls_used == 0
 
 
-def test_action_not_available_then_escalate(with_a):
+def test_action_not_available_then_escalate(with_a, solver_limit):
+    solver_limit(1)  # L0 뒤 Solver 0 → 이관만 열린다 (A.30)
     run, steps, _ = _run(with_a, [solve("L0"), solve("L0"), escalate("해가 없다")])
     assert _guards(steps) == [
         ("COMPLETED", "CONTINUE", None),
@@ -159,8 +177,9 @@ def test_malformed_twice_escalates(with_a, bad):
     assert run.solver_calls_used == 0 and _count("solver_job") == 0
 
 
-def test_malformed_count_restarts_after_other_result(with_a):
+def test_malformed_count_restarts_after_other_result(with_a, solver_limit):
     """바로 앞 COMPLETED step만 본다. 사이에 ACTION_NOT_AVAILABLE이 있으면 다시 센다 (A.22)."""
+    solver_limit(1)  # L0 뒤 이관만 열린다 (A.30)
     bad = AIMessage(content="L1로 하겠습니다")
     run, steps, _ = _run(with_a, [solve("L0"), bad, solve("L0"), bad, escalate()])
     assert _guards(steps) == [
@@ -202,7 +221,7 @@ def test_solver_budget_exhausted_leaves_only_escalate(with_a):
         )
     model = ScriptedChatModel([escalate()])
     run = runtime.invoke(with_a, {"run_id": "run_s"}, model)
-    assert model.tool_names(0) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
+    assert model.tool_names(0) == ["ESCALATE_NO_SOLUTION"]  # 조회도 닫힌다 (A.30 3)
     assert run.status == "ESCALATED"
 
 
@@ -221,7 +240,9 @@ def test_stale_observation_is_not_executed(with_a):
     assert run.solver_calls_used == 0 and _count("solver_job") == 0
 
 
-def test_stale_observation_applies_to_escalate(with_a):
+def test_stale_observation_applies_to_escalate(with_a, solver_limit):
+    solver_limit(0)  # 처음부터 이관만 열린다 (A.30)
+
     def event_during_llm():
         with db.write() as tx:
             bump_context_version(tx, with_a.site_id)
@@ -236,7 +257,8 @@ def test_stale_observation_applies_to_escalate(with_a):
     assert run.status == "ESCALATED"
 
 
-def test_stale_snapshot_at_registration(with_a, monkeypatch):
+def test_stale_snapshot_at_registration(with_a, monkeypatch, solver_limit):
+    solver_limit(1)  # STALE_SNAPSHOT으로 끝난 L1 뒤 이관만 열린다 (A.30)
     real = cpsat.solve
 
     def solve_then_change(*args):
@@ -301,7 +323,8 @@ def test_t43_graph_input_rejects_extra_keys(with_a):
         ("UPDATE solver_job SET status = 'RESERVED'", "only RESERVED"),
     ],
 )
-def test_t51_run_step_triggers(with_a, sql, match):
+def test_t51_run_step_triggers(with_a, sql, match, solver_limit):
+    solver_limit(1)  # L0 뒤 이관만 열린다 (A.30)
     _run(with_a, [solve("L0"), escalate()])  # ESCALATED, step 2개, solver_job 1개
     with pytest.raises(sqlite3.IntegrityError, match=match), db.write() as tx:
         tx.execute(sql)
@@ -332,8 +355,8 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
         "human_rounds": spec.MAX_HUMAN_ROUNDS,
         "solver_calls": spec.MAX_SOLVER_CALLS,
     }
-    assert binding.prompt.PROMPT_VERSION == "replanning-p9"
-    assert runtime.exec_contract_version("REPLANNING") == "replanning-a29"
+    assert binding.prompt.PROMPT_VERSION == "replanning-p10"
+    assert runtime.exec_contract_version("REPLANNING") == "replanning-a30"
     assert runtime.exec_contract_version("COORDINATION") == "coordination-a24"
     assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-a25"
     assert runtime.exec_contract_version("INTAKE") == "intake-a26"

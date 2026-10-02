@@ -59,7 +59,7 @@ class ListAssignableResources(Action):
 
     OPENS = (
         "맡은 충돌의 당사자 작업(L0) 중 필요한 자원이 있고 자원 축이 확인된 제약으로 고정되지 않은 "
-        "작업을 현재 자원 사실에서 아직 조회하지 않았을 때"
+        "작업을 현재 자원 사실에서 아직 조회하지 않았을 때(Solver 호출이 남아 있을 때)"
     )
 
     task_id: str = Field(
@@ -86,7 +86,7 @@ class AskTaskOwner(Action):
 
     OPENS = (
         "아직 시도하지 않은 탐색 범위가 없고, 자원 축이 미확인인 작업의 자원 조회 결과에 현재 자원 말고 "
-        "담당자가 거절하지 않은 대체 자원이 있으며, 사람 확인 라운드가 남아 있을 때"
+        "담당자가 거절하지 않은 대체 자원이 있으며, 사람 확인 라운드가 남아 있을 때(Solver 호출이 남아 있을 때)"
     )
 
     task_id: str = Field(description="확인을 요청할 작업")
@@ -104,7 +104,7 @@ class AskWindowChange(Action):
     OPENS = (
         "아직 시도하지 않은 탐색 범위가 없고, 자원 조회·대체 자원 시도·자원 확인 질문으로 열 수 있는 것이 "
         "남아 있지 않으며, 시간창을 넓히면 자리가 생기는 작업(시간창 선택지)이 있고, 사람 확인 라운드가 "
-        "남아 있을 때"
+        "남아 있을 때(Solver 호출이 남아 있을 때)"
     )
 
     task_id: str = Field(description="시간창을 넓힐지 물을 작업 (시간창 선택지가 있는 작업)")
@@ -115,7 +115,8 @@ class EscalateNoSolution(Action):
     """탐색 범위 확대, 자원 조회, 대체 자원 시도, 담당자 확인으로 열 수 있는 대안이 남아 있지 않을 때만
     사유를 붙여 사람에게 넘기고 Run을 끝낸다."""
 
-    OPENS = "언제나 열려 있다. 단 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
+    # 해 없음은 서버가 판정한다: 다른 도구가 모두 닫혔을 때만 연다 (A.30)
+    OPENS = "다른 도구(탐색·자원 조회·대체 자원 시도·담당자 확인·시간창 확인)가 하나도 열려 있지 않을 때(서버 판정)"
 
     reason: str = Field(min_length=1, description="해가 없다고 판단한 근거(시도한 범위와 결과)")
 
@@ -212,7 +213,7 @@ def window_key(option: dict[str, Any]) -> str:
 
 
 def window_gate(obs: dict[str, Any], c: dict[str, Any] | None = None) -> bool:
-    """시간창 질문의 선택지 밖 조건 (A.29 2). 미시도 범위 없음 ∧ 사람 라운드 남음 ∧ 자원 경로가 닫힘
+    """시간창 질문의 선택지 밖 조건 (A.29 2·A.30 3). 미시도 범위 없음 ∧ 사람 라운드·Solver 호출 남음 ∧ 자원 경로가 닫힘
     (자원 조회 대상·미시도 대체 자원·RESOURCE 질문 값 없음) ∧ 답을 기다리는 질문 없음.
 
     observer는 이 조건이 갖춰졌을 때만 선택지를 계산한다.
@@ -222,6 +223,8 @@ def window_gate(obs: dict[str, Any], c: dict[str, Any] | None = None) -> bool:
     return (
         not obs["untried_levels"]
         and obs["budget_remaining"]["human_rounds"] > 0
+        # Solver 호출이 없으면 넓혀도 계산할 수 없다 (A.30 3)
+        and obs["budget_remaining"]["solver_calls"] > 0
         and not c["LIST"]
         and not c["TRY"]
         and not c["ASK"]
@@ -234,13 +237,18 @@ def _union(groups: dict[str, list[str]]) -> list[str]:
 
 
 def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """{action 이름: 허용 인자 제한}. 작업별 조합은 choices로 Gateway가 다시 검사한다."""
+    """{action 이름: 허용 인자 제한}. 작업별 조합은 choices로 Gateway가 다시 검사한다.
+
+    불변식 (A.30): ESCALATE_NO_SOLUTION이 있으면 도구는 그것 하나뿐이다. Solver 호출이 0이면
+    SOLVE·TRY·LIST·ASK·시간창 질문이 없다(조회·질문은 다음 Solver 호출을 열어 주는 수단이다).
+    """
     out: dict[str, dict[str, Any]] = {}
     budget = obs["budget_remaining"]
     if obs["conflicts"] and obs["untried_levels"] and budget["solver_calls"] > 0:
         out["SOLVE_WITH_SCOPE"] = {"level": list(obs["untried_levels"])}
     c = choices(obs)
-    if c["LIST"]:
+    solver = budget["solver_calls"] > 0
+    if c["LIST"] and solver:
         out["LIST_ASSIGNABLE_RESOURCES"] = {"task_id": c["LIST"]}
     if c["TRY"] and obs["primary_conflict"] and budget["solver_calls"] > 0:
         out["TRY_ALTERNATIVE_RESOURCE"] = {
@@ -248,7 +256,7 @@ def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "resource_id": _union(c["TRY"]),
         }
     # 사람에게는 계산으로 할 수 있는 탐색을 먼저 한 뒤에만 묻는다 (A.21 0-2)
-    if c["ASK"] and not obs["untried_levels"] and budget["human_rounds"] > 0:
+    if c["ASK"] and not obs["untried_levels"] and budget["human_rounds"] > 0 and solver:
         out["ASK_TASK_OWNER"] = {
             "task_id": sorted(c["ASK"]),
             "axis": ["RESOURCE"],
@@ -256,7 +264,9 @@ def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
         }
     if c["WINDOW"]:
         out["ASK_WINDOW_CHANGE"] = {"task_id": sorted(c["WINDOW"])}
-    out["ESCALATE_NO_SOLUTION"] = {}
+    # 해 없음은 서버가 판정한다: 다른 Action이 하나도 열려 있지 않을 때만 연다 (A.30 1)
+    if not out:
+        out["ESCALATE_NO_SOLUTION"] = {}
     return out
 
 

@@ -88,7 +88,7 @@ class AskReporter(Action):
 class Escalate(Action):
     """조회·분석·신고자 확인으로 열 수 있는 대안이 남아 있지 않거나 신고가 시작 지연이 아닐 때만 사유와 함께 이관한다."""
 
-    # Replanning p7과 같은 조건 문구 (A.21 p7 수정, A.27)
+    # 안내 문구 방식. Replanning(A.30)과 달리 서버가 판정하지 않는다: 신고 문장 판단이 필요하다
     OPENS = "언제나 열려 있다. 단 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
 
     reason: str = Field(min_length=1, description="이관 사유")
