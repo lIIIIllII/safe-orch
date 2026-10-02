@@ -1577,3 +1577,46 @@ live run에 남은 실패 두 유형 대응. 모호 신고(A.26 S4 #2)는 LOOKUP
 
 - 모든 회차 금지 Action·MALFORMED·LLM 오류 0, Budget 안. 기록의 `agent_flags`가 경로 명시값과 같다(`.env`는 둘 다 true).
 
+
+### A.29 요청자 시간창 완화 확인 — Replanning의 TIME 축 질문 (§9.4·§11.6·§11.7·§15·§18.1·§18.2.3·§18.2.7 보충, A.21·A.25·A.27 변경, 스키마 변경 없음)
+
+배경: 수동 테스트에서 Alpha를 TASK_IMMOVABLE(C)로 거절하고 Planner A가 SITE-CR-01을 거절(DECLINE)하자 Replanning이 이관했다. RESOURCE 질문 값이 비고(A.21 3단계) 미시도 범위도 없어 ESCALATE만 남았다. A의 시간창(시작 09:00–10:00, 종료 10:30) 안에는 해가 없지만 창을 넓히면 해가 열린다. 시간창은 요청자가 폼으로 확정한 자기 조건(fields `form:`, A.14)이라 요청자가 바꿀 수 있다.
+
+**확인한 값** (`verify_demo_values` CP-SAT, C 고정, A는 A-CR-01만): 시작 한도/종료 한도 10:00/10:30(현재)·10:00/11:00·10:30/10:30·10:29/11:00·10:30/10:59는 모든 범위 INFEASIBLE, **10:30/11:00**이면 L0 OPTIMAL(A 10:30–11:00 A-CR-01, 변경 1, 지연 90). N5도 fixture에서 시작 한도 10/13 11:00·종료 한도 12:00이면 해가 생긴다(N5 10/13 11:00, 변경 1).
+
+**결정** (10/2 검토의 1-B·2(b)·3-i·5-C)
+1. **새 Action `ASK_WINDOW_CHANGE(task_id, question)`** (Replanning). 기존 `ASK_TASK_OWNER`(MOVABILITY, RESOURCE 축)는 그대로 둔다. 창을 넓히는 것은 축을 여는 것(MOVABILITY)이 아니라 사실(시간창) 수정이다. 모델은 값을 쓰지 않고 작업만 고른다. 넓힐 값은 서버 선택지(아래 5)에서 온다.
+2. **여는 조건** (Available Actions, A.21 0-2·A.27 원칙): 미시도 범위 없음 ∧ 사람 라운드 남음 ∧ **자원 경로가 닫힘**(자원 조회 대상(LIST)·미시도 대체 자원(TRY)·RESOURCE 질문 값이 모두 없음) ∧ 답을 기다리는 질문 없음 ∧ 서버 선택지가 있는 작업이 있음 ∧ 그 선택지를 이 Case에서 담당자가 거절하지 않음. 자원 경로가 열려 있으면 열리지 않으므로 기본안 B(Scene 3, Beta)는 그대로다. 창을 넓히면 지연이 생기므로 Goal의 "변경 수 → 지연" 순서와도 맞는다. 사람 라운드는 2 그대로(RESOURCE 1 + TIME 1).
+   - 대상 작업: acting 작업 ∩ 주 충돌 L0 ∩ READY ∩ `movable.time` ∩ TIME 축 고정 제약 없음. 확인자 = 작업 담당자.
+3. **FACT_UPDATE에 origin(EVENT·OWNER)을 둔다.** 확인자·Hold 조건·바꿀 수 있는 필드·Run 처리·서버 문구는 origin으로만 갈린다.
+
+   | origin | 만드는 곳 | 확인자 | Hold 조건 | 바꿀 수 있는 필드 | TIME Consent | 확인 뒤 Run |
+   |---|---|---|---|---|---|---|
+   | EVENT | Event Response `PROPOSE_FACT_UPDATE` (A.25) | SUPERVISOR | 그 Event의 Hold ACTIVE | earliest_start | 복사 안 함 | ER Run SUCCEEDED(`FACT_CONFIRMED:`) |
+   | OWNER | Replanning `ASK_WINDOW_CHANGE` (A.29) | 작업 담당자 | 없음 | latest_start, latest_end | 복사 안 함 + 새 TIME Consent `{start_min: earliest_start, start_max: 새 latest_start}`(출처 `message:<mid>`) | 제안을 만든 Run wake |
+
+   - payload: EVENT는 기존 모양(`event_id, hold_id, field, old_value, new_value, evidence`)에 `origin: "EVENT"`를 더한다(origin이 없는 옛 행은 EVENT로 읽는다). OWNER는 `{origin: "OWNER", axis: "TIME", allowed_values: ["<새 latest_start>/<새 latest_end>"], changes: [{field, old_value, new_value} …], fit_start}`. `axis`·`allowed_values`는 RESOURCE 질문과 같은 방식으로 Observation `human_replies`와 거절 값 제외에 쓴다.
+   - 확인(ACCEPT) 검사: A.21 ①–④ 다음 ⑤ 현재 revision = base ∧ 바꿀 필드의 현재 값 = old_value 전부(아니면 `STALE_PROPOSAL`), EVENT면 Hold ACTIVE(`HOLD_NOT_ACTIVE`).
+   - 확인 효과(한 tx): 새 task revision(바꿀 필드 = 새 값), critical field window의 확인 값도 새 값(CONFIRMED, 출처 `proposal:<pid>`, A.25와 같은 규칙), RESOURCE Consent 복사(A.14 C1), (OWNER) 새 TIME Consent, Context +1, 제안 CONFIRMED, 메시지 ANSWERED, 위 표의 Run 처리. 새 TIME Consent가 없으면 넓힌 창 안의 배치가 자기 담당자에게 PENDING이 된다.
+   - 폐기(DECLINE): 제안 DISCARDED, 메시지 ANSWERED, Context 그대로, 제안을 만든 Run wake(두 origin 같음). OWNER에서 거절한 선택지는 이 Case에서 다시 묻지 않는다.
+   - STALE: Run이 끝나면 보낸 요청 정리(`cancel_requests`)가 제안을 STALE로 만들고, 늦은 답은 LATE다(A.21 ③, 두 origin 같음).
+   - 메시지 유형: EVENT는 CONFIRMATION(Supervisor 확인), OWNER는 QUESTION(담당자에게 묻기, ASK_TASK_OWNER와 같음).
+   - 서버 문구(받은 요청 카드): EVENT는 A.25 그대로("…시작 가능 시각 … → … 신고: …"). OWNER는 "A(인양) 작업의 시간창을 넓히시겠습니까? 시작 한도 10/12(월) 10:00 → 10/12(월) 10:30, 종료 한도 10/12(월) 10:30 → 10/12(월) 11:00. 넓히면 재계획이 넓힌 시간창 안에서 다시 계산합니다(지금 현장 정보로는 10/12(월) 10:30 시작 자리가 있습니다)." 화면은 origin으로 카드 제목·표를 나눈다.
+4. **실효 탐색 키·미시도 판정**: 키에 시간창이 들어 있으므로(`domain/hashes.search_key`, A.21) 확인 뒤에는 L0·L1·L2가 모두 새 키가 되어 다시 열린다(의도한 동작). 수동 시나리오 Solver 사용은 L0, L1(Alpha), 확인 뒤 L0로 3/6이다. 키 정의는 바꾸지 않는다.
+5. **넓힐 값 = 서버 결정론 스캔** (Observation `window_options`): 대상 작업 하나의 시간창을 Horizon 끝까지 풀고, **나머지 작업은 기준 배정에 고정**한 채 시작 시각을 earliest_start부터 1분씩 옮기며 Rule Engine 검사(기본 제약·Rule)와 자원 겹침을 본다. 첫 가능 시작 s*에서 선택지 `{latest_start: max(현재, s*), latest_end: max(현재, s* + duration)}` 하나를 낸다. 자원은 기준 배정의 자원 그대로다. s*가 현재 창 안이면(넓힐 필요가 없으면) 선택지가 없다. 나머지 작업끼리 이미 충돌하면 선택지가 없다. Solver를 부르지 않고(Solver Budget 차감 없음) Rule Engine만 쓴다. 계산은 2의 다른 조건(미시도 범위 없음·자원 경로 닫힘·라운드 남음)이 갖춰졌을 때만 하고, 아니면 빈 목록이다.
+   - **한계**: 대상 작업 하나만 옮기고 나머지는 고정해서 계산하므로, 다른 작업을 같이 움직이면 더 좁은 창으로 풀리는 경우는 찾지 못한다. 첫 버전은 작업마다 선택지 1개(해가 열리는 가장 좁은 창)다. 확인 뒤 Solver는 넓힌 창에서 범위대로 다시 계산하므로 다른 작업이 움직이는 해도 나올 수 있다.
+   - 서버는 사람 문장에서 값을 뽑지 않는다(A.25·A.26). 답은 ACCEPT·DECLINE이고, 다른 창을 원하면 거절 사유(인용 데이터)로 쓴다.
+6. **기대 경로 재정의**: `--path B-decline`은 RESOURCE 질문과 TIME 질문을 모두 거절한 뒤 이관한다(질문 2회). N5는 K의 자원 경로가 닫힌 뒤 N5의 TIME 질문이 열린다. 요청자가 거절하면 이관(기대값 ESCALATE 유지), 수락하면 해가 생긴다.
+
+**블루프린트와 달라지는 점** (v1.2.4 본문은 다음 개정 때 반영한다)
+1. §11.7: Action 표에 `ASK_WINDOW_CHANGE` 행(사용 조건 위 2, 효과 FACT_UPDATE(OWNER) + QUESTION, 사람 라운드 +1, WAIT(MESSAGE)). "ASK가 RESOURCE 축만인 이유" 문단을 "RESOURCE는 ASK_TASK_OWNER, 시간창은 ASK_WINDOW_CHANGE(자원 경로가 닫힌 뒤)"로 바꾼다. Observation 17개 키 → 18개(`window_options`). prompt `replanning-p9`.
+2. §18.1 "ASK 범위" 한계를 지우고 새 한계를 적는다: 시간창 선택지는 대상 작업 하나만 옮기고 나머지는 고정해서 계산하므로, 다른 작업을 같이 움직이면 더 좁은 창으로 풀리는 경우는 찾지 못한다. 첫 버전은 선택지 1개다.
+3. §18.2.7 "ASK의 TIME 축"을 구현됨으로 옮긴다.
+4. §18.2.3·§9.4: FACT_UPDATE에 origin. 확인자 SUPERVISOR·Hold 조건·필드 earliest_start는 EVENT일 때의 규칙이고, OWNER는 위 3의 표다. A.25 3 "바꾸는 필드는 earliest_start만"은 EVENT의 규칙이 된다.
+5. A.14 C1: 창 확인(OWNER)은 TIME Consent를 복사하지 않고 새로 만든다.
+6. A.21 5·"N5 ASK 미노출"과 A.21 9의 B-decline·N5 성공 기준(위 6), A.27 표 Replanning 행(TIME 질문 조건 추가).
+7. §15: 주 시연 장면은 그대로다. 선택 장면 "자원 거절 → 시간창 완화 확인 → 해"를 더한다.
+
+**테스트 원칙**: 기본안 B 경로에서는 TIME 질문이 열리지 않아 모델 입력의 도구 목록·Run·step 기록이 같다. 골든 테스트(A.23)는 값을 바꾸지 않고, p9에서 더한 것(System의 새 도구 줄·규칙 문구·관찰 읽는 법 줄, 빈 `window_options`, prompt_version·exec_contract_version 라벨)만 되돌려 같은 hash인지 확인한다. exec_contract_version `replanning-d5` → `replanning-a29`.
+
+**단계**: S1 창 선택지 스캔(순수 함수) + CP-SAT 교차 테스트 → S2 Agent·명령(spec·Observation·executor·prompt p9·FACT_UPDATE origin·영향받는 Run·E2E·N5·B-decline 테스트) → S3 화면(받은 요청 카드 origin별, Activity, labels) → S4 live run(`--path B-time` 3회, B-decline·N5 재정의, 회귀) → 결과 보고 후 멈춤. 단계마다 커밋·push.
