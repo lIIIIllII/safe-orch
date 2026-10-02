@@ -1642,7 +1642,54 @@ live run에 남은 실패 두 유형 대응. 모호 신고(A.26 S4 #2)는 LOOKUP
 
 - 모든 회차 금지 Action·MALFORMED·LLM 오류 0, Budget 안. 시간창 질문의 값은 모든 회차 서버 선택지와 같았다.
 
-**남은 실패: 거절 직후 이관 (B #3, B-decline #3)** — 원인만 기록한다(대응은 결정 뒤)
+**남은 실패: 거절 직후 이관 (B #3, B-decline #3)** — 원인만 기록한다. 대응은 A.30(Replanning 이관은 다른 Action이 모두 닫혔을 때만)이고, 아래 비교 수치는 A.30에서 정정했다.
 - 현상: Alpha를 C 고정으로 거절한 뒤 재개된 첫 step에서 LIST(A)가 열려 있었는데(도구 = LIST_ASSIGNABLE_RESOURCES·ESCALATE_NO_SOLUTION, 자원 경로가 열려 있어 시간창 질문은 닫힘) 모델이 ESCALATE를 골랐다. decision_summary: "L0 불가능, L1 후보가 확인된 제약으로 거절됐고 추가 탐색·자원 경로가 없음"(B #3), "자원·범위 대안이 남지 않아 담당자 검토 요청"(B-decline #3). 시간창 질문 단계까지 가지 못했으므로 A.29 기능 자체의 실패는 아니다.
-- 이전 버전과 비교(기록 전체의 기본안 B 계열, 거절 뒤 첫 Action): p6 SOLVE 3, p7 SOLVE 7·LIST 7, p8 LIST 5 → **거절 직후 이관 0/22**. p9: LIST 8·ESCALATE 2 → **2/10**.
-- 이 step에서 모델 입력이 p8과 다른 곳은 A.29에서 더한 것뿐이다(골든 테스트로 확인): System의 규칙 문구("시간창은 작업 담당자가 넓히기를 확인한 경우에만 바뀐다"), 도구 줄 `ASK_WINDOW_CHANGE`(열리는 조건 "… 자원 조회·대체 자원 시도·자원 확인 질문으로 열 수 있는 것이 남아 있지 않으며 …"), 관찰 읽는 법의 시간창 선택지 줄("자원 경로가 남아 있으면 비어 있다")과 질문 값 줄, 관찰의 빈 `window_options`. 따라서 이 추가가 이관 판단을 늘렸을 가능성이 높다(추정). 어느 문구가 원인인지는 확인하지 않았다. 표본이 작아(10회) 우연일 가능성도 남는다(p8 기준 이관률이 0이 아니라면 2/10은 드물지만 불가능하지 않다).
+- 이전 버전과 비교(기록 전체의 기본안 B 계열): **(A.30에서 정정)** 처음에는 "거절 뒤 첫 Action"만 세어 p6–p8을 0/22로 적었으나, p6 `20261001T134631Z` #2가 거절 뒤 SOLVE를 한 번 더 하고 [LIST, ESCALATE]에서 이관한 같은 실패였다(S S S E). "진행 경로가 열려 있는데 이관" 기준으로 **p6–p8 1/22, p9 2/10**(한쪽 Fisher p ≈ 0.22)이다. p9 문구 추가의 영향은 통계로 뒷받침되지 않는다.
+- 이 step에서 모델 입력이 p8과 다른 곳은 A.29에서 더한 것뿐이다(골든 테스트로 확인): System의 규칙 문구("시간창은 작업 담당자가 넓히기를 확인한 경우에만 바뀐다"), 도구 줄 `ASK_WINDOW_CHANGE`(열리는 조건 "… 자원 조회·대체 자원 시도·자원 확인 질문으로 열 수 있는 것이 남아 있지 않으며 …"), 관찰 읽는 법의 시간창 선택지 줄("자원 경로가 남아 있으면 비어 있다")과 질문 값 줄, 관찰의 빈 `window_options`. 처음에는 이 추가가 이관 판단을 늘렸을 가능성이 높다고 적었으나, 정정한 수치(위)로는 우연과 구별되지 않는다. 같은 실패가 p6에도 있었으므로 문구 하나가 아니라 "열린 경로가 있어도 이관할 수 있는 계약"이 원인으로 보고 A.30에서 구조로 막는다.
+
+### A.30 Replanning 이관은 다른 Action이 모두 닫혔을 때만 (§11.6·§11.7·§18.2.1 보충, A.21 0-2·A.27·A.29 변경, 스키마 변경 없음)
+
+배경: A.29 live run에서 Alpha 거절 직후 자원 조회(LIST)가 열려 있는데 모델이 `ESCALATE_NO_SOLUTION`을 골랐다(B #3, B-decline #3). 같은 실패가 p6에도 있었다(A.29 S4 정정: p6–p8 1/22, p9 2/10, p ≈ 0.22). prompt 문구 조정은 특정 결과에 맞추는 조정이라 하지 않는다.
+
+**원칙**: `ESCALATE_NO_SOLUTION`은 "해 없음"이라는 사실 주장이다. 서버가 연 탐색·조회·확인 경로가 남아 있으면 그 주장은 사실과 다르다. A.21 0-2·A.27처럼 Available Actions에서 판정하는 서버 정책이며, 입력과 관계없이 같은 규칙이다.
+
+**결정**
+1. Replanning `ESCALATE_NO_SOLUTION`은 다른 Action(SOLVE_WITH_SCOPE·LIST_ASSIGNABLE_RESOURCES·TRY_ALTERNATIVE_RESOURCE·ASK_TASK_OWNER·ASK_WINDOW_CHANGE)이 하나도 열려 있지 않을 때만 연다(`available_actions`가 다른 키를 모두 계산한 뒤 비어 있을 때). Gateway도 다른 Action처럼 이 tx에서 다시 관찰해 확인한다(닫혀 있으면 `ACTION_NOT_AVAILABLE`).
+2. **step 수로 여는 예외는 두지 않는다.** 마지막 step에서도 열린 Action을 진행하고, step·LLM 시도가 끝나면 observe가 BUDGET_EXHAUSTED로 끝낸다(§11.6). 이관 사유가 "해 없음"인 것은 서버가 대안 소진을 판정했을 때뿐이다.
+3. **Solver 호출이 0이면 LIST·ASK_TASK_OWNER·ASK_WINDOW_CHANGE도 닫는다.** 이 셋은 다음 Solver 호출을 열어 주는 수단이라 Solver가 없으면 쓸모가 없다(사람에게 쓸모없는 질문을 보내지 않는다). LIST·ASK는 `available_actions`, 시간창 질문은 `window_gate`에 `solver_calls > 0`을 둔다(그래서 Solver 0이면 `window_options`도 계산하지 않고 비어 있다, A.29 5와 같은 원칙). SOLVE·TRY는 이미 Solver 호출 > 0을 본다.
+4. **불변식**: Replanning Available Actions에 ESCALATE_NO_SOLUTION이 있으면 도구는 그것 하나뿐이다. Solver 호출이 0이면 SOLVE·TRY·LIST·ASK·시간창 질문이 없다. ESCALATE만 남으면 도구 강제 호출(`tool_choice="any"`, §11.2)이라 모델은 이관한다.
+5. **끝의 보장**: 열린 Action은 모두 유한한 자원을 쓴다(미시도 실효 탐색 키, 같은 자원 사실에서 LIST 1회, 사람 라운드 2와 거절 값 제외, Solver 6회). step 15·LLM 시도 30이 끝나면 BUDGET_EXHAUSTED, recursion_limit은 ERROR, Supervisor는 Run을 취소할 수 있다(§12). MALFORMED·LLM_ERROR 연속 2회(§11.2), 제약 없는 거절 2회(`REJECTED_TWICE`, §9.2) 종료는 그대로다.
+
+**범위: Replanning만** (Agent별 이관 Action의 뜻과 여는 조건)
+
+| Agent | Action | 뜻 | 여는 조건 |
+|---|---|---|---|
+| Replanning | `ESCALATE_NO_SOLUTION` | 계산 결과에 대한 사실 주장("해 없음"). 서버가 자기 Action 집합으로 검증할 수 있다 | 다른 Action이 모두 닫혔을 때 (A.30) |
+| Event Response | `ESCALATE` | 신고가 시작 지연이 아님 등 사람 문장 해석이 필요한 판단. Hold가 걸린 채 Supervisor에게 넘어가므로 안전한 기본값이다 | 언제나 (A.25·A.27 문구 안내 그대로) |
+| Work Intake | `ESCALATE` | 요청자 거절·값 검증 실패 등 사람 답에 대한 판단 | 언제나 |
+| Coordination | `ESCALATE` | 응답 불가·해석할 수 없는 이견 등 사람 문장 해석 | 언제나 |
+
+서버는 사람 문장에서 값을 뽑지 않으므로(A.25·A.26) 나머지 Agent의 이관은 서버가 판정할 수 없다. ER `Escalate.OPENS`의 "Replanning p7과 같은 조건 문구" 주석은 "ER은 문장 판단이 필요해 안내 문구 방식을 유지한다(A.30)"로 고친다.
+
+**문구** (서버 규칙과 맞추는 네 곳만, docstring은 그대로): ESCALATE OPENS "다른 도구(탐색·자원 조회·대체 자원 시도·담당자 확인·시간창 확인)가 하나도 열려 있지 않을 때(서버 판정)", 규칙 줄 "ESCALATE_NO_SOLUTION은 서버가 다른 도구를 모두 닫았을 때만 열린다. 사유를 붙여 쓴다.", LIST·ASK_TASK_OWNER·ASK_WINDOW_CHANGE OPENS 끝에 "Solver 호출이 남아 있을 때", 시간창 선택지 관찰 줄 "…남아 있거나 Solver 호출이 없으면 비어 있다". prompt `replanning-p10`, exec_contract `replanning-a30`. `to_p9()`가 A.30 문구만 되돌린다(구현 전 p9 렌더링 hash를 상수로 고정해 확인).
+
+**테스트**
+- 골든: 값은 그대로다. `to_p7(to_p9(System))`, 그리고 구조 단위 정규화: 모델 입력 `tools`와 `agent_step.available_actions`에서 ESCALATE가 빠진 목록 끝에 p9 ESCALATE 스키마를 다시 붙인다. 붙인 곳에는 다른 도구가 하나 이상 있었음을 assert한다(바뀐 것이 ESCALATE 노출뿐임을 증명).
+- 불변식: conftest autouse 검사로 모든 테스트가 만든 Replanning AgentStep 전부에서 위 4의 불변식을 확인한다. 이름 붙인 합성 상태 테스트(시연값에 기대지 않음): Solver 0 / 거절 직후 LIST만 / 열린 질문만 남음 / 주 충돌 없음 / 대체 자원 없는 LIST / 마지막 step / 닫혀 있는데 ESCALATE 호출 → ACTION_NOT_AVAILABLE.
+- 기존 스크립트 테스트 수정 기준: ① 테스트 대상이 이관 자체면 다른 Action을 모두 닫은 뒤 ESCALATE ② 이관이 Run을 끝내는 수단일 뿐이면 end_reason·status를 assert하는 테스트는 스크립트를 늘려 닫힐 때까지 진행, 아니면 Supervisor Run 취소 ③ 도구 목록 assert는 새 목록으로 ④ 열린 상태 ESCALATE 호출은 새 테스트로.
+
+**live run**: 기록 step 행에 `tools`(바인딩한 도구 이름)를 더하고, Replanning step 중 ESCALATE_NO_SOLUTION을 고른 step의 도구가 그것 하나뿐인지 검사한다(`escalate_only_when_alone`). 모든 경로의 성공 조건에 AND로 더한다. 다른 성공 기준은 바꾸지 않는다.
+
+**한계** (고치지 않고 기록한다)
+- 관찰 이후 새 변화(`NEW_CHANGE_BEFORE_WAIT`)로 다시 관찰할 때, 이미 보낸 질문을 다시 기다리는 방법은 없다(질문은 OPEN으로 남고 같은 작업·축 질문은 닫힌다).
+- LIST는 대체 자원이 없어도 열린다(조회해야 알 수 있다). 조회 결과에 대체 자원이 없으면 그 뒤 ASK는 닫힌다.
+- 새 Action을 더할 때는 그것이 해를 열 수 있는 Action인지(이관 조건의 "다른 Action"에 넣을지) 정해서 더한다.
+- primary_conflict가 없을 때도 ASK가 열릴 수 있다(조건이 주 충돌을 보지 않는다). 지금은 도달 가능한 상태인지만 테스트로 확인한다.
+
+**블루프린트와 달라지는 점** (v1.2.4 본문은 다음 개정 때 반영한다)
+1. §11.7: `ESCALATE_NO_SOLUTION` 사용 조건 "항상" → "다른 Action이 모두 닫혔을 때"(Gateway 재확인). LIST·ASK_TASK_OWNER(·ASK_WINDOW_CHANGE)의 사용 조건에 "Solver 호출 남음". "사람에게 묻는 시점(서버 정책)" 문단 옆에 "해 없음은 서버가 판정한다"를 더한다.
+2. §11.6: 마지막 step 예외 없음. 탐색 중 Budget이 끝나면 BUDGET_EXHAUSTED다.
+3. §18.2.1: 이관 조건은 Agent 공통이 아니다(위 표).
+4. A.21 0-2·A.27 표 Replanning 행: 이관 조건을 더한다.
+
+**단계**: S0 결정 기록(이 항목, A.29 정정) → S1 코드·테스트 → S2 live run 검사 → S3 live run(B 5, B-decline 3, B-time 3, N5 3, B --coord·coord·event --coord·intake 각 1, `--request N1,N2,N3,N4` 1회) → 결과 보고 후 멈춤. 단계마다 커밋·push.
