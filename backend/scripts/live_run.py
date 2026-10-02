@@ -29,6 +29,8 @@
   → 넓힌 창의 후보가 PASS ∧ 협의 완료면 승인. 성공 = Alpha PASS ∧ 자원 질문 1회(LIST 결과의 대체 자원) ∧ 시간창 질문
   1회(값 = 그 step의 서버 선택지) ∧ 수락 뒤 SOLVE ∧ 후보가 verify 기대값(expected_window: A 10:30 A-CR-01, 변경 1,
   지연 90)과 같음 ∧ PASS ∧ 협의 완료 ∧ R1 ∧ Run SUCCEEDED ∧ 금지 Action 0 ∧ Budget 안.
+- 모든 경로의 성공 조건에 이관 시점 검사(A.30)를 AND로 더한다: Replanning의 ESCALATE_NO_SOLUTION이 바인딩되었거나
+  골라진 step의 도구는 그것 하나뿐이다(기록 steps[].tools, success_criteria.escalate_only_when_alone).
 - --request(경로 A)의 사람 역할(A.29 6): Run이 담당자 질문(시간창 넓히기 등)을 기다리면 그 수신자로 DECLINE한다.
   해가 없는 요청(N5)의 기대값은 그대로 이관이다. 답은 기록 human_replies에 남는다.
 - --path coord(기본안 A, 부록 A.24): COORDINATION_ENABLED를 켠 임시 DB에서 요청 A만. 스크립트가 사람 역할을
@@ -213,6 +215,8 @@ def _step_rows(steps: list[dict[str, Any]], calls: list[dict[str, Any]]) -> list
                 "step_no": s["step_no"],
                 "status": s["status"],
                 "action": action.get("name"),
+                # 바인딩한 도구 이름 (이관 시점 검사, A.30)
+                "tools": [t["function"]["name"] for t in s["available_actions"] or []],
                 "level": (action.get("args") or {}).get("level"),
                 "decision_summary": s["decision_summary"],
                 "result_kind": s["result_kind"],
@@ -227,6 +231,14 @@ def _step_rows(steps: list[dict[str, Any]], calls: list[dict[str, Any]]) -> list
             }
         )
     return out
+
+
+def escalate_only_when_alone(rows: list[dict[str, Any]]) -> bool:
+    """Replanning 이관 시점 검사 (A.30): ESCALATE_NO_SOLUTION이 바인딩되었거나 골라진 step의 도구는 그것
+    하나뿐이다. 이름이 Replanning에만 있으므로(다른 Agent는 ESCALATE) Agent를 따로 가리지 않는다.
+    """
+    name = "ESCALATE_NO_SOLUTION"
+    return all(r["tools"] == [name] for r in rows if name in r["tools"] or r["action"] == name)
 
 
 def request_names(pack: Any) -> list[str]:
@@ -316,6 +328,7 @@ def run_once(
                 record["success"] = (
                     c["no_candidate"]
                     and c["escalated"]
+                    and c.get("escalate_only_when_alone") is True
                     and c.get("forbidden_actions") == 0
                     and bool(c.get("within_budget"))
                 )
@@ -650,7 +663,10 @@ def _path_b(
             and criteria["notices_complete"]
             and criteria["all_runs_within_budget"]
         )
-    success = success and criteria["forbidden_actions"] == 0
+    criteria["escalate_only_when_alone"] = escalate_only_when_alone(rows)
+    success = (
+        success and criteria["forbidden_actions"] == 0 and criteria["escalate_only_when_alone"]
+    )
 
     # matches_expected: Alpha = verify의 L1, Beta = 거절 고정 + L0 + try (A.21 9)
     world_model, world, task_a, _ = verify.load(pack_dir(pack_name))
@@ -910,10 +926,12 @@ def _path_coord(record: dict[str, Any], settings: Settings, pack: Any, raw: bool
     keys = ("alpha_pass", "change_request_to_owner", "draft_ok", "constraint_from_proposal",
             "beta_pass", "committed_r1", "replanning_succeeded", "notices_complete",
             "notice_run_succeeded", "within_budget")  # fmt: skip
+    criteria["escalate_only_when_alone"] = escalate_only_when_alone(rows)
     success = (
         all(criteria[k] for k in keys)
         and criteria["forbidden_actions"] == 0
         and criteria["malformed"] == 0
+        and criteria["escalate_only_when_alone"]
     )
     record.update(
         model_settings=model_settings(settings),
@@ -1282,6 +1300,7 @@ def _path_event(
     }
     keys = ["proposed_e_60", "fact_confirmed", "hold_fact_confirmed", "er_succeeded",
             "gamma_e_60", "committed_r2", "within_budget"]  # fmt: skip
+    criteria["escalate_only_when_alone"] = escalate_only_when_alone(rows)
     success = (
         all(criteria[k] for k in keys)
         and criteria["gamma_changed_delay"] == [1, expected_delay]
@@ -1289,6 +1308,7 @@ def _path_event(
         and criteria["forbidden_actions"] == 0
         and criteria["malformed"] == 0
         and (not coord or (bool(targets) and noticed == targets))
+        and criteria["escalate_only_when_alone"]
     )
     record.update(
         model_settings=model_settings(settings),
@@ -1484,11 +1504,13 @@ def _path_intake(
     }
     keys_ok = ("intake_succeeded", "values_match_new_task", "fields_confirmed_from_message",
                "consents_like_form", "alpha_pass", "alpha_matches_expected", "within_budget")  # fmt: skip
+    criteria["escalate_only_when_alone"] = escalate_only_when_alone(rows)
     success = (
         all(criteria[k] for k in keys_ok)
         and criteria["forbidden_actions"] == 0
         and criteria["malformed"] == 0
         and (not ambiguous or asks >= 1)
+        and criteria["escalate_only_when_alone"]
     )
     record.update(
         model_settings=model_settings(settings),
@@ -1657,6 +1679,7 @@ def _run_request(
             "malformed": guards.count("MALFORMED"),
             "llm_errors": guards.count("LLM_ERROR"),
             "within_budget": run is not None and run.status != "BUDGET_EXHAUSTED",
+            "escalate_only_when_alone": escalate_only_when_alone(rows),
         }
         record.update(
             model_settings=model_settings(settings),
@@ -1664,7 +1687,8 @@ def _run_request(
             prompt_version=PROMPT_VERSION,
             success=criteria["pass_reached"]
             and criteria["forbidden_actions"] == 0
-            and criteria["within_budget"],
+            and criteria["within_budget"]
+            and criteria["escalate_only_when_alone"],
             success_criteria=criteria,
             first_solve_level=solves[0]["level"] if solves else None,
             l0_first=bool(solves) and solves[0]["level"] == "L0",

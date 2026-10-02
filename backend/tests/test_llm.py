@@ -397,6 +397,27 @@ def test_live_run_no_solution_request_succeeds_by_escalation(monkeypatch):
     assert r["success_criteria"]["pass_reached"] is False
     assert r["success_criteria"]["forbidden_actions"] == 0
     assert [h["reply"] for h in r["human_replies"]] == ["DECLINE"]
+    assert r["success_criteria"]["escalate_only_when_alone"]
+
+
+def test_escalate_only_when_alone_check():
+    """live run 이관 시점 검사 (A.30): 이관이 바인딩되었거나 골라진 step의 도구는 그것 하나뿐이어야 한다."""
+    e = "ESCALATE_NO_SOLUTION"
+    ok = [
+        {"tools": ["LIST_ASSIGNABLE_RESOURCES"], "action": "LIST_ASSIGNABLE_RESOURCES"},
+        {"tools": [e], "action": e},
+        {
+            "tools": ["LOOKUP_TASKS", "ESCALATE"],
+            "action": "ESCALATE",
+        },  # 다른 Agent의 이관은 대상 밖
+    ]
+    assert live_run.escalate_only_when_alone(ok)
+    assert not live_run.escalate_only_when_alone([{"tools": ["SOLVE_WITH_SCOPE", e], "action": e}])
+    assert not live_run.escalate_only_when_alone(
+        [{"tools": ["SOLVE_WITH_SCOPE", e], "action": "SOLVE_WITH_SCOPE"}]
+    )
+    # 도구에 없는 이관 호출(Gateway가 거절)도 위반으로 센다
+    assert not live_run.escalate_only_when_alone([{"tools": ["SOLVE_WITH_SCOPE"], "action": e}])
 
 
 def test_live_run_rejects_unknown_request(capsys):
@@ -559,6 +580,8 @@ def test_live_run_path_b_decline_ends_in_escalation(monkeypatch):
     assert (r["run_status"], r["committed"], r["messages"]) == ("ESCALATED", None, 2)
     assert (c["ask_count"], c["window_ask_count"]) == (1, 1)
     assert c["no_ask_or_try_after_decline"] and c["window_value_is_server_option"]
+    assert c["escalate_only_when_alone"]  # 이관 step의 도구는 그것 하나뿐 (A.30)
+    assert r["steps"][-1]["tools"] == ["ESCALATE_NO_SOLUTION"]
     assert [e.get("reply") for e in r["events"] if "reply" in e] == ["DECLINE", "DECLINE"]
     assert r["beta_matches_expected"] is None
 
