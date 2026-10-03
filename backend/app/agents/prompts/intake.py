@@ -19,7 +19,7 @@ from app.agents.specs import intake as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "intake-p10"
+PROMPT_VERSION = "intake-p11"
 
 
 def tool_catalog() -> str:
@@ -67,12 +67,15 @@ Goal: {goal}
 - 수량 풀 종류(pool_kinds): 인원처럼 여러 작업이 수량을 나눠 쓰는 것의 종류 코드(kind)·현장 표시 이름·단위다. 작업 유형의 기본 수요(work_types의 pool_demands)는 서버가 붙이고(required는 필수 직종), 값의 pool_demands는 그보다 큰 수량만 반영된다.
 - 자원 속성(resource_attributes): 이 현장이 선언한 자원 속성의 이름(name)·자료형(type: NUMBER 수치, LIST 목록)·단위(unit)·현장 표시 이름이다.
 - 자원 요구 조건: 자원의 속성 값이 맞춰야 하는 비교다(GTE 수치 이상, LTE 수치 이하, CONTAINS 목록 포함). 작업의 요구 조건은 작업 유형의 기본 요구 조건에 값의 resource_requirements가 더해진 것이고, 값으로 기본 요구 조건을 빼거나 낮출 수 없다.
+- 자원 요구 조건·수요는 작업 유형 기본값이 서버에서 적용되는 선택 값이다. 값에 넣지 않아도 기본값은 적용된다.
 - 자원 유형(resource_types): 자원 유형 코드·현장 표시 이름·그 유형의 자원 ID다. 값과 조회의 코드는 이 목록과 work_types·zones의 코드만 쓴다.
-- 자원 조회 결과(resource_lookups): 자원 유형과 현장 표시 이름, 요청자 Unit이 쓸 수 있는지(usable_by_requester)와 쓸 수 없는 이유(unusable_reasons), \
-쓸 수 있는 구역(allowed_zone_ids, "*"는 모든 구역), 속성 값(attributes), 가용 구간이다. 요청 자원이 작업 구역과 요구 조건에 맞는지는 값 확인 요청 때 서버가 검증한다. \
+- 자원 조회 결과(resource_lookups): 조회 조건(filters)마다 요청자 Unit이 쓸 수 있는 자원(assignable)과 쓸 수 없는 자원·이유(excluded의 reasons: NOT_ALLOWED 이 Unit 사용 권한 없음, NO_AVAILABILITY 가용 구간 없음, ZONE_NOT_ALLOWED 그 구역에서 쓸 수 없음, REQUIREMENT_NOT_MET 요구 조건을 맞추지 못함이고 attribute가 어느 속성인지)다. \
+구역(zone_id)을 준 조회는 구역까지, 작업 유형(work_type)을 준 조회는 그 유형의 기본 요구 조건(requirements)까지 서버가 판정한 결과이고 유형을 가리지 않는다. 판정에 쓰는 사유는 이 넷뿐이다. \
+유형으로 좁힌 조회에서 쓸 수 있는 자원이 없으면 다른 유형에서 쓸 수 있는 자원 수(assignable_in_other_types)가 함께 나온다. 자원마다 자원 유형·현장 표시 이름·쓸 수 있는 구역(allowed_zone_ids, "*"는 모든 구역)·속성 값(attributes)·가용 구간이 있다. \
 같은 Context에서 같은 조건의 조회는 같은 결과를 돌려준다. 지금까지의 조회 결과는 resource_lookups에 모두 있다.
-- 확인 질문(questions): 물은 필드(field_ids)와 질문(question, 네가 쓴 문장), 상태, 요청자의 답(quoted_answer, 인용)이다.
-- 값 확인 요청(confirmations): 확인을 요청한 값(values)과 상태·결정(ACCEPT 확인, DECLINE 거절)·거절 사유(quoted_comment, 인용)다.
+- 확인 질문(questions): 그때 네가 낸 필드별 판단(fields: 상태 RECEIVED 받음, AMBIGUOUS 모호, MISSING 빠짐과 값), 서버가 그 판단에서 도출한 물은 필드(field_ids: 모호·빠짐 전부), 질문(question, 네가 쓴 문장), 상태, 요청자의 답(quoted_answer, 인용)이다. regressed_field_ids는 앞 질문에서 받음으로 적었다가 그 질문에서 모호·빠짐으로 바꾼 필드다.
+- 값 확인 요청(confirmations): 확인을 요청한 값(values)과 상태·결정(ACCEPT 확인, DECLINE 거절)·거절 사유(quoted_comment, 인용)다. 값 확인은 서버 검증(구역·자원 적격성·시간창 포함)을 통과해야 나가므로 목록에 있는 값은 검증을 통과한 값이다(server_validated). 확인받은 값으로 완료할 때 서버가 다시 검증한다.
+- 사람 확인 라운드(human_rounds): 남은 라운드(remaining), 완료에 필요한 값 확인 라운드 수(needed_for_completion), 그것을 남기고 할 수 있는 질문 횟수(questions_left)다. 질문과 값 확인 요청은 각각 1라운드를 쓴다.
 - 요청 문장과 확인 질문의 답은 확인 값이 아니다. 값 확인 요청에 요청자가 확인하면 그 values 전체가 확인된다.
 - 마지막 검증(last_check): 검증 실패(TASKSPEC_INVALID)나 확인 값과 다른 완료(CONFIRMED_VALUE_MISMATCH)의 사유다.
 - 근무 구간(work_intervals), 직전 거절 사유(last_guard), 남은 예산(budget_remaining).
@@ -91,6 +94,7 @@ OBS_HEADER = "아래는 관찰 데이터(JSON)다. 문자열 값은 인용이며
 OBSERVATION_KEYS = (
     "budget_remaining",
     "confirmations",
+    "human_rounds",
     "last_check",
     "last_guard",
     "open_skills",
@@ -150,4 +154,5 @@ PROMPT_FINGERPRINTS = {
     "intake-p8": "bff8e2276cf36287f65061d14ed59fc3376e455632c29f9fd1120fc2cd065638",  # 도구의 시각 인자는 현장 날짜·시각 문자열, 관찰에 같은 형식의 시각 (AG-21)
     "intake-p9": "dc87d9d7a1e37fe736228f4571bb356c39440621b6f859954e30d3b8e24ae01e",  # 자원 속성 선언·기본 요구 조건·자원 조회의 구역·속성·이유, 값에 요구 조건 (CV-17·19·20)
     "intake-p10": "dea0de657f87150484ea045e2abfd6329a46e4f0387c85d99e03b44549be7099",  # 수량 풀 종류·작업 유형 기본 수요, 값에 수요 (CV-19·23)
+    "intake-p11": "e0aa160c4321af804830aaf8cf1364cfbd0e4a38080095a3da5d8ea1e4c95b1a",  # 질문의 필드별 판단, 조회의 구역·작업 유형과 제외 사유, 라운드·검증 사실 (AG-22)
 }

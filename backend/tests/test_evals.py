@@ -7,7 +7,7 @@ import uuid
 import pytest
 from conftest import add_run
 from langchain_core.messages import AIMessage
-from scripted import Router, call, escalate, solve
+from scripted import Router, call, escalate, field_judgments, solve
 
 from app.store import db
 from evals import compare, judge
@@ -40,7 +40,9 @@ def _scn(pack, name, hidden=False):
 
 
 def _ask(*fields):
-    return call("ASK_CLARIFICATION", field_ids=list(fields), question="빠진 값을 알려 주세요.")
+    return call(
+        "ASK_CLARIFICATION", fields=field_judgments(*fields), question="빠진 값을 알려 주세요."
+    )
 
 
 def _report(text="정리해 보고한다"):
@@ -114,8 +116,9 @@ def test_s1_passes_with_scripted_model(pack):
     assert r["metrics"]["questions_by_actor"] == {"planner_a": 3}
     replies = [a for a in r["human_actions"] if a["action"] == "REPLY"]
     assert [a["comment"] for a in replies[:2]] == [
-        "블록이라 큰 크레인이어야 돼요 10시 반엔 들어가야죠",
-        "골리앗(SITE-GC-01)이요 13일 화요일이요. 10시 반이 좋은데 11시까진 괜찮고, 12시 전엔 끝나야 해요",
+        # 물은 필드는 서버가 판단에서 도출한 순서다(시간창, 자원)
+        "10시 반엔 들어가야죠 블록이라 큰 크레인이어야 돼요",
+        "13일 화요일이요. 10시 반이 좋은데 11시까진 괜찮고, 12시 전엔 끝나야 해요 골리앗(SITE-GC-01)이요",
     ]
     assert (replies[2]["kind"], replies[2]["decision"]) == ("VALUES_CHECK", "ACCEPT")
     assert r["human_actions"][-1]["action"] == "APPROVE"

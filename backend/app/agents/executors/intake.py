@@ -28,6 +28,7 @@ from app.store.repos.runs import charge
 from app.store.repos.site import get_site, list_actors
 
 FIELD_NAMES = {
+    "work_type": "작업 유형",
     "zone_id": "구역",
     "duration": "작업 시간",
     "window": "시작 범위·종료 한도",
@@ -56,7 +57,12 @@ class IntakeExecutor:
             assert obs is not None
             if isinstance(action, spec.LookupResource):
                 result = self.observer.lookup_resources(
-                    tx, self.pack, obs.run.acting_unit_id, action.resource_type
+                    tx,
+                    self.pack,
+                    obs.run.acting_unit_id,
+                    action.resource_type,
+                    action.zone_id,
+                    action.work_type,
                 )
                 return self._done(
                     tx, run_id, step_no, meta, parsed, GatewayResult("CONTINUE"), result
@@ -151,11 +157,24 @@ class IntakeExecutor:
         obs: Observation,
         action: spec.AskClarification,
     ) -> GatewayResult:
-        """확인 질문(제안 없는 QUESTION) → 요청자. 답은 자유 텍스트(ANSWER)로 온다."""
+        """확인 질문(제안 없는 QUESTION) → 요청자. 답은 자유 텍스트(ANSWER)로 온다.
+
+        물을 필드는 필드별 판단에서 도출한다(모호·빠짐 전부). 물을 것이 없으면 자기 인자끼리 모순이라
+        거절한다. 앞 질문에서 받음으로 적은 필드를 모호·빠짐으로 바꾼 것(상태 후퇴)은 막지 않고 기록한다 (AG-22).
+        """
+        judgments = action.fields.model_dump()
+        field_ids = spec.open_fields(judgments)
+        if not field_ids:
+            outcome = GatewayResult("REJECTED", "NOTHING_TO_ASK")
+            detail = {"fields": judgments, "field_ids": []}
+            return self._done(tx, run_id, step_no, meta, parsed, outcome, detail, verdict=REJECTED)
+        asked = obs.data["questions"]
+        before = (asked[-1].get("fields") if asked else None) or {}
+        regressed = [f for f in field_ids if (before.get(f) or {}).get("status") == "RECEIVED"]
         site = get_site(tx, self.pack.site_id)
         assert site is not None
         request = obs.data["request"]
-        fields = ", ".join(FIELD_NAMES[f] for f in dict.fromkeys(action.field_ids))
+        fields = ", ".join(FIELD_NAMES[f] for f in field_ids)
         body = f"작업 요청 {request['task_id']} 확인 질문: {fields}을(를) 알려 주세요. 답은 문장으로 적습니다."
         message_id = new_id("msg")
         insert_message(
@@ -173,7 +192,13 @@ class IntakeExecutor:
         )
         charge(tx, run_id, human_rounds=1)
         outcome = self.wait_or_continue(tx, run_id, step_no, "MESSAGE", message_id)
-        result = {"message_id": message_id, "field_ids": list(action.field_ids), "body": body}
+        result = {
+            "message_id": message_id,
+            "field_ids": field_ids,
+            "fields": judgments,
+            "regressed_field_ids": regressed,
+            "body": body,
+        }
         return self._done(
             tx, run_id, step_no, meta, parsed, outcome, result, {"message_id": message_id}
         )

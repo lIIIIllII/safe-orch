@@ -34,35 +34,57 @@ def _spans(pack: LoadedPack, intervals: Any) -> list[list[str]]:
 
 
 def lookup_resources(
-    conn: sqlite3.Connection, pack: LoadedPack, unit_id: str, resource_type: str | None
+    conn: sqlite3.Connection,
+    pack: LoadedPack,
+    unit_id: str,
+    resource_type: str | None,
+    zone_id: str | None = None,
+    work_type: str | None = None,
 ) -> dict[str, Any]:
-    """LOOKUP_RESOURCE 결과: 유형별 자원, 사용 가능 구역·속성 값, 요청자 Unit이 쓸 수 없는 이유, 가용 구간.
+    """LOOKUP_RESOURCE 결과: 요청자 Unit이 쓸 수 있는 자원(assignable)과 제외 자원·사유(excluded).
 
-    쓸 수 없는 이유는 적격성 함수 결과다 (CV-20). 조회에는 작업 값이 없으므로 Unit·가용 구간까지만 나온다.
-    구역·요구 조건은 값 확인 요청 때 같은 함수가 판정하고, 여기서는 판단 근거(구역·속성 값)를 준다.
+    판정은 적격성 함수다 (CV-20). 구역을 주면 구역 사유가, 작업 유형을 주면 그 유형의 기본 요구 조건
+    사유가 나온다(기본 요구 조건은 서버가 붙인다). 모양은 Replanning 자원 조회와 같다.
+    유형 인자는 좁히기용이다. 그 유형에 쓸 수 있는 자원이 없으면 다른 유형에서 쓸 수 있는 자원 수를
+    사실로 함께 돌려준다(assignable_in_other_types).
     """
-    resources = [
-        {
+    requirements = pack.default_requirements(work_type) if work_type else ()
+    assignable, excluded, elsewhere = [], [], 0
+    for r in sorted(list_resources(conn, pack.site_id), key=lambda r: r.resource_id):
+        # 유형은 가리지 않는다: 자원마다 제 유형으로 본다
+        need = ResourceNeed(
+            required_resource_type=r.resource_type, zone_id=zone_id, requirements=requirements
+        )
+        reasons = exclusion_reasons(need, r, unit_id)
+        if resource_type is not None and r.resource_type != resource_type:
+            elsewhere += not reasons
+            continue
+        entry = {
             "resource_id": r.resource_id,
             "display_name": r.display_name,
             "resource_type": r.resource_type,
             "owner_unit_id": r.owner_unit_id,
-            "usable_by_requester": unit_id in r.allowed_unit_ids,
-            "unusable_reasons": [
-                e.model_dump(exclude_none=True)
-                for e in exclusion_reasons(
-                    ResourceNeed(required_resource_type=r.resource_type), r, unit_id
-                )
-            ],
             "allowed_zone_ids": list(r.allowed_zone_ids),
             "attributes": r.model_dump(mode="json")["attributes"],
             "available_intervals": [list(iv) for iv in r.available_intervals],
             "available_local": _spans(pack, r.available_intervals),
         }
-        for r in sorted(list_resources(conn, pack.site_id), key=lambda r: r.resource_id)
-        if resource_type is None or r.resource_type == resource_type
-    ]
-    return {"filters": {"resource_type": resource_type}, "resources": resources}
+        if reasons:
+            excluded.append(
+                {**entry, "reasons": [e.model_dump(exclude_none=True) for e in reasons]}
+            )
+        else:
+            assignable.append(entry)
+    out: dict[str, Any] = {
+        "filters": {"resource_type": resource_type, "zone_id": zone_id, "work_type": work_type},
+        # 판정에 쓴 요구 조건(작업 유형 기본값)
+        "requirements": [q.model_dump() for q in requirements],
+        "assignable": assignable,
+        "excluded": excluded,
+    }
+    if resource_type is not None and not assignable:
+        out["assignable_in_other_types"] = elsewhere
+    return out
 
 
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:
@@ -89,7 +111,11 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             questions.append(
                 {
                     "message_id": m["message_id"],
-                    "field_ids": ((step.get("action") or {}).get("args") or {}).get("field_ids"),
+                    # 서버가 필드별 판단에서 도출한 물은 필드(모호·빠짐 전부)
+                    "field_ids": (result := step.get("tool_result") or {}).get("field_ids"),
+                    # 그때의 필드별 판단(상태·값)과, 앞 질문에서 받음으로 적었다가 바뀐 필드
+                    "fields": result.get("fields"),
+                    "regressed_field_ids": result.get("regressed_field_ids"),
                     # 이 Run이 물은 문장(모델 작성, 인용). 같은 질문 반복을 알아볼 수 있게
                     "question": m["agent_text"],
                     "status": m["status"],
@@ -104,6 +130,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 {
                     "message_id": m["message_id"],
                     "values": (values := (step.get("tool_result") or {}).get("values")),
+                    # 값 확인은 서버 검증(폼과 같은 검사)을 통과해야 나간다
+                    "server_validated": True,
                     # 같은 값의 현장 날짜·시각 (도구의 시각 인자와 같은 형식)
                     "values_local": None
                     if not values
@@ -122,6 +150,9 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "reason_code": s["guard"]["reason_code"],
             "detail": s["tool_result"],
         }
+    remaining = budget_remaining(run, spec.SPEC)
+    rounds = int(remaining.get("human_rounds", 0))
+    confirmed = bool(confirmations) and confirmations[-1]["decision"] == "ACCEPT"
     data = {
         "run": {"run_id": run.run_id, "agent_type": run.agent_type, "goal": spec.GOAL},
         "versions": {
@@ -177,7 +208,13 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "work_hours": _spans(pack, pack.work_intervals),
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),
-        "budget_remaining": budget_remaining(run, spec.SPEC),
+        "budget_remaining": remaining,
+        # 사람 확인 라운드의 사실(서버 계산). 완료에는 요청자가 확인한 값 확인 1라운드가 필요하다
+        "human_rounds": {
+            "remaining": rounds,
+            "needed_for_completion": 0 if confirmed else 1,
+            "questions_left": max(0, rounds - 1),
+        },
     }
     data["open_skills"] = spec.open_skills(data)
     return Observation(

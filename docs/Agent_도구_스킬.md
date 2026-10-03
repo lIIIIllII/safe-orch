@@ -50,7 +50,7 @@
 | 도구 | 하는 일 |
 |---|---|
 | `LOOKUP_TASKS(filter)` | 작업 찾기(유형·구역·자원·시간·문구) |
-| `LOOKUP_RESOURCES(task \| type)` | 쓸 수 있는 자원과 제외된 자원(이유 포함) |
+| `LOOKUP_RESOURCES(task \| type, zone, work_type)` | 쓸 수 있는 자원과 제외된 자원(이유 포함). Intake는 구역·작업 유형을 주면 유형을 가리지 않고 판정 결과를 받는다(작업 유형 기본 요구 조건은 서버가 붙인다). 유형으로 좁혔는데 없으면 다른 유형에서 쓸 수 있는 자원 수도 받는다 |
 | `LOOKUP_ZONES(ref)` | 구역과 구역 관계 |
 | `GET_GROUPS(batch)` | 서버가 계산한 엮임 그룹 |
 | `GET_STATE(scope)` | 상태 요약: 충돌·후보·검증·Hold·Run |
@@ -75,7 +75,7 @@
 **사람** (수신자는 Agent별로 서버가 고정)
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `ASK_REQUESTER(questions)` | 요청자에게 빠진 값을 묶어서 묻는다 | C |
+| `ASK_REQUESTER(fields, question)` | 요청자에게 빠진 값을 묶어서 묻는다. 필드별 판단(상태: 받음·모호·빠짐, 현재 값)이 필수이고, 물을 필드는 서버가 그 판단에서 도출한다(모호·빠짐 전부). 모호·빠짐이 없으면 거절한다 | C |
 | `REQUEST_CONFIRMATION(values)` | 요청자에게 뽑은 값 확인을 받는다 | C |
 | `ASK_REPORTER(question)` | 신고자에게 되묻는다 | C |
 | `ASK_OWNER(owner, items)` | 담당자에게 변경 확인·조건 확인을 묶어서 묻는다 | C |

@@ -9,7 +9,7 @@ import json
 import uuid
 
 from fastapi.testclient import TestClient
-from scripted import Router, call, solve
+from scripted import Router, call, field_judgments, solve
 
 from app.agents.prompts import intake as prompt
 from app.agents.specs import intake as spec
@@ -119,7 +119,7 @@ def _ask():
     return call(
         "ASK_CLARIFICATION",
         "이유: 구역·자원이 없다/다음: 답을 본다",
-        field_ids=["zone_id", "resource"],
+        fields=field_judgments("zone_id", "resource"),
         question="어느 구역에서, 어떤 크레인으로 하나요?",
     )
 
@@ -151,7 +151,11 @@ def test_clear_request_matches_form_path(seeded):
     assert "종료 한도 10/12(월) 10:30(90분)" in confirm["body"]
     obs = _steps(run.run_id)[1]["observation"]
     assert obs["request"]["quoted_text"] == pack.demo_intakes[0].text
-    assert obs["resource_lookups"][0]["filters"] == {"resource_type": "CRANE"}
+    assert obs["resource_lookups"][0]["filters"] == {
+        "resource_type": "CRANE",
+        "zone_id": None,
+        "work_type": None,
+    }
 
     ctx = _site(pack).context_version
     assert _reply(pack, confirm["message_id"]).status == "APPLIED"
@@ -363,16 +367,12 @@ def test_same_resource_lookup_keeps_last_result_only(seeded):
     other = call("LOOKUP_RESOURCE", "전체", resource_type=None)
     run = _to_request(pack, [_lookup(), _lookup(), other, _lookup(), _request()])
     obs = _steps(run.run_id)[4]["observation"]
-    assert [lk["filters"] for lk in obs["resource_lookups"]] == [
-        {"resource_type": None},
-        {"resource_type": "CRANE"},
+    assert [lk["filters"]["resource_type"] for lk in obs["resource_lookups"]] == [None, "CRANE"]
+    crane = obs["resource_lookups"][1]
+    assert [r["resource_id"] for r in crane["assignable"]] == ["A-CR-01", "SITE-CR-01"]
+    assert [(r["resource_id"], r["reasons"]) for r in crane["excluded"]] == [
+        ("B-CR-01", [{"reason": "NOT_ALLOWED"}])
     ]
-    crane = obs["resource_lookups"][1]["resources"]
-    assert {r["resource_id"]: r["usable_by_requester"] for r in crane} == {
-        "A-CR-01": True,
-        "B-CR-01": False,
-        "SITE-CR-01": True,
-    }
 
 
 def test_intake_api(seeded):
@@ -566,19 +566,18 @@ def test_observation_has_attribute_declarations_and_resource_facts(seeded):
     defaults = {w["work_type"]: w["resource_requirements"] for w in obs["work_types"]}
     assert defaults["LIFTING"] == [{"attribute": "max_load", "op": "GTE", "value": 20}]
     assert defaults["HOT_WORK"] == []
-    found = {r["resource_id"]: r for r in obs["resource_lookups"][0]["resources"]}
+    lookup = obs["resource_lookups"][0]
+    found = {r["resource_id"]: r for r in lookup["assignable"]}
     assert {
-        k: found["SITE-CR-01"][k]
-        for k in ("display_name", "allowed_zone_ids", "attributes", "unusable_reasons")
+        k: found["SITE-CR-01"][k] for k in ("display_name", "allowed_zone_ids", "attributes")
     } == {
         "display_name": "현장 공용 크레인 1호",
         "allowed_zone_ids": ["B", "C", "D"],
         "attributes": {"max_load": 50, "usage": ["일반"]},
-        "unusable_reasons": [],
     }
     # 쓸 수 없는 이유는 적격성 함수 결과다(요청자 Unit UA는 B-CR-01을 쓸 수 없다)
-    assert found["B-CR-01"]["unusable_reasons"] == [{"reason": "NOT_ALLOWED"}]
-    assert found["B-CR-01"]["usable_by_requester"] is False
+    [b_crane] = lookup["excluded"]
+    assert (b_crane["resource_id"], b_crane["reasons"]) == ("B-CR-01", [{"reason": "NOT_ALLOWED"}])
     # 요구 조건의 속성 인자에는 선언된 속성 이름만 enum으로 건다
     tools = {
         t["function"]["name"]: t["function"] for t in _steps(run.run_id)[1]["available_actions"]
@@ -690,3 +689,222 @@ def test_values_check_text_shows_effective_demand(seeded):
 
     low = {**VALUES_A, "pool_demands": [{"kind": "WORKER", "quantity": 2}]}
     assert "수요 작업 인원 4명, 신호수 1명." in values_check_text(seeded, "X", low)
+
+
+# ── 질문의 필드별 판단·필요 기준 자원 조회 (AG-22, CV-20) ────────
+
+
+def _ask_with(fields, question="알려 주세요."):
+    return call(
+        "ASK_CLARIFICATION", "이유: 빠진 값/다음: 답을 본다", fields=fields, question=question
+    )
+
+
+def test_ask_requires_field_judgments(seeded):
+    """판단 칸은 필수다: 없거나 필드가 빠지면 형식 오류다."""
+    pack = seeded
+    assert _intake(pack).status == "APPLIED"
+    partial = field_judgments("resource")
+    partial.pop("window")
+    bad = [
+        call("ASK_CLARIFICATION", "질문", question="어느 구역인가요?"),
+        _ask_with(partial),
+    ]
+    run_until_idle(pack, model_factory=Router(intake=bad).factory())
+    [run] = _runs("INTAKE")
+    assert [s["guard"]["reason_code"] for s in _steps(run.run_id)] == ["MALFORMED", "MALFORMED"]
+    assert _messages("QUESTION") == []
+
+
+def test_asked_fields_are_derived_from_judgments(seeded):
+    """물을 필드는 서버가 판단에서 도출한다: 모호·빠짐 전부, 필드 순서대로."""
+    pack = seeded
+    assert _intake(pack).status == "APPLIED"
+    fields = field_judgments(
+        "resource", ambiguous=("window",), zone_id="B", duration=30, work_type="LIFTING"
+    )
+    run_until_idle(pack, model_factory=Router(intake=[_ask_with(fields)]).factory())
+    [run] = _runs("INTAKE")
+    [step] = _steps(run.run_id)
+    assert step["tool_result"]["field_ids"] == ["window", "resource"]
+    assert step["tool_result"]["fields"] == fields
+    assert step["tool_result"]["regressed_field_ids"] == []
+    [question] = _messages("QUESTION")
+    assert "시작 범위·종료 한도, 자원을(를) 알려 주세요" in question["body"]
+    _reply(pack, question["message_id"], "ANSWER", "A-CR-01이요")
+    run_until_idle(pack, model_factory=Router(intake=[_request()]).factory())
+    obs = _steps(run.run_id)[1]["observation"]
+    [q] = obs["questions"]
+    assert (q["field_ids"], q["fields"], q["regressed_field_ids"]) == (
+        ["window", "resource"],
+        fields,
+        [],
+    )
+    # 판단의 값에도 실행 시 Pack 코드 enum이 걸린다. 정적 스키마에는 Pack 값이 없다
+    tools = {
+        t["function"]["name"]: t["function"] for t in _steps(run.run_id)[0]["available_actions"]
+    }
+    defs = tools["ASK_CLARIFICATION"]["parameters"]["$defs"]
+    zone = next(b for b in defs["ZoneJudgment"]["properties"]["value"]["anyOf"] if "enum" in b)
+    assert zone["enum"] == [z.zone_id for z in pack.zones]
+    assert tools["ASK_CLARIFICATION"]["parameters"]["required"].count("fields") == 1
+    assert "field_ids" not in tools["ASK_CLARIFICATION"]["parameters"]["properties"]
+
+
+def test_ask_with_nothing_open_is_rejected_without_using_a_round(seeded):
+    """모호·빠짐이 하나도 없는데 묻는 것은 자기 인자끼리 모순이다. 가드 거절이고 형식 오류로 세지 않는다."""
+    pack = seeded
+    assert _intake(pack).status == "APPLIED"
+    nothing = _ask_with(field_judgments())
+    replies = [nothing, nothing, nothing, _request()]
+    run_until_idle(pack, model_factory=Router(intake=replies).factory())
+    [run] = _runs("INTAKE")
+    steps = _steps(run.run_id)
+    assert [(s["result_kind"], s["guard"]["reason_code"]) for s in steps[:3]] == [
+        ("REJECTED", "NOTHING_TO_ASK")
+    ] * 3
+    assert _messages("QUESTION") == []
+    # 연속 거절로 Run이 끝나지 않고, 사람 라운드도 쓰지 않았다
+    assert (run.status, run.human_rounds_used) == ("WAITING_HUMAN", 1)
+    assert len(_messages("CONFIRMATION")) == 1
+
+
+def test_status_regression_is_recorded_not_blocked(seeded):
+    """앞 질문에서 받음으로 적은 필드를 모호·빠짐으로 바꿔도 막지 않는다. 결과와 관찰에 사실로 남긴다."""
+    pack = seeded
+    assert _intake(pack, pack.demo_intakes[1].text).status == "APPLIED"
+    first = field_judgments("resource", zone_id="B")  # 구역은 받음
+    run_until_idle(pack, model_factory=Router(intake=[_ask_with(first)]).factory())
+    [q1] = _messages("QUESTION")
+    _reply(pack, q1["message_id"], "ANSWER", "A-CR-01 크레인이요")
+    second = field_judgments("zone_id", ambiguous=("duration",))  # 구역·작업 시간을 다시 연다
+    run_until_idle(pack, model_factory=Router(intake=[_ask_with(second)]).factory())
+    [run] = _runs("INTAKE")
+    s2 = _steps(run.run_id)[1]
+    assert (s2["result_kind"], s2["guard"]["verdict"]) == ("WAIT", "ACCEPTED")
+    assert s2["tool_result"]["field_ids"] == ["zone_id", "duration"]
+    assert s2["tool_result"]["regressed_field_ids"] == ["zone_id", "duration"]
+    assert len(_messages("QUESTION")) == 2
+    _reply(pack, _messages("QUESTION")[1]["message_id"], "ANSWER", "B구역이요")
+    run_until_idle(pack, model_factory=Router(intake=[_request()]).factory())
+    obs = _steps(run.run_id)[2]["observation"]
+    assert [q["regressed_field_ids"] for q in obs["questions"]] == [[], ["zone_id", "duration"]]
+
+
+def test_observation_states_round_and_validation_facts(seeded):
+    """관찰 사실: 남은 라운드·완료에 필요한 라운드·남은 질문 횟수, 값 확인의 서버 검증 통과 표시."""
+    pack = seeded
+    assert _intake(pack, pack.demo_intakes[1].text).status == "APPLIED"
+    run_until_idle(pack, model_factory=Router(intake=[_ask()]).factory())
+    [question] = _messages("QUESTION")
+    _reply(pack, question["message_id"], "ANSWER", pack.demo_intakes[1].answer)
+    run_until_idle(pack, model_factory=Router(intake=[_request()]).factory())
+    [confirm] = _messages("CONFIRMATION")
+    _reply(pack, confirm["message_id"])
+    run_until_idle(pack, model_factory=Router(intake=[_complete()]).factory())
+    [run] = _runs("INTAKE")
+    obs = [s["observation"] for s in _steps(run.run_id)]
+    assert [o["human_rounds"] for o in obs] == [
+        {"remaining": 3, "needed_for_completion": 1, "questions_left": 2},
+        {"remaining": 2, "needed_for_completion": 1, "questions_left": 1},
+        {"remaining": 1, "needed_for_completion": 0, "questions_left": 0},  # 확인을 받았다
+    ]
+    assert obs[1]["confirmations"] == []
+    [seen] = obs[2]["confirmations"]
+    assert seen["server_validated"] is True and seen["decision"] == "ACCEPT"
+    assert "서버가 다시 검증한다" in spec.CompleteTaskspec.__doc__
+    assert run.status == "SUCCEEDED"
+
+
+def _lookup_direct(pack, resource_type=None, zone_id=None, work_type=None):
+    from app.agents.observers.intake import lookup_resources
+
+    with db.read() as conn:
+        return lookup_resources(conn, pack, "UA", resource_type, zone_id, work_type)
+
+
+def _ids(entries):
+    return [r["resource_id"] for r in entries]
+
+
+def test_lookup_by_zone_and_work_type_uses_eligibility(seeded):
+    """구역·작업 유형을 주면 유형을 가리지 않고 쓸 수 있는 자원과 제외 사유를 돌려준다 (CV-20)."""
+    pack = seeded
+    found = _lookup_direct(pack, zone_id="F", work_type="LIFTING")
+    assert found["filters"] == {"resource_type": None, "zone_id": "F", "work_type": "LIFTING"}
+    assert found["requirements"] == [{"attribute": "max_load", "op": "GTE", "value": 20}]
+    assert _ids(found["assignable"]) == ["SITE-GC-01"]  # F 안벽에서 UA가 쓸 수 있는 것은 골리앗뿐
+    assert {r["resource_id"]: r["reasons"] for r in found["excluded"]} == {
+        "A-CR-01": [{"reason": "ZONE_NOT_ALLOWED"}],
+        "B-CR-01": [{"reason": "NOT_ALLOWED"}, {"reason": "ZONE_NOT_ALLOWED"}],
+        "SITE-CR-01": [{"reason": "ZONE_NOT_ALLOWED"}],
+    }
+    assert "assignable_in_other_types" not in found
+    # 구역만: B구역은 크레인 둘
+    assert _ids(_lookup_direct(pack, zone_id="B")["assignable"]) == ["A-CR-01", "SITE-CR-01"]
+    # 조건 없는 조회는 권한·가용 구간까지만 본다
+    plain = _lookup_direct(pack)
+    assert _ids(plain["assignable"]) == ["A-CR-01", "SITE-CR-01", "SITE-GC-01"]
+    assert plain["requirements"] == []
+
+
+def test_lookup_requirement_reason_needs_work_type(seeded):
+    """작업 유형 기본 요구 조건은 서버가 붙인다: 작업 유형을 줘야 요구 조건 사유가 나온다."""
+    pack = seeded
+    with db.write() as tx:
+        tx.execute(
+            "UPDATE resource SET attributes = ? WHERE resource_id = 'A-CR-01'",
+            (json.dumps({"max_load": 10, "usage": ["일반"]}),),
+        )
+    assert "A-CR-01" in _ids(_lookup_direct(pack, zone_id="B")["assignable"])
+    lifting = _lookup_direct(pack, zone_id="B", work_type="LIFTING")
+    assert _ids(lifting["assignable"]) == ["SITE-CR-01"]
+    assert {"reason": "REQUIREMENT_NOT_MET", "attribute": "max_load"} in next(
+        r["reasons"] for r in lifting["excluded"] if r["resource_id"] == "A-CR-01"
+    )
+    # 요구 조건이 없는 작업 유형이면 사유가 없다
+    assert "A-CR-01" in _ids(_lookup_direct(pack, zone_id="B", work_type="HOT_WORK")["assignable"])
+
+
+def test_lookup_narrowed_by_type_reports_other_types(seeded):
+    """유형으로 좁혔는데 쓸 수 있는 자원이 없으면 다른 유형에서 쓸 수 있는 자원 수를 함께 준다."""
+    pack = seeded
+    crane_f = _lookup_direct(pack, "CRANE", "F", "LIFTING")
+    assert crane_f["assignable"] == [] and _ids(crane_f["excluded"]) == [
+        "A-CR-01",
+        "B-CR-01",
+        "SITE-CR-01",
+    ]
+    assert crane_f["assignable_in_other_types"] == 1  # 골리앗
+    crane_b = _lookup_direct(pack, "CRANE", "B", "LIFTING")
+    assert _ids(crane_b["assignable"]) == ["A-CR-01", "SITE-CR-01"]
+    assert "assignable_in_other_types" not in crane_b  # 쓸 수 있는 자원이 있으면 주지 않는다
+    assert _lookup_direct(pack, "GANTRY", "B", "LIFTING")["assignable_in_other_types"] == 2
+
+
+def test_lookup_tool_takes_zone_and_work_type(seeded):
+    """도구 인자로 조회하고, 조건이 다른 조회는 따로 남는다."""
+    pack = seeded
+    by_need = call(
+        "LOOKUP_RESOURCE",
+        "이유: 구역·유형으로 조회/다음: 값 확인",
+        zone_id="B",
+        work_type="LIFTING",
+    )
+    run = _to_request(pack, [_lookup(), by_need, _request()])
+    steps = _steps(run.run_id)
+    assert steps[1]["tool_result"]["filters"] == {
+        "resource_type": None,
+        "zone_id": "B",
+        "work_type": "LIFTING",
+    }
+    obs = steps[2]["observation"]
+    assert [lk["filters"]["zone_id"] for lk in obs["resource_lookups"]] == [None, "B"]
+    tools = {t["function"]["name"]: t["function"] for t in steps[0]["available_actions"]}
+    props = tools["LOOKUP_RESOURCE"]["parameters"]["properties"]
+    assert next(b for b in props["zone_id"]["anyOf"] if "enum" in b)["enum"] == [
+        z.zone_id for z in pack.zones
+    ]
+    assert next(b for b in props["work_type"]["anyOf"] if "enum" in b)["enum"] == sorted(
+        pack.work_types
+    )

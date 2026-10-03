@@ -354,7 +354,7 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
     assert runtime.exec_contract_version("REPLANNING") == "replanning-c2"
     assert runtime.exec_contract_version("COORDINATION") == "coordination-c3"
     assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c4"
-    assert runtime.exec_contract_version("INTAKE") == "intake-c6"
+    assert runtime.exec_contract_version("INTAKE") == "intake-c7"
     assert runtime.exec_contract_version("ASSISTANT") == "AGENT_TYPE_NOT_REGISTERED"
 
 

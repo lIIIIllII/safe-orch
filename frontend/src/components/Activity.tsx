@@ -9,6 +9,8 @@ import {
   AGENT_TYPE,
   AXIS,
   EXCLUDE_REASON,
+  FIELD_STATUS,
+  INTAKE_FIELD,
   RESULT_KIND,
   RUN_STATUS,
   SCOPE_LEVEL,
@@ -195,12 +197,20 @@ function ListResult({ tr }: { tr: Record<string, unknown> }) {
   return (
     <table className="tbl small">
       <tbody>
-        <tr>
-          <th>조회 작업</th>
-          <td>
-            {String(tr.task_id)} · 필요 유형 {String(tr.required_type ?? '—')} · 현재 {String(tr.current ?? '없음')}
-          </td>
-        </tr>
+        {'task_id' in tr && (
+          <tr>
+            <th>조회 작업</th>
+            <td>
+              {String(tr.task_id)} · 필요 유형 {String(tr.required_type ?? '—')} · 현재 {String(tr.current ?? '없음')}
+            </td>
+          </tr>
+        )}
+        {typeof tr.assignable_in_other_types === 'number' && (
+          <tr>
+            <th>다른 유형</th>
+            <td>다른 유형에서 쓸 수 있는 자원 {tr.assignable_in_other_types}개</td>
+          </tr>
+        )}
         <tr>
           <th>배정 가능</th>
           <td>
@@ -233,6 +243,34 @@ function ListResult({ tr }: { tr: Record<string, unknown> }) {
                 ))}
           </td>
         </tr>
+      </tbody>
+    </table>
+  )
+}
+
+type Judged = { status: string; value?: unknown }
+
+/** 작업 접수 질문의 필드별 판단. 물은 필드는 서버가 판단에서 도출한 것이다(모호·빠짐 전부). */
+function FieldsResult({ tr }: { tr: Record<string, unknown> }) {
+  const fields = (tr.fields ?? {}) as Record<string, Judged>
+  const asked = (tr.field_ids as string[]) ?? []
+  const regressed = (tr.regressed_field_ids as string[]) ?? []
+  return (
+    <table className="tbl small">
+      <tbody>
+        {Object.entries(fields).map(([id, j]) => (
+          <tr key={id}>
+            <th>{INTAKE_FIELD[id] ?? id}</th>
+            <td>
+              <span className={j.status === 'RECEIVED' ? 'tag' : 'tag tag-warn'}>
+                {FIELD_STATUS[j.status] ?? j.status}
+              </span>{' '}
+              {j.value === null || j.value === undefined ? '—' : <code>{JSON.stringify(j.value)}</code>}
+              {asked.includes(id) && ' · 물음'}
+              {regressed.includes(id) && ' · 앞 질문에서는 받음'}
+            </td>
+          </tr>
+        ))}
       </tbody>
     </table>
   )
@@ -295,6 +333,11 @@ function StepCard({ s }: { s: AgentStep }) {
           'to_actor_id',
           'body',
           'try_resources',
+          // 작업 접수 질문의 필드별 판단은 전용 블록으로 보여 준다
+          'fields',
+          'field_ids',
+          'regressed_field_ids',
+          'assignable_in_other_types',
         ].includes(k),
     ),
   )
@@ -345,7 +388,10 @@ function StepCard({ s }: { s: AgentStep }) {
               {tr.delay_optimality_unconfirmed === true && <span className="tag tag-warn">지연 최적성 미확정</span>}
             </p>
           )}
-          {name === 'LIST_ASSIGNABLE_RESOURCES' && 'assignable' in tr && <ListResult tr={tr} />}
+          {(name === 'LIST_ASSIGNABLE_RESOURCES' || name === 'LOOKUP_RESOURCE') && 'assignable' in tr && (
+            <ListResult tr={tr} />
+          )}
+          {name === 'ASK_CLARIFICATION' && isRecord(tr.fields) && <FieldsResult tr={tr} />}
           {name === 'ASK_TASK_OWNER' && 'message_id' in tr && <AskResult tr={tr} args={args} />}
           {name === 'TRY_ALTERNATIVE_RESOURCE' && isRecord(tr.try_resources) && (
             <p>

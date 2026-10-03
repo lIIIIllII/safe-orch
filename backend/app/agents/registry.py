@@ -50,6 +50,6 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-c6",  # 기록만. 값에 요구 조건·수요(pool_demands)
+        exec_contract_version="intake-c7",  # 기록만. 질문의 필드별 판단, 조회의 구역·작업 유형 (AG-22)
     ),
 }

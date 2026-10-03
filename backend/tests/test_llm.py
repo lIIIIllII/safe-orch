@@ -11,7 +11,7 @@ import yaml
 from conftest import add_run
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
-from scripted import Router, ScriptedChatModel, call, escalate, solve
+from scripted import Router, ScriptedChatModel, call, escalate, field_judgments, solve
 
 from app.agents import llm, runtime
 from app.agents.observers.replanning import build_observation
@@ -685,7 +685,10 @@ INTAKE_VALUES = {
 def test_live_run_path_intake_with_scripted_model(monkeypatch, ambiguous):
     """--path intake [--ambiguous]: 질문(모호) → 값 확인 → 완료 → Replanning Alpha."""
     ask = call(
-        "ASK_CLARIFICATION", "질문", field_ids=["zone_id", "resource"], question="구역·자원?"
+        "ASK_CLARIFICATION",
+        "질문",
+        fields=field_judgments("zone_id", "resource"),
+        question="구역·자원?",
     )
     intake = [
         *([ask] if ambiguous else []),

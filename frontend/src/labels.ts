@@ -39,6 +39,7 @@ export const REASON: Record<string, string> = {
   INVALID_DECISION: '이 메시지에 쓸 수 없는 답(질문은 답변, 확인은 확인·거절)',
   TASK_ID_IN_INTAKE: '같은 작업 ID로 진행 중인 자연어 요청 있음',
   TASKSPEC_INVALID: '작업 요청 값이 검증을 통과하지 못함',
+  NOTHING_TO_ASK: '모호·빠짐으로 적은 필드가 없어 물을 것이 없음',
   // 폼
   TASK_ID_EXISTS: '같은 작업 ID 있음',
   FIELD_MISSING: '필수 확인 항목 누락',
@@ -367,6 +368,21 @@ export const DECISION_BY_TYPE: Record<string, Record<string, string>> = {
   CONFIRMATION: { ACCEPT: '확정', DECLINE: '폐기' },
   FACT_UPDATE: { ACCEPT: '확정', DECLINE: '폐기' },
   TASKSPEC: { ACCEPT: '확인', DECLINE: '거절' },
+}
+
+/** 작업 접수 질문의 필드별 판단: 필드 이름과 상태 */
+export const INTAKE_FIELD: Record<string, string> = {
+  work_type: '작업 유형',
+  zone_id: '구역',
+  duration: '작업 시간',
+  window: '시작 범위·종료 한도',
+  resource: '자원',
+}
+
+export const FIELD_STATUS: Record<string, string> = {
+  RECEIVED: '받음',
+  AMBIGUOUS: '모호',
+  MISSING: '빠짐',
 }
 
 /** 사실 수정 필드 */

@@ -2,6 +2,7 @@
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
 Action(최소 경로): LOOKUP_RESOURCE, ASK_CLARIFICATION, REQUEST_CONFIRMATION, COMPLETE_TASKSPEC, ESCALATE.
+질문에는 필드별 판단을 함께 내고, 물을 필드는 그 판단에서 서버가 도출한다 (AG-22).
 모델이 추출·조회한 값은 PROPOSED이고, 요청자가 확인한 값만 CONFIRMED가 된다. 위험 태그는 받지 않는다.
 """
 
@@ -24,7 +25,7 @@ MAX_HUMAN_ROUNDS = 3  # 확인 질문과 값 확인 요청을 모두 센다
 RECURSION_LIMIT = MAX_STEPS * 5 + 10
 SUMMARY_MAX = 200
 TEXT_MAX = 300
-FIELD_IDS = ("zone_id", "duration", "window", "resource")
+FIELD_IDS = ("work_type", "zone_id", "duration", "window", "resource")  # 필드별 판단의 필드
 TIME_FIELDS = ("earliest_start", "latest_start", "latest_end")  # 현장 날짜·시각 문자열 (AG-21)
 
 
@@ -95,20 +96,90 @@ class TaskValues(BaseModel):
 
 
 class LookupResource(Action):
-    """자원을 유형별로 찾고, 요청자 Unit이 쓸 수 있는지와 가용 구간을 돌려준다."""
+    """요청자 Unit이 쓸 수 있는 자원과 쓸 수 없는 자원·이유를 돌려준다. 구역과 작업 유형을 주면 그 구역에서 그 작업 유형의 기본 요구 조건까지 맞는 자원을 유형을 가리지 않고 가린다."""
 
     OPENS = "언제나 열려 있다"
 
-    resource_type: str | None = Field(default=None, description="자원 유형(없으면 전체)")
+    resource_type: str | None = Field(
+        default=None, description="자원 유형으로 좁힌다(없으면 모든 유형)"
+    )
+    zone_id: str | None = Field(default=None, description="작업 구역 ID(알면 넣는다)")
+    work_type: str | None = Field(default=None, description="작업 유형 코드(알면 넣는다)")
+
+
+FieldStatus = Literal["RECEIVED", "AMBIGUOUS", "MISSING"]
+STATUS_TEXT = "RECEIVED 받음(요청 문장이나 답에 있다), AMBIGUOUS 모호, MISSING 빠짐"
+
+
+class _Judgment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: FieldStatus = Field(description=STATUS_TEXT)
+
+
+class WorkTypeJudgment(_Judgment):
+    value: str | None = Field(default=None, description="지금 판단한 작업 유형 코드(없으면 비운다)")
+
+
+class ZoneJudgment(_Judgment):
+    value: str | None = Field(default=None, description="지금 판단한 구역 ID(없으면 비운다)")
+
+
+class DurationJudgment(_Judgment):
+    value: int | None = Field(default=None, gt=0, description="지금 판단한 작업 시간(분)")
+
+
+class WindowValue(BaseModel):
+    """시간창의 부분 값. 시각은 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    earliest_start: str | None = Field(default=None, description="가장 이른 시작")
+    latest_start: str | None = Field(default=None, description="가장 늦은 시작")
+    latest_end: str | None = Field(default=None, description="종료 한도")
+
+
+class WindowJudgment(_Judgment):
+    value: WindowValue | None = Field(default=None, description="지금 판단한 값(아는 것만)")
+
+
+class ResourceValue(BaseModel):
+    """자원의 부분 값."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    required_resource_type: str | None = Field(default=None, description="필요 자원 유형")
+    requested_resource_id: str | None = Field(default=None, description="요청 자원 ID")
+
+
+class ResourceJudgment(_Judgment):
+    value: ResourceValue | None = Field(default=None, description="지금 판단한 값(아는 것만)")
+
+
+class FieldJudgments(BaseModel):
+    """필드별 현재 판단: 상태와 지금 판단한 값."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    work_type: WorkTypeJudgment
+    zone_id: ZoneJudgment
+    duration: DurationJudgment
+    window: WindowJudgment
+    resource: ResourceJudgment
+
+
+def open_fields(judgments: dict[str, Any]) -> list[str]:
+    """판단에서 도출한 물을 필드: 모호·빠짐 전부 (AG-22)."""
+    return [f for f in FIELD_IDS if judgments[f]["status"] != "RECEIVED"]
 
 
 class AskClarification(Action):
-    """빠지거나 모호한 값을 요청자에게 묻는다. 답은 자유 텍스트로 온다."""
+    """빠지거나 모호한 값을 요청자에게 묻는다. 필드마다 현재 판단을 함께 내며, 서버가 모호·빠짐으로 적힌 필드 전부를 물을 필드로 삼는다. 답은 자유 텍스트로 온다."""
 
     OPENS = "사람 확인 라운드가 남았고 답을 기다리는 질문·확인 요청이 없을 때"
 
-    field_ids: list[Literal["zone_id", "duration", "window", "resource"]] = Field(
-        min_length=1, description="물을 critical field"
+    fields: FieldJudgments = Field(
+        description="필드 5개 각각의 현재 판단. 모호·빠짐인 필드가 하나는 있어야 한다"
     )
     question: str = Field(min_length=1, max_length=TEXT_MAX, description="요청자에게 보이는 질문")
 
@@ -125,7 +196,7 @@ class RequestConfirmation(Action):
 
 
 class CompleteTaskspec(Action):
-    """요청자가 확인한 값으로 작업 요청을 완료한다. 제출 값은 확인받은 값과 같아야 한다."""
+    """요청자가 확인한 값으로 작업 요청을 완료한다. 제출 값은 확인받은 값과 같아야 한다. 확인받은 값으로 완료할 때 서버가 다시 검증한다."""
 
     OPENS = "이 Run의 마지막 확인 요청에 요청자가 확인(ACCEPT)했고 답을 기다리는 요청이 없을 때"
 
@@ -210,10 +281,14 @@ def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
     codes = code_values(obs)
     values = {"values": codes}
     out: dict[str, dict[str, Any]] = {
-        "LOOKUP_RESOURCE": {"resource_type": codes["required_resource_type"]}
+        "LOOKUP_RESOURCE": {
+            "resource_type": codes["required_resource_type"],
+            "zone_id": codes["zone_id"],
+            "work_type": codes["work_type"],
+        }
     }
     if c["ASK"]:
-        out["ASK_CLARIFICATION"] = {}
+        out["ASK_CLARIFICATION"] = {"fields": codes}
     if c["REQUEST"]:
         out["REQUEST_CONFIRMATION"] = values
     if c["COMPLETE"]:
@@ -239,6 +314,14 @@ def tool_schemas(available: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         model = ACTIONS[name]
         params = model.model_json_schema()
         for arg, allowed in limits.items():
+            if arg == "fields":
+                # 필드별 판단의 값에도 값 인자와 같은 코드 enum을 건다
+                defs = params["$defs"]
+                _enum(defs["WorkTypeJudgment"]["properties"]["value"], allowed["work_type"])
+                _enum(defs["ZoneJudgment"]["properties"]["value"], allowed["zone_id"])
+                for key in ("required_resource_type", "requested_resource_id"):
+                    _enum(defs["ResourceValue"]["properties"][key], allowed[key])
+                continue
             if arg == "values":
                 props = params["$defs"]["TaskValues"]["properties"]
                 for field, field_allowed in allowed.items():
