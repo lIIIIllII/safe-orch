@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from conftest import add_task, make_task
 from langchain_core.messages import AIMessage
-from scripted import Router, blocked, call, done, solve
+from scripted import Router, ask_owner, blocked, call, done, solve, wait_answers
 
 from app.agents.observers.coordination import _items
 from app.agents.prompts import coordination as prompt
@@ -749,3 +749,61 @@ def test_ask_phase_sorts_by_owner_and_returns_answers(with_a):
     ended = _runs("COORDINATION")[0]
     assert (ended.status, ended.end_reason) == ("BLOCKED", "RETURN_BLOCKED")
     assert [m["status"] for m in _messages("QUESTION")] == ["CANCELLED", "ANSWERED", "ANSWERED"]
+
+
+def _start_ask(pack, needs):
+    """메인 없이 Coordination 사전 확인 Run을 시작시킨다(START_RUN 등록)."""
+    with db.write() as tx:
+        payload = {
+            "agent_type": "COORDINATION",
+            "phase": "ASK",
+            "need_ids": [n["need_id"] for n in needs],
+            "needs": needs,
+            "acting_unit_id": "SITE",
+            "context_version": get_site(tx, pack.site_id).context_version,
+        }
+        register_job(tx, pack.site_id, "START_RUN", f"START_RUN:{_key()}", payload)
+
+
+def test_ask_owner_refuses_declined_value_while_other_needs_remain(with_a):
+    """다른 확인이 남아 있어 사전 확인 스킬이 열려 있어도, 담당자가 거절한 값(같은 작업 revision)을 다시
+    물으면 VALUE_DECLINED로 거절된다. 같은 요청은 두 번 나가지 않는다 (AG-09)."""
+    pack = with_a
+    add_task(pack, make_task(pack, task_id="A2"))
+    # 앞 사전 확인에서 A 담당자가 SITE-CR-01을 거절했다
+    _start_ask(pack, [_need("n1:s:0", "A")])
+    run_until_idle(pack, model_factory=Router().factory())
+    [question] = _messages("QUESTION")
+    assert _reply(pack, "planner_a", question["message_id"], "DECLINE").status == "APPLIED"
+    run_until_idle(pack, model_factory=Router().factory())
+    assert _runs("COORDINATION")[0].status == "SUCCEEDED"
+
+    # 다음 사전 확인(다른 Run): 같은 값의 need와 아직 묻지 않은 need(A2)를 함께 받는다
+    _start_ask(pack, [_need("n2:s:0", "A"), _need("n2:s:1", "A2")])
+    router = Router(coordination=[ask_owner(0), ask_owner(1), wait_answers()])
+    run_until_idle(pack, model_factory=router.factory())
+    run = _runs("COORDINATION")[-1]
+    s_declined, s_ask, _ = _steps(run.run_id)
+    asks = {a["task_id"]: a for a in s_declined["observation"]["asks"]}
+    assert (asks["A"]["status"], asks["A"]["reason"], asks["A2"]["status"]) == (
+        "NOT_ASKABLE",
+        "VALUE_DECLINED",
+        "UNASKED",
+    )
+    assert "PRE_CONFIRM" in s_declined["observation"]["open_skills"]  # A2가 남아 스킬은 열려 있다
+    tool = next(
+        t["function"]
+        for t in s_declined["available_actions"]
+        if t["function"]["name"] == "ASK_OWNER"
+    )
+    assert tool["parameters"]["properties"]["need_id"]["enum"] == ["n2:s:1"]
+    assert s_declined["guard"] == {"verdict": "REJECTED", "reason_code": "VALUE_DECLINED"}
+    assert (s_ask["guard"]["verdict"], s_ask["action"]["args"]["need_id"]) == ("ACCEPTED", "n2:s:1")
+    # A에 나간 질문은 처음 하나뿐이다
+    with db.read() as conn:
+        sent = conn.execute(
+            "SELECT p.target_task_id FROM message m JOIN proposal p"
+            " ON p.proposal_id = m.proposal_id WHERE m.type = 'QUESTION' ORDER BY m.rowid"
+        ).fetchall()
+    assert [r[0] for r in sent] == ["A", "A2"]
+    assert run.status == "WAITING_HUMAN"
