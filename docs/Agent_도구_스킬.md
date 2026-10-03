@@ -23,14 +23,15 @@
 | Agent | Goal | 끝나는 방식 | Budget |
 |---|---|---|---|
 | Main | 맡은 사건을 끝까지 처리한다 | 맡은 일이 모두 닫히면 `CLOSE`. 풀 수 없으면 Supervisor에게 `ESCALATE` | step, 전문 Agent 호출 수 (값 미정). 사건을 합치면 더하되 상한 |
-| Intake | 확인된 작업 묶음 | `RETURN_RESULT` | step 12, 사람 라운드 3 |
+| Intake | 확인된 작업 묶음 | `COMPLETE_TASK_BATCH`로 완료. 막히면 `RETURN_RESULT(BLOCKED)`: 접수 미완으로 끝나고 요청자에게 사유를 통지한다 | step 12, 사람 라운드 3 |
 | Replanning | 검증 가능한 후보 묶음과 서버 지표 기반 설명 | `RETURN_RESULT` | step 15, Solver 6, 알아보기 계산 (값 미정) |
 | Coordination | 협의 항목 해소, 확정 뒤 통지 | `RETURN_RESULT` | step 12, 사람 라운드 (값 미정) |
 | Event Response | 신고의 대상·영향·사실 수정안 | `RETURN_RESULT` | step 10, 사람 라운드 2 |
 | Site Assistant | 근거 있는 답 | `ANSWER` | 질문당 step 6 |
 
 - LLM 시도 Budget은 모든 Agent가 step × 2다.
-- 전문 Agent는 다른 Agent를 부르지 않고 사람에게 이관하지도 않는다. 막히면 `RETURN_RESULT(BLOCKED)`에 이유와 필요한 것을 담아 메인에게 돌려준다. Supervisor 이관은 메인만 한다.
+- 전문 Agent는 다른 Agent를 부르지 않고 사람에게 이관하지도 않는다. 막히면 `RETURN_RESULT(BLOCKED)`에 요약과 풀 수 있는 길을 담아 메인에게 돌려준다. Supervisor 이관은 메인만 한다.
+- Intake는 메인이 부르지 않는 입구다. 접수에서 시작하고, 완료하면 작업이 준비되며, 막히면 이관 없이 요청자에게 접수 미완을 알린다.
 - 메인은 한 번에 하나다. 새 사건은 열린 메인을 깨우고, 열린 메인이 없으면 새 메인을 띄운다.
 
 ## 3. 도구
@@ -92,8 +93,22 @@
 **마무리·답변**
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `RETURN_RESULT(status, summary, needs)` | 전문 Agent가 메인에게 결과를 돌려준다. status DONE / BLOCKED | D |
+| `RETURN_RESULT(status, summary, paths)` | 전문 Agent가 결과를 돌려준다. status DONE / BLOCKED. 모델은 요약과 길만 쓰고, 결과물(후보·협의 상태·수정안 등)은 서버가 채운다 | D |
 | `ANSWER(text, evidence_refs)` | 근거 ID를 붙여 답한다. 근거가 없으면 모른다고 답한다 | D |
+
+### 결과의 길과 needs
+
+- 길(path) 하나는 needs 묶음이다. 그 길의 needs가 모두 충족되면 다시 시도할 가치가 있다는 뜻이다. 서로 다른 방법은 다른 길로 낸다(최대 3개, 길마다 needs 최대 4개). 풀 길을 찾지 못했으면 0개다.
+- need는 종류와 그 종류의 참조만 쓴다. 자유 문장은 없다. 서버는 참조가 가리키는 대상이 지금 사실에 있는지 검사하고, 아니면 거절한다(`NEED_INVALID`).
+- Budget 소진은 need가 아니다. Run의 종료 사유로만 남는다.
+
+| 종류 | 참조 | 서버 검증 |
+|---|---|---|
+| `OWNER_CONSENT` | 작업, 축, (자원 축이면 자원 값) | 현재 계산 대상 작업, 그 축이 확인된 제약으로 고정되지 않음, 자원 값이 적격이고 담당자가 거절한 값이 아님 |
+| `OTHER_UNIT` | Unit | 지금 충돌에 작업을 가진 Unit이고 그 Run의 acting unit이 아님 |
+| `FACT_CHANGE` | 필드와 대상 하나(작업: 시간창·작업 시간·요청 철회, 자원: 가용 구간·사용 권한, 풀: 수량) | 대상이 있음 |
+| `HUMAN_INFO` | 사람, 신고 또는 작업 | 사람과 대상이 있음. Intake는 요청자와 접수 중인 작업, Event Response는 신고자와 그 신고 |
+| `HUMAN_DECISION` | 후보·신고·메시지 중 하나 | 대상이 있음 |
 
 ## 4. 스킬
 
@@ -131,7 +146,7 @@
 - Replanning `LIST_ASSIGNABLE_RESOURCES`, Intake `LOOKUP_RESOURCE` → `LOOKUP_RESOURCES`
 - Replanning `ASK_TASK_OWNER`, Coordination `SEND_CHANGE_REQUEST` → Coordination `ASK_OWNER`
 - Intake `ASK_CLARIFICATION` → `ASK_REQUESTER`, `COMPLETE_TASKSPEC` → `COMPLETE_TASK_BATCH`
-- 각 Agent의 `ESCALATE`·`ESCALATE_NO_SOLUTION`, Coordination `REPORT_TO_SUPERVISOR` → 전문 Agent는 `RETURN_RESULT`, 이관은 메인 `ESCALATE`
+- 전문 Agent의 종료는 `RETURN_RESULT`로 옮겼다. 메인이 생기기 전까지 부모 없는 Replanning·Coordination·Event Response Run의 결과는 옛 종료(이관·보고)로 이어지고, Replanning·Event Response는 BLOCKED만 돌려준다. 이관은 메인 `ESCALATE`로 옮긴다
 - Coordinator가 사건마다 전문 Agent를 자동 시작하던 것 → 메인이 `CALL_AGENT`로 부른다
 
 ## 7. 열린 값

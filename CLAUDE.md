@@ -9,6 +9,7 @@ Agent·도구·스킬: `docs/Agent_도구_스킬.md` (목록과 규칙. 지침 �
 ## 작업 규칙
 - 패키지 설치 전 venv 먼저(`uv venv --python 3.12`), 설치는 `uv add`(개발용 `uv add --dev`). pip 직접 사용 금지.
 - 최소 변경. 기존 구조 유지. 파일 전체 재작성 금지(부분 수정).
+- Agent 구현(2~4단계)이 끝날 때까지 평가(실제 모델 반복 측정)는 돌리지 않는다. 구현마다 pytest·ruff·골든과 영향 경로 live run 1회만 한다.
 
 ## 저장소
 - SQLite + 표준 `sqlite3`. ORM 없음.
