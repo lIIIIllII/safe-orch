@@ -352,9 +352,9 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
     }
     assert binding.prompt.PROMPT_VERSION == "replanning-p9"
     assert runtime.exec_contract_version("REPLANNING") == "replanning-c2"
-    assert runtime.exec_contract_version("COORDINATION") == "coordination-c2"
-    assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c2"
-    assert runtime.exec_contract_version("INTAKE") == "intake-c2"
+    assert runtime.exec_contract_version("COORDINATION") == "coordination-c3"
+    assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c3"
+    assert runtime.exec_contract_version("INTAKE") == "intake-c3"
     assert runtime.exec_contract_version("ASSISTANT") == "AGENT_TYPE_NOT_REGISTERED"
 
 

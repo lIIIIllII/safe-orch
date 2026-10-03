@@ -147,13 +147,13 @@ def code_values(obs: dict[str, Any]) -> dict[str, list[str]]:
     }
 
 
-SKILLS = ("ASSESS", "ASK_PEOPLE", "TASK_INTAKE", "WRAP_UP")
+SKILLS = ("ASSESS", "ASK_REQUESTER", "TASK_INTAKE", "WRAP_UP")
 
 
 def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
     """스킬이 열리는 사실. 순서 조건은 없다."""
     request = bool(obs.get("request"))
-    return {"has_draft_request": request, "has_ask_target": request}
+    return {"has_draft_request": request}
 
 
 def open_skills(obs: dict[str, Any]) -> list[str]:

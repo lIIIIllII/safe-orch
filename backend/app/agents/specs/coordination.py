@@ -164,7 +164,7 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
     return {"REQUEST": request, "DRAFT": draft, "WAIT": waiting, "NOTICE": notice}
 
 
-SKILLS = ("ASK_PEOPLE", "CONSULT", "NOTIFY", "WRAP_UP")
+SKILLS = ("CONSULT", "NOTIFY", "WRAP_UP")
 OPEN_ITEM = ("PENDING", "OBJECTED", "OBJECTION_DRAFT_PENDING")
 
 
@@ -173,7 +173,6 @@ def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
     live = bool((obs.get("candidate") or {}).get("live"))
     consult = live and any(i["status"] in OPEN_ITEM for i in obs["items"])
     return {
-        "has_ask_target": consult,
         "has_consult_item": consult,
         "has_unsent_notice": any(not t["sent"] for t in obs["notice_targets"]),
     }

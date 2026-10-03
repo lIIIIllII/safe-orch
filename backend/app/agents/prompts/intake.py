@@ -19,7 +19,7 @@ from app.agents.specs import intake as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "intake-p6"
+PROMPT_VERSION = "intake-p7"
 
 
 def tool_catalog() -> str:
@@ -138,4 +138,5 @@ PROMPT_FINGERPRINTS = {
     "intake-p4": "343e9e3ed1658a1ee4e28e474233a82e05bab87aa89de50df068178968c16a85",  # 현장의 지금 site_now (ST-17)
     "intake-p5": "5ca8f69c0c3e4a6487c0d5d32f4eb99cf8c9d9eafdf7a7e5d634bd345e1bd028",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-18)
     "intake-p6": "62ee72c80a9cb81ec86aa2a372b6258d92d61a142e2e436ab36f063285ae1d73",  # 접수 요령을 TASK_INTAKE 지침으로(1단계 지침 1차)
+    "intake-p7": "162d798a30aab6b1b5b6aff27145e73477cc624f38387ef9682713dfc9c0a437",  # 사람과 대화하는 스킬을 상대별로 나눔 (AG-20)
 }

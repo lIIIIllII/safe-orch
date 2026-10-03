@@ -36,20 +36,20 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=coordination_prompt,
         observer=coordination_observer,
         executor=CoordinationExecutor,
-        exec_contract_version="coordination-c2",  # 기록만
+        exec_contract_version="coordination-c3",  # 기록만. 스킬을 상대별로 나눔(AG-20)
     ),
     event_response_spec.AGENT_TYPE: AgentBinding(
         spec=event_response_spec.SPEC,
         prompt=event_response_prompt,
         observer=event_response_observer,
         executor=EventResponseExecutor,
-        exec_contract_version="event-response-c2",  # 기록만
+        exec_contract_version="event-response-c3",  # 기록만
     ),
     intake_spec.AGENT_TYPE: AgentBinding(
         spec=intake_spec.SPEC,
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-c2",  # 기록만
+        exec_contract_version="intake-c3",  # 기록만
     ),
 }

@@ -105,7 +105,8 @@
 | 후보 구성 | 충돌 그룹이 있음 | `SOLVE`, `COMPARE_CANDIDATES`, `SUBMIT_CANDIDATES` | Replanning |
 | 거절 반영 | 이 Case 후보에 거절·이견이 있음 | `DIAGNOSE`, `SOLVE`, `COMPARE_CANDIDATES` | Replanning |
 | 영향 분석 | 분석할 변경(신고·후보·가정)이 있음 | `ANALYZE_IMPACT`, `PREVIEW` | Main, Replanning, Event Response, Coordination |
-| 사람 확인 | 물을 대상이 있음 | 사람 도구 중 `SEND_NOTICE` 뺀 것 | Intake, Event Response, Coordination |
+| 요청자 질문 | 작성 중인 작업 묶음이 있음 | `ASK_REQUESTER`, `WAIT_FOR_REPLIES` | Intake |
+| 신고자 질문 | 신고가 있음 | `ASK_REPORTER`, `WAIT_FOR_REPLIES` | Event Response |
 | 협의 | 확인 대기 항목이나 이견이 있음 | `ASK_OWNER`, `WAIT_FOR_REPLIES`, `DRAFT_CONSTRAINT` | Coordination |
 | 통지 | 확정됐는데 통지하지 않은 대상이 있음 | `SEND_NOTICE` | Coordination |
 | 사실 수정 | Hold가 걸린 신고가 있음 | `PROPOSE_FACT_UPDATE` | Event Response |

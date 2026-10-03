@@ -109,7 +109,7 @@ FLOW = {
 }
 
 
-SKILLS = ("ASSESS", "IMPACT", "ASK_PEOPLE", "FACT_UPDATE", "WRAP_UP")
+SKILLS = ("ASSESS", "IMPACT", "ASK_REPORTER", "FACT_UPDATE", "WRAP_UP")
 
 
 def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
@@ -117,7 +117,6 @@ def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
     event = obs.get("event") or {}
     return {
         "has_change": bool(event),
-        "has_ask_target": bool(event),
         "has_hold": (event.get("hold") or {}).get("status") == "ACTIVE",
     }
 
