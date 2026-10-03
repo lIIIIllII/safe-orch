@@ -18,7 +18,7 @@ from app.agents.specs import coordination as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "coordination-p3"
+PROMPT_VERSION = "coordination-p4"
 
 
 def tool_catalog() -> str:
@@ -125,4 +125,5 @@ PROMPT_FINGERPRINTS = {
     "coordination-p1": "fc329da2f9eb7048918f68e2703cc34dd43922ce6e5166410fd8060f13539c5a",
     "coordination-p2": "b3bf3ba05f2d9ef25335d60a680cd95d69a7e2cfb07701de7692ce4764ae16a1",  # 이전 후보의 답이 적용된 항목 표시 prior_answer (ST-15)
     "coordination-p3": "0d9d3244fb214bb08a492f25547d58656fcd674d0f825b3aefbdc5c2fce7097e",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-18)
+    "coordination-p4": "83e5192daf138df5fec072b00c33d153e74584c1b61f628f5d7b72cb4de67b57",  # ASK_PEOPLE에서 라운드 남기기 문장 뺌
 }
