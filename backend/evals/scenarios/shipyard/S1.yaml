@@ -1,0 +1,35 @@
+id: "S1"
+title: 모호한 자연어 접수 → 충돌
+site_now: "2026-10-12T09:00+09:00"   # 현장의 지금 = 10/12(월) 09:00. 분 값은 원점 10/12 09:00 기준
+start: { kind: INTAKE, requester: planner_a, task_id: T1, text: "내일 오전에 F구역에서 크레인으로 한 시간쯤 들어 올려야 해요. 10시 반에는 시작해야 하고요." }
+truth:
+  task:   # 값 확인 판정의 진실 범위. [lo, hi]는 범위다
+    work_type: LIFTING
+    zone_id: F
+    duration: 60
+    required_resource_type: GANTRY
+    requested_resource_id: SITE-GC-01
+    earliest_start: [1440, 1530]
+    latest_start: 1560
+    latest_end: 1620
+  in_text: [zone_id, duration]   # 문장에 있던 필드
+humans:
+  free_text:   # 필드별 1번째 → 2번째 답. 바닥나면 중립 답
+    planner_a:
+      fields:
+        resource: ["블록이라 큰 크레인이어야 돼요", "골리앗(SITE-GC-01)이요"]
+        window: ["10시 반엔 들어가야죠", "13일 화요일이요. 10시 반이 좋은데 11시까진 괜찮고, 12시 전엔 끝나야 해요"]
+        zone_id: ["F구역이요"]
+        duration: ["한 시간이요"]
+  values_check:   # 진실 범위면 ACCEPT, 아니면 DECLINE과 틀린 필드마다 한 줄
+    planner_a:
+      decline_lines:
+        resource: "골리앗(SITE-GC-01)이어야 해요"
+        window: "13일 화요일, 10시 반~11시 시작, 12시 전 종료예요"
+        zone_id: "F구역이에요"
+        duration: "한 시간이에요"
+        work_type: "들어 올리는 작업이에요"
+  rules: []
+outcome: { kind: INTAKE_COMMITTED }   # Intake 완료 ∧ 값이 진실 범위 ∧ 필드 CONFIRMED ∧ PASS 후보 ∧ 확정
+checks:
+  structural_reask: { from_stage: 3 }

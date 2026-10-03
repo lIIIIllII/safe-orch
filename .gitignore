@@ -10,4 +10,5 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 data/live_runs/
+data/evals/
 .claude/settings.local.json
