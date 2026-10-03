@@ -19,7 +19,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p9"
+PROMPT_VERSION = "event-response-p10"
 
 
 def tool_catalog() -> str:
@@ -62,6 +62,7 @@ Goal: {goal}
 - 시간은 Horizon 원점(첫날 {origin_time})을 0으로 하는 정수 분이고(1440분 = 하루), 시각 옆의 *_clock은 같은 값의 현장 날짜·시각이다.
 - 현장의 지금(site_now): 현장 날짜·요일·시각(local), 같은 시각의 분(minute), Horizon 안(IN)·앞(BEFORE)·뒤(AFTER)다. \
 신고 문장의 상대 날짜(오늘·내일·모레)와 날짜 없는 시각은 현장의 지금 기준이다.
+- 도구의 시각 인자는 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다. 분으로 바꾸지 않는다(서버가 바꾼다). 관찰의 날짜·시각 값(site_now.local, work_hours, *_clock)이 같은 형식이고 요일이 붙어 있다.
 - 신고(event): 유형(event_type), 신고 문장(quoted_text, 인용), 서버가 건 Hold(hold)다.
 - 작업 유형(work_types): 코드와 현장 표시 이름이다. 신고의 작업 표현을 코드로 이을 때 쓴다. 구역(zones)은 구역 ID 목록이다.
 - 조회 결과(lookups): 작업별 담당·시간창(earliest_start 시작 가능 시각, latest_start, latest_end)·현재 배정(assignment)이다. \
@@ -97,6 +98,7 @@ OBSERVATION_KEYS = (
     "run",
     "site_now",
     "versions",
+    "work_hours",
     "work_intervals",
     "work_types",
     "zones",
@@ -141,4 +143,5 @@ PROMPT_FINGERPRINTS = {
     "event-response-p7": "4568e1f2a0fcf6da84dad2e5fc42596b56be173ef1f8c68bdcfa829d3ae8210c",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-18)
     "event-response-p8": "d06a206492c63e1aa19fa7be6306d94f87577aa7631347c3e756cfbfb87029df",  # ASK_PEOPLE에서 라운드 남기기 문장 뺌
     "event-response-p9": "3156ac900415cebfe78058f45ff5fbbe5308a7575b13b7f876bebd9bd0218f85",  # 사람과 대화하는 스킬을 상대별로 나눔 (AG-20)
+    "event-response-p10": "685e1ee3cac96d92825f9a1f45b03ea3a4b6722f5f19d08ef1df14bf429bbe46",  # 도구의 시각 인자는 현장 날짜·시각 문자열, 관찰에 같은 형식의 시각 (AG-21)
 }

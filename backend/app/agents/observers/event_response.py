@@ -12,7 +12,7 @@ from typing import Any
 from app.agents.observe import Observation, budget_remaining, last_guard, recent_steps
 from app.agents.specs import event_response as spec
 from app.clock import site_now
-from app.domain.calendar import has_work_slot, local_clock, now_view
+from app.domain.calendar import has_work_slot, now_view, site_time
 from app.packs.loader import LoadedPack
 from app.rules.engine import separation_links
 from app.store.repos.events import get_event, get_hold
@@ -24,7 +24,7 @@ from app.store.repos.tasks import list_current_tasks
 
 
 def clock(pack: LoadedPack, minute: int) -> str:
-    return local_clock(pack.horizon_start_utc, pack.timezone, minute)
+    return site_time(pack.horizon_start_utc, pack.timezone, minute)
 
 
 def _ready(conn: sqlite3.Connection, pack: LoadedPack) -> list[Any]:
@@ -64,7 +64,9 @@ def lookup_tasks(
             "earliest_start": t.earliest_start,
             "earliest_start_clock": clock(pack, t.earliest_start),
             "latest_start": t.latest_start,
+            "latest_start_clock": clock(pack, t.latest_start),
             "latest_end": t.latest_end,
+            "latest_end_clock": clock(pack, t.latest_end),
             # 시작 가능 시각을 늦출 수 있는 최대 분. 0이면 늦추는 수정안은 분석을 통과하지 못한다
             "start_slack": t.latest_start - t.earliest_start,
             "assignment": _assignment(pack, placed.get(t.task_id)),
@@ -215,6 +217,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             site_now(), pack.horizon_start_utc, pack.timezone, pack.horizon_minutes
         ),
         "work_intervals": [list(iv) for iv in pack.work_intervals],
+        "work_hours": [[clock(pack, lo), clock(pack, hi)] for lo, hi in pack.work_intervals],
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),
         "budget_remaining": budget_remaining(run, spec.SPEC),

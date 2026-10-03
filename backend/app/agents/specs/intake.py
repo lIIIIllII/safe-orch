@@ -25,6 +25,7 @@ RECURSION_LIMIT = MAX_STEPS * 5 + 10
 SUMMARY_MAX = 200
 TEXT_MAX = 300
 FIELD_IDS = ("zone_id", "duration", "window", "resource")
+TIME_FIELDS = ("earliest_start", "latest_start", "latest_end")  # 현장 날짜·시각 문자열 (AG-21)
 
 
 class Action(BaseModel):
@@ -43,16 +44,17 @@ class Action(BaseModel):
 
 
 class TaskValues(BaseModel):
-    """작업 요청 값. 시간은 Horizon 원점 기준 정수 분이다. 위험 태그 칸은 없다(I-14)."""
+    """작업 요청 값. 시각은 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다(서버가 분으로 바꾼다).
+    위험 태그 칸은 없다."""
 
     model_config = ConfigDict(extra="forbid")
 
     work_type: str = Field(description="작업 유형 코드(관찰의 work_types)")
     zone_id: str = Field(description="구역 ID")
     duration: int = Field(gt=0, description="작업 시간(분)")
-    earliest_start: int = Field(description="가장 이른 시작(분)")
-    latest_start: int = Field(description="가장 늦은 시작(분)")
-    latest_end: int = Field(description="종료 한도(분)")
+    earliest_start: str = Field(description='가장 이른 시작. 현장 날짜·시각 "YYYY-MM-DD HH:MM"')
+    latest_start: str = Field(description='가장 늦은 시작. 현장 날짜·시각 "YYYY-MM-DD HH:MM"')
+    latest_end: str = Field(description='종료 한도. 현장 날짜·시각 "YYYY-MM-DD HH:MM"')
     required_resource_type: str | None = Field(default=None, description="필요 자원 유형")
     requested_resource_id: str | None = Field(default=None, description="요청 자원 ID")
 

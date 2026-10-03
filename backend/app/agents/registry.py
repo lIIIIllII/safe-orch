@@ -43,13 +43,13 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=event_response_prompt,
         observer=event_response_observer,
         executor=EventResponseExecutor,
-        exec_contract_version="event-response-c3",  # 기록만
+        exec_contract_version="event-response-c4",  # 기록만. 시각 인자는 현장 날짜·시각 문자열(AG-21)
     ),
     intake_spec.AGENT_TYPE: AgentBinding(
         spec=intake_spec.SPEC,
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-c3",  # 기록만
+        exec_contract_version="intake-c4",  # 기록만
     ),
 }

@@ -490,3 +490,61 @@ def test_third_question_uses_last_round(seeded):
     last = _steps(run.run_id)[3:]
     assert "REQUEST_CONFIRMATION" not in _tool_names(last[0])
     assert [s["guard"]["reason_code"] for s in last] == ["ACTION_NOT_AVAILABLE", None]
+
+
+# ── 시각 인자는 현장 날짜·시각 문자열 (AG-21) ──────────────────
+
+
+def test_time_arguments_are_site_time_strings(seeded):
+    """도구는 시각을 문자열로 받고 서버가 분으로 바꾼다. 확인 값·작업 값은 분이고, 관찰에 같은 형식의 시각이 있다."""
+    pack = seeded
+    run = _to_request(pack)
+    [step] = [s for s in _steps(run.run_id) if s["action"]["name"] == "REQUEST_CONFIRMATION"]
+    sent = step["action"]["args"]["values"]
+    assert (sent["earliest_start"], sent["latest_end"]) == (
+        "2026-10-12(월) 09:00",
+        "2026-10-12(월) 10:30",
+    )
+    assert step["tool_result"]["values"] == VALUES_A  # 서버가 바꾼 분
+    schema = next(
+        t["function"]["parameters"]["$defs"]["TaskValues"]["properties"]
+        for t in step["available_actions"]
+        if t["function"]["name"] == "REQUEST_CONFIRMATION"
+    )
+    assert schema["earliest_start"]["type"] == "string" and schema["duration"]["type"] == "integer"
+    obs = step["observation"]
+    assert obs["work_hours"][0] == ["2026-10-12(월) 09:00", "2026-10-12(월) 17:00"]
+    assert obs["work_intervals"][0] == [0, 480]
+    [m] = _messages("CONFIRMATION")
+    assert _reply(pack, m["message_id"]).status == "APPLIED"
+    run_until_idle(pack, model_factory=Router(intake=[_complete()]).factory())
+    last = _steps(run.run_id)[-1]
+    assert last["observation"]["confirmations"][-1]["values_local"] == {
+        "earliest_start": "2026-10-12(월) 09:00",
+        "latest_start": "2026-10-12(월) 10:00",
+        "latest_end": "2026-10-12(월) 10:30",
+    }
+    task = _task(pack, "A")
+    assert (task.earliest_start, task.latest_start, task.latest_end) == (0, 60, 90)
+
+
+def test_time_invalid_is_rejected_without_using_a_round(seeded):
+    """형식이 틀리거나 Horizon 밖인 시각은 TIME_INVALID로 거절한다. 형식 오류 연속에는 세지 않는다."""
+    pack = seeded
+    assert _intake(pack).status == "APPLIED"
+    minutes = _request({**VALUES_A, "earliest_start": "0"})
+    outside = _request({**VALUES_A, "latest_end": "2026-10-15 09:00"})
+    weekday = _request({**VALUES_A, "earliest_start": "2026-10-12(화) 09:00"})
+    run_until_idle(
+        pack, model_factory=Router(intake=[minutes, outside, weekday, _request()]).factory()
+    )
+    [run] = _runs("INTAKE")
+    steps = _steps(run.run_id)
+    assert [(s["result_kind"], s["guard"]["reason_code"]) for s in steps] == [
+        ("REJECTED", "TIME_INVALID"),
+        ("REJECTED", "TIME_INVALID"),
+        ("REJECTED", "TIME_INVALID"),
+        ("WAIT", None),
+    ]
+    assert steps[1]["observation"]["last_check"]["reason_code"] == "TIME_INVALID"
+    assert (run.status, run.human_rounds_used) == ("WAITING_HUMAN", 1)

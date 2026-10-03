@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app.clock import site_now
 from app.config import get_settings
-from app.domain.calendar import now_view
+from app.domain.calendar import now_view, parse_site_time, site_time
 
 
 @pytest.mark.parametrize("value", ["2026-10-12T09:00", "2026-10-12", "내일"])
@@ -56,3 +56,38 @@ def test_now_view_local_minute_and_horizon(pack, now, expected):
         datetime.fromisoformat(now), pack.horizon_start_utc, pack.timezone, pack.horizon_minutes
     )
     assert view == expected
+
+
+# ── Agent 도구의 시각 인자: 현장 날짜·시각 문자열 ↔ 분 (AG-21) ──
+
+
+@pytest.mark.parametrize(
+    ("text", "minute"),
+    [
+        ("2026-10-12 09:00", 0),
+        ("2026-10-13 10:30", 1530),
+        ("2026-10-14(수) 10:00", 2940),  # 요일은 붙여도 된다
+        (" 2026-10-14 17:00 ", 3360),  # Horizon 끝
+    ],
+)
+def test_parse_site_time(pack, text, minute):
+    args = (pack.horizon_start_utc, pack.timezone, pack.horizon_minutes)
+    assert parse_site_time(text, *args) == minute
+    assert parse_site_time(site_time(*args[:2], minute), *args) == minute  # 관찰 형식 그대로 받는다
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "2940",  # 분 숫자
+        "10/14 10:00",  # 형식이 다름
+        "2026-10-14T10:00",
+        "2026-10-14(화) 10:00",  # 요일이 날짜와 다름
+        "2026-02-30 10:00",  # 없는 날짜
+        "2026-10-12 08:59",  # Horizon 앞
+        "2026-10-14 17:01",  # Horizon 뒤
+    ],
+)
+def test_parse_site_time_rejects(pack, text):
+    with pytest.raises(ValueError):
+        parse_site_time(text, pack.horizon_start_utc, pack.timezone, pack.horizon_minutes)

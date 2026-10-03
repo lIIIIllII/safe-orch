@@ -5,6 +5,7 @@ R1(기본안 B로 확정) → 지연 신고 → 즉시 SITE Hold → ER(LOOKUP �
 설정 EVENT_RESPONSE_ENABLED를 켠 테스트만 ER이 시작한다(기본값 꺼짐 = Scene 4 그대로).
 """
 
+import json
 import uuid
 
 from langchain_core.messages import AIMessage
@@ -227,8 +228,8 @@ def test_er_minimal_path_to_r2(seeded, event_response_on):
     assert [t["task_id"] for t in steps[0]["tool_result"]["tasks"]] == ["E", "P", "W"]
     impact = steps[1]["tool_result"]
     assert (impact["old_clock"], impact["new_clock"], impact["ok"]) == (
-        "10/12(월) 09:45",
-        "10/12(월) 10:00",
+        "2026-10-12(월) 09:45",
+        "2026-10-12(월) 10:00",
         True,
     )
     assert impact["plan_window_violation"] is True
@@ -531,7 +532,7 @@ def test_ambiguous_report_asks_reporter_then_proposes(seeded, event_response_on)
         "ANALYZE_IMPACT",
         "PROPOSE_FACT_UPDATE",
     ]
-    assert steps[2]["tool_result"]["new_clock"] == "10/12(월) 10:15"
+    assert steps[2]["tool_result"]["new_clock"] == "2026-10-12(월) 10:15"
     [fu] = _proposals("FACT_UPDATE")
     assert (fu["target_task_id"], fu["status"]) == ("E", "PENDING")
     assert _hold(pack, refs["hold_id"])["status"] == "ACTIVE"
@@ -603,3 +604,40 @@ def test_lookup_start_slack_and_analysis_delay_minutes(seeded, event_response_on
     assert obs["lookups"][0]["tasks"][0]["start_slack"] == 75
     assert obs["analyses"][0]["delay_minutes"] == 15
     assert "start_slack은 시작 가능 시각을 늦출 수 있는 최대 분이다" in prompt.SYSTEM
+
+
+# ── 시각 인자는 현장 날짜·시각 문자열 (AG-21) ──────────────────
+
+
+def test_er_time_arguments_are_site_time_strings(seeded, event_response_on):
+    """분석·제안의 새 시각은 문자열로 받고 서버가 분으로 바꾼다. 조회 결과에 같은 형식의 시각이 있다."""
+    _, er = _to_proposal(seeded)
+    lookup, analyze, propose = _steps(er.run_id)
+    assert analyze["action"]["args"]["new_earliest_start"] == "2026-10-12(월) 10:00"
+    assert analyze["tool_result"]["new_earliest_start"] == 60
+    [p] = _proposals("FACT_UPDATE")
+    assert json.loads(p["payload"])["new_value"] == 60
+    e = next(t for t in lookup["tool_result"]["tasks"] if t["task_id"] == "E")
+    assert (e["earliest_start_clock"], e["latest_start_clock"], e["latest_end_clock"]) == (
+        "2026-10-12(월) 09:45",
+        "2026-10-12(월) 11:00",
+        "2026-10-12(월) 11:30",
+    )
+    assert propose["observation"]["work_hours"][1] == [
+        "2026-10-13(화) 09:00",
+        "2026-10-13(화) 17:00",
+    ]
+
+
+def test_er_time_invalid_is_rejected(seeded, event_response_on):
+    bad = call("ANALYZE_IMPACT", task_id="E", new_earliest_start="60")
+    outside = call(
+        "PROPOSE_FACT_UPDATE", task_id="E", new_earliest_start="2026-10-20 10:00", evidence="x"
+    )
+    _, er = _to_proposal(seeded, [bad, outside, _propose(60)])
+    steps = _steps(er.run_id)
+    assert [(s["result_kind"], s["guard"]["reason_code"]) for s in steps] == [
+        ("REJECTED", "TIME_INVALID"),
+        ("REJECTED", "TIME_INVALID"),
+        ("WAIT", None),
+    ]

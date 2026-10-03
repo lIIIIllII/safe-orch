@@ -13,14 +13,23 @@ from typing import Any
 from app.agents.observe import Observation, budget_remaining, last_guard, recent_steps
 from app.agents.specs import intake as spec
 from app.clock import site_now
-from app.domain.calendar import now_view
+from app.domain.calendar import now_view, site_time
 from app.packs.loader import LoadedPack
 from app.store.repos.messages import list_run_messages
 from app.store.repos.resources import list_resources
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
 
-CHECK_REASONS = ("TASKSPEC_INVALID", "CONFIRMED_VALUE_MISMATCH")
+CHECK_REASONS = ("TASKSPEC_INVALID", "CONFIRMED_VALUE_MISMATCH", "TIME_INVALID")
+
+
+def _at(pack: LoadedPack, minute: int) -> str:
+    return site_time(pack.horizon_start_utc, pack.timezone, minute)
+
+
+def _spans(pack: LoadedPack, intervals: Any) -> list[list[str]]:
+    """분 구간의 현장 날짜·시각."""
+    return [[_at(pack, lo), _at(pack, hi)] for lo, hi in intervals]
 
 
 def lookup_resources(
@@ -34,6 +43,7 @@ def lookup_resources(
             "owner_unit_id": r.owner_unit_id,
             "usable_by_requester": unit_id in r.allowed_unit_ids,
             "available_intervals": [list(iv) for iv in r.available_intervals],
+            "available_local": _spans(pack, r.available_intervals),
         }
         for r in sorted(list_resources(conn, pack.site_id), key=lambda r: r.resource_id)
         if resource_type is None or r.resource_type == resource_type
@@ -79,7 +89,11 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             confirmations.append(
                 {
                     "message_id": m["message_id"],
-                    "values": (step.get("tool_result") or {}).get("values"),
+                    "values": (values := (step.get("tool_result") or {}).get("values")),
+                    # 같은 값의 현장 날짜·시각 (도구의 시각 인자와 같은 형식)
+                    "values_local": None
+                    if not values
+                    else {k: _at(pack, values[k]) for k in spec.TIME_FIELDS},
                     "status": m["status"],
                     "decision": reply.get("decision"),
                     "quoted_comment": reply.get("comment") or None,
@@ -138,6 +152,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             site_now(), pack.horizon_start_utc, pack.timezone, pack.horizon_minutes
         ),
         "work_intervals": [list(iv) for iv in pack.work_intervals],
+        "work_hours": _spans(pack, pack.work_intervals),
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),
         "budget_remaining": budget_remaining(run, spec.SPEC),

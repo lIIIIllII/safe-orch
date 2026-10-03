@@ -14,7 +14,7 @@ from app.agents.observe import Observation
 from app.agents.specs import event_response as spec
 from app.agents.tool_gateway import ACCEPTED, ToolGateway, _Parsed
 from app.agents.types import GatewayResult, StepMeta
-from app.domain.calendar import local_clock
+from app.domain.calendar import local_clock, parse_site_time
 from app.domain.ids import new_id
 from app.packs.loader import LoadedPack
 from app.store import db
@@ -53,27 +53,43 @@ class EventResponseExecutor:
                 )
             if isinstance(action, spec.AnalyzeImpact):
                 result = self.observer.analyze_impact(
-                    tx, self.pack, action.task_id, action.new_earliest_start
+                    tx, self.pack, action.task_id, self._minute(action)
                 )
                 return self._done(
                     tx, run_id, step_no, meta, parsed, GatewayResult("CONTINUE"), result
                 )
             if isinstance(action, spec.ProposeFactUpdate):
                 # 제출 때 영향 분석을 다시 돌려 통과해야 받는다. 분석을 했는지는 보지 않는다 (CV-16)
-                analysis = self.observer.analyze_impact(
-                    tx, self.pack, action.task_id, action.new_earliest_start
-                )
+                new_value = self._minute(action)
+                analysis = self.observer.analyze_impact(tx, self.pack, action.task_id, new_value)
                 if not analysis["ok"]:
                     return self._reject(tx, run_id, step_no, meta, parsed, "ANALYSIS_NOT_PASSED")
-                return self._propose(tx, run_id, step_no, meta, parsed, obs, action)
+                return self._propose(tx, run_id, step_no, meta, parsed, obs, action, new_value)
             if isinstance(action, spec.AskReporter):
                 return self._ask_reporter(tx, run_id, step_no, meta, parsed, obs, action)
             assert isinstance(action, spec.Escalate)
             outcome = GatewayResult("DONE", None, "ESCALATED", "ESCALATE")
             return self._done(tx, run_id, step_no, meta, parsed, outcome, {"reason": action.reason})
 
-    def _permitted(self, obs: Observation, action: Any) -> bool:
+    def _minute(self, action: Any) -> int | None:
+        """도구가 받은 새 시각(현장 날짜·시각 문자열)을 분으로 바꾼다. 바꿀 수 없으면 None (AG-21)."""
+        pack = self.pack
+        try:
+            return parse_site_time(
+                action.new_earliest_start,
+                pack.horizon_start_utc,
+                pack.timezone,
+                pack.horizon_minutes,
+            )
+        except ValueError:
+            return None
+
+    def _permitted(self, obs: Observation, action: Any) -> bool | str:
         """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가."""
+        if isinstance(action, spec.AnalyzeImpact | spec.ProposeFactUpdate) and (
+            self._minute(action) is None
+        ):
+            return "TIME_INVALID"
         available = obs.available
         c = spec.choices(obs.data, obs.hidden)
         if isinstance(action, spec.LookupTasks):
@@ -84,7 +100,7 @@ class EventResponseExecutor:
             return (
                 "PROPOSE_FACT_UPDATE" in available
                 and action.task_id in c["PROPOSE"]
-                and (action.task_id, action.new_earliest_start) not in c["DISCARDED"]
+                and (action.task_id, self._minute(action)) not in c["DISCARDED"]
             )
         if isinstance(action, spec.AskReporter):
             return "ASK_REPORTER" in available
@@ -163,6 +179,7 @@ class EventResponseExecutor:
         parsed: _Parsed,
         obs: Observation,
         action: spec.ProposeFactUpdate,
+        new_value: int,
     ) -> GatewayResult:
         """FACT_UPDATE 제안 + Supervisor 확인 메시지 → 대기. 확인자는 actor_id가 가장 작은 SUPERVISOR."""
         site = get_site(tx, self.pack.site_id)
@@ -179,7 +196,7 @@ class EventResponseExecutor:
             "hold_id": (event["hold"] or {}).get("hold_id"),
             "field": "earliest_start",
             "old_value": task.earliest_start,
-            "new_value": action.new_earliest_start,
+            "new_value": new_value,
             "evidence": action.evidence,
         }
         proposal_id, message_id = new_id("prop"), new_id("msg")

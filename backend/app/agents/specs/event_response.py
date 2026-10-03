@@ -56,8 +56,8 @@ class AnalyzeImpact(Action):
     OPENS = "현재 계산 대상(READY) 작업이고 Supervisor 확인을 기다리는 사실 수정안이 없을 때"
 
     task_id: str = Field(description="분석할 작업 ID(현재 계산 대상 작업)")
-    new_earliest_start: int = Field(
-        description="새 시작 가능 시각. Horizon 원점 기준 정수 분(결과에 날짜·시각이 함께 나온다)"
+    new_earliest_start: str = Field(
+        description='새 시작 가능 시각. 현장 날짜·시각 "YYYY-MM-DD HH:MM"(서버가 분으로 바꾼다)'
     )
 
 
@@ -68,7 +68,9 @@ class ProposeFactUpdate(Action):
     OPENS = "이 Run에서 폐기된 값이 아니고 확인을 기다리는 사실 수정안이 없을 때"
 
     task_id: str = Field(description="사실을 수정할 작업 ID")
-    new_earliest_start: int = Field(description="새 시작 가능 시각(정수 분)")
+    new_earliest_start: str = Field(
+        description='새 시작 가능 시각. 현장 날짜·시각 "YYYY-MM-DD HH:MM"(서버가 분으로 바꾼다)'
+    )
     evidence: str = Field(
         min_length=1,
         max_length=TEXT_MAX,

@@ -19,7 +19,7 @@ from app.commands.task_request import (
     create_requested_task,
     validate_task_request,
 )
-from app.domain.calendar import local_clock
+from app.domain.calendar import local_clock, parse_site_time
 from app.domain.ids import new_id
 from app.packs.loader import LoadedPack
 from app.store import db
@@ -112,8 +112,34 @@ class IntakeExecutor:
         actor_id = obs.data["request"]["requester_actor_id"]
         return next(a for a in list_actors(tx, self.pack.site_id) if a.actor_id == actor_id)
 
-    def _form(self, obs: Observation, values: spec.TaskValues) -> TaskRequestForm:
-        return TaskRequestForm(task_id=obs.data["request"]["task_id"], **values.model_dump())
+    def _minutes(self, values: spec.TaskValues) -> dict[str, Any] | None:
+        """도구가 받은 값의 시각(현장 날짜·시각 문자열)을 분으로 바꾼다. 바꿀 수 없으면 None (AG-21)."""
+        out = values.model_dump()
+        pack = self.pack
+        try:
+            for key in spec.TIME_FIELDS:
+                out[key] = parse_site_time(
+                    out[key], pack.horizon_start_utc, pack.timezone, pack.horizon_minutes
+                )
+        except ValueError:
+            return None
+        return out
+
+    def _time_invalid(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        values: spec.TaskValues,
+    ) -> GatewayResult:
+        outcome = GatewayResult("REJECTED", "TIME_INVALID")
+        detail = {"reason_codes": ["TIME_INVALID"], "values": values.model_dump()}
+        return self._done(tx, run_id, step_no, meta, parsed, outcome, detail, verdict=REJECTED)
+
+    def _form(self, obs: Observation, values: dict[str, Any]) -> TaskRequestForm:
+        return TaskRequestForm(task_id=obs.data["request"]["task_id"], **values)
 
     def _ask(
         self,
@@ -165,9 +191,11 @@ class IntakeExecutor:
         """값 확인 요청(CONFIRMATION) → 요청자. 폼 검증을 통과해야 나간다. 확인 값 = 이 step의 결과 values."""
         site = get_site(tx, self.pack.site_id)
         assert site is not None
-        form = self._form(obs, action.values)
+        values = self._minutes(action.values)
+        if values is None:
+            return self._time_invalid(tx, run_id, step_no, meta, parsed, action.values)
+        form = self._form(obs, values)
         codes = validate_task_request(tx, self.pack, site, self._requester(tx, obs), form)
-        values = action.values.model_dump()
         if codes:
             outcome = GatewayResult("REJECTED", "TASKSPEC_INVALID")
             detail = {"reason_codes": codes, "values": values}
@@ -207,7 +235,9 @@ class IntakeExecutor:
     ) -> GatewayResult:
         """확인 값과 같으면 폼과 같은 함수로 작업을 만든다(source_ref message:<mid>)."""
         last = obs.data["confirmations"][-1]
-        submitted = action.values.model_dump()
+        submitted = self._minutes(action.values)
+        if submitted is None:
+            return self._time_invalid(tx, run_id, step_no, meta, parsed, action.values)
         if submitted != last["values"]:
             outcome = GatewayResult("REJECTED", "CONFIRMED_VALUE_MISMATCH")
             detail = {"confirmed": last["values"], "submitted": submitted}
@@ -215,7 +245,7 @@ class IntakeExecutor:
         site = get_site(tx, self.pack.site_id)
         assert site is not None
         actor = self._requester(tx, obs)
-        form = self._form(obs, action.values)
+        form = self._form(obs, submitted)
         codes = validate_task_request(tx, self.pack, site, actor, form)
         if codes:
             outcome = GatewayResult("REJECTED", "TASKSPEC_INVALID")

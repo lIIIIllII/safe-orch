@@ -12,6 +12,8 @@ from langchain_core.messages import AIMessage, BaseMessage
 
 from app.agents import skills
 from app.agents.registry import BINDINGS
+from app.domain.calendar import site_time
+from app.packs.loader import load_pack, pack_dir
 
 Reply = AIMessage | Callable[[], AIMessage]
 
@@ -23,7 +25,25 @@ DEFAULT_SKILL = {
 }
 
 
+_PACK = load_pack(pack_dir("shipyard"))
+TIME_FIELDS = ("earliest_start", "latest_start", "latest_end", "new_earliest_start")
+
+
+def site(minute: int) -> str:
+    """Horizon 원점 기준 분 → 도구의 시각 인자 형식(현장 날짜·시각 문자열, AG-21)."""
+    return site_time(_PACK.horizon_start_utc, _PACK.timezone, minute)
+
+
+def _times(args: dict[str, Any]) -> dict[str, Any]:
+    """테스트는 시각을 분으로 쓴다. 모델이 보내는 모양(문자열)으로 바꾼다."""
+    out = {k: site(v) if k in TIME_FIELDS and isinstance(v, int) else v for k, v in args.items()}
+    if isinstance(out.get("values"), dict):
+        out["values"] = _times(out["values"])
+    return out
+
+
 def call(name: str, summary: str = "다음 전략을 시도한다", **args: Any) -> AIMessage:
+    args = _times(args)
     return AIMessage(
         content="",
         tool_calls=[

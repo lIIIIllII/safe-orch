@@ -88,7 +88,7 @@ from app.commands.messages import ReplyRequest, reply_message
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.config import REPO_ROOT, Settings, get_settings
 from app.coordinator.dispatcher import run_until_idle
-from app.domain.calendar import work_delay
+from app.domain.calendar import parse_site_time, work_delay
 from app.packs.loader import load_pack, pack_dir
 from app.solver import cpsat
 from app.store import db
@@ -176,6 +176,16 @@ def _human_answer(asked: int, first: str, original: str) -> tuple[str, str]:
 
 def _key() -> str:
     return uuid.uuid4().hex
+
+
+def _minute(pack: Any, text: Any) -> int | None:
+    """Action의 시각 인자(현장 날짜·시각 문자열)를 분으로. 바꿀 수 없으면 None."""
+    try:
+        return parse_site_time(
+            str(text), pack.horizon_start_utc, pack.timezone, pack.horizon_minutes
+        )
+    except ValueError:
+        return None
 
 
 def _guard_counts(guards: list[str | None]) -> dict[str, int]:
@@ -1189,7 +1199,10 @@ def _path_event(
         row["agent"] = next(r.agent_type for r in runs if r.run_id == s["run_id"])
     er = next((r for r in runs if r.agent_type == "EVENT_RESPONSE"), None)
     proposes = [
-        s["action"]["args"]
+        {
+            "task_id": s["action"]["args"]["task_id"],
+            "new_earliest_start": _minute(pack, s["action"]["args"]["new_earliest_start"]),
+        }
         for s in steps
         if (s["action"] or {}).get("name") == "PROPOSE_FACT_UPDATE"
         and s["guard"]["verdict"] == "ACCEPTED"
