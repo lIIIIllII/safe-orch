@@ -11,8 +11,9 @@ from pydantic import Field
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
 from app.domain.calendar import has_work_slot
+from app.domain.eligibility import ResourceNeed, exclusion_reasons, requirement_error
 from app.domain.ids import new_id
-from app.domain.models import Actor, Consent, Movable, Site, Task
+from app.domain.models import Actor, Consent, Movable, Requirement, Site, Task
 from app.packs.loader import LoadedPack, confirmed_fields
 from app.store.repos.cases import end_case_run, queued_task_ids, register_recheck, wake_run
 from app.store.repos.consents import insert_consent
@@ -42,8 +43,20 @@ class TaskRequestForm(Body):
     latest_end: int
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
+    # 작업 값. 작업 유형 기본값에 더해진다(빼거나 낮출 수 없다, CV-19)
+    resource_requirements: tuple[Requirement, ...] = ()
     predecessors: tuple[PredecessorInput, ...] = ()
     hazard_tags: tuple[str, ...] = Field(default=(), exclude=True)  # 받으면 버린다
+
+
+# 자원 적격성 사유 → 폼 거절 사유 (CV-20)
+EXCLUSION_CODES = {
+    "TYPE_MISMATCH": "RESOURCE_TYPE_MISMATCH",
+    "NOT_ALLOWED": "RESOURCE_NOT_AUTHORIZED",
+    "NO_AVAILABILITY": "RESOURCE_NO_AVAILABILITY",
+    "ZONE_NOT_ALLOWED": "RESOURCE_ZONE_NOT_ALLOWED",
+    "REQUIREMENT_NOT_MET": "RESOURCE_REQUIREMENT_NOT_MET",
+}
 
 
 def validate_task_request(
@@ -83,6 +96,11 @@ def validate_task_request(
         and (form.required_resource_type is None or form.requested_resource_id is None)
     ):
         r.reject("FIELD_MISSING")
+    # 요구 조건은 선언된 속성과 맞아야 하고, 자원을 쓰는 작업에만 붙는다
+    if any(requirement_error(q, pack.resource_attributes) for q in form.resource_requirements) or (
+        form.resource_requirements and form.required_resource_type is None
+    ):
+        r.reject("INVALID_REQUIREMENT")
     if form.requested_resource_id is not None:
         res = {x.resource_id: x for x in list_resources(tx, site_id)}.get(
             form.requested_resource_id
@@ -90,10 +108,18 @@ def validate_task_request(
         if res is None:
             r.reject("UNKNOWN_RESOURCE")
         else:
-            if res.resource_type != form.required_resource_type:
-                r.reject("RESOURCE_TYPE_MISMATCH")
-            if actor.unit_id not in res.allowed_unit_ids:
-                r.reject("RESOURCE_NOT_AUTHORIZED")
+            need = ResourceNeed(
+                required_resource_type=form.required_resource_type,
+                zone_id=form.zone_id,
+                requirements=(
+                    *pack.default_requirements(form.work_type),
+                    *form.resource_requirements,
+                ),
+            )
+            for code in dict.fromkeys(
+                EXCLUSION_CODES[e.reason] for e in exclusion_reasons(need, res, actor.unit_id)
+            ):
+                r.reject(code)
     # 선행 작업은 현재 READY·QUEUED 작업만. 철회된 작업(NEEDS_INFO)은 없는 것으로 본다.
     current = {
         t.task_id
@@ -128,6 +154,7 @@ def create_requested_task(
         unit_id=actor.unit_id,
         owner_actor_id=actor.actor_id,
         hazard_tags=pack.hazard_tags(form.work_type),
+        default_requirements=pack.default_requirements(form.work_type),
         movable=Movable(time=True, resource=False),  # 자원 축은 MOVABILITY로만 연다
         fields=confirmed_fields(data, wt.critical_fields, source_ref),
         lifecycle="READY",

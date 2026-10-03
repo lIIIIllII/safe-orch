@@ -43,6 +43,18 @@ class Action(BaseModel):
     )
 
 
+class RequirementValue(BaseModel):
+    """자원 요구 조건 하나: 자원의 속성 값이 맞춰야 하는 비교."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attribute: str = Field(description="자원 속성 이름(관찰의 resource_attributes)")
+    op: Literal["GTE", "LTE", "CONTAINS"] = Field(
+        description="GTE 수치 이상, LTE 수치 이하(수치 속성), CONTAINS 목록 포함(목록 속성)"
+    )
+    value: int | float | str = Field(description="비교 값. 수치 속성은 숫자, 목록 속성은 문자열")
+
+
 class TaskValues(BaseModel):
     """작업 요청 값. 시각은 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다(서버가 분으로 바꾼다).
     위험 태그 칸은 없다."""
@@ -57,6 +69,13 @@ class TaskValues(BaseModel):
     latest_end: str = Field(description='종료 한도. 현장 날짜·시각 "YYYY-MM-DD HH:MM"')
     required_resource_type: str | None = Field(default=None, description="필요 자원 유형")
     requested_resource_id: str | None = Field(default=None, description="요청 자원 ID")
+    resource_requirements: list[RequirementValue] = Field(
+        default_factory=list,
+        description=(
+            "자원 요구 조건(선택). 요청 문장이나 요청자 답에 있을 때만 넣는다. "
+            "작업 유형의 기본 요구 조건은 서버가 붙이므로 넣지 않는다"
+        ),
+    )
 
 
 class LookupResource(Action):
@@ -146,6 +165,7 @@ def code_values(obs: dict[str, Any]) -> dict[str, list[str]]:
         "zone_id": list(obs["zones"]),
         "required_resource_type": [t["resource_type"] for t in types],
         "requested_resource_id": sorted({r for t in types for r in t["resource_ids"]}),
+        "resource_requirements.attribute": [a["name"] for a in obs["resource_attributes"]],
     }
 
 
@@ -205,6 +225,12 @@ def tool_schemas(available: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
             if arg == "values":
                 props = params["$defs"]["TaskValues"]["properties"]
                 for field, field_allowed in allowed.items():
+                    if field == "resource_requirements.attribute":
+                        # 선언된 속성이 없으면 enum을 걸지 않는다(빈 enum은 스키마 오류)
+                        if field_allowed:
+                            requirement = params["$defs"]["RequirementValue"]["properties"]
+                            _enum(requirement["attribute"], field_allowed)
+                        continue
                     _enum(props[field], field_allowed)
             else:
                 _enum(params["properties"][arg], allowed)

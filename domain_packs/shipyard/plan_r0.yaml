@@ -2,6 +2,7 @@
 # 로더가 revision 1, lifecycle READY, critical field CONFIRMED(source_ref "fixture:plan_r0")로 만든다.
 # 가정: latest_end는 latest_start + duration.
 # E의 "D 종료 후 15분"은 SEP-HOT-FLAM(gap 15)으로만 표현한다. predecessors는 모두 빈 배열.
+# resource_requirements는 작업 값이다(작업 유형 기본값에 더해진다). 골리앗 인양(K, Q)만 둔다.
 tasks:
   - task_id: B                  # B구역 하부 작업, 고정
     unit_id: UB
@@ -72,6 +73,7 @@ tasks:
     latest_end: 1560            # 10/13(화) 11:00
     required_resource_type: GANTRY
     requested_resource_id: SITE-GC-01
+    resource_requirements: [{ attribute: max_load, op: GTE, value: 100 }, { attribute: usage, op: CONTAINS, value: 블록 }]
     predecessors: []
     movable: { time: false, resource: false }
 
@@ -114,6 +116,7 @@ tasks:
     latest_end: 2970            # 10/14(수) 10:30
     required_resource_type: GANTRY
     requested_resource_id: SITE-GC-01
+    resource_requirements: [{ attribute: max_load, op: GTE, value: 100 }, { attribute: usage, op: CONTAINS, value: 블록 }]
     predecessors: []
     movable: { time: false, resource: false }
 

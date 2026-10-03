@@ -17,6 +17,8 @@ CandidateKind = Literal["REPLAN", "RECONFIRM"]
 ValidationStatus = Literal["PASS", "FAIL", "INCOMPLETE"]
 ScopeLevel = Literal["L0", "L1", "L2"]
 Axis = Literal["TIME", "RESOURCE"]
+AttributeType = Literal["NUMBER", "LIST"]
+RequirementOp = Literal["GTE", "LTE", "CONTAINS"]  # 코어가 아는 비교는 이 셋뿐이다 (CV-17)
 
 
 class Frozen(BaseModel):
@@ -26,11 +28,29 @@ class Frozen(BaseModel):
 # ── Pack 정의 ──────────────────────────────────────────────────
 
 
+class ResourceAttribute(Frozen):
+    """Pack이 선언한 자원 속성. 코어는 속성 이름을 모른다 (CV-17)."""
+
+    name: str
+    type: AttributeType
+    unit: str = ""
+    display_name: str = Field(min_length=1)  # 화면 표시용
+
+
+class Requirement(Frozen):
+    """자원 요구 조건 하나. GTE·LTE는 NUMBER 속성과 수치, CONTAINS는 LIST 속성과 문자열."""
+
+    attribute: str
+    op: RequirementOp
+    value: int | float | str
+
+
 class WorkType(Frozen):
     work_type: str
     display_name: str = Field(min_length=1)  # 화면 표시용
     hazard_tags: tuple[str, ...] = Field(min_length=1)
     critical_fields: tuple[str, ...]
+    resource_requirements: tuple[Requirement, ...] = ()  # 이 유형 작업의 기본 요구 조건
 
 
 class Rule(Frozen):
@@ -86,11 +106,18 @@ class ZoneRelation(Frozen):
 
 class Resource(Frozen):
     resource_id: str
+    display_name: str = ""  # 화면 표시용
     resource_type: str
     owner_unit_id: str
     allowed_unit_ids: tuple[str, ...]
+    allowed_zone_ids: tuple[str, ...]  # 필수. ("*",)는 모든 구역 (CV-18)
     capacity: Literal[1] = 1
     available_intervals: tuple[tuple[int, int], ...]
+    attributes: dict[str, int | float | tuple[str, ...]] = Field(
+        default_factory=dict
+    )  # Pack 선언 속성 값
+    cost_per_hour: int | float | None = None  # 데이터만. 계산·판정에 쓰지 않는다 (CV-22)
+    note: str = ""
 
 
 class Predecessor(Frozen):
@@ -125,10 +152,17 @@ class Task(Frozen):
     latest_end: int
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
+    default_requirements: tuple[Requirement, ...] = ()  # 서버가 Pack의 작업 유형에서 도출 (CV-19)
+    resource_requirements: tuple[Requirement, ...] = ()  # 작업 값. 기본값에 더하기만 한다 (CV-19)
     predecessors: tuple[Predecessor, ...] = ()
     movable: Movable
     fields: dict[str, FieldRecord]
     lifecycle: Lifecycle
+
+    @property
+    def requirements(self) -> tuple[Requirement, ...]:
+        """자원이 모두 맞춰야 하는 조건 = 작업 유형 기본값 + 작업 값."""
+        return (*self.default_requirements, *self.resource_requirements)
 
     @model_validator(mode="after")
     def _window(self) -> "Task":

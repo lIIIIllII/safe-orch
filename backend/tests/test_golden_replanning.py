@@ -3,7 +3,7 @@
 대상은 Run 행, AgentStep 행(created_at 제외), Gateway CommandResult(created_at 제외), 모델이 받은
 입력(System·Human 메시지, 바인딩한 도구, bind 인자)이다.
 uuid4 ID와 hash는 실행마다 달라지므로 등장 순서대로 치환한 뒤 hash한다.
-스킬 층(replanning-p9, skill 인자·open_skills)에서 다시 만들었다. step 순서와 결과는 그 전과 같다.
+자원 모델 확장 ①(replanning-p10, 자원 조회 제외 사유 모양)에서 다시 만들었다. step 순서·Action·결과는 그 전과 같다.
 """
 
 import json
@@ -33,10 +33,10 @@ PREFIXED_ID = re.compile(r"(?<![0-9a-z_])([a-z]+)_[0-9a-f]{32}(?![0-9a-f])")
 BARE_ID = re.compile(r"(?<![0-9a-f_])[0-9a-f]{32}(?![0-9a-f])")
 HASH = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 REQ = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-# 스킬 층 구현 뒤 다시 만든 값
+# 자원 모델 확장 ① 뒤 다시 만든 값
 GOLDEN = {
-    "plan_b": "27454e925b4197400e819632f67e51ed25ea14f6a151710080441709d908ccd3",
-    "rejections": "f651126bc04b9a60169fc8edae90b2875284c43a3e0d23defd036ef870ef7e9b",
+    "plan_b": "6b0ea1b3fb784a5e6e2e8ca68f709bcd54bacf3d57c9fa3cedb3dbdd2726be42",
+    "rejections": "734d6e2653031e524a7c4b2b8bfce56babed23f8683313899cb9f261f3197dca",
 }
 
 

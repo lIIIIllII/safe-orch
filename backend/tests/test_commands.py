@@ -1,5 +1,6 @@
 """Command Service·Consultation. 게이트 경로, 기본안 B, T01·T11–T15·T18–T23·T35·T45·T51."""
 
+import json
 import sqlite3
 import threading
 import uuid
@@ -299,6 +300,32 @@ def test_form_records_confirmed_fields_movable_and_consents(seeded):
         ("planner_a", {"requested_resource_id": "X-CR-99"}, "UNKNOWN_RESOURCE"),
         ("planner_a", {"required_resource_type": "TRUCK"}, "RESOURCE_TYPE_MISMATCH"),
         ("planner_a", {"requested_resource_id": "B-CR-01"}, "RESOURCE_NOT_AUTHORIZED"),
+        ("planner_a", {"zone_id": "D"}, "RESOURCE_ZONE_NOT_ALLOWED"),  # A-CR-01은 B·C 구역
+        (
+            "planner_a",
+            {"resource_requirements": [{"attribute": "max_load", "op": "GTE", "value": 40}]},
+            "RESOURCE_REQUIREMENT_NOT_MET",  # A-CR-01은 25 t
+        ),
+        (
+            "planner_a",
+            {"resource_requirements": [{"attribute": "reach", "op": "GTE", "value": 1}]},
+            "INVALID_REQUIREMENT",  # 선언되지 않은 속성
+        ),
+        (
+            "planner_a",
+            {"resource_requirements": [{"attribute": "usage", "op": "LTE", "value": 1}]},
+            "INVALID_REQUIREMENT",  # 목록 속성에 수치 비교
+        ),
+        (
+            "planner_a",
+            {
+                "work_type": "HOT_WORK",
+                "required_resource_type": None,
+                "requested_resource_id": None,
+                "resource_requirements": [{"attribute": "max_load", "op": "GTE", "value": 1}],
+            },
+            "INVALID_REQUIREMENT",  # 자원을 쓰지 않는 작업의 요구 조건
+        ),
         ("planner_a", {"predecessors": [{"task_id": "Z"}]}, "PREDECESSOR_NOT_FOUND"),
     ],
 )
@@ -657,3 +684,39 @@ def test_dispatch_dedupe_and_pending_resume_unique(seeded):
             " VALUES (?, 'RESUME_RUN', '{}', 'x')",
             (sid,),
         )
+
+
+def test_form_requirements_are_added_to_work_type_defaults(seeded):
+    """작업 값은 조건을 더하기만 한다. 작업 유형 기본값은 서버가 붙인다 (CV-19)."""
+    own = [{"attribute": "max_load", "op": "GTE", "value": 40}]
+    form = _form_a(seeded, requested_resource_id="SITE-CR-01", resource_requirements=own)
+    assert submit_task_request(seeded, "planner_a", _key(), form).status == "APPLIED"
+    with db.read() as conn:
+        a = next(t for t in list_current_tasks(conn, seeded.site_id, seeded) if t.task_id == "A")
+        stored = conn.execute(
+            "SELECT resource_requirements FROM task WHERE task_id = 'A'"
+        ).fetchone()[0]
+    assert json.loads(stored) == own  # DB에는 작업 값만
+    assert [r.model_dump() for r in a.requirements] == [
+        {"attribute": "max_load", "op": "GTE", "value": 20},  # LIFTING 기본값
+        *own,
+    ]
+    # 확인 상태는 resource 필드 하나에 묶인다
+    assert a.fields["resource"].status == "CONFIRMED"
+    assert a.fields["resource"].value == {
+        "required_resource_type": "CRANE",
+        "requested_resource_id": "SITE-CR-01",
+        "resource_requirements": own,
+    }
+    # 낮은 값을 넣어도 기본값은 남는다: 기본값(≥ 20)을 못 맞추는 자원은 거절된다
+    low = _form_a(
+        seeded,
+        task_id="A2",
+        resource_requirements=[{"attribute": "max_load", "op": "GTE", "value": 1}],
+    )
+    with db.write() as tx:
+        tx.execute(
+            "UPDATE resource SET attributes = '{\"max_load\": 10}' WHERE resource_id = 'A-CR-01'"
+        )
+    out = submit_task_request(seeded, "planner_a", _key(), low)
+    assert out.reason_codes == ("RESOURCE_REQUIREMENT_NOT_MET",)

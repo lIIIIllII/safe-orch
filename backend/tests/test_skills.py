@@ -8,6 +8,7 @@ from app.agents import runtime, skills
 from app.agents.observers.replanning import assignable_resources, build_observation
 from app.agents.registry import BINDINGS
 from app.agents.specs import coordination, event_response, intake, replanning
+from app.domain.models import Requirement
 from app.store import db
 from app.store.repos.runs import list_steps
 
@@ -193,14 +194,62 @@ def test_resource_eligibility_type_permission_and_availability(with_a):
     a = facts.task_map()["A"]
     listed = assignable_resources(facts, a, "UA")
     assert [r["resource_id"] for r in listed["assignable"]] == ["A-CR-01", "SITE-CR-01"]
-    assert listed["excluded"] == [{"resource_id": "B-CR-01", "reason": "NOT_ALLOWED"}]  # 권한
+    assert listed["excluded"] == [
+        {"resource_id": "B-CR-01", "reasons": [{"reason": "NOT_ALLOWED"}]}  # 권한
+    ]
     assert "SITE-GC-01" not in str(listed)  # 유형이 다르면 대상이 아니다
     closed = [
         r.model_copy(update={"available_intervals": ()}) if r.resource_id == "SITE-CR-01" else r
         for r in facts.resources
     ]
     no_slot = assignable_resources(with_facts(snapshot, resources=tuple(closed)).facts(), a, "UA")
-    assert {"resource_id": "SITE-CR-01", "reason": "NO_AVAILABILITY"} in no_slot["excluded"]  # 가용
+    assert {"resource_id": "SITE-CR-01", "reasons": [{"reason": "NO_AVAILABILITY"}]} in no_slot[
+        "excluded"
+    ]  # 가용
+
+
+def test_listing_reports_zone_and_requirement_reasons(with_a):
+    """자원 조회의 제외 사유에 구역·요구 조건(어느 속성인지)이 나온다 (CV-20)."""
+    snapshot = take_snapshot(with_a)
+
+    def listed(**changes):
+        tasks = tuple(
+            t.model_copy(update=changes) if t.task_id == "A" else t for t in snapshot.facts().tasks
+        )
+        facts = with_facts(snapshot, tasks=tasks).facts()
+        return assignable_resources(facts, facts.task_map()["A"], "UA")
+
+    in_d = listed(zone_id="D")  # A-CR-01은 B·C, SITE-CR-01은 B·C·D, B-CR-01은 B·D
+    assert in_d["assignable"] == [{"resource_id": "SITE-CR-01"}]
+    assert in_d["excluded"] == [
+        {"resource_id": "A-CR-01", "reasons": [{"reason": "ZONE_NOT_ALLOWED"}]},
+        {"resource_id": "B-CR-01", "reasons": [{"reason": "NOT_ALLOWED"}]},
+    ]
+    need = (
+        Requirement(attribute="max_load", op="GTE", value=40),
+        Requirement(attribute="usage", op="CONTAINS", value="블록"),
+    )
+    heavy = listed(resource_requirements=need[:1])
+    assert heavy["assignable"] == [{"resource_id": "SITE-CR-01"}]
+    assert heavy["excluded"][0] == {
+        "resource_id": "A-CR-01",
+        "reasons": [{"reason": "REQUIREMENT_NOT_MET", "attribute": "max_load"}],
+    }
+    both = listed(zone_id="D", resource_requirements=need)
+    assert both["assignable"] == []
+    assert {x["resource_id"]: x["reasons"] for x in both["excluded"]} == {
+        "A-CR-01": [
+            {"reason": "ZONE_NOT_ALLOWED"},
+            {"reason": "REQUIREMENT_NOT_MET", "attribute": "max_load"},
+            {"reason": "REQUIREMENT_NOT_MET", "attribute": "usage"},
+        ],
+        "B-CR-01": [
+            {"reason": "NOT_ALLOWED"},
+            {"reason": "REQUIREMENT_NOT_MET", "attribute": "max_load"},
+            {"reason": "REQUIREMENT_NOT_MET", "attribute": "usage"},
+        ],
+        "SITE-CR-01": [{"reason": "REQUIREMENT_NOT_MET", "attribute": "usage"}],
+    }
 
 
 def test_ineligible_resource_is_rejected_at_execution(with_a):

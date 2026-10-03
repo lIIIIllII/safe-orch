@@ -69,40 +69,32 @@ def test_zone_relations_adjacent_stored_both_ways(seeded):
 def test_resources(seeded):
     with db.read() as conn:
         res = list_resources(conn, "YARD-01")
+
+    def row(rid, name, rtype, owner, units, zones, load, usage, cost, note=""):
+        return {
+            "resource_id": rid,
+            "display_name": name,
+            "resource_type": rtype,
+            "owner_unit_id": owner,
+            "allowed_unit_ids": units,
+            "allowed_zone_ids": zones,
+            "capacity": 1,
+            "available_intervals": ((0, 3360),),
+            "attributes": {"max_load": load, "usage": usage},
+            "cost_per_hour": cost,
+            "note": note,
+        }
+
+    # fmt: off
     assert [r.model_dump() for r in res] == [
-        {
-            "resource_id": "A-CR-01",
-            "resource_type": "CRANE",
-            "owner_unit_id": "UA",
-            "allowed_unit_ids": ("UA",),
-            "capacity": 1,
-            "available_intervals": ((0, 3360),),
-        },
-        {
-            "resource_id": "B-CR-01",
-            "resource_type": "CRANE",
-            "owner_unit_id": "UB",
-            "allowed_unit_ids": ("UB",),
-            "capacity": 1,
-            "available_intervals": ((0, 3360),),
-        },
-        {
-            "resource_id": "SITE-CR-01",
-            "resource_type": "CRANE",
-            "owner_unit_id": "SITE",
-            "allowed_unit_ids": ("UA",),
-            "capacity": 1,
-            "available_intervals": ((0, 3360),),
-        },
-        {
-            "resource_id": "SITE-GC-01",
-            "resource_type": "GANTRY",
-            "owner_unit_id": "SITE",
-            "allowed_unit_ids": ("UA", "UB"),
-            "capacity": 1,
-            "available_intervals": ((0, 3360),),
-        },
+        row("A-CR-01", "A사 이동식 크레인 1호", "CRANE", "UA", ("UA",), ("B", "C"), 25, ("일반",), 150000),
+        row("B-CR-01", "B사 이동식 크레인 1호", "CRANE", "UB", ("UB",), ("B", "D"), 25, ("일반",), 150000),
+        row("SITE-CR-01", "현장 공용 크레인 1호", "CRANE", "SITE", ("UA",), ("B", "C", "D"), 50, ("일반",),
+            220000),
+        row("SITE-GC-01", "안벽 골리앗 크레인 1호", "GANTRY", "SITE", ("UA", "UB"), ("F", "H"), 300,
+            ("블록", "일반"), 900000, "안벽 레일 구간 전용"),
     ]
+    # fmt: on
 
 
 # fmt: off
@@ -164,7 +156,11 @@ def test_task_fields_match_a8(seeded):
         "duration": _confirmed(30),
         "window": _confirmed({"earliest_start": 60, "latest_start": 90, "latest_end": 120}),
         "resource": _confirmed(
-            {"required_resource_type": "CRANE", "requested_resource_id": "A-CR-01"}
+            {
+                "required_resource_type": "CRANE",
+                "requested_resource_id": "A-CR-01",
+                "resource_requirements": [],  # 작업 값만. 작업 유형 기본값은 넣지 않는다
+            }
         ),
     }
     assert dumped["E"] == {
@@ -181,8 +177,8 @@ def test_current_task_revision_is_max(seeded):
         tx.execute(
             "INSERT INTO task SELECT site_id, task_id, 2, unit_id, owner_actor_id, work_type,"
             " zone_id, duration, 60, latest_start, latest_end, required_resource_type,"
-            " requested_resource_id, predecessors, movable, fields, lifecycle"
-            " FROM task WHERE task_id = 'E'"
+            " requested_resource_id, resource_requirements, predecessors, movable, fields,"
+            " lifecycle FROM task WHERE task_id = 'E'"
         )
     with db.read() as conn:
         e = next(t for t in list_current_tasks(conn, "YARD-01", seeded) if t.task_id == "E")

@@ -18,6 +18,7 @@ import {
   endReason,
 } from '../labels'
 import { Code } from './common'
+import { attributeName, useEnv } from '../context'
 import { delayText } from '../time'
 import type { Run } from './ReviewPanel'
 
@@ -183,10 +184,12 @@ function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x)
 }
 
-type Rid = { resource_id: string; reason?: string }
+type Why = { reason: string; attribute?: string }
+type Rid = { resource_id: string; reasons?: Why[] }
 
 /** 자원 조회 결과: 배정 가능 자원과 제외 자원·이유. */
 function ListResult({ tr }: { tr: Record<string, unknown> }) {
+  const { meta } = useEnv()
   const assignable = (tr.assignable as Rid[]) ?? []
   const excluded = (tr.excluded as Rid[]) ?? []
   return (
@@ -218,7 +221,14 @@ function ListResult({ tr }: { tr: Record<string, unknown> }) {
               ? '없음'
               : excluded.map((a) => (
                   <span key={a.resource_id} className="tag tag-warn">
-                    {a.resource_id} — {EXCLUDE_REASON[a.reason ?? ''] ?? a.reason} <code>{a.reason}</code>
+                    {a.resource_id} —{' '}
+                    {(a.reasons ?? []).map((w, i) => (
+                      <span key={`${w.reason}:${w.attribute ?? ''}`}>
+                        {i > 0 && ', '}
+                        {EXCLUDE_REASON[w.reason] ?? w.reason}
+                        {w.attribute && `(${attributeName(meta, w.attribute)})`} <code>{w.reason}</code>
+                      </span>
+                    ))}
                   </span>
                 ))}
           </td>

@@ -14,6 +14,7 @@ from app.agents.observe import Observation, budget_remaining, last_guard, recent
 from app.agents.specs import intake as spec
 from app.clock import site_now
 from app.domain.calendar import now_view, site_time
+from app.domain.eligibility import ResourceNeed, exclusion_reasons
 from app.packs.loader import LoadedPack
 from app.store.repos.messages import list_run_messages
 from app.store.repos.resources import list_resources
@@ -35,13 +36,26 @@ def _spans(pack: LoadedPack, intervals: Any) -> list[list[str]]:
 def lookup_resources(
     conn: sqlite3.Connection, pack: LoadedPack, unit_id: str, resource_type: str | None
 ) -> dict[str, Any]:
-    """LOOKUP_RESOURCE 결과: 유형별 자원, 요청자 Unit 사용 가능 여부, 가용 구간(Replanning LIST와 같은 기준)."""
+    """LOOKUP_RESOURCE 결과: 유형별 자원, 사용 가능 구역·속성 값, 요청자 Unit이 쓸 수 없는 이유, 가용 구간.
+
+    쓸 수 없는 이유는 적격성 함수 결과다 (CV-20). 조회에는 작업 값이 없으므로 Unit·가용 구간까지만 나온다.
+    구역·요구 조건은 값 확인 요청 때 같은 함수가 판정하고, 여기서는 판단 근거(구역·속성 값)를 준다.
+    """
     resources = [
         {
             "resource_id": r.resource_id,
+            "display_name": r.display_name,
             "resource_type": r.resource_type,
             "owner_unit_id": r.owner_unit_id,
             "usable_by_requester": unit_id in r.allowed_unit_ids,
+            "unusable_reasons": [
+                e.model_dump(exclude_none=True)
+                for e in exclusion_reasons(
+                    ResourceNeed(required_resource_type=r.resource_type), r, unit_id
+                )
+            ],
+            "allowed_zone_ids": list(r.allowed_zone_ids),
+            "attributes": r.model_dump(mode="json")["attributes"],
             "available_intervals": [list(iv) for iv in r.available_intervals],
             "available_local": _spans(pack, r.available_intervals),
         }
@@ -128,6 +142,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 "work_type": k,
                 "display_name": v.display_name,
                 "critical_fields": list(v.critical_fields),
+                # 이 유형 작업에 서버가 붙이는 기본 자원 요구 조건 (CV-19)
+                "resource_requirements": [r.model_dump() for r in v.resource_requirements],
             }
             for k, v in sorted(pack.work_types.items())
         ],
@@ -143,6 +159,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             }
             for code, name in sorted(pack.resource_types.items())
         ],
+        # Pack이 선언한 자원 속성(요구 조건과 자원 속성 값의 이름)
+        "resource_attributes": [a.model_dump() for a in pack.resource_attributes.values()],
         "resource_lookups": list(by_filters.values()),
         "questions": questions,
         "confirmations": confirmations,

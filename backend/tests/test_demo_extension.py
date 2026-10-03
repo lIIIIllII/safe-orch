@@ -475,7 +475,14 @@ def test_meta_api(client, seeded):
         "display_name": "인양",
         "hazard_tags": ["LIFTING"],
         "critical_fields": ["zone_id", "duration", "window", "resource"],
+        "resource_requirements": [{"attribute": "max_load", "op": "GTE", "value": 20}],
     }
+    assert meta["work_types"]["HOT_WORK"]["resource_requirements"] == []
+    assert meta["resource_attributes"] == [
+        {"name": "max_load", "type": "NUMBER", "unit": "t", "display_name": "최대 하중"},
+        {"name": "usage", "type": "LIST", "unit": "", "display_name": "용도"},
+    ]
+    assert meta["currency"] == "KRW"
     assert {r["rule_id"]: (r["type"], r["display_name"]) for r in meta["rules"]} == {
         "SEP-LIFT-BELOW": ("SEPARATION", "인양–하부 작업 분리"),
         "SEP-HOT-FLAM": ("SEPARATION", "화기–인화성 작업 분리(15분)"),
@@ -493,6 +500,9 @@ def test_meta_api(client, seeded):
     ]
     gc = next(r for r in meta["resources"] if r["resource_id"] == "SITE-GC-01")
     assert (gc["resource_type"], gc["allowed_unit_ids"]) == ("GANTRY", ["UA", "UB"])
+    assert (gc["display_name"], gc["allowed_zone_ids"]) == ("안벽 골리앗 크레인 1호", ["F", "H"])
+    assert gc["attributes"] == {"max_load": 300, "usage": ["블록", "일반"]}
+    assert (gc["cost_per_hour"], gc["note"]) == (900000, "안벽 레일 구간 전용")
     assert client.get(f"/api/sites/{SITE}/meta").status_code == 401
     assert client.get("/api/sites/NOPE/meta", headers={"X-Actor": "planner_a"}).status_code == 404
 
@@ -520,7 +530,13 @@ def test_dev_scenario_api(client, seeded):
         "latest_end": 90,
         "required_resource_type": "CRANE",
         "requested_resource_id": "A-CR-01",
+        "resource_requirements": [],
     }
+    # 골리앗 인양의 큰 값은 작업 값이다(작업 유형 기본값은 공통 하한만)
+    assert requests[1]["form"]["resource_requirements"] == [
+        {"attribute": "max_load", "op": "GTE", "value": 100},
+        {"attribute": "usage", "op": "CONTAINS", "value": "블록"},
+    ]
     assert all(r["label"] for r in requests)
     assert body["event_reports"][0]["body"] == {
         "event_type": "DELAY",

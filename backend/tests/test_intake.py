@@ -35,6 +35,7 @@ VALUES_A = {
     "latest_end": 90,
     "required_resource_type": "CRANE",
     "requested_resource_id": "A-CR-01",
+    "resource_requirements": [],
 }
 
 
@@ -548,3 +549,85 @@ def test_time_invalid_is_rejected_without_using_a_round(seeded):
     ]
     assert steps[1]["observation"]["last_check"]["reason_code"] == "TIME_INVALID"
     assert (run.status, run.human_rounds_used) == ("WAITING_HUMAN", 1)
+
+
+# ── 자원 속성·사용 가능 구역·요구 조건 (CV-17~20) ────────────────
+
+
+def test_observation_has_attribute_declarations_and_resource_facts(seeded):
+    """관찰: 속성 선언, 작업 유형 기본 요구 조건, 자원 조회의 표시 이름·구역·속성 값·쓸 수 없는 이유."""
+    run = _to_request(seeded)
+    obs = _steps(run.run_id)[1]["observation"]
+    assert obs["resource_attributes"] == [
+        {"name": "max_load", "type": "NUMBER", "unit": "t", "display_name": "최대 하중"},
+        {"name": "usage", "type": "LIST", "unit": "", "display_name": "용도"},
+    ]
+    defaults = {w["work_type"]: w["resource_requirements"] for w in obs["work_types"]}
+    assert defaults["LIFTING"] == [{"attribute": "max_load", "op": "GTE", "value": 20}]
+    assert defaults["HOT_WORK"] == []
+    found = {r["resource_id"]: r for r in obs["resource_lookups"][0]["resources"]}
+    assert {
+        k: found["SITE-CR-01"][k]
+        for k in ("display_name", "allowed_zone_ids", "attributes", "unusable_reasons")
+    } == {
+        "display_name": "현장 공용 크레인 1호",
+        "allowed_zone_ids": ["B", "C", "D"],
+        "attributes": {"max_load": 50, "usage": ["일반"]},
+        "unusable_reasons": [],
+    }
+    # 쓸 수 없는 이유는 적격성 함수 결과다(요청자 Unit UA는 B-CR-01을 쓸 수 없다)
+    assert found["B-CR-01"]["unusable_reasons"] == [{"reason": "NOT_ALLOWED"}]
+    assert found["B-CR-01"]["usable_by_requester"] is False
+    # 요구 조건의 속성 인자에는 선언된 속성 이름만 enum으로 건다
+    tools = {
+        t["function"]["name"]: t["function"] for t in _steps(run.run_id)[1]["available_actions"]
+    }
+    defs = tools["REQUEST_CONFIRMATION"]["parameters"]["$defs"]
+    assert defs["RequirementValue"]["properties"]["attribute"]["enum"] == ["max_load", "usage"]
+    static = json.dumps(spec.tool_schemas({name: {} for name in spec.ACTIONS}), ensure_ascii=False)
+    assert "max_load" not in static and "max_load" not in prompt.SYSTEM
+
+
+def test_requirements_are_checked_confirmed_and_stored(seeded):
+    """값의 요구 조건은 폼과 같은 적격성 검사를 거치고, resource 필드와 함께 확인된다."""
+    pack = seeded
+    need = [{"attribute": "max_load", "op": "GTE", "value": 40}]
+    weak = {**VALUES_A, "resource_requirements": need}  # A-CR-01은 25 t
+    far = {**VALUES_A, "zone_id": "D"}  # A-CR-01은 B·C 구역
+    good = {**weak, "requested_resource_id": "SITE-CR-01"}  # 50 t
+    run = _to_request(pack, [_request(weak), _request(far), _request(good)])
+    s0, s1, _ = _steps(run.run_id)
+    assert s0["guard"]["reason_code"] == s1["guard"]["reason_code"] == "TASKSPEC_INVALID"
+    assert s0["tool_result"]["reason_codes"] == ["RESOURCE_REQUIREMENT_NOT_MET"]
+    assert s1["tool_result"]["reason_codes"] == ["RESOURCE_ZONE_NOT_ALLOWED"]
+    [confirm] = _messages("CONFIRMATION")
+    # 서버 문구는 작업 유형 기본값과 요청 값을 함께 보여 준다(표시 이름·단위는 Pack 선언)
+    assert "자원 CRANE SITE-CR-01(요구 조건: 최대 하중 ≥ 20 t, 최대 하중 ≥ 40 t)" in confirm["body"]
+    _reply(pack, confirm["message_id"])
+    run_until_idle(pack, model_factory=Router(intake=[_complete(good)]).factory())
+    a = _task(pack, "A")
+    assert [r.model_dump() for r in a.resource_requirements] == need
+    assert a.fields["resource"].value == {
+        "required_resource_type": "CRANE",
+        "requested_resource_id": "SITE-CR-01",
+        "resource_requirements": need,
+    }
+    assert a.fields["resource"].source_ref == f"message:{confirm['message_id']}"
+
+
+def test_values_check_text_without_requirements(seeded):
+    """요구 조건이 없으면 서버 문구에 요구 조건이 나오지 않는다."""
+    from app.agents.executors.intake import values_check_text
+
+    hot = {
+        **VALUES_A,
+        "work_type": "HOT_WORK",
+        "required_resource_type": None,
+        "requested_resource_id": None,
+    }
+    assert "요구 조건" not in values_check_text(seeded, "X", hot)
+    block = {
+        **VALUES_A,
+        "resource_requirements": [{"attribute": "usage", "op": "CONTAINS", "value": "블록"}],
+    }
+    assert "(요구 조건: 최대 하중 ≥ 20 t, 용도 블록 포함)" in values_check_text(seeded, "X", block)

@@ -6,7 +6,13 @@ import pytest
 from conftest import add_task, make_task, take_snapshot, with_facts
 
 from app.domain.hashes import candidate_hash
-from app.domain.models import Conflict, FeedbackConstraint, Movable, SolverResult
+from app.domain.models import (
+    Conflict,
+    FeedbackConstraint,
+    Movable,
+    Requirement,
+    SolverResult,
+)
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
 from app.solver.candidate import build_candidate
@@ -127,6 +133,49 @@ def test_unauthorized_filtered_when_authorized_remains(resource_movable_a):
         snap, _conflict(resource_movable_a, snap), "UA", "L0", {"A": ["B-CR-01", "SITE-CR-01"]}
     )
     assert spec.resource_alternatives == {"A": ("SITE-CR-01",)}
+
+
+def _resources(snapshot, resource_id, **changes):
+    return with_facts(
+        snapshot,
+        resources=tuple(
+            r.model_copy(update=changes) if r.resource_id == resource_id else r
+            for r in snapshot.facts().resources
+        ),
+    )
+
+
+def _tasks(snapshot, task_id, **changes):
+    return with_facts(
+        snapshot,
+        tasks=tuple(
+            t.model_copy(update=changes) if t.task_id == task_id else t
+            for t in snapshot.facts().tasks
+        ),
+    )
+
+
+def test_alternative_filtered_by_zone_and_requirement(resource_movable_a, monkeypatch):
+    """대체 자원 필터는 적격성 함수다: 구역·요구 조건이 안 맞으면 Solver 입력에 들어가지 않는다 (CV-20)."""
+    pack = resource_movable_a
+    snap = take_snapshot(pack)
+    try_site = {"A": ["SITE-CR-01"]}
+    assert _run(pack, snap, "L0", try_site)[0].resource_alternatives == {"A": ("SITE-CR-01",)}
+    _forbid_solver(monkeypatch)
+    for changed in (
+        _resources(snap, "SITE-CR-01", allowed_zone_ids=("C", "D")),  # A는 B구역
+        _resources(
+            snap, "SITE-CR-01", attributes={"max_load": 10, "usage": ("일반",)}
+        ),  # 기본값 ≥ 20
+        _tasks(
+            snap,
+            "A",
+            resource_requirements=(Requirement(attribute="max_load", op="LTE", value=30),),
+        ),  # 작업 값 ≤ 30: A-CR-01(25 t)은 맞고 SITE-CR-01(50 t)은 안 맞는다
+    ):
+        with pytest.raises(SearchSpecError) as exc:
+            _run(pack, changed, "L0", try_site)
+        assert exc.value.reason_code == "RESOURCE_NOT_AUTHORIZED"
 
 
 # ── SearchSpec 오류·hash ───────────────────────────────────────
@@ -426,3 +475,26 @@ def test_search_key_changes_with_ready_set_and_in_scope_constraints(with_a):
     assert _key(with_a, _fix(snapshot, "A", axes=("TIME",)))[0] != key
     assert _key(with_a, _fix(snapshot, "C"))[0] == key
     assert _key(with_a, _fix(snapshot, "C"), "L1")[0] != _key(with_a, snapshot, "L1")[0]
+
+
+def test_search_key_includes_zone_attributes_and_requirements(with_a):
+    """구역·속성·요구 조건은 Solver 입력이다. 표시 이름·메모·비용은 아니다 (CV-21)."""
+    snapshot = take_snapshot(with_a)
+    key, _ = _key(with_a, snapshot)
+    for changed in (
+        _resources(snapshot, "SITE-CR-01", allowed_zone_ids=("*",)),
+        _resources(snapshot, "SITE-CR-01", attributes={"max_load": 60, "usage": ("일반",)}),
+        _tasks(
+            snapshot,
+            "A",
+            resource_requirements=(Requirement(attribute="max_load", op="GTE", value=22),),
+        ),
+        _tasks(snapshot, "C", default_requirements=()),
+    ):
+        assert _key(with_a, changed)[0] != key
+    shown = _resources(
+        snapshot, "SITE-CR-01", display_name="다른 이름", note="메모", cost_per_hour=1
+    )
+    other_key, other_digest = _key(with_a, shown)
+    assert other_key == key
+    assert other_digest != _key(with_a, snapshot)[1]  # 무결성 hash는 snapshot 전체를 따른다

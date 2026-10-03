@@ -19,7 +19,7 @@ from app.agents.specs import intake as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "intake-p8"
+PROMPT_VERSION = "intake-p9"
 
 
 def tool_catalog() -> str:
@@ -63,9 +63,12 @@ Goal: {goal}
 요청 문장의 상대 날짜(오늘·내일·모레)와 날짜 없는 시각은 현장의 지금 기준이다.
 - 도구의 시각 인자는 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다. 분으로 바꾸지 않는다(서버가 바꾼다). 관찰의 날짜·시각 값(site_now.local, work_hours, values_local, available_local)이 같은 형식이고 요일이 붙어 있다.
 - 요청(request): 작업 ID(task_id), 요청 문장(quoted_text, 인용), 요청자와 Unit이다. 작업 ID는 구역이 아니다.
-- 작업 유형(work_types): 코드·현장 표시 이름·확인해야 할 필드(critical_fields)다. 구역(zones)은 구역 ID 목록이다.
+- 작업 유형(work_types): 코드·현장 표시 이름·확인해야 할 필드(critical_fields)·기본 자원 요구 조건(resource_requirements)이다. 구역(zones)은 구역 ID 목록이다.
+- 자원 속성(resource_attributes): 이 현장이 선언한 자원 속성의 이름(name)·자료형(type: NUMBER 수치, LIST 목록)·단위(unit)·현장 표시 이름이다.
+- 자원 요구 조건: 자원의 속성 값이 맞춰야 하는 비교다(GTE 수치 이상, LTE 수치 이하, CONTAINS 목록 포함). 작업의 요구 조건은 작업 유형의 기본 요구 조건에 값의 resource_requirements가 더해진 것이고, 값으로 기본 요구 조건을 빼거나 낮출 수 없다.
 - 자원 유형(resource_types): 자원 유형 코드·현장 표시 이름·그 유형의 자원 ID다. 값과 조회의 코드는 이 목록과 work_types·zones의 코드만 쓴다.
-- 자원 조회 결과(resource_lookups): 자원 유형, 요청자 Unit이 쓸 수 있는지(usable_by_requester), 가용 구간이다. \
+- 자원 조회 결과(resource_lookups): 자원 유형과 현장 표시 이름, 요청자 Unit이 쓸 수 있는지(usable_by_requester)와 쓸 수 없는 이유(unusable_reasons), \
+쓸 수 있는 구역(allowed_zone_ids, "*"는 모든 구역), 속성 값(attributes), 가용 구간이다. 요청 자원이 작업 구역과 요구 조건에 맞는지는 값 확인 요청 때 서버가 검증한다. \
 같은 Context에서 같은 조건의 조회는 같은 결과를 돌려준다. 지금까지의 조회 결과는 resource_lookups에 모두 있다.
 - 확인 질문(questions): 물은 필드(field_ids)와 질문(question, 네가 쓴 문장), 상태, 요청자의 답(quoted_answer, 인용)이다.
 - 값 확인 요청(confirmations): 확인을 요청한 값(values)과 상태·결정(ACCEPT 확인, DECLINE 거절)·거절 사유(quoted_comment, 인용)다.
@@ -93,6 +96,7 @@ OBSERVATION_KEYS = (
     "questions",
     "recent_steps",
     "request",
+    "resource_attributes",
     "resource_lookups",
     "resource_types",
     "run",
@@ -142,4 +146,5 @@ PROMPT_FINGERPRINTS = {
     "intake-p6": "62ee72c80a9cb81ec86aa2a372b6258d92d61a142e2e436ab36f063285ae1d73",  # 접수 요령을 TASK_INTAKE 지침으로(1단계 지침 1차)
     "intake-p7": "162d798a30aab6b1b5b6aff27145e73477cc624f38387ef9682713dfc9c0a437",  # 사람과 대화하는 스킬을 상대별로 나눔 (AG-20)
     "intake-p8": "bff8e2276cf36287f65061d14ed59fc3376e455632c29f9fd1120fc2cd065638",  # 도구의 시각 인자는 현장 날짜·시각 문자열, 관찰에 같은 형식의 시각 (AG-21)
+    "intake-p9": "dc87d9d7a1e37fe736228f4571bb356c39440621b6f859954e30d3b8e24ae01e",  # 자원 속성 선언·기본 요구 조건·자원 조회의 구역·속성·이유, 값에 요구 조건 (CV-17·19·20)
 }

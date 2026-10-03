@@ -14,6 +14,7 @@ from app.agents import observe as common
 from app.agents.observe import budget_remaining
 from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
+from app.domain.eligibility import exclusion_reasons
 from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
@@ -72,19 +73,24 @@ def resources_hash(facts: SnapshotContent) -> str:
 
 
 def assignable_resources(facts: SnapshotContent, task: Task, acting_unit_id: str) -> dict[str, Any]:
-    """LIST_ASSIGNABLE_RESOURCES 결과. TRY 필터와 같은 기준(유형·allowed_unit_ids·가용 구간).
+    """LIST_ASSIGNABLE_RESOURCES 결과. TRY 필터·실행 검사와 같은 적격성 함수로 판정한다 (CV-20).
 
     유형이 다른 자원은 대상이 아니므로 목록에 넣지 않는다(excluded는 같은 유형만).
+    excluded의 reasons는 제외 사유 전부다. 요구 조건 사유에는 어느 속성인지(attribute)가 붙는다.
     """
     current = facts.base_assignments()[task.task_id].resource_id
     assignable, excluded = [], []
     for r in sorted(facts.resources, key=lambda r: r.resource_id):
-        if r.resource_type != task.required_resource_type:
+        reasons = exclusion_reasons(task, r, acting_unit_id)
+        if any(e.reason == "TYPE_MISMATCH" for e in reasons):
             continue
-        if acting_unit_id not in r.allowed_unit_ids:
-            excluded.append({"resource_id": r.resource_id, "reason": "NOT_ALLOWED"})
-        elif not r.available_intervals:
-            excluded.append({"resource_id": r.resource_id, "reason": "NO_AVAILABILITY"})
+        if reasons:
+            excluded.append(
+                {
+                    "resource_id": r.resource_id,
+                    "reasons": [e.model_dump(exclude_none=True) for e in reasons],
+                }
+            )
         else:
             assignable.append({"resource_id": r.resource_id})
     return {
@@ -205,7 +211,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             }
         )
 
-    # 자원 적격성(유형·사용 권한·가용 구간). 조회했는지와 무관하게 서버가 계산하고 모델에는 보이지 않는다 (CV-15)
+    # 자원 적격성(유형·사용 권한·가용 구간·구역·요구 조건). 조회했는지와 무관하게 서버가 계산하고 모델에는 보이지 않는다 (CV-15)
     eligible = {}
     for t in facts.tasks:
         if t.unit_id != run.acting_unit_id or not t.required_resource_type:

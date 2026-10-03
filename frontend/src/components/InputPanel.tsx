@@ -3,8 +3,8 @@
 
 import { useState } from 'react'
 import { newKey } from '../api'
-import type { SiteState } from '../types'
-import { useEnv, workTypeName } from '../context'
+import type { Requirement, SiteState } from '../types'
+import { attributeText, requirementText, usableInZone, useEnv, workTypeName } from '../context'
 import type { Run } from './ReviewPanel'
 import { Inbox } from './Inbox'
 import { openInbox } from '../inbox'
@@ -74,8 +74,11 @@ interface FormState {
   le_time: string
   required_resource_type: string
   requested_resource_id: string
+  /** 요구 조건 입력 행: 속성 이름 → 비교·값. 값이 비면 보내지 않는다 */
+  req: Record<string, { op: string; value: string }>
 }
 
+type TextField = Exclude<keyof FormState, 'req'>
 type TimeField = 'es' | 'ls' | 'le'
 
 function emptyForm(firstDay: string): FormState {
@@ -92,6 +95,7 @@ function emptyForm(firstDay: string): FormState {
     le_time: '',
     required_resource_type: '',
     requested_resource_id: '',
+    req: {},
   }
 }
 
@@ -104,7 +108,21 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
   const allowed = roles.includes('UNIT_PLANNER')
   const resourceTypes = [...new Set(meta.resources.map((r) => r.resource_type))]
   const actorName = new Map(state.actors.map((a) => [a.actor_id, a.name]))
-  const set = (k: keyof FormState) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
+  const set = (k: TextField) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
+  // 요구 조건 입력 행은 속성 선언(meta.resource_attributes)으로 만든다. 수치는 ≥·≤, 목록은 포함
+  const reqRow = (name: string) => f.req[name] ?? { op: 'GTE', value: '' }
+  const setReq = (name: string, change: Partial<{ op: string; value: string }>) =>
+    setF({ ...f, req: { ...f.req, [name]: { ...reqRow(name), ...change } } })
+  const requirements: Requirement[] = meta.resource_attributes.flatMap((a): Requirement[] => {
+    const row = reqRow(a.name)
+    const text = row.value.trim()
+    if (!text) return []
+    if (a.type === 'LIST') return [{ attribute: a.name, op: 'CONTAINS', value: text }]
+    const n = Number(text)
+    return Number.isFinite(n) ? [{ attribute: a.name, op: row.op === 'LTE' ? 'LTE' : 'GTE', value: n }] : []
+  })
+  const defaults = meta.work_types[f.work_type]?.resource_requirements ?? []
+  const chosen = meta.resources.find((r) => r.resource_id === f.requested_resource_id)
   const minute = (field: TimeField): number | null => {
     const time = f[`${field}_time`]
     return time.trim() ? clock.toMinute(f[`${field}_day`], time) : null
@@ -154,6 +172,9 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
       le_time: le.time,
       required_resource_type: r.required_resource_type ?? '',
       requested_resource_id: r.requested_resource_id ?? '',
+      req: Object.fromEntries(
+        (r.resource_requirements ?? []).map((q) => [q.attribute, { op: q.op, value: String(q.value) }]),
+      ),
     })
   }
   const demoReq = demo === null ? null : (scenario?.task_requests[demo] ?? null)
@@ -175,6 +196,7 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
       latest_end: minute('le'),
       required_resource_type: f.required_resource_type || null,
       requested_resource_id: f.requested_resource_id || null,
+      resource_requirements: requirements,
       predecessors: [],
     }
     void run('작업 요청', `/sites/${siteId}/task-requests`, body)
@@ -240,7 +262,7 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
           <option value="">없음</option>
           {resourceTypes.map((r) => (
             <option key={r} value={r}>
-              {r}
+              {meta.resource_types[r] ?? r} ({r})
             </option>
           ))}
         </select>
@@ -249,13 +271,61 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
         요청 자원
         <select value={f.requested_resource_id} onChange={set('requested_resource_id')}>
           <option value="">없음</option>
-          {meta.resources.map((r) => (
-            <option key={r.resource_id} value={r.resource_id}>
-              {r.resource_id} ({r.resource_type})
-            </option>
-          ))}
+          {meta.resources.map((r) => {
+            // 구역이 안 맞는 자원은 사유와 함께 비활성. 나머지 조건은 서버가 판정한다
+            const off = f.zone_id !== '' && !usableInZone(r, f.zone_id)
+            const attrs = attributeText(meta, r)
+            return (
+              <option key={r.resource_id} value={r.resource_id} disabled={off}>
+                {r.resource_id} · {r.display_name || r.resource_type}
+                {attrs && ` (${attrs})`}
+                {off && ` — ${f.zone_id} 구역에서 쓸 수 없음`}
+              </option>
+            )
+          })}
         </select>
       </label>
+      {chosen && (
+        <p className="muted small span2">
+          {chosen.resource_id} 사용 가능 구역{' '}
+          {chosen.allowed_zone_ids.includes('*') ? '모든 구역' : chosen.allowed_zone_ids.join(', ')}
+          {chosen.note && ` · ${chosen.note}`}
+        </p>
+      )}
+      {chosen && f.zone_id !== '' && !usableInZone(chosen, f.zone_id) && (
+        <p className="warn small span2">
+          {chosen.resource_id}은(는) {f.zone_id} 구역에서 쓸 수 없습니다. 제출하면 서버가 거절합니다.
+        </p>
+      )}
+      {f.required_resource_type !== '' &&
+        meta.resource_attributes.map((a) => (
+          <label key={a.name}>
+            자원 요구 조건 · {a.display_name}
+            <span className="row tight">
+              {a.type === 'NUMBER' ? (
+                <select value={reqRow(a.name).op} onChange={(e) => setReq(a.name, { op: e.target.value })}>
+                  <option value="GTE">≥ 이상</option>
+                  <option value="LTE">≤ 이하</option>
+                </select>
+              ) : (
+                <span className="hint">포함</span>
+              )}
+              <input
+                inputMode={a.type === 'NUMBER' ? 'decimal' : undefined}
+                placeholder="없음"
+                value={reqRow(a.name).value}
+                onChange={(e) => setReq(a.name, { value: e.target.value })}
+              />
+              {a.unit && <span className="hint">{a.unit}</span>}
+            </span>
+          </label>
+        ))}
+      {f.required_resource_type !== '' && defaults.length > 0 && (
+        <p className="muted small span2">
+          작업 유형 기본 요구 조건(서버가 붙임): {defaults.map((q) => requirementText(meta, q)).join(', ')}. 입력한
+          조건은 여기에 더해집니다.
+        </p>
+      )}
       {outside && (
         <p className="warn small span2">
           요청 시작이 근무시간 밖입니다. 접수되면 근무시간 충돌(CALENDAR)로 재계획되고, 시간창에 근무시간 자리가 없으면

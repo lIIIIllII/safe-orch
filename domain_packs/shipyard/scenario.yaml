@@ -32,6 +32,7 @@ demo_requests:
     latest_end: 1800            # 10/13(화) 15:00
     required_resource_type: GANTRY
     requested_resource_id: SITE-GC-01
+    resource_requirements: [{ attribute: max_load, op: GTE, value: 100 }, { attribute: usage, op: CONTAINS, value: 블록 }]
 
   - task_id: N2                 # SEP-HOT-FLAM (P) → 10/13 11:15, 변경 1, 지연 45/45
     label: 화기–도장 분리
@@ -56,6 +57,7 @@ demo_requests:
     latest_end: 3300            # 10/14(수) 16:00
     required_resource_type: GANTRY
     requested_resource_id: SITE-GC-01
+    resource_requirements: [{ attribute: max_load, op: GTE, value: 100 }, { attribute: usage, op: CONTAINS, value: 블록 }]
 
   - task_id: N4                 # SEP-HOT-FLAM (W) → 10/14 09:00 (다음 날), 변경 1, 지연 1140/180
     label: 다음 날 이동

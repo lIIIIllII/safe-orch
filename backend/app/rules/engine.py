@@ -7,6 +7,7 @@ Solver와 코드를 나눈다: app.solver를 import하지 않는다. Rule 데이
 from collections.abc import Iterable
 
 from app.domain.calendar import fits_work_interval
+from app.domain.eligibility import exclusion_reasons
 from app.domain.models import Assignment, Conflict, Rule, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 
@@ -44,6 +45,8 @@ BASIC_RULE_IDS = frozenset(
         "RESOURCE_MISSING",
         "RESOURCE_TYPE",
         "RESOURCE_AUTH",
+        "RESOURCE_ZONE",
+        "RESOURCE_REQUIREMENT",
         "AVAILABILITY",
         "CALENDAR",
     }
@@ -51,7 +54,8 @@ BASIC_RULE_IDS = frozenset(
 
 
 def _basic(facts: SnapshotContent, pairs: list[tuple[Task, Assignment]]) -> list[Conflict]:
-    """기본 제약: duration, 시간창·Horizon, 근무 달력, 선후행, 필요 자원, 유형, 권한, 가용 구간.
+    """기본 제약: duration, 시간창·Horizon, 근무 달력, 선후행, 필요 자원, 유형, 권한, 구역, 요구 조건,
+    가용 구간. 자원 쪽 사유는 적격성 함수 하나로 판정한다 (CV-20).
 
     CALENDAR는 WINDOW와 따로 판정한다(Horizon 밖이면 둘 다 보고).
     선행 작업이 검사 대상 배정에 없으면 건너뛰지 않고 PREDECESSOR_MISSING이다(fail-closed).
@@ -83,14 +87,20 @@ def _basic(facts: SnapshotContent, pairs: list[tuple[Task, Assignment]]) -> list
         if a.resource_id is None:
             continue
         r = resources.get(a.resource_id)
-        if r is None or (
-            t.required_resource_type is not None and r.resource_type != t.required_resource_type
-        ):
-            out.append(_conflict("RESOURCE_TYPE", [(t, a)], a.resource_id))
         if r is None:
+            out.append(_conflict("RESOURCE_TYPE", [(t, a)], a.resource_id))
             continue
-        if t.unit_id not in r.allowed_unit_ids:
+        # 가용 구간이 하나도 없는 경우(NO_AVAILABILITY)는 아래 AVAILABILITY가 배정 구간으로 잡는다
+        reasons = {e.reason for e in exclusion_reasons(t, r, t.unit_id)}
+        # 필요 유형이 없는 작업은 유형을 보지 않는다
+        if t.required_resource_type is not None and "TYPE_MISMATCH" in reasons:
+            out.append(_conflict("RESOURCE_TYPE", [(t, a)], a.resource_id))
+        if "NOT_ALLOWED" in reasons:
             out.append(_conflict("RESOURCE_AUTH", [(t, a)], a.resource_id))
+        if "ZONE_NOT_ALLOWED" in reasons:
+            out.append(_conflict("RESOURCE_ZONE", [(t, a)], a.resource_id))
+        if "REQUIREMENT_NOT_MET" in reasons:
+            out.append(_conflict("RESOURCE_REQUIREMENT", [(t, a)], a.resource_id))
         if not any(lo <= a.start and a.end <= hi for lo, hi in r.available_intervals):
             out.append(_conflict("AVAILABILITY", [(t, a)], a.resource_id))
     return out

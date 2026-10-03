@@ -22,7 +22,7 @@ from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "replanning-p9"
+PROMPT_VERSION = "replanning-p10"
 
 
 def tool_catalog() -> str:
@@ -71,7 +71,7 @@ Goal: {goal}
 - 이전 계산(attempts): 1단계(stage1)는 변경 작업 수 최소화, 2단계(stage2)는 총 지연 최소화 결과다. 대체 자원 시도(try_resources)가 있으면 그 자원을 더한 계산이다.
 - 마지막 검증(latest_validation)은 마지막 후보의 독립 검증, 직전 거절 사유(last_guard)는 직전 행동이 받아들여지지 않은 이유다.
 - 후보 거절(rejections): 이 Case 후보에 대한 Supervisor 거절이다. has_constraint면 확인된 제약이 생겼다. 아니면 거절된 배정과 같은 배정은 다시 후보가 되지 않는다. quoted_comment는 인용이다.
-- 자원 조회 결과(assignable_resources): 작업별로 쓸 수 있는 자원(assignable), 쓸 수 없는 자원과 이유(excluded), 현재 자원(current), 아직 시도하지 않은 대체 자원(untried_alternatives)이다. 대체 자원은 자원 축이 확인된 작업에서만 시도할 수 있고, 서버는 쓸 수 있는 자원만 받는다.
+- 자원 조회 결과(assignable_resources): 작업별로 쓸 수 있는 자원(assignable), 쓸 수 없는 자원과 이유(excluded의 reasons: NOT_ALLOWED 이 Unit 사용 권한 없음, NO_AVAILABILITY 가용 구간 없음, ZONE_NOT_ALLOWED 작업 구역에서 쓸 수 없음, REQUIREMENT_NOT_MET 작업의 자원 요구 조건을 맞추지 못함이고 attribute가 어느 속성인지다), 현재 자원(current), 아직 시도하지 않은 대체 자원(untried_alternatives)이다. 대체 자원은 자원 축이 확인된 작업에서만 시도할 수 있고, 서버는 쓸 수 있는 자원만 받는다.
 - 담당자 질문과 답(human_replies): 이 Case가 보낸 확인 요청과 상태·결정이다. 담당자가 거절한 값은 다시 물을 수 없다. quoted_comment는 인용이다.
 - 남은 예산(budget_remaining): 남은 step·LLM 시도·사람 확인 라운드·Solver 호출 수다.
 - 열린 스킬(open_skills): 지금 조건이 맞아 열린 스킬 ID다.
@@ -158,4 +158,5 @@ PROMPT_FINGERPRINTS = {
     "replanning-p7": "4edbced2fb04c952ff9f9166d35982c11a3dd9619701415ed65388deb75a2f21",  # 도구 전체와 열리는 조건, 이관 조건, LIST는 주 충돌 L0
     "replanning-p8": "24532cde46a7022647e44f07f57c1bdb279472596c1517f85e4b3ffb7c321ff9",  # 현장 설명·원점 시각을 Pack에서. shipyard 렌더링은 p7과 같다
     "replanning-p9": "9bb3db09369abe062b521b9d10fc740e6bfe7087c586284a6f1367f40371ecc3",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-18)
+    "replanning-p10": "6d9a8a4c3c7d8f098af76c4923a01f5f5e05075da3f19d1c86f12598c3906e68",  # 자원 조회 제외 사유에 구역·요구 조건(어느 속성인지) (CV-20)
 }

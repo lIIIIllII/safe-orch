@@ -13,7 +13,7 @@ from pathlib import Path
 
 from app.config import get_settings
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
 _local = threading.local()

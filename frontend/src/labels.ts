@@ -47,6 +47,10 @@ export const REASON: Record<string, string> = {
   UNKNOWN_RESOURCE: '없는 자원',
   RESOURCE_TYPE_MISMATCH: '요청 자원 유형 불일치',
   RESOURCE_NOT_AUTHORIZED: '이 Unit이 쓸 수 없는 자원',
+  RESOURCE_NO_AVAILABILITY: '가용 구간이 없는 자원',
+  RESOURCE_ZONE_NOT_ALLOWED: '이 구역에서 쓸 수 없는 자원',
+  RESOURCE_REQUIREMENT_NOT_MET: '자원이 요구 조건을 맞추지 못함',
+  INVALID_REQUIREMENT: '요구 조건이 속성 선언과 맞지 않음',
   INVALID_WINDOW: '시간창 모순',
   WINDOW_OUTSIDE_WORK_HOURS: '시간창 안에 근무시간 시작 자리가 없음',
   PREDECESSOR_NOT_FOUND: '선행 작업 없음',
@@ -121,12 +125,15 @@ export const REASON: Record<string, string> = {
   RESOURCE_MISSING: '필요 자원 미배정',
   RESOURCE_TYPE: '자원 유형 부적격',
   RESOURCE_AUTH: '자원 사용 권한 없음',
+  RESOURCE_ZONE: '자원 사용 가능 구역 밖',
+  RESOURCE_REQUIREMENT: '자원이 요구 조건을 맞추지 못함',
   AVAILABILITY: '가용 구간 밖',
   CALENDAR: '근무시간 밖(근무 구간 하나에 들어가지 않음)',
   CAPACITY: '자원 겹침',
   FIELD_NOT_CONFIRMED: '필수 항목 미확인',
   CONFIRMED_VALUE_MISMATCH: '확인 값과 다름',
   HAZARD_TAGS_MISMATCH: '위험 태그가 Pack 도출값과 다름',
+  DEFAULT_REQUIREMENTS_MISMATCH: '기본 자원 요구 조건이 Pack 도출값과 다름',
   UNMAPPED_RULE: '처리할 수 없는 Rule',
 }
 
@@ -371,4 +378,7 @@ export const AXIS: Record<string, string> = {
 export const EXCLUDE_REASON: Record<string, string> = {
   NOT_ALLOWED: '이 Unit 사용 권한 없음',
   NO_AVAILABILITY: '가용 구간 없음',
+  ZONE_NOT_ALLOWED: '작업 구역에서 쓸 수 없음',
+  REQUIREMENT_NOT_MET: '요구 조건 미달',
+  TYPE_MISMATCH: '자원 유형 다름',
 }

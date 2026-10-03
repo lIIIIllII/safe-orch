@@ -62,7 +62,7 @@ class ReplanningExecutor:
     def _permitted(self, obs: Observation, action: spec.Action) -> bool | str:
         """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (작업별 조합까지).
 
-        자원을 쓰거나 묻는 행동은 자원 적격성(유형·사용 권한·가용 구간)을 여기서 검사한다.
+        자원을 쓰거나 묻는 행동은 자원 적격성(유형·사용 권한·가용 구간·구역·요구 조건)을 여기서 검사한다.
         조회했는지는 보지 않는다 (CV-15). 적격이 아니면 RESOURCE_NOT_ELIGIBLE.
         """
         available = obs.available

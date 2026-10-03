@@ -57,17 +57,23 @@ CREATE TABLE zone_relation (
 CREATE TABLE resource (
     site_id             TEXT NOT NULL REFERENCES site (site_id),
     resource_id         TEXT NOT NULL,
+    display_name        TEXT NOT NULL,
     resource_type       TEXT NOT NULL,
     owner_unit_id       TEXT NOT NULL,
     allowed_unit_ids    TEXT NOT NULL CHECK (json_valid(allowed_unit_ids)),
+    allowed_zone_ids    TEXT NOT NULL CHECK (json_valid(allowed_zone_ids)),  -- ["*"] = 모든 구역
     capacity            INTEGER NOT NULL CHECK (capacity = 1),
     available_intervals TEXT NOT NULL CHECK (json_valid(available_intervals)),
+    attributes          TEXT NOT NULL CHECK (json_valid(attributes)),        -- Pack 선언 속성 값
+    cost_per_hour       REAL,                                                -- 데이터만
+    note                TEXT NOT NULL,
     PRIMARY KEY (site_id, resource_id),
     FOREIGN KEY (site_id, owner_unit_id) REFERENCES work_unit (site_id, unit_id)
 );
 
 -- 새 revision은 INSERT로만 만든다. 현재 revision = MAX(revision).
 -- hazard_tags 컬럼은 두지 않는다(조회 시 Pack의 work_type에서 도출).
+-- resource_requirements는 작업 값만 담는다. 작업 유형 기본값은 조회 시 Pack에서 도출한다.
 CREATE TABLE task (
     site_id                TEXT NOT NULL REFERENCES site (site_id),
     task_id                TEXT NOT NULL,
@@ -82,6 +88,7 @@ CREATE TABLE task (
     latest_end             INTEGER NOT NULL,
     required_resource_type TEXT,
     requested_resource_id  TEXT,
+    resource_requirements  TEXT NOT NULL CHECK (json_valid(resource_requirements)),
     predecessors           TEXT NOT NULL CHECK (json_valid(predecessors)),
     movable                TEXT NOT NULL CHECK (json_valid(movable)),
     fields                 TEXT NOT NULL CHECK (json_valid(fields)),

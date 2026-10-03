@@ -260,6 +260,16 @@ class IntakeExecutor:
         )
 
 
+def requirement_text(pack: LoadedPack, req: dict[str, Any]) -> str:
+    """요구 조건 하나의 사람용 문구. 속성 표시 이름과 단위는 Pack 선언에서 읽는다."""
+    decl = pack.resource_attributes.get(req["attribute"])
+    name = decl.display_name if decl else req["attribute"]
+    if req["op"] == "CONTAINS":
+        return f"{name} {req['value']} 포함"
+    unit = f" {decl.unit}" if decl and decl.unit else ""
+    return f"{name} {'≥' if req['op'] == 'GTE' else '≤'} {req['value']}{unit}"
+
+
 def values_check_text(pack: LoadedPack, task_id: str, v: dict[str, Any]) -> str:
     """값 확인 요청의 서버 문구: 값을 날짜·시각과 분으로, 확인의 효과(동의)를 함께."""
 
@@ -273,6 +283,13 @@ def values_check_text(pack: LoadedPack, task_id: str, v: dict[str, Any]) -> str:
         if v.get("requested_resource_id")
         else "없음"
     )
+    # 자원이 맞춰야 하는 조건 = 작업 유형 기본값 + 요청 값 (CV-19)
+    needs = [
+        *(r.model_dump() for r in pack.default_requirements(v["work_type"])),
+        *(v.get("resource_requirements") or ()),
+    ]
+    if v.get("requested_resource_id") and needs:
+        resource += f"(요구 조건: {', '.join(requirement_text(pack, r) for r in needs)})"
     return (
         f"작업 요청 {task_id} 값 확인: {name}, {v['zone_id']} 구역, {v['duration']}분, "
         f"시작 {at(v['earliest_start'])}–{at(v['latest_start'])}, 종료 한도 {at(v['latest_end'])}, "

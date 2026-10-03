@@ -1,8 +1,20 @@
 # shipyard Domain Pack. work_type → hazard_tags, critical_fields.
 # hazard_tags는 서버가 work_type에서 도출한다. 작업 입력으로 받지 않는다.
 # display_name은 화면 표시용이다. 화면은 Pack 값을 하드코딩하지 않는다.
+pack_format: 2   # Pack 형식 버전. 로더(PACK_FORMAT)와 같아야 한다.
+
+# 자원 속성 선언. 자료형은 NUMBER(수치)·LIST(문자열 목록) 둘뿐이다.
+# site.yaml 자원의 attributes와 요구 조건(resource_requirements)은 여기 선언된 이름만 쓴다.
+resource_attributes:
+  max_load: { type: NUMBER, unit: t, display_name: 최대 하중 }
+  usage:    { type: LIST,            display_name: 용도 }
+
+# resource_requirements는 그 유형 작업의 자원 요구 조건 기본값이다. 서버가 작업 유형에서 도출하고,
+# 작업 값(작업의 resource_requirements)은 조건을 더하기만 한다.
+# 비교(op)는 GTE(수치 이상)·LTE(수치 이하)·CONTAINS(목록 포함) 셋뿐이다.
+# LIFTING은 크레인 인양과 골리앗 인양이 같은 유형이라 공통 하한(20 t)만 둔다. 골리앗 인양의 큰 값은 작업 값이다.
 work_types:
-  LIFTING:    { display_name: 인양,      hazard_tags: [LIFTING],    critical_fields: [zone_id, duration, window, resource] }
+  LIFTING:    { display_name: 인양,      hazard_tags: [LIFTING],    critical_fields: [zone_id, duration, window, resource], resource_requirements: [{ attribute: max_load, op: GTE, value: 20 }] }
   WORK_BELOW: { display_name: 하부 작업, hazard_tags: [WORK_BELOW], critical_fields: [zone_id, duration, window] }
   HOT_WORK:   { display_name: 화기,      hazard_tags: [HOT_WORK],   critical_fields: [zone_id, duration, window] }
   PAINTING:   { display_name: 도장,      hazard_tags: [FLAMMABLE],  critical_fields: [zone_id, duration, window] }

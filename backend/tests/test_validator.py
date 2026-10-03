@@ -16,6 +16,7 @@ from app.domain.models import (
     FeedbackConstraint,
     FieldRecord,
     Predecessor,
+    Requirement,
 )
 from app.packs.loader import EVALUATORS, load_pack
 from app.rules import engine
@@ -411,6 +412,25 @@ def test_t29_other_pack_hash_c01(alpha, pack_copy):
     other = load_pack(pack_copy)
     assert other.pack_hash != pack.pack_hash
     assert _bad(validate(snap, cand, spec, other)) == [("C01", "PACK_HASH_MISMATCH", ())]
+
+
+def test_c07_resource_zone_and_requirement(seeded):
+    """Rule Engine의 구역·요구 조건 사유는 기존 자원 검사(C07)로 잡는다."""
+    snap = _retask(take_snapshot(seeded), "C", zone_id="D")  # A-CR-01은 B·C 구역만
+    v = validate(snap, _reconfirm(snap), None, seeded)
+    assert ("C07", "RESOURCE_ZONE", ("C",)) in _bad(v)
+    need = (Requirement(attribute="max_load", op="GTE", value=40),)  # A-CR-01은 25 t
+    snap = _retask(take_snapshot(seeded), "C", resource_requirements=need)
+    v = validate(snap, _reconfirm(snap), None, seeded)
+    assert ("C07", "RESOURCE_REQUIREMENT", ("C",)) in _bad(v)
+    assert v.status == "INCOMPLETE"  # 확인 값(resource 필드)과도 달라졌다
+
+
+def test_default_requirements_mismatch_c11(seeded):
+    """작업 유형 기본 요구 조건은 서버가 도출한다. Snapshot 값이 Pack과 다르면 C11 (CV-19)."""
+    snap = _retask(take_snapshot(seeded), "C", default_requirements=())
+    v = validate(snap, _reconfirm(snap), None, seeded)
+    assert _bad(v) == [("C11", "DEFAULT_REQUIREMENTS_MISMATCH", ("C",))]
 
 
 def test_t29_hazard_tags_mismatch_c11(seeded):

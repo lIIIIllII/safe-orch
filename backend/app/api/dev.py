@@ -42,7 +42,12 @@ FORM_FIELDS = (
     "latest_end",
     "required_resource_type",
     "requested_resource_id",
+    "resource_requirements",
 )
+
+
+def _form(request: Any) -> dict[str, Any]:
+    return request.model_dump(mode="json", include=set(FORM_FIELDS))
 
 
 def scenario_view(pack: LoadedPack) -> dict[str, Any]:
@@ -52,13 +57,13 @@ def scenario_view(pack: LoadedPack) -> dict[str, Any]:
         {
             "label": nt.label,
             "requester": nt.owner_actor_id,
-            "form": {k: getattr(nt, k) for k in FORM_FIELDS},
+            "form": _form(nt),
         }
     ] + [
         {
             "label": d.label,
             "requester": d.requester,
-            "form": {k: getattr(d, k) for k in FORM_FIELDS},
+            "form": _form(d),
         }
         for d in pack.demo_requests
     ]

@@ -1,6 +1,7 @@
 """현장 목록 GET /sites와 Pack 표시 정보 GET /sites/{id}/meta.
 
-화면이 Pack 값(작업 유형·Rule 이름, 시간대, 근무 달력, 구역, 자원)을 하드코딩하지 않도록 내려준다.
+화면이 Pack 값(작업 유형·Rule 이름, 시간대, 근무 달력, 구역, 자원, 자원 속성 선언, 작업 유형 기본 요구 조건)을
+하드코딩하지 않도록 내려준다.
 Pack은 기동 시 한 번 읽고 바뀌지 않으므로 DB를 읽지 않는다.
 """
 
@@ -40,11 +41,14 @@ def get_meta(site_id: str, pack: PackDep, actor: ActorDep) -> dict[str, Any]:
         "pack": pack.name,
         "pack_hash": pack.pack_hash,
         "resource_types": dict(pack.resource_types),  # 코드 → 표시 이름
+        "resource_attributes": [a.model_dump() for a in pack.resource_attributes.values()],
+        "currency": pack.currency,
         "work_types": {
             wt_id: {
                 "display_name": wt.display_name,
                 "hazard_tags": list(wt.hazard_tags),
                 "critical_fields": list(wt.critical_fields),
+                "resource_requirements": [r.model_dump() for r in wt.resource_requirements],
             }
             for wt_id, wt in pack.work_types.items()
         },

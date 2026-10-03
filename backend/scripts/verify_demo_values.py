@@ -2,7 +2,8 @@
 
     cd backend && uv run python -m scripts.verify_demo_values
 
-- 입력은 Pack YAML(site·plan_r0·scenario·rules)을 yaml.safe_load로 직접 읽는다.
+- 입력은 Pack YAML(pack·site·plan_r0·scenario·rules)을 yaml.safe_load로 직접 읽는다.
+- 자원 조건(유형·사용 권한·사용 가능 구역·요구 조건)도 여기서 따로 구현한다(`fits`). app의 적격성 함수를 쓰지 않는다.
 - 계산은 app 코드(rules·solver·validator)를 import하지 않는 독립 구현이다. CP-SAT 모델(CALENDAR 포함)과
   전수 열거를 함께 돌려 상태·변경 수·지연·해가 같은지 대조하고, 최적해가 하나뿐인지 센다.
 - 결과는 콘솔에만 쓴다. pytest(tests/test_demo_extension.py)가 같은 값을 운영 코드로 재현한다.
@@ -41,6 +42,8 @@ class T:
     mt: bool
     mr: bool
     start: int | None = None  # Plan 배정. 없으면 신규 작업이고 기준 시작 = es
+    # 자원 요구 조건 (속성, 비교, 값) = 작업 유형 기본값 + 작업 값
+    needs: tuple[tuple[str, str, Any], ...] = ()
 
 
 @dataclass
@@ -52,7 +55,8 @@ class World:
     rules: list[tuple[str, str, str, set[str], int]]
     adjacent: set[tuple[str, str]]
     below: set[tuple[str, str]]
-    resources: dict[str, tuple[str, set[str]]]
+    # 자원 ID → (유형, 허용 Unit, 사용 가능 구역("*" = 모든 구역), 속성 값)
+    resources: dict[str, tuple[str, set[str], set[str], dict[str, Any]]]
 
     def rel(self, a: str, b: str) -> str | None:
         if a == b:
@@ -76,6 +80,9 @@ def load(pack: Path = PACK) -> tuple[World, list[T], T, list[T]]:
         "pack.yaml", "rules.yaml", "site.yaml", "plan_r0.yaml", "scenario.yaml",
     )}  # fmt: skip
     tags = {k: v["hazard_tags"][0] for k, v in raw["pack.yaml"]["work_types"].items()}
+    type_needs = {
+        k: v.get("resource_requirements") or [] for k, v in raw["pack.yaml"]["work_types"].items()
+    }
     site = raw["site.yaml"]
     origin_utc = dt.datetime.fromisoformat(site["horizon_start_utc"])
     world = World(
@@ -98,7 +105,12 @@ def load(pack: Path = PACK) -> tuple[World, list[T], T, list[T]]:
             (r["upper"], r["lower"]) for r in site["zone_relations"] if r["relation"] == "BELOW"
         },
         resources={
-            r["resource_id"]: (r["resource_type"], set(r["allowed_unit_ids"]))
+            r["resource_id"]: (
+                r["resource_type"],
+                set(r["allowed_unit_ids"]),
+                set(r["allowed_zone_ids"]),
+                r.get("attributes") or {},
+            )
             for r in site["resources"]
         },
     )
@@ -111,6 +123,10 @@ def load(pack: Path = PACK) -> tuple[World, list[T], T, list[T]]:
             t["earliest_start"], t["latest_start"], t["latest_end"],
             t.get("required_resource_type"), t.get("requested_resource_id"),
             movable["time"], movable["resource"], start,
+            tuple(
+                (q["attribute"], q["op"], q["value"])
+                for q in type_needs[t["work_type"]] + (t.get("resource_requirements") or [])
+            ),
         )  # fmt: skip
 
     fixture = [
@@ -131,6 +147,35 @@ def base(t: T) -> tuple[int, str | None]:
     return (t.start if t.start is not None else t.es, t.res)
 
 
+def unmet(w: World, t: T, r: str) -> list[str]:
+    """자원 r이 작업 t의 조건 중 맞추지 못한 것 (독립 구현). 비면 쓸 수 있다."""
+    rtype, units, zones, attrs = w.resources[r]
+    out = []
+    if rtype != t.rtype:
+        out.append("유형")
+    if t.unit not in units:
+        out.append("권한")
+    if "*" not in zones and t.zone not in zones:
+        out.append("구역")
+    for attr, op, value in t.needs:
+        have = attrs.get(attr)
+        if op == "CONTAINS":
+            met = isinstance(have, list) and value in have
+        elif op == "GTE":
+            met = have is not None and have >= value
+        elif op == "LTE":
+            met = have is not None and have <= value
+        else:
+            raise SystemExit(f"모르는 비교 {op!r}")
+        if not met:
+            out.append(f"요구 조건 {attr}")
+    return out
+
+
+def fits(w: World, t: T, r: str) -> bool:
+    return not unmet(w, t, r)
+
+
 def ok_one(w: World, t: T, s: int, r: str | None) -> bool:
     e = s + t.d
     if s < t.es or s > t.ls or e > t.le or s < 0 or e > w.horizon:
@@ -139,7 +184,7 @@ def ok_one(w: World, t: T, s: int, r: str | None) -> bool:
         return False
     if t.rtype and r is None:
         return False
-    return r is None or (w.resources[r][0] == t.rtype and t.unit in w.resources[r][1])
+    return r is None or fits(w, t, r)
 
 
 def sep_violations(w: World, x: T, sx: int, y: T, sy: int) -> list[str]:
@@ -170,6 +215,14 @@ def conflicts(w: World, tasks: list[T]) -> list[tuple[str, tuple[str, ...]]]:
             out.append(("WINDOW", (t.id,)))
         if w.cal is not None and not any(lo <= s and s + t.d <= hi for lo, hi in w.cal):
             out.append(("CALENDAR", (t.id,)))
+        # 기준 자원이 구역·요구 조건에 안 맞으면 충돌이다
+        r = base(t)[1]
+        if r is not None:
+            bad = unmet(w, t, r)
+            if "구역" in bad:
+                out.append(("RESOURCE_ZONE", (t.id,)))
+            if any(x.startswith("요구 조건") for x in bad):
+                out.append(("RESOURCE_REQUIREMENT", (t.id,)))
     for i, x in enumerate(tasks):
         for y in tasks[i + 1 :]:
             (sx, rx), (sy, ry) = base(x), base(y)
@@ -216,8 +269,9 @@ def cpsat(w: World, tasks: list[T], ax: dict) -> tuple:
             if w.cal is not None:
                 dom = [[lo, hi - t.d] for lo, hi in w.cal if hi - t.d >= lo]
                 m.add_linear_expression_in_domain(s, Domain.from_intervals(dom))
+            # 대체 자원은 조건에 맞는 것만(운영 코드는 SearchSpec에서 거른다)
             opts = ([br] if t.rtype and br else []) + (
-                [r for r in alts if r != br] if t.rtype and mr else []
+                [r for r in alts if r != br and fits(w, t, r)] if t.rtype and mr else []
             )
             lits = []
             for r in opts:
@@ -453,6 +507,16 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     w, fixture, a, demos = load()
     print(f"원점 {w.clock(0)}, Horizon {w.horizon}분, 근무 구간 {list(w.cal)}")
+    print("자원 조건 (사용 가능 구역 · 속성 값):")
+    for rid, (rtype, units, zones, attrs) in w.resources.items():
+        print(f"  {rid} {rtype} Unit {sorted(units)} 구역 {sorted(zones)} {attrs}")
+    print("자원을 쓰는 작업의 요구 조건과 기준 자원:")
+    for t in [*fixture, a, *demos]:
+        if t.rtype:
+            bad = unmet(w, t, t.res) if t.res else ["자원 없음"]
+            print(f"  {t.id} {t.zone}구역 {t.rtype} {t.res} 조건 {list(t.needs)} → {bad or '적격'}")
+            if bad:
+                raise SystemExit(f"{t.id}: 기준 자원이 조건에 맞지 않는다 {bad}")
     print("R0 충돌:", conflicts(w, fixture))
     print(f"\n기본 시연값 A ({a.id}):")
     solve_request(w, fixture, a)

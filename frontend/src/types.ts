@@ -25,12 +25,35 @@ export interface Unit {
   unit_type: string
 }
 
+/** Pack이 선언한 자원 속성. 화면은 속성 이름을 모르고 선언으로만 그린다. */
+export interface ResourceAttribute {
+  name: string
+  type: 'NUMBER' | 'LIST'
+  unit: string
+  display_name: string
+}
+
+/** 자원 요구 조건: GTE 수치 이상, LTE 수치 이하, CONTAINS 목록 포함. */
+export interface Requirement {
+  attribute: string
+  op: 'GTE' | 'LTE' | 'CONTAINS'
+  value: number | string
+}
+
 export interface Resource {
   resource_id: string
+  display_name: string
   resource_type: string
   owner_unit_id: string
   allowed_unit_ids: string[]
+  /** 사용 가능 구역. ["*"]는 모든 구역 */
+  allowed_zone_ids: string[]
   available_intervals: [number, number][]
+  /** 선언된 속성의 값 (수치 또는 문자열 목록) */
+  attributes: Record<string, number | string[]>
+  /** 데이터만 (meta.currency 단위) */
+  cost_per_hour: number | null
+  note: string
 }
 
 export interface Task {
@@ -47,6 +70,10 @@ export interface Task {
   latest_end: number
   required_resource_type: string | null
   requested_resource_id: string | null
+  /** 작업 유형 기본 요구 조건 (서버 도출) */
+  default_requirements: Requirement[]
+  /** 작업 값으로 더한 요구 조건 */
+  resource_requirements: Requirement[]
   movable: { time: boolean; resource: boolean }
   lifecycle: string
   gate: 'ALLOW' | 'HOLD' | 'STALE'
@@ -321,7 +348,20 @@ export interface SiteEntry {
 export interface Meta {
   pack: string
   pack_hash: string
-  work_types: Record<string, { display_name: string; hazard_tags: string[]; critical_fields: string[] }>
+  /** 자원 유형 코드 → 표시 이름 */
+  resource_types: Record<string, string>
+  resource_attributes: ResourceAttribute[]
+  currency: string
+  work_types: Record<
+    string,
+    {
+      display_name: string
+      hazard_tags: string[]
+      critical_fields: string[]
+      /** 이 유형 작업에 서버가 붙이는 기본 자원 요구 조건 */
+      resource_requirements: Requirement[]
+    }
+  >
   rules: { rule_id: string; type: string; display_name: string }[]
   timezone: string
   horizon_start_utc: string
@@ -343,6 +383,7 @@ export interface TaskForm {
   latest_end: number
   required_resource_type: string | null
   requested_resource_id: string | null
+  resource_requirements: Requirement[]
 }
 
 /** GET /api/dev/scenario (DEMO_MODE). */

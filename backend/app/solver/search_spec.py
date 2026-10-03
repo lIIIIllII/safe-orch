@@ -5,6 +5,7 @@ app.rules·app.validator를 import하지 않는다.
 
 from collections.abc import Mapping, Sequence
 
+from app.domain.eligibility import exclusion_reasons
 from app.domain.hashes import search_key, search_spec_hash
 from app.domain.ids import new_id
 from app.domain.models import Conflict, Movable, ScopeLevel, SearchSpec, Snapshot
@@ -56,7 +57,7 @@ def build_search_spec(
         for t in scope
     }
 
-    # 자원 대안은 try_resources로만 추가한다. 권한 필터 후 비면 Solver를 부르지 않는다.
+    # 자원 대안은 try_resources로만 추가한다. 적격성 필터(CV-20) 후 비면 Solver를 부르지 않는다.
     tasks = facts.task_map()
     resources = facts.resource_map()
     alternatives: dict[str, tuple[str, ...]] = {}
@@ -67,13 +68,7 @@ def build_search_spec(
         ok = []
         for rid in rids:
             r = resources.get(rid)
-            if (
-                r is not None
-                and r.resource_type == task.required_resource_type
-                and acting_unit_id in r.allowed_unit_ids
-                and r.available_intervals
-                and rid not in ok
-            ):
+            if r is not None and not exclusion_reasons(task, r, acting_unit_id) and rid not in ok:
                 ok.append(rid)
         if not ok:
             raise SearchSpecError("RESOURCE_NOT_AUTHORIZED", f"{tid}: {list(rids)}")

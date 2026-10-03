@@ -16,6 +16,7 @@ from pydantic import Field, ValidationError
 from app.config import REPO_ROOT
 from app.domain.calendar import fits_work_interval
 from app.domain.canonical import canonical_hash
+from app.domain.eligibility import ALL_ZONES, ResourceNeed, exclusion_reasons, requirement_error
 from app.domain.models import (
     Actor,
     Assignment,
@@ -24,7 +25,9 @@ from app.domain.models import (
     Movable,
     Predecessor,
     Relation,
+    Requirement,
     Resource,
+    ResourceAttribute,
     Rule,
     Task,
     WorkType,
@@ -33,6 +36,7 @@ from app.domain.models import (
     ZoneRelation,
 )
 
+PACK_FORMAT = 2  # pack.yaml pack_format. 형식이 바뀌면 올린다(1 = 버전 없는 옛 형식)
 PACK_FILES = ("pack.yaml", "rules.yaml", "site.yaml", "plan_r0.yaml", "scenario.yaml")
 EVALUATORS = {"SEPARATION", "CAPACITY"}
 RULE_RELATIONS = {"SAME", "ADJACENT", "BELOW"}
@@ -64,6 +68,7 @@ class NewTaskRequest(Frozen):
     latest_end: int
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
+    resource_requirements: tuple[Requirement, ...] = ()
     predecessors: tuple[Predecessor, ...] = ()
     movable: Movable
     requested: Assignment
@@ -83,6 +88,7 @@ class DemoRequest(Frozen):
     latest_end: int
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
+    resource_requirements: tuple[Requirement, ...] = ()
 
 
 class DemoEvent(Frozen):
@@ -120,6 +126,8 @@ class LoadedPack(Frozen):
     pack_hash: str
     work_types: dict[str, WorkType]
     resource_types: dict[str, str] = Field(default_factory=dict)  # 코드 → 표시 이름
+    resource_attributes: dict[str, ResourceAttribute] = Field(default_factory=dict)  # 속성 선언
+    currency: str = ""  # 자원 비용의 화폐 단위
     rules: tuple[Rule, ...]
     site_id: str
     site_description: str  # Replanning System prompt의 현장 설명
@@ -143,6 +151,11 @@ class LoadedPack(Frozen):
     def hazard_tags(self, work_type: str) -> tuple[str, ...]:
         wt = self.work_types.get(work_type)
         return wt.hazard_tags if wt else ()
+
+    def default_requirements(self, work_type: str) -> tuple[Requirement, ...]:
+        """작업 유형의 기본 자원 요구 조건. 위험 태그처럼 서버가 도출한다 (CV-19)."""
+        wt = self.work_types.get(work_type)
+        return wt.resource_requirements if wt else ()
 
     def rel(self, zone_a: str, zone_b: str) -> Relation | None:
         """hazard_a 작업 구역에서 hazard_b 작업 구역으로 본 관계. 선언이 없으면 None."""
@@ -254,7 +267,10 @@ def _duplicates(where: str, ids: list[Any], reasons: list[str]) -> None:
 def confirmed_fields(
     task: dict[str, Any], critical: tuple[str, ...], source_ref: str
 ) -> dict[str, FieldRecord]:
-    """critical field별 CONFIRMED 확인 기록. 값이 없는 필드는 키를 두지 않는다."""
+    """critical field별 CONFIRMED 확인 기록. 값이 없는 필드는 키를 두지 않는다.
+
+    task의 resource_requirements는 검증된 값이어야 한다(Requirement 또는 같은 모양의 dict).
+    """
     values: dict[str, Any] = {
         "zone_id": task.get("zone_id"),
         "duration": task.get("duration"),
@@ -268,6 +284,11 @@ def confirmed_fields(
         else {
             "required_resource_type": task.get("required_resource_type"),
             "requested_resource_id": task.get("requested_resource_id"),
+            # 요구 조건은 resource 필드에 묶어 값 확인 한 번에 같이 확인한다
+            "resource_requirements": [
+                Requirement.model_validate(r).model_dump()
+                for r in task.get("resource_requirements") or ()
+            ],
         },
     }
     return {
@@ -277,9 +298,36 @@ def confirmed_fields(
     }
 
 
+def _requirements(
+    where: str, items: Any, attributes: dict[str, ResourceAttribute], reasons: list[str]
+) -> tuple[Requirement, ...]:
+    """자원 요구 조건 목록. 선언되지 않은 속성, 속성 자료형과 맞지 않는 비교·값을 거절한다."""
+    out: list[Requirement] = []
+    for i, item in enumerate(_as_list(items, where, reasons)):
+        req = _model(Requirement, item, f"{where}[{i}]", reasons)
+        if not req:
+            continue
+        error = requirement_error(req, attributes)
+        if error:
+            reasons.append(f"{where}[{i}]: {error}")
+        else:
+            out.append(req)
+    return tuple(out)
+
+
+EXCLUSION_TEXT = {
+    "TYPE_MISMATCH": "resource type mismatch",
+    "NOT_ALLOWED": "requester unit not allowed on resource",
+    "NO_AVAILABILITY": "resource has no available interval",
+    "ZONE_NOT_ALLOWED": "resource not allowed in zone",
+    "REQUIREMENT_NOT_MET": "resource does not meet requirement",
+}
+
+
 def _demo_requests(
     scen_doc: dict[str, Any],
     work_types: dict[str, WorkType],
+    attributes: dict[str, ResourceAttribute],
     actors: list[Actor],
     zone_ids: set[str],
     resources: list[Resource],
@@ -297,6 +345,12 @@ def _demo_requests(
         req = _model(DemoRequest, d, where, reasons)
         if not req:
             continue
+        own = _requirements(
+            f"{where}.resource_requirements",
+            [r.model_dump() for r in req.resource_requirements],
+            attributes,
+            reasons,
+        )
         out.append(req)
         requester = actors_by_id.get(req.requester)
         if requester is None:
@@ -316,11 +370,16 @@ def _demo_requests(
             res = resources_by_id.get(req.requested_resource_id)
             if res is None:
                 reasons.append(f"{where}: undefined resource {req.requested_resource_id!r}")
-            else:
-                if res.resource_type != req.required_resource_type:
-                    reasons.append(f"{where}: resource type mismatch")
-                if requester is not None and requester.unit_id not in res.allowed_unit_ids:
-                    reasons.append(f"{where}: requester unit not allowed on resource")
+            elif requester is not None:
+                # 폼 검사와 같은 적격성 함수 (CV-20)
+                need = ResourceNeed(
+                    required_resource_type=req.required_resource_type,
+                    zone_id=req.zone_id,
+                    requirements=(*(wt.resource_requirements if wt else ()), *own),
+                )
+                for e in exclusion_reasons(need, res, requester.unit_id):
+                    detail = f" {e.attribute!r}" if e.attribute else ""
+                    reasons.append(f"{where}: {EXCLUSION_TEXT[e.reason]}{detail}")
         end = req.earliest_start + req.duration
         if not (
             0 <= req.earliest_start <= req.latest_start
@@ -384,6 +443,23 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
     plan_doc = _as_dict(raw["plan_r0.yaml"], "plan_r0.yaml", reasons)
     scen_doc = _as_dict(raw["scenario.yaml"], "scenario.yaml", reasons)
 
+    if pack_doc.get("pack_format") != PACK_FORMAT:
+        reasons.append(
+            f"pack.yaml: pack_format must be {PACK_FORMAT}, got {pack_doc.get('pack_format')!r}"
+        )
+
+    # resource_attributes: 자원 속성 선언. 자원 값과 요구 조건은 여기 선언된 이름만 쓴다 (CV-17)
+    attributes: dict[str, ResourceAttribute] = {}
+    for attr_id, spec in _as_dict(
+        pack_doc.get("resource_attributes"), "pack.yaml.resource_attributes", reasons
+    ).items():
+        where = f"pack.yaml.resource_attributes.{attr_id}"
+        attr = _model(
+            ResourceAttribute, {"name": attr_id, **_as_dict(spec, where, reasons)}, where, reasons
+        )
+        if attr:
+            attributes[attr_id] = attr
+
     # work_types
     work_types: dict[str, WorkType] = {}
     for wt_id, spec in _as_dict(
@@ -393,8 +469,17 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         if not spec.get("hazard_tags"):
             reasons.append(f"pack.yaml.work_types.{wt_id}: empty hazard_tags")
             continue
+        defaults = _requirements(
+            f"pack.yaml.work_types.{wt_id}.resource_requirements",
+            spec.get("resource_requirements"),
+            attributes,
+            reasons,
+        )
         wt = _model(
-            WorkType, {"work_type": wt_id, **spec}, f"pack.yaml.work_types.{wt_id}", reasons
+            WorkType,
+            {"work_type": wt_id, **spec, "resource_requirements": defaults},
+            f"pack.yaml.work_types.{wt_id}",
+            reasons,
         )
         if wt:
             work_types[wt_id] = wt
@@ -540,6 +625,10 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         raw_work = []
     work_intervals = _check_intervals("site.yaml.work_intervals", raw_work, horizon, reasons)
 
+    currency = site_doc.get("currency")
+    if not isinstance(currency, str) or not currency.strip():
+        reasons.append("site.yaml: currency missing (e.g. KRW)")
+
     # resources
     resources: list[Resource] = []
     res_items = _as_list(site_doc.get("resources"), "site.yaml.resources", reasons)
@@ -549,6 +638,28 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         if r.get("capacity") != 1:
             reasons.append(f"{where}: capacity must be 1, got {r.get('capacity')!r}")
             continue
+        # 사용 가능 구역은 필수다. 모든 구역은 "*"로 적는다(빠뜨린 자원이 모든 구역에서 쓰이지 않게, CV-18)
+        allowed_zones = r.get("allowed_zone_ids")
+        if allowed_zones in (ALL_ZONES, [ALL_ZONES]):
+            r = {**r, "allowed_zone_ids": [ALL_ZONES]}
+        elif not isinstance(allowed_zones, list) or not allowed_zones:
+            reasons.append(
+                f'{where}: allowed_zone_ids required (zone id list, or "{ALL_ZONES}" for all zones)'
+            )
+            continue
+        else:
+            for z in allowed_zones:
+                if z not in zone_ids:
+                    reasons.append(f"{where}: undefined zone {z!r} in allowed_zone_ids")
+        values = _as_dict(r.get("attributes") or {}, f"{where}.attributes", reasons)
+        for attr_id, value in values.items():
+            decl = attributes.get(attr_id)
+            number = isinstance(value, (int, float)) and not isinstance(value, bool)
+            texts = isinstance(value, list) and all(isinstance(x, str) for x in value)
+            if decl is None:
+                reasons.append(f"{where}: undeclared attribute {attr_id!r}")
+            elif (decl.type == "NUMBER" and not number) or (decl.type == "LIST" and not texts):
+                reasons.append(f"{where}: attribute {attr_id!r} must be {decl.type}, got {value!r}")
         res = _model(Resource, r, where, reasons)
         if res:
             resources.append(res)
@@ -590,6 +701,9 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         t = {k: v for k, v in _as_dict(t, where, reasons).items() if k != "hazard_tags"}
         check_task_refs(where, t)
         wt = work_types.get(t.get("work_type"))
+        t["resource_requirements"] = _requirements(
+            f"{where}.resource_requirements", t.get("resource_requirements"), attributes, reasons
+        )
         task = _model(
             Task,
             {
@@ -597,6 +711,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
                 "revision": 1,
                 "lifecycle": "READY",
                 "hazard_tags": wt.hazard_tags if wt else (),
+                "default_requirements": wt.resource_requirements if wt else (),
                 "fields": confirmed_fields(t, wt.critical_fields if wt else (), FIXTURE_SOURCE_REF),
             },
             where,
@@ -644,6 +759,12 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             if k != "hazard_tags"
         }
         check_task_refs("scenario.yaml.new_task", nt)
+        nt["resource_requirements"] = _requirements(
+            "scenario.yaml.new_task.resource_requirements",
+            nt.get("resource_requirements"),
+            attributes,
+            reasons,
+        )
         if isinstance(nt.get("requested"), dict):
             nt["requested"] = {"task_id": nt.get("task_id"), **nt["requested"]}
         new_task = _model(NewTaskRequest, nt, "scenario.yaml.new_task", reasons)
@@ -668,7 +789,15 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
 
     # 시연 요청·신고 문구
     demo_requests = _demo_requests(
-        scen_doc, work_types, actors, zone_ids, resources, horizon, work_intervals, reasons
+        scen_doc,
+        work_types,
+        attributes,
+        actors,
+        zone_ids,
+        resources,
+        horizon,
+        work_intervals,
+        reasons,
     )
     _duplicates(
         "tasks (plan_r0 + scenario)",
@@ -727,6 +856,8 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             pack_hash=pack_hash,
             work_types=work_types,
             resource_types=resource_types,
+            resource_attributes=attributes,
+            currency=currency,
             rules=tuple(rules),
             site_id=site_doc.get("site_id"),
             site_description=site_description,

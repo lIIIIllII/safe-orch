@@ -146,7 +146,7 @@ def open_skills(obs: dict[str, Any]) -> list[str]:
 def choices(obs: dict[str, Any], hidden: dict[str, Any] | None = None) -> dict[str, Any]:
     """작업별 허용 값. Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다.
 
-    hidden["eligible"]은 서버가 계산한 자원 적격성이다(유형·사용 권한·가용 구간, CV-15):
+    hidden["eligible"]은 서버가 계산한 자원 적격성이다(유형·사용 권한·가용 구간·구역·요구 조건, CV-15):
     {작업: {"alternatives": 현재 자원 말고 쓸 수 있는 자원, "untried": 그중 아직 시도하지 않은 것}}.
     자원 조회를 했는지는 보지 않는다.
     LIST: 필요 자원이 있고 RESOURCE 축이 제약으로 막히지 않았으며 같은 자원 사실에서 아직 조회하지 않은 작업.

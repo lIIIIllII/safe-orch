@@ -11,7 +11,7 @@ def list_resources(conn: sqlite3.Connection, site_id: str) -> list[Resource]:
     out = []
     for r in found:
         r.pop("site_id")
-        r["allowed_unit_ids"] = loads(r["allowed_unit_ids"])
-        r["available_intervals"] = loads(r["available_intervals"])
+        for col in ("allowed_unit_ids", "allowed_zone_ids", "available_intervals", "attributes"):
+            r[col] = loads(r[col])
         out.append(Resource(**r))
     return out

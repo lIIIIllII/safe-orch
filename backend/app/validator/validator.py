@@ -33,6 +33,8 @@ BASIC_TO_CHECK = {
     "RESOURCE_MISSING": "C07",
     "RESOURCE_TYPE": "C07",
     "RESOURCE_AUTH": "C08",
+    "RESOURCE_ZONE": "C07",  # 사용 가능 구역
+    "RESOURCE_REQUIREMENT": "C07",  # 자원 요구 조건
     "AVAILABILITY": "C09",
     "CALENDAR": "C04",  # 근무 달력
 }
@@ -153,6 +155,7 @@ def _field_values(t: Task) -> dict[str, Any]:
         "resource": {
             "required_resource_type": t.required_resource_type,
             "requested_resource_id": t.requested_resource_id,
+            "resource_requirements": [r.model_dump() for r in t.resource_requirements],
         },
     }
 
@@ -166,6 +169,8 @@ def _c11(facts: SnapshotContent, pack: LoadedPack) -> list[Violation]:
             continue
         if tuple(t.hazard_tags) != wt.hazard_tags:
             out.append(("C11", (t.task_id,), "HAZARD_TAGS_MISMATCH"))
+        if t.default_requirements != wt.resource_requirements:
+            out.append(("C11", (t.task_id,), "DEFAULT_REQUIREMENTS_MISMATCH"))
         values = _field_values(t)
         for name in wt.critical_fields:
             record = t.fields.get(name)

@@ -332,6 +332,19 @@ def test_demo_requests_and_events_loaded(pack):
         (lambda r: r.update(requester="nobody"), "undefined actor 'nobody'"),
         (lambda r: r.update(zone_id="Z9"), "undefined zone 'Z9'"),
         (lambda r: r.update(requested_resource_id="A-CR-01"), "resource type mismatch"),
+        (lambda r: r.update(zone_id="G"), "resource not allowed in zone"),
+        (
+            lambda r: r["resource_requirements"].append(
+                {"attribute": "max_load", "op": "GTE", "value": 500}
+            ),
+            "resource does not meet requirement 'max_load'",
+        ),
+        (
+            lambda r: r.update(
+                resource_requirements=[{"attribute": "reach", "op": "GTE", "value": 1}]
+            ),
+            "undeclared attribute 'reach'",
+        ),
         (lambda r: r.update(requested_resource_id=None), "needs required_resource_type"),
         (lambda r: r.update(earliest_start=1000, latest_start=1000), "outside work_intervals"),
         (lambda r: r.update(task_id="K"), "duplicate id 'K'"),
@@ -493,3 +506,161 @@ def test_resource_types_loaded_and_checked(pack, pack_copy):
 def test_resource_type_display_name_required(pack_copy):
     _edit(pack_copy, "pack.yaml", lambda d: d["resource_types"]["CRANE"].pop("display_name"))
     assert "pack.yaml.resource_types.CRANE: display_name missing" in _reasons(pack_copy)
+
+
+# ── 자원 모델: Pack 형식 버전·속성 선언·사용 가능 구역·요구 조건 (CV-17~19) ──
+
+
+def test_resource_model_loaded(pack):
+    assert {k: v.model_dump() for k, v in pack.resource_attributes.items()} == {
+        "max_load": {
+            "name": "max_load",
+            "type": "NUMBER",
+            "unit": "t",
+            "display_name": "최대 하중",
+        },
+        "usage": {"name": "usage", "type": "LIST", "unit": "", "display_name": "용도"},
+    }
+    assert pack.currency == "KRW"
+    by_id = {r.resource_id: r for r in pack.resources}
+    assert {k: (r.allowed_zone_ids, r.attributes["max_load"]) for k, r in by_id.items()} == {
+        "A-CR-01": (("B", "C"), 25),
+        "SITE-CR-01": (("B", "C", "D"), 50),
+        "B-CR-01": (("B", "D"), 25),
+        "SITE-GC-01": (("F", "H"), 300),
+    }
+    assert by_id["SITE-GC-01"].attributes["usage"] == ("블록", "일반")
+    assert all(r.display_name and r.cost_per_hour for r in pack.resources)
+    # 작업 유형 기본값은 공통 하한만, 골리앗 인양의 큰 값은 작업 값이다
+    low = [r.model_dump() for r in pack.default_requirements("LIFTING")]
+    assert low == [{"attribute": "max_load", "op": "GTE", "value": 20}]
+    assert pack.default_requirements("HOT_WORK") == ()
+    tasks = {t.task_id: t for t in pack.tasks}
+    own = [
+        {"attribute": "max_load", "op": "GTE", "value": 100},
+        {"attribute": "usage", "op": "CONTAINS", "value": "블록"},
+    ]
+    assert [r.model_dump() for r in tasks["K"].resource_requirements] == own
+    assert [r.model_dump() for r in tasks["K"].requirements] == low + own
+    assert tasks["C"].resource_requirements == () and tasks["C"].default_requirements
+    assert tasks["B"].requirements == ()
+    # 확인 상태는 resource 필드에 묶인다(작업 값만)
+    assert tasks["K"].fields["resource"].value["resource_requirements"] == own
+    demos = {d.task_id: d for d in pack.demo_requests}
+    assert [r.model_dump() for r in demos["N1"].resource_requirements] == own
+    assert pack.new_task.resource_requirements == ()
+
+
+def _lifting(d):
+    return d["work_types"]["LIFTING"]
+
+
+@pytest.mark.parametrize(
+    ("fname", "mutate", "expected"),
+    [
+        ("pack.yaml", lambda d: d.pop("pack_format"), "pack_format must be 2, got None"),
+        ("pack.yaml", lambda d: d.update(pack_format=1), "pack_format must be 2, got 1"),
+        (
+            "pack.yaml",
+            lambda d: d["resource_attributes"]["max_load"].update(type="TEXT"),
+            "pack.yaml.resource_attributes.max_load.type",
+        ),
+        (
+            "pack.yaml",
+            lambda d: d["resource_attributes"]["usage"].pop("display_name"),
+            "pack.yaml.resource_attributes.usage.display_name",
+        ),
+        (
+            "site.yaml",
+            lambda d: d["resources"][0].pop("allowed_zone_ids"),
+            "site.yaml.resources[0]: allowed_zone_ids required",
+        ),
+        (
+            "site.yaml",
+            lambda d: d["resources"][0].update(allowed_zone_ids=[]),
+            "site.yaml.resources[0]: allowed_zone_ids required",
+        ),
+        (
+            "site.yaml",
+            lambda d: d["resources"][0].update(allowed_zone_ids=["B", "Z9"]),
+            "undefined zone 'Z9' in allowed_zone_ids",
+        ),
+        (
+            "site.yaml",
+            lambda d: d["resources"][0].update(allowed_zone_ids=["B", "*"]),
+            "undefined zone '*' in allowed_zone_ids",
+        ),
+        (
+            "site.yaml",
+            lambda d: d["resources"][0]["attributes"].update(reach=30),
+            "undeclared attribute 'reach'",
+        ),
+        (
+            "site.yaml",
+            lambda d: d["resources"][0]["attributes"].update(max_load="25t"),
+            "attribute 'max_load' must be NUMBER",
+        ),
+        (
+            "site.yaml",
+            lambda d: d["resources"][0]["attributes"].update(max_load=True),
+            "attribute 'max_load' must be NUMBER",
+        ),
+        (
+            "site.yaml",
+            lambda d: d["resources"][0]["attributes"].update(usage="일반"),
+            "attribute 'usage' must be LIST",
+        ),
+        ("site.yaml", lambda d: d.pop("currency"), "site.yaml: currency missing"),
+        (
+            "pack.yaml",
+            lambda d: _lifting(d).update(
+                resource_requirements=[{"attribute": "reach", "op": "GTE", "value": 1}]
+            ),
+            "LIFTING.resource_requirements[0]: undeclared attribute 'reach'",
+        ),
+        (
+            "pack.yaml",
+            lambda d: _lifting(d).update(
+                resource_requirements=[{"attribute": "max_load", "op": "CONTAINS", "value": "x"}]
+            ),
+            "attribute 'max_load' is NUMBER",
+        ),
+        (
+            "pack.yaml",
+            lambda d: _lifting(d).update(
+                resource_requirements=[{"attribute": "usage", "op": "GTE", "value": 1}]
+            ),
+            "attribute 'usage' is LIST",
+        ),
+        (
+            "pack.yaml",
+            lambda d: _lifting(d).update(
+                resource_requirements=[{"attribute": "max_load", "op": "EQ", "value": 1}]
+            ),
+            "LIFTING.resource_requirements[0].op",
+        ),
+        (
+            "plan_r0.yaml",
+            lambda d: _task(d, "K").update(
+                resource_requirements=[{"attribute": "reach", "op": "GTE", "value": 1}]
+            ),
+            "plan_r0.yaml.tasks[4].resource_requirements[0]: undeclared attribute 'reach'",
+        ),
+        (
+            "scenario.yaml",
+            lambda d: d["new_task"].update(
+                resource_requirements=[{"attribute": "usage", "op": "LTE", "value": 1}]
+            ),
+            "scenario.yaml.new_task.resource_requirements[0]: attribute 'usage' is LIST",
+        ),
+    ],
+)
+def test_resource_model_rejected(pack_copy, fname, mutate, expected):
+    _edit(pack_copy, fname, mutate)
+    assert expected in _reasons(pack_copy)
+
+
+@pytest.mark.parametrize("value", ["*", ["*"]])
+def test_all_zones_must_be_written_as_star(pack_copy, value):
+    _edit(pack_copy, "site.yaml", lambda d: d["resources"][0].update(allowed_zone_ids=value))
+    assert load_pack(pack_copy).resources[0].allowed_zone_ids == ("*",)

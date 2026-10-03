@@ -36,8 +36,9 @@ def search_key(
 
     무결성 hash(search_spec_hash)와 다르다. snapshot_hash 대신 Solver가 읽는 사실만 넣으므로
     context_version·plan_revision 번호, Consent, fields, revision 번호, Hold가 바뀌어도 같다.
-    - 작업(READY): 구역, duration, 시간창, 필요 자원 유형, 기준 배정, 선후행, hazard_tags
-    - 자원(유형·허용 Unit·가용 구간), 구역 관계, pack_hash(Rule), 근무 구간, Horizon
+    - 작업(READY): 구역, duration, 시간창, 필요 자원 유형, 자원 요구 조건, 기준 배정, 선후행, hazard_tags
+    - 자원(유형·허용 Unit·사용 가능 구역·속성 값·가용 구간), 구역 관계, pack_hash(Rule), 근무 구간, Horizon
+    - 자원의 표시 이름·메모·비용은 Solver 입력이 아니므로 넣지 않는다 (CV-21)
     - 확인된 제약은 넣지 않는다. 제약은 axes를 통해서만 Solver 입력에 영향을 준다(범위 밖 작업의 제약은
       그 범위의 탐색을 바꾸지 않는다)
     - axes는 정규화: resource 축이 true여도 대체 자원이 없으면 Solver 입력이 같으므로 false
@@ -57,6 +58,7 @@ def search_key(
                     "duration": t.duration,
                     "window": [t.earliest_start, t.latest_start, t.latest_end],
                     "required_resource_type": t.required_resource_type,
+                    "requirements": [r.model_dump() for r in t.requirements],
                     "base": base[t.task_id].model_dump(),
                     "predecessors": [p.model_dump() for p in t.predecessors],
                     "hazard_tags": sorted(t.hazard_tags),
@@ -68,6 +70,8 @@ def search_key(
                     "resource_id": r.resource_id,
                     "resource_type": r.resource_type,
                     "allowed_unit_ids": sorted(r.allowed_unit_ids),
+                    "allowed_zone_ids": sorted(r.allowed_zone_ids),
+                    "attributes": r.model_dump(mode="json")["attributes"],
                     "available_intervals": [list(iv) for iv in r.available_intervals],
                 }
                 for r in sorted(facts.resources, key=lambda r: r.resource_id)

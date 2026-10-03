@@ -277,7 +277,7 @@ def test_plan_b_full_e2e(seeded):
         "required_type": "CRANE",
         "current": "A-CR-01",
         "assignable": [{"resource_id": "A-CR-01"}, {"resource_id": "SITE-CR-01"}],
-        "excluded": [{"resource_id": "B-CR-01", "reason": "NOT_ALLOWED"}],
+        "excluded": [{"resource_id": "B-CR-01", "reasons": [{"reason": "NOT_ALLOWED"}]}],
         "resources_hash": s_list["tool_result"]["resources_hash"],
     }
     # ASK는 조회와 무관하게 열려 있다(순서는 지침). LIST 대상은 자원이 필요하고 RESOURCE가 막히지 않은

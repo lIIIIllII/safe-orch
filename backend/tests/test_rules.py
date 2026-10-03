@@ -6,7 +6,7 @@ import pytest
 from conftest import add_task, make_task, take_snapshot, with_facts
 
 from app.domain.canonical import canonical_hash
-from app.domain.models import Assignment, Predecessor, ZoneRelation
+from app.domain.models import Assignment, Predecessor, Requirement, ZoneRelation
 from app.rules.engine import detect_conflicts
 from app.store import db
 from app.store.repos.site import get_site
@@ -283,3 +283,48 @@ def test_basic_precedence(seeded):
     assert ("PRECEDENCE", ("D", "E")) not in _ids(
         detect_conflicts(snap, _replace(base, _asg("E", 50, 80)), seeded)
     )
+
+
+def test_basic_resource_zone_and_requirement(with_a):
+    """구역·요구 조건은 적격성 함수 결과로 기본 제약이 된다 (CV-20)."""
+    snap = take_snapshot(with_a)
+    base = snap.facts().check_assignments()
+    new = {"RESOURCE_ZONE", "RESOURCE_REQUIREMENT"}
+
+    def rules_for(snapshot, *assignments):
+        found = detect_conflicts(snapshot, _replace(base, *assignments), with_a)
+        return {(c.rule_id, c.resource_id) for c in found if c.rule_id in new}
+
+    # A는 B구역 인양(작업 유형 기본값 최대 하중 ≥ 20): 두 크레인 모두 맞는다
+    assert rules_for(snap) == set()
+    assert rules_for(snap, _asg("A", 60, 90, "SITE-CR-01")) == set()
+    # 구역: A-CR-01은 B·C, SITE-CR-01은 B·C·D에서만 쓸 수 있다
+    in_d = _retask(snap, "A", zone_id="D")
+    assert rules_for(in_d) == {("RESOURCE_ZONE", "A-CR-01")}
+    assert rules_for(in_d, _asg("A", 60, 90, "SITE-CR-01")) == set()
+    everywhere = with_facts(
+        in_d,
+        resources=tuple(
+            r.model_copy(update={"allowed_zone_ids": ("*",)}) for r in in_d.facts().resources
+        ),
+    )
+    assert rules_for(everywhere) == set()
+    # 요구 조건: 작업 값이 더해진다. A-CR-01은 25 t, SITE-CR-01은 50 t
+    heavy = _retask(
+        snap, "A", resource_requirements=(Requirement(attribute="max_load", op="GTE", value=40),)
+    )
+    assert rules_for(heavy) == {("RESOURCE_REQUIREMENT", "A-CR-01")}
+    assert rules_for(heavy, _asg("A", 60, 90, "SITE-CR-01")) == set()
+    # 작업 유형 기본값만으로도 걸린다. 조건이 여럿이어도 충돌은 작업·자원당 하나다
+    strict = _retask(
+        snap,
+        "A",
+        default_requirements=(
+            Requirement(attribute="max_load", op="GTE", value=30),
+            Requirement(attribute="usage", op="CONTAINS", value="블록"),
+        ),
+    )
+    found = detect_conflicts(strict, base, with_a)
+    assert [(c.rule_id, c.task_ids) for c in found if c.rule_id in new] == [
+        ("RESOURCE_REQUIREMENT", ("A",))
+    ]

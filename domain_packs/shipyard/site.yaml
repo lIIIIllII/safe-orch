@@ -7,6 +7,7 @@ site_description: "여러 협력사가 구역·크레인·시간을 나눠 쓰�
 timezone: "Asia/Seoul"                      # IANA. 화면의 날짜·시각 변환용
 horizon_start_utc: "2026-10-12T00:00:00Z"   # = 10/12(월) 09:00 KST, 가정
 horizon_minutes: 3360                       # 10/12(월) 09:00 – 10/14(수) 17:00
+currency: KRW                               # 자원 cost_per_hour의 화폐 단위
 
 # 근무 달력(가정). 작업 [start, end)는 근무 구간 하나 안에 있어야 한다(기본 제약 CALENDAR).
 # 0 ≤ lo < hi ≤ horizon, 시작 순, 겹치거나 맞닿지 않음.
@@ -39,8 +40,11 @@ zone_relations:
 
 # available_intervals [[0, 3360]]은 가정. 야간은 근무 달력(CALENDAR)이 막는다.
 # SITE-GC-01(골리앗 크레인, 가정)은 두 협력사 공용이다. 유형을 CRANE과 나눠 A 장면의 자원 조회에 섞이지 않게 한다.
+# allowed_zone_ids(사용 가능 구역)는 필수다. 모든 구역이면 "*"로 적는다. 없으면 로더가 거절한다.
+# attributes는 pack.yaml resource_attributes에 선언된 속성의 값이다.
+# display_name·cost_per_hour·note는 가정값이다. cost_per_hour(currency 단위)는 데이터만 두고 계산·판정에 쓰지 않는다.
 resources:
-  - { resource_id: A-CR-01,    resource_type: CRANE,  owner_unit_id: UA,   allowed_unit_ids: [UA],     capacity: 1, available_intervals: [[0, 3360]] }
-  - { resource_id: SITE-CR-01, resource_type: CRANE,  owner_unit_id: SITE, allowed_unit_ids: [UA],     capacity: 1, available_intervals: [[0, 3360]] }
-  - { resource_id: B-CR-01,    resource_type: CRANE,  owner_unit_id: UB,   allowed_unit_ids: [UB],     capacity: 1, available_intervals: [[0, 3360]] }
-  - { resource_id: SITE-GC-01, resource_type: GANTRY, owner_unit_id: SITE, allowed_unit_ids: [UA, UB], capacity: 1, available_intervals: [[0, 3360]] }
+  - { resource_id: A-CR-01,    display_name: A사 이동식 크레인 1호,  resource_type: CRANE,  owner_unit_id: UA,   allowed_unit_ids: [UA],     allowed_zone_ids: [B, C],    capacity: 1, available_intervals: [[0, 3360]], attributes: { max_load: 25,  usage: [일반]       }, cost_per_hour: 150000, note: "" }
+  - { resource_id: SITE-CR-01, display_name: 현장 공용 크레인 1호,   resource_type: CRANE,  owner_unit_id: SITE, allowed_unit_ids: [UA],     allowed_zone_ids: [B, C, D], capacity: 1, available_intervals: [[0, 3360]], attributes: { max_load: 50,  usage: [일반]       }, cost_per_hour: 220000, note: "" }
+  - { resource_id: B-CR-01,    display_name: B사 이동식 크레인 1호,  resource_type: CRANE,  owner_unit_id: UB,   allowed_unit_ids: [UB],     allowed_zone_ids: [B, D],    capacity: 1, available_intervals: [[0, 3360]], attributes: { max_load: 25,  usage: [일반]       }, cost_per_hour: 150000, note: "" }
+  - { resource_id: SITE-GC-01, display_name: 안벽 골리앗 크레인 1호, resource_type: GANTRY, owner_unit_id: SITE, allowed_unit_ids: [UA, UB], allowed_zone_ids: [F, H],    capacity: 1, available_intervals: [[0, 3360]], attributes: { max_load: 300, usage: [블록, 일반] }, cost_per_hour: 900000, note: "안벽 레일 구간 전용" }

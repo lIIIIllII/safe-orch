@@ -37,17 +37,23 @@ def seed_pack(tx: sqlite3.Connection, pack: LoadedPack) -> None:
         [(sid, r.zone_a, r.zone_b, r.relation) for r in pack.zone_relations],
     )
     tx.executemany(
-        "INSERT INTO resource (site_id, resource_id, resource_type, owner_unit_id,"
-        " allowed_unit_ids, capacity, available_intervals) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO resource (site_id, resource_id, display_name, resource_type, owner_unit_id,"
+        " allowed_unit_ids, allowed_zone_ids, capacity, available_intervals, attributes,"
+        " cost_per_hour, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 sid,
                 r.resource_id,
+                r.display_name,
                 r.resource_type,
                 r.owner_unit_id,
                 dumps(list(r.allowed_unit_ids)),
+                dumps(list(r.allowed_zone_ids)),
                 r.capacity,
                 dumps([list(iv) for iv in r.available_intervals]),
+                dumps(r.model_dump(mode="json")["attributes"]),
+                r.cost_per_hour,
+                r.note,
             )
             for r in pack.resources
         ],
@@ -55,8 +61,8 @@ def seed_pack(tx: sqlite3.Connection, pack: LoadedPack) -> None:
     tx.executemany(
         "INSERT INTO task (site_id, task_id, revision, unit_id, owner_actor_id, work_type,"
         " zone_id, duration, earliest_start, latest_start, latest_end, required_resource_type,"
-        " requested_resource_id, predecessors, movable, fields, lifecycle)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " requested_resource_id, resource_requirements, predecessors, movable, fields, lifecycle)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 sid,
@@ -72,6 +78,7 @@ def seed_pack(tx: sqlite3.Connection, pack: LoadedPack) -> None:
                 t.latest_end,
                 t.required_resource_type,
                 t.requested_resource_id,
+                dumps([r.model_dump() for r in t.resource_requirements]),
                 dumps([p.model_dump() for p in t.predecessors]),
                 dumps(t.movable.model_dump()),
                 dumps({k: v.model_dump() for k, v in t.fields.items()}),

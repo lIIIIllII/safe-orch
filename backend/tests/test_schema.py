@@ -45,7 +45,7 @@ def _insert_chain(tx: sqlite3.Connection, site_id: str) -> None:
 
 def test_init_db_creates_v5_tables(temp_db):
     with db.read() as conn:
-        assert db.get_schema_version(conn) == db.SCHEMA_VERSION == 6
+        assert db.get_schema_version(conn) == db.SCHEMA_VERSION == 7
         assert {
             "schema_meta",
             "site",
@@ -127,7 +127,8 @@ def test_init_db_failure_leaves_zero_tables(tmp_path, use_db_path, monkeypatch):
 def test_resource_capacity_must_be_1(seeded):
     with pytest.raises(sqlite3.IntegrityError, match="CHECK"), db.write() as tx:
         tx.execute(
-            "INSERT INTO resource VALUES (?, 'X-CR-02', 'CRANE', 'UA', '[\"UA\"]', 2, '[[0,180]]')",
+            "INSERT INTO resource VALUES (?, 'X-CR-02', 'X', 'CRANE', 'UA', '[\"UA\"]', '[\"*\"]', 2,"
+            " '[[0,180]]', '{}', NULL, '')",
             (seeded.site_id,),
         )
 
