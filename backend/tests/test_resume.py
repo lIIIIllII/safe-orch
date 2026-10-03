@@ -921,7 +921,7 @@ def test_t02_injected_comment_cannot_trigger_approval(seeded):
 
 
 def test_server_does_not_order_list_try_ask(seeded):
-    """순서 규칙은 스킬 지침에 있다 (AG-18). 미시도 범위가 남아 있어도, 자원 조회를 하지 않아도 서버는
+    """순서 규칙은 스킬 지침에 있다 (AG-01). 미시도 범위가 남아 있어도, 자원 조회를 하지 않아도 서버는
     ASK·TRY를 막지 않고, LIST는 주 충돌 밖 작업도 받는다. 자원 축 미확인이면 TRY는 없다(동의)."""
     pack = seeded
     assert _submit_a(pack).status == "APPLIED"

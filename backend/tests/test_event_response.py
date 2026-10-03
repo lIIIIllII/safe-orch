@@ -555,7 +555,7 @@ def test_ask_reporter_closed_while_question_open_or_proposal_pending(seeded, eve
 
 
 def test_server_does_not_order_lookup_before_ask_reporter(seeded, event_response_on):
-    """순서 규칙은 스킬 지침에 있다 (AG-18). 조회 전에도 서버는 ASK_REPORTER를 막지 않는다."""
+    """순서 규칙은 스킬 지침에 있다 (AG-01). 조회 전에도 서버는 ASK_REPORTER를 막지 않는다."""
     pack = seeded
     _r1(pack)
     _report(pack, pack.demo_events[1].text)

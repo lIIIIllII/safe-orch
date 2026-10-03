@@ -159,7 +159,7 @@ PROMPT_FINGERPRINTS = {
     "replanning-p6": "2f5287a66d4bc0121e747150e2dc7708a8898f7869a3074d81c96bd228286ba8",  # 질문·답 Case 단위, 거절 값 재질문 금지
     "replanning-p7": "4edbced2fb04c952ff9f9166d35982c11a3dd9619701415ed65388deb75a2f21",  # 도구 전체와 열리는 조건, 이관 조건, LIST는 주 충돌 L0
     "replanning-p8": "24532cde46a7022647e44f07f57c1bdb279472596c1517f85e4b3ffb7c321ff9",  # 현장 설명·원점 시각을 Pack에서. shipyard 렌더링은 p7과 같다
-    "replanning-p9": "9bb3db09369abe062b521b9d10fc740e6bfe7087c586284a6f1367f40371ecc3",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-18)
+    "replanning-p9": "9bb3db09369abe062b521b9d10fc740e6bfe7087c586284a6f1367f40371ecc3",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-01)
     "replanning-p10": "6d9a8a4c3c7d8f098af76c4923a01f5f5e05075da3f19d1c86f12598c3906e68",  # 자원 조회 제외 사유에 구역·요구 조건(어느 속성인지) (CV-20)
     "replanning-p11": "33fb3d9f286ba13da7c9acd873a0d11c649f5484f0595a101f1eb8d31aa1aeae",  # 풀 초과 충돌(풀·종류·초과 시각), 작업의 수요 (CV-23)
 }

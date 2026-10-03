@@ -2,7 +2,7 @@
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터(untried_levels 등)만 보고 계산한다.
 Action: SOLVE_WITH_SCOPE, LIST_ASSIGNABLE_RESOURCES, TRY_ALTERNATIVE_RESOURCE, ASK_TASK_OWNER,
-ESCALATE_NO_SOLUTION. 순서는 스킬 지침에 있고, 여기 조건은 사실·유효성·Budget뿐이다 (AG-01·AG-18).
+ESCALATE_NO_SOLUTION. 순서는 스킬 지침에 있고, 여기 조건은 사실·유효성·Budget뿐이다 (AG-01).
 모듈 이름(GOAL, ACTIONS, tool_schemas 등)은 그대로 두고, 그 값으로 SPEC(AgentSpec)을 만든다.
 """
 

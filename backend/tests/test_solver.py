@@ -478,7 +478,7 @@ def test_search_key_changes_with_ready_set_and_in_scope_constraints(with_a):
 
 
 def test_search_key_includes_zone_attributes_and_requirements(with_a):
-    """구역·속성·요구 조건은 Solver 입력이다. 표시 이름·메모·비용은 아니다 (CV-21)."""
+    """구역·속성·요구 조건은 Solver 입력이다. 표시 이름·메모·비용은 아니다 (CV-04)."""
     snapshot = take_snapshot(with_a)
     key, _ = _key(with_a, snapshot)
     for changed in (

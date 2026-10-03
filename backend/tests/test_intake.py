@@ -445,7 +445,7 @@ def test_runtime_enums_on_code_arguments_and_static_schema_has_no_pack_values(se
 
 
 def test_server_does_not_reserve_last_round(seeded):
-    """순서 규칙은 스킬 지침에 있다 (AG-18). 남은 사람 라운드가 1이어도 서버는 질문을 막지 않는다."""
+    """순서 규칙은 스킬 지침에 있다 (AG-01). 남은 사람 라운드가 1이어도 서버는 질문을 막지 않는다."""
     pack = seeded
     assert _intake(pack, pack.demo_intakes[1].text).status == "APPLIED"
     run_until_idle(pack, model_factory=Router(intake=[_lookup(), _ask()]).factory())

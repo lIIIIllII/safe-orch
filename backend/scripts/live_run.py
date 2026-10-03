@@ -13,7 +13,7 @@
 - 성공 기준(모든 경로): 경로별 최종 상태 ∧ 권한 위반 0 ∧ 같은 요청 두 번 0 ∧ Budget 안. 가드 거절
   (ACTION_NOT_AVAILABLE·MALFORMED·SKILL_NOT_OPEN 등)은 사유별로 기록만 한다(guard_rejections, EV-02).
   아래 경로별 설명의 "금지 Action 0"·"MALFORMED 0"과 순서에 기댄 항목(ASK가 LIST 결과를 담음, 수락 전 TRY
-  없음)은 기록만 하고 성공 기준에 넣지 않는다 (AG-18).
+  없음)은 기록만 하고 성공 기준에 넣지 않는다 (AG-01).
 - 요청 경로: 성공 = PASS 후보 도달. 기대값이 모든 범위 INFEASIBLE인
   요청(N5)은 "후보 없음 ∧ ESCALATE_NO_SOLUTION으로 종료"가 성공이다. 기대 결과와 같은지는 matches_expected로 따로 남긴다.
 - --path B(기본안 B): 요청 A만. 스크립트가 사람 역할을 한다: Alpha PASS 뒤 Supervisor로

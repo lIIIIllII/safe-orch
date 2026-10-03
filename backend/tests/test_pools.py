@@ -221,7 +221,7 @@ def test_solver_infeasible_when_required_pool_is_missing(with_a):
 
 
 def test_search_key_includes_pools_and_demands(with_a):
-    """풀 수량·허용 Unit과 작업 수요는 Solver 입력이다. 표시 이름·단가는 아니다 (CV-21)."""
+    """풀 수량·허용 Unit과 작업 수요는 Solver 입력이다. 표시 이름·단가는 아니다 (CV-04)."""
     snap = take_snapshot(with_a)
 
     def key(snapshot):

@@ -144,7 +144,7 @@ PROMPT_FINGERPRINTS = {
     "intake-p2": "fcfca39ebb9411cefaea0362c474a14c0a86414ddf61d8f04c3d1d4ba75a1062",  # 자원 유형 코드·표시 이름, 코드 인자 실행 시 enum, 확인 의미 사실 설명
     "intake-p3": "057c1ac721076deac49fc6b8854256119f800f2a55920e30811c723f56cbfe1e",  # 마지막 라운드는 값 확인용(ASK 열리는 조건), 질문 문장 노출
     "intake-p4": "343e9e3ed1658a1ee4e28e474233a82e05bab87aa89de50df068178968c16a85",  # 현장의 지금 site_now (ST-17)
-    "intake-p5": "5ca8f69c0c3e4a6487c0d5d32f4eb99cf8c9d9eafdf7a7e5d634bd345e1bd028",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-18)
+    "intake-p5": "5ca8f69c0c3e4a6487c0d5d32f4eb99cf8c9d9eafdf7a7e5d634bd345e1bd028",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-01)
     "intake-p6": "62ee72c80a9cb81ec86aa2a372b6258d92d61a142e2e436ab36f063285ae1d73",  # 접수 요령을 TASK_INTAKE 지침으로(1단계 지침 1차)
     "intake-p7": "162d798a30aab6b1b5b6aff27145e73477cc624f38387ef9682713dfc9c0a437",  # 사람과 대화하는 스킬을 상대별로 나눔 (AG-20)
     "intake-p8": "bff8e2276cf36287f65061d14ed59fc3376e455632c29f9fd1120fc2cd065638",  # 도구의 시각 인자는 현장 날짜·시각 문자열, 관찰에 같은 형식의 시각 (AG-21)

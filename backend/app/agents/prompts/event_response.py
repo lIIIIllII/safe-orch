@@ -139,7 +139,7 @@ PROMPT_FINGERPRINTS = {
     "event-response-p4": "43842c8b5c1304b33874fae5c1d74ce241097029989f2b24036983a6cdb55053",  # 조회 뒤 질문(ASK_REPORTER 열리는 조건)
     "event-response-p5": "c08d380cc1ecd55316f0ad387152b04c0bea832d6e7dce78668c176b3c9911e6",  # 조회 start_slack·분석 delay_minutes, 이관 조건 문구를 Replanning p7과 맞춤
     "event-response-p6": "32095e40779ecd479c5ece5faa9433e3315739ae6a3fbb36cdd145b81a0f8492",  # 현장의 지금 site_now (ST-17)
-    "event-response-p7": "4568e1f2a0fcf6da84dad2e5fc42596b56be173ef1f8c68bdcfa829d3ae8210c",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-18)
+    "event-response-p7": "4568e1f2a0fcf6da84dad2e5fc42596b56be173ef1f8c68bdcfa829d3ae8210c",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-01)
     "event-response-p8": "d06a206492c63e1aa19fa7be6306d94f87577aa7631347c3e756cfbfb87029df",  # ASK_PEOPLE에서 라운드 남기기 문장 뺌
     "event-response-p9": "3156ac900415cebfe78058f45ff5fbbe5308a7575b13b7f876bebd9bd0218f85",  # 사람과 대화하는 스킬을 상대별로 나눔 (AG-20)
     "event-response-p10": "685e1ee3cac96d92825f9a1f45b03ea3a4b6722f5f19d08ef1df14bf429bbe46",  # 도구의 시각 인자는 현장 날짜·시각 문자열, 관찰에 같은 형식의 시각 (AG-21)
