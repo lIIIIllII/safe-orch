@@ -232,17 +232,17 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
 # ── Coordination ───────────────────────────────────
 
 
-def list_change_requests(
-    conn: sqlite3.Connection, site_id: str, candidate_id: str
+def _change_requests(
+    conn: sqlite3.Connection, site_id: str, where: str, params: tuple[Any, ...]
 ) -> list[dict[str, Any]]:
-    """후보에 묶인 변경 요청과 그 메시지의 제약 초안(FEEDBACK_CONSTRAINT 제안, 마지막 1개)."""
+    """변경 요청과 그 메시지의 제약 초안(FEEDBACK_CONSTRAINT 제안, 마지막 1개)."""
     out = []
     for r in rows(
         conn,
-        "SELECT message_id, run_id, step_no, to_actor_id, status, reply, change_hash"
-        " FROM message WHERE site_id = ? AND candidate_id = ? AND type = 'CHANGE_REQUEST'"
+        "SELECT message_id, run_id, step_no, to_actor_id, status, reply, change_hash, candidate_id"
+        f" FROM message WHERE site_id = ? AND type = 'CHANGE_REQUEST' AND {where}"
         " ORDER BY rowid",
-        (site_id, candidate_id),
+        (site_id, *params),
     ):
         r["reply"] = loads(r["reply"])
         drafts = rows(
@@ -259,8 +259,25 @@ def list_change_requests(
     return out
 
 
+def list_change_requests(
+    conn: sqlite3.Connection, site_id: str, candidate_id: str
+) -> list[dict[str, Any]]:
+    """후보에 묶인 변경 요청."""
+    return _change_requests(conn, site_id, "candidate_id = ?", (candidate_id,))
+
+
+def list_requests_for_changes(
+    conn: sqlite3.Connection, site_id: str, change_hashes: list[str]
+) -> list[dict[str, Any]]:
+    """같은 변경(change_hash = 작업·revision·전후 배정)의 변경 요청. 후보와 Case를 가리지 않는다 (ST-15)."""
+    if not change_hashes:
+        return []
+    marks = ", ".join("?" * len(change_hashes))
+    return _change_requests(conn, site_id, f"change_hash IN ({marks})", tuple(change_hashes))
+
+
 def change_answers(requests: list[dict[str, Any]]) -> dict[str, str]:
-    """change_hash → 담당자 답에 따른 item 상태. 늦은 답(LATE)은 세지 않는다.
+    """change_hash → 담당자 답에 따른 item 상태. 취소된 요청·늦은 답(CANCELLED·LATE)은 세지 않는다 (ST-16).
 
     ACCEPT → ACCEPTED, DECLINE(이견) → OBJECTED, 그 이견의 제약 초안이 PENDING이면
     OBJECTION_DRAFT_PENDING. 같은 변경에 답이 여럿이면 마지막 것.
@@ -276,6 +293,15 @@ def change_answers(requests: list[dict[str, Any]]) -> dict[str, str]:
             pending = r["draft"] is not None and r["draft"]["status"] == "PENDING"
             out[r["change_hash"]] = "OBJECTION_DRAFT_PENDING" if pending else "OBJECTED"
     return out
+
+
+def answer_sources(requests: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """change_hash → 그 상태를 만든 변경 요청(change_answers와 같은 규칙: 유효한 답 중 마지막)."""
+    return {
+        r["change_hash"]: r
+        for r in requests
+        if r["status"] == "ANSWERED" and (r["reply"] or {}).get("decision") in ("ACCEPT", "DECLINE")
+    }
 
 
 def list_run_messages(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:

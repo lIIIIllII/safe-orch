@@ -5,6 +5,7 @@
 
 import sqlite3
 from dataclasses import dataclass
+from typing import Any
 
 from app.domain.consultation import (
     ConsultationStatus,
@@ -16,7 +17,7 @@ from app.domain.consultation import (
 from app.domain.models import Candidate, ConsultationItem
 from app.store.repos._rows import dumps, loads, rows
 from app.store.repos.decisions import list_decisions
-from app.store.repos.messages import change_answers, list_change_requests
+from app.store.repos.messages import answer_sources, change_answers, list_requests_for_changes
 from app.store.repos.plans import get_plan_by_candidate
 from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.site import get_site
@@ -41,6 +42,8 @@ class ConsultationView:
     item_status: dict[str, ItemStatus]
     items_status: ConsultationStatus  # item만 본 상태 (승인 8단계)
     status: ConsultationStatus  # COMMITTED·STALE·REJECTED까지 반영한 표시 상태
+    # task_id → 그 item 상태를 만든 담당자 답의 출처. prior = 다른 후보의 요청에 한 답이 넘어왔다
+    answer_from: dict[str, dict[str, Any]]
 
 
 def insert_consultation(
@@ -91,8 +94,22 @@ def consultation_view(
         for d in list_decisions(conn, site_id, candidate_id, "WAIVE")
         for tid in d["target_task_ids"]
     ]
-    answers = change_answers(list_change_requests(conn, site_id, candidate_id))
+    # 답은 후보가 아니라 변경(change_hash)으로 찾는다. 같은 변경이면 다른 후보·Case의 답도 적용된다
+    requests = list_requests_for_changes(conn, site_id, [i.change_hash for i in items])
+    answers = change_answers(requests)
     statuses = item_statuses(items, waived, answers)  # type: ignore[arg-type]
+    sources = answer_sources(requests)
+    answer_from = {
+        i.task_id: {
+            "message_id": src["message_id"],
+            "candidate_id": src["candidate_id"],
+            "actor_id": src["reply"].get("actor_id"),
+            "at": src["reply"].get("at"),
+            "prior": src["candidate_id"] != candidate_id,
+        }
+        for i in items
+        if statuses[i.task_id] != "WAIVED" and (src := sources.get(i.change_hash)) is not None
+    }
     state = candidate_state(conn, site_id, candidate)
     return ConsultationView(
         candidate_id=candidate_id,
@@ -105,6 +122,7 @@ def consultation_view(
             stale=state.stale,
             rejected=state.rejected,
         ),
+        answer_from=answer_from,
     )
 
 

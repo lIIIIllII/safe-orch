@@ -22,8 +22,8 @@ from app.store.repos.site import bump_context_version
 CONFLICT = {"conflict": {"rule_id": "SEP-LIFT-BELOW", "task_ids": ["A", "B"]}}
 
 
-def _run(pack, replies, run_id="run_1"):
-    add_run(pack, run_id, input_ref=CONFLICT)
+def _run(pack, replies, run_id="run_1", **changes):
+    add_run(pack, run_id, input_ref=CONFLICT, **changes)
     model = ScriptedChatModel(replies)
     run = runtime.invoke(pack, {"run_id": run_id}, model)
     with db.read() as conn:
@@ -97,14 +97,21 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert key["command_type"] == "AGENT:SOLVE_WITH_SCOPE" and key["status"] == "APPLIED"
 
 
-def test_same_effective_spec_is_not_retried_site_wide(with_a):
+def test_same_effective_spec_is_not_retried_within_case(with_a):
     _run(with_a, [solve("L0"), solve("L1")])
-    # 같은 사실 위의 새 Run: L0·L1·L2 모두 같은 실효 SearchSpec을 이미 시도했다
-    run, steps, model = _run(with_a, [solve("L2"), escalate()], run_id="run_2")
+    # 같은 Case의 새 Run: L0·L1·L2 모두 같은 실효 SearchSpec을 이미 시도했다 (CV-13)
+    run, steps, model = _run(
+        with_a, [solve("L2"), escalate()], run_id="run_2", case_id="case_run_1"
+    )
     # 계산 Action은 없다. 자원 조회(A·C)는 Solver를 부르지 않으므로 남는다
     assert model.tool_names(0) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
     assert _guards(steps)[0] == ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE")
     assert run.status == "ESCALATED" and run.solver_calls_used == 0
+    # 다른 Case의 Run: 같은 탐색을 다시 계산할 수 있다
+    run, steps, model = _run(with_a, [solve("L0"), escalate()], run_id="run_3")
+    assert model.tool_names(0)[0] == "SOLVE_WITH_SCOPE"
+    assert _guards(steps)[0] == ("COMPLETED", "CONTINUE", None)
+    assert run.solver_calls_used == 1
 
 
 def test_action_not_available_then_escalate(with_a):

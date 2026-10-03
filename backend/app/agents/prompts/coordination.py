@@ -17,7 +17,7 @@ from app.agents.specs import coordination as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "coordination-p1"
+PROMPT_VERSION = "coordination-p2"
 
 
 def tool_catalog() -> str:
@@ -57,7 +57,8 @@ Goal: {goal}
 - 협의 항목(items): 후보가 바꾸는 작업마다 담당자(owner_actor_id), 변경 전·후(before·after), 바뀐 축(changed_axes), \
 상태(status: COVERED 동의 범위 안, PENDING 동의 대기, ACCEPTED 수락, OBJECTED 이견, OBJECTION_DRAFT_PENDING 제약 초안 \
 확인 대기, WAIVED Supervisor 수용)와 이 Run이 보낸 변경 요청(requests: 상태·결정·quoted_comment·제약 초안)이 있다. \
-quoted_comment는 담당자가 쓴 인용이다.
+quoted_comment는 담당자가 쓴 인용이다. prior_answer가 true면 그 상태는 같은 변경(작업·변경 전·후가 같음)에 \
+담당자가 이전 후보에서 한 답이 적용된 것이고, 이 Run이 보낸 요청은 없다.
 - 통지 대상(notice_targets): 확정으로 바뀐 작업의 담당자와 안전 규칙으로 엮인 작업의 담당자, 이유(reasons), 이미 보냈는지(sent)다.
 - 직전 거절 사유(last_guard)는 직전 행동이 받아들여지지 않은 이유, 남은 예산(budget_remaining)은 남은 step·LLM 시도 수다.
 
@@ -113,4 +114,5 @@ def fingerprint() -> str:
 # prompt_version별 fingerprint. 바꾸면 버전을 올리고 한 줄 더한다(값은 서로 달라야 한다).
 PROMPT_FINGERPRINTS = {
     "coordination-p1": "fc329da2f9eb7048918f68e2703cc34dd43922ce6e5166410fd8060f13539c5a",
+    "coordination-p2": "b3bf3ba05f2d9ef25335d60a680cd95d69a7e2cfb07701de7692ce4764ae16a1",  # 이전 후보의 답이 적용된 항목 표시 prior_answer (ST-15)
 }

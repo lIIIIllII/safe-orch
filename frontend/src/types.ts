@@ -109,6 +109,14 @@ export interface ConsultationItem {
     quoted_comment: string | null
     draft: { proposal_id: string; status: string; axes: string[] } | null
   } | null
+  /** 상태를 만든 담당자 답의 출처. prior면 같은 변경에 다른 후보에서 한 답이 적용된 것이다. */
+  answer_source: {
+    message_id: string
+    candidate_id: string
+    actor_id: string | null
+    at: string | null
+    prior: boolean
+  } | null
 }
 
 /** 거절된 후보의 거절 사유와 그 거절로 생긴 제약. */

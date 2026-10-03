@@ -66,6 +66,8 @@ def _items(conn: sqlite3.Connection, pack: LoadedPack, run_id: str, candidate_id
             "after": i.after.model_dump(),
             "changed_axes": changed_axes(i.before, i.after),
             "status": view.item_status[i.task_id],
+            # 같은 변경에 담당자가 이전 후보에서 한 답이 적용되었다
+            "prior_answer": bool(view.answer_from.get(i.task_id, {}).get("prior")),
             "requests": mine.get(i.change_hash, []),
         }
         for i in view.items

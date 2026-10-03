@@ -135,7 +135,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     conflicts = detect_conflicts(snapshot, facts.check_assignments(), pack)
     primary = primary_conflict(facts, conflicts, run)
     # 미시도 판정은 실효 탐색 키(Solver 입력)로 한다. 무결성 hash가 아니다
-    tried = tried_search_keys(conn, pack.site_id)
+    tried = tried_search_keys(conn, pack.site_id, run.case_id)
     keys = level_keys(snapshot, primary, run.acting_unit_id) if primary else {}
     untried = [lv for lv, k in keys.items() if k not in tried]
 

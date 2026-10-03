@@ -233,16 +233,17 @@ def finish_solver_job(
     )
 
 
-def tried_search_keys(conn: sqlite3.Connection, site_id: str) -> set[str]:
-    """site에서 이미 시도한 실효 탐색 키 (RESERVED·REGISTERED)."""
+def tried_search_keys(conn: sqlite3.Connection, site_id: str, case_id: str) -> set[str]:
+    """이 Case에서 이미 시도한 실효 탐색 키 (RESERVED·REGISTERED). Case가 바뀌면 다시 계산할 수 있다 (CV-13)."""
     return {
         r["search_key"]
         for r in rows(
             conn,
             "SELECT s.search_key FROM solver_job j JOIN search_spec s"
             " ON s.search_spec_id = j.search_spec_id"
-            " WHERE j.site_id = ? AND j.status IN ('RESERVED', 'REGISTERED')",
-            (site_id,),
+            " JOIN agent_run r ON r.run_id = j.run_id"
+            " WHERE j.site_id = ? AND r.case_id = ? AND j.status IN ('RESERVED', 'REGISTERED')",
+            (site_id, case_id),
         )
     }
 

@@ -268,6 +268,14 @@ function CandidateDetail({
                   </td>
                   <td>
                     {ITEM_STATUS[it.item_status] ?? it.item_status}
+                    {it.answer_source?.prior && (
+                      <div className="small muted">
+                        이전 답 적용 ·{' '}
+                        {actorName.get(it.answer_source.actor_id ?? '') ?? it.answer_source.actor_id}
+                        {it.answer_source.at && ` · ${it.answer_source.at}`} · 후보{' '}
+                        <code>{it.answer_source.candidate_id}</code>
+                      </div>
+                    )}
                     {it.request?.quoted_comment && (
                       <div className="small muted">이견(인용): “{it.request.quoted_comment}”</div>
                     )}

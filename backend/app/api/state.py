@@ -171,6 +171,8 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
                     **i.model_dump(mode="json"),
                     "item_status": view.item_status[i.task_id],
                     "request": _request_view(requests.get(i.change_hash)),
+                    # 상태를 만든 담당자 답의 출처. prior면 다른 후보에서 한 답이 적용된 것이다
+                    "answer_source": view.answer_from.get(i.task_id),
                 }
                 for i in view.items
             ],

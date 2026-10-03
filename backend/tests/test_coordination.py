@@ -9,8 +9,9 @@ import uuid
 from langchain_core.messages import AIMessage
 from scripted import Router, call, solve
 
+from app.agents.observers.coordination import _items
 from app.agents.prompts import coordination as prompt
-from app.api.state import build_state
+from app.api.state import build_state, candidate_view
 from app.commands.approval import (
     ApproveRequest,
     RejectRequest,
@@ -19,10 +20,11 @@ from app.commands.approval import (
     reject_candidate,
     waive,
 )
+from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.messages import ReplyRequest, reply_message
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
-from app.domain.consultation import item_statuses
+from app.domain.consultation import change_hash, item_statuses
 from app.domain.models import Assignment, ConsultationItem
 from app.store import db
 from app.store.repos.consultations import consultation_view
@@ -30,7 +32,8 @@ from app.store.repos.decisions import list_constraints
 from app.store.repos.dispatch import list_jobs
 from app.store.repos.records import list_validations
 from app.store.repos.runs import get_run, list_steps
-from app.store.repos.site import get_site
+from app.store.repos.site import bump_context_version, get_site
+from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
 OBJECTION = "작업발판 연계 공정 확정"  # scenario demo_rejections[0].comment와 같은 문장
 
@@ -372,6 +375,144 @@ def test_objection_without_fix_request_is_reported_not_drafted(seeded, coordinat
     view = _view(pack, rp.wait_ref)
     assert (view.item_status["C"], view.items_status) == ("OBJECTED", "BLOCKED")
     assert _runs("REPLANNING")[0].status == "WAITING_HUMAN"  # Supervisor가 거절해 재탐색할 수 있다
+
+
+# ── 담당자 답은 변경(change_hash)에 묶인다 (ST-15·ST-16, CV-13) ──
+
+
+def _report_event(pack, source="ev1"):
+    out = receive_event(
+        pack,
+        "reporter",
+        _key(),
+        EventReport(source_event_id=source, event_type="OTHER", text="확인 필요"),
+    )
+    assert out.status == "APPLIED"
+    return out.result_refs["hold_id"]
+
+
+def _release_no_change(pack, hold_id):
+    body = HoldRelease(
+        hold_id=hold_id,
+        resolution="NO_CHANGE",
+        expected_context_version=_site(pack).context_version,
+    )
+    assert release_hold_command(pack, "supervisor", _key(), body).status == "APPLIED"
+
+
+def _replan_in_new_case(pack, coordination=()):
+    """해제 뒤 RECHECK → 새 Case의 Replanning Run이 L0·L1을 다시 계산한다. 새 후보 ID."""
+    router = Router(replanning=[solve("L0"), solve("L1")], coordination=list(coordination))
+    run_until_idle(pack, model_factory=router.factory())
+    assert router.left()["REPLANNING"] == 0
+    first, second = _runs("REPLANNING")
+    assert second.case_id != first.case_id
+    assert [(s["result_kind"], s["guard"]["reason_code"]) for s in _steps(second.run_id)] == [
+        ("CONTINUE", None),
+        ("WAIT", None),
+    ]
+    return second.wait_ref
+
+
+def test_accept_carries_to_same_change_in_new_case(seeded, coordination_on):
+    """수락한 변경이 새 Case의 후보에 그대로 있으면 처음부터 ACCEPTED다. 다시 묻지 않는다."""
+    pack = seeded
+    rp, coord = _alpha_consulting(pack)
+    [cr] = _messages("CHANGE_REQUEST")
+    assert _reply(pack, "foreman_a2", cr["message_id"]).status == "APPLIED"
+    run_until_idle(pack, model_factory=Router(coordination=[_report("C 수락")]).factory())
+    with db.read() as conn:
+        [own] = [i for i in _items(conn, pack, coord.run_id, rp.wait_ref) if i["task_id"] == "C"]
+    assert (own["status"], own["prior_answer"]) == ("ACCEPTED", False)
+
+    _release_no_change(pack, _report_event(pack))
+    # Coordination 응답을 주지 않는다. 협의 Run이 뜨면 스크립트 소진으로 ERROR가 된다
+    beta = _replan_in_new_case(pack)
+    assert beta != rp.wait_ref
+    view = _view(pack, beta)
+    assert (view.item_status, view.status) == ({"A": "COVERED", "C": "ACCEPTED"}, "COMPLETE")
+    assert len(_messages("CHANGE_REQUEST")) == 1 and len(_runs("COORDINATION")) == 1
+    with db.read() as conn:
+        shown = candidate_view(conn, pack.site_id, beta)
+        [obs_c] = [i for i in _items(conn, pack, coord.run_id, beta) if i["task_id"] == "C"]
+    sources = {i["task_id"]: i["answer_source"] for i in shown["consultation"]["items"]}
+    src = sources["C"]
+    assert (src["message_id"], src["candidate_id"], src["actor_id"], src["prior"]) == (
+        cr["message_id"],
+        rp.wait_ref,
+        "foreman_a2",
+        True,
+    )
+    assert src["at"] and sources["A"] is None
+    assert (obs_c["prior_answer"], obs_c["requests"]) == (True, [])
+    assert _approve(pack, beta).status == "APPLIED"
+
+
+def test_objection_carries_and_candidate_waits_for_supervisor(seeded, coordination_on):
+    """이견 낸 변경이 새 후보에 있으면 처음부터 OBJECTED다. 다시 나가지 않고 Supervisor를 기다린다."""
+    pack = seeded
+    _alpha_consulting(pack)
+    _objected(pack, "이번 주는 좀 어렵네요")
+    run_until_idle(pack, model_factory=Router(coordination=[_report("C 이견")]).factory())
+
+    _release_no_change(pack, _report_event(pack))
+    beta = _replan_in_new_case(pack)
+    view = _view(pack, beta)
+    assert (view.item_status["C"], view.status) == ("OBJECTED", "BLOCKED")
+    assert view.answer_from["C"]["prior"] is True
+    assert len(_messages("CHANGE_REQUEST")) == 1 and len(_runs("COORDINATION")) == 1
+    waiting = _runs("REPLANNING")[-1]
+    assert (waiting.status, waiting.wait_kind) == ("WAITING_HUMAN", "CANDIDATE_OUTCOME")
+    out = _approve(pack, beta)
+    assert (out.status, out.reason_codes) == ("REJECTED", ("CONSULTATION_INCOMPLETE",))
+
+
+def test_cancelled_and_late_answers_do_not_carry(seeded, coordination_on):
+    """신고로 취소된 요청과 Hold 중 늦은 답은 같은 변경이 다시 나와도 세지 않는다. 다시 묻는다."""
+    pack = seeded
+    _alpha_consulting(pack)
+    [cr] = _messages("CHANGE_REQUEST")
+    hold_id = _report_event(pack)
+    assert _messages("CHANGE_REQUEST")[0]["status"] == "CANCELLED"
+    assert _view(pack, cr["candidate_id"]).answer_from == {}
+    late = _reply(pack, "foreman_a2", cr["message_id"])
+    assert late.status == "APPLIED" and late.result_refs["late"] is True
+    _release_no_change(pack, hold_id)
+
+    beta = _replan_in_new_case(pack, [_request_c(), _wait()])
+    old, new = _messages("CHANGE_REQUEST")
+    assert (old["status"], new["status"], new["candidate_id"]) == ("LATE", "OPEN", beta)
+    assert old["change_hash"] == new["change_hash"]
+    view = _view(pack, beta)
+    assert view.item_status["C"] == "PENDING" and view.answer_from == {}
+
+
+def test_answer_does_not_carry_when_task_revision_changes(seeded, coordination_on):
+    """작업 revision이 바뀌면 다른 변경이다. 수락이 넘어오지 않는다."""
+    pack = seeded
+    _alpha_consulting(pack)
+    [cr] = _messages("CHANGE_REQUEST")
+    assert _reply(pack, "foreman_a2", cr["message_id"]).status == "APPLIED"
+    run_until_idle(pack, model_factory=Router(coordination=[_report("C 수락")]).factory())
+    with db.write() as tx:
+        c = next(t for t in list_current_tasks(tx, pack.site_id, pack) if t.task_id == "C")
+        insert_task_revision(tx, pack.site_id, c.model_copy(update={"revision": c.revision + 1}))
+        bump_context_version(tx, pack.site_id)
+    _release_no_change(pack, _report_event(pack))
+
+    beta = _replan_in_new_case(pack, [_request_c(), _wait()])
+    old, new = _messages("CHANGE_REQUEST")
+    assert old["change_hash"] != new["change_hash"]
+    assert _view(pack, beta).item_status["C"] == "PENDING"
+
+
+def test_change_hash_covers_revision_and_both_assignments():
+    before = Assignment(task_id="C", start=60, end=90, resource_id="A-CR-01")
+    after = Assignment(task_id="C", start=90, end=120, resource_id="A-CR-01")
+    moved = Assignment(task_id="C", start=75, end=105, resource_id="A-CR-01")
+    base = change_hash("C", 1, before, after)
+    assert change_hash("C", 1, before, after) == base
+    assert len({base, change_hash("C", 2, before, after), change_hash("C", 1, moved, after)}) == 3
 
 
 # ── 서버 검사 ──────────────────────────────────────────────────
