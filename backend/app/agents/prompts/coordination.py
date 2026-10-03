@@ -18,7 +18,7 @@ from app.agents.specs import coordination as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "coordination-p6"
+PROMPT_VERSION = "coordination-p7"
 
 
 def tool_catalog() -> str:
@@ -129,4 +129,5 @@ PROMPT_FINGERPRINTS = {
     "coordination-p4": "83e5192daf138df5fec072b00c33d153e74584c1b61f628f5d7b72cb4de67b57",  # ASK_PEOPLE에서 라운드 남기기 문장 뺌
     "coordination-p5": "4b86d6910d2d02d1833d71acc5a837b3cd911e8f1c147e6568a57c53a3c3f24f",  # 사람과 대화하는 스킬을 상대별로 나눔 (AG-20)
     "coordination-p6": "0ff9f9f1bd40574d65206ea1e32417b16be859fee3b594d31f017505b260fa73",  # 종료는 RETURN_RESULT: 보고·이관 대신 결과와 길 묶음 (AG-23)
+    "coordination-p7": "51a8637f97517fe0873e7ca73e4780c49ce355633d90eeec5618f7e2e1612784",  # 결과의 OTHER_UNIT에 충돌 그룹 참조
 }

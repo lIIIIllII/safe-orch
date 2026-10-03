@@ -30,9 +30,8 @@ TEST_ENV = {
     "PACK": "shipyard",
     "DISPATCH_WORKER": "false",  # 테스트는 run_until_idle로 직접 돌린다
     "LANGSMITH_TRACING": "false",
-    # Agent 자동 시작은 끈다. 켜는 테스트는 coordination_on·event_response_on을 쓴다
-    "COORDINATION_ENABLED": "false",
-    "EVENT_RESPONSE_ENABLED": "false",
+    # 사건 → 메인 자동 시작은 끈다. 켜는 테스트는 main_on을 쓴다
+    "MAIN_AUTO_START": "false",
     # 현장의 지금을 고정한다(Horizon 원점). 실제 시계로 돌면 관찰이 실행마다 달라진다 (ST-17)
     "SITE_NOW": "2026-10-12T09:00+09:00",
 }
@@ -176,23 +175,11 @@ def with_a(seeded):
 
 
 @pytest.fixture
-def coordination_on(monkeypatch):
-    """COORDINATION_ENABLED를 켠다(기본안 A). 테스트 기준값은 꺼짐(test_env)."""
+def main_on(monkeypatch):
+    """MAIN_AUTO_START를 켠다: 사건이 생기면 메인이 뜬다. 테스트 기준값은 꺼짐(test_env)."""
     from app.config import get_settings
 
-    monkeypatch.setenv("COORDINATION_ENABLED", "true")
-    get_settings.cache_clear()
-    yield
-    # 환경변수는 monkeypatch가 test_env 값(false)으로 되돌린다. 캐시만 비운다
-    get_settings.cache_clear()
-
-
-@pytest.fixture
-def event_response_on(monkeypatch):
-    """EVENT_RESPONSE_ENABLED를 켠다. 테스트 기준값은 꺼짐(test_env)."""
-    from app.config import get_settings
-
-    monkeypatch.setenv("EVENT_RESPONSE_ENABLED", "true")
+    monkeypatch.setenv("MAIN_AUTO_START", "true")
     get_settings.cache_clear()
     yield
     # 환경변수는 monkeypatch가 test_env 값(false)으로 되돌린다. 캐시만 비운다

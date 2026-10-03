@@ -139,5 +139,5 @@ def fingerprint() -> str:
 
 # prompt_version별 fingerprint. 바꾸면 버전을 올리고 한 줄 더한다(값은 서로 달라야 한다).
 PROMPT_FINGERPRINTS: dict[str, str] = {
-    "main-p1": "65d2738912369c6887a4bf52d0fd80b387440f6c8facea0de38de329ac09deb2",
+    "main-p1": "7012047a25b6382ba6b7dbaf8746b36e462086e9ac28a47a4e29d3f18dc446d6",
 }

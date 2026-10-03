@@ -9,19 +9,10 @@ import sqlite3
 from pydantic import Field
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
-from app.config import get_settings
 from app.domain.ids import new_id
 from app.domain.models import Axis, Candidate, FeedbackConstraint, Plan, Validation
 from app.packs.loader import LoadedPack
-from app.store.repos.case_events import record_case_event
-from app.store.repos.cases import (
-    close_case,
-    end_candidate_runs,
-    end_case_run,
-    register_coordination,
-    register_recheck,
-    wake_run,
-)
+from app.store.repos.cases import deliver_event, end_candidate_runs, register_recheck, wake_run
 from app.store.repos.consultations import CandidateState, candidate_state, consultation_view
 from app.store.repos.decisions import insert_constraint, insert_decision
 from app.store.repos.events import list_active_holds
@@ -150,44 +141,14 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
         ctx.actor_id,
         site.context_version,
     )
-    # 후보를 만든 Replanning Run을 SUCCEEDED로. RECONFIRM 후보에는 Run이 없다.
-    # Case가 닫히면 대기열 1건을 올리고, 확정 뒤 남은 요청을 위해 RECHECK(plan 키)를 등록한다.
-    run_id = None
-    if candidate.solver_result_id is not None:
-        run_id = run_for_solver_result(tx, candidate.solver_result_id)
-    _record_decided(tx, ctx, candidate, decision_id, "APPROVE", run_id)
-    if run_id is not None and not end_case_run(
-        tx, ctx.pack, run_id, "SUCCEEDED", f"COMMITTED:{plan_revision}"
-    ):
-        run_id = None
-    if run_id is None:
-        close_case(tx, ctx.pack)
-    # 이 후보의 협의 Run도 끝내고, 설정이 켜졌으면 확정 통지 Run을 등록한다
+    # 이 후보의 협의 Run이 열려 있으면 끝낸다. 확정 뒤 남은 요청을 위해 RECHECK(plan 키)를 등록한다.
+    # 승인 결과는 사건으로 메인에게 간다. 확정 뒤 통지는 메인이 부른다 (AG-26).
     end_candidate_runs(
         tx, ctx.pack, candidate.candidate_id, "SUCCEEDED", f"COMMITTED:{plan_revision}"
     )
-    maker = (
-        run_for_solver_result(tx, candidate.solver_result_id)
-        if candidate.solver_result_id is not None
-        else None
-    )
-    maker_run = get_run(tx, maker) if maker else None
-    if get_settings().coordination_enabled and maker_run is not None:
-        register_coordination(
-            tx,
-            ctx.pack,
-            "NOTICE",
-            f"START_RUN:COORDINATION:NOTICE:plan{plan_revision}",
-            candidate.candidate_id,
-            maker_run.case_id,
-            plan_revision=plan_revision,
-        )
     register_recheck(tx, site_id, {"kind": "COMMIT", "plan_revision": plan_revision})
-    r.refs = {
-        "plan_revision": plan_revision,
-        "decision_id": decision_id,
-        "succeeded_run_id": run_id,
-    }
+    _deliver_decided(tx, ctx, candidate, decision_id, "APPROVE")
+    r.refs = {"plan_revision": plan_revision, "decision_id": decision_id}
     return r
 
 
@@ -236,6 +197,13 @@ def _waive(tx: sqlite3.Connection, ctx: CommandContext, body: WaiveRequest) -> R
         comment=body.comment,
     )
     r.refs = {"decision_id": decision_id}
+    # 협의 항목이 사람 수용으로 닫혔다. 답을 기다리던 협의 Run이 다시 관찰하게 깨운다
+    for (run_id,) in tx.execute(
+        "SELECT run_id FROM agent_run WHERE site_id = ? AND agent_type = 'COORDINATION'"
+        " AND status = 'WAITING_HUMAN' AND json_extract(input_ref, '$.candidate_id') = ?",
+        (ctx.site_id, candidate.candidate_id),
+    ).fetchall():
+        wake_run(tx, ctx.site_id, run_id)
     return r
 
 
@@ -305,56 +273,33 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
     end_candidate_runs(
         tx, ctx.pack, candidate.candidate_id, "STALE", f"REJECTED:{candidate.candidate_id}"
     )
-    # 후보를 만든 Replanning Run에 거절을 알린다.
-    # 제약 있는 거절은 wake, 제약 없는 거절은 Case의 2번째면 이관(T33), 아니면 wake.
-    run_id = (
-        run_for_solver_result(tx, candidate.solver_result_id)
-        if candidate.solver_result_id
-        else None
-    )
-    run = get_run(tx, run_id) if run_id else None
-    _record_decided(tx, ctx, candidate, decision_id, "REJECT", run_id)
-    if run is not None:
-        if not immovable and _no_constraint_rejections(tx, run.case_id) >= MAX_PLAIN_REJECTIONS:
-            end_case_run(tx, ctx.pack, run.run_id, "ESCALATED", "REJECTED_TWICE")
-        else:
-            wake_run(tx, site_id, run.run_id)
-        r.refs["run_id"] = run.run_id
+    # 거절 결과는 사건으로 메인에게 간다. 다시 재계획할지 이관할지는 메인이 판단한다 (AG-25)
+    _deliver_decided(tx, ctx, candidate, decision_id, "REJECT")
     return r
 
 
-def _record_decided(
+def _deliver_decided(
     tx: sqlite3.Connection,
     ctx: CommandContext,
     candidate: Candidate,
     decision_id: str,
     decision: str,
-    maker_run_id: str | None,
 ) -> None:
-    """후보 승인·거절 결과는 그 후보를 만든 Run의 Case 사건이다(Run을 끝내기 전에 적는다)."""
-    maker = get_run(tx, maker_run_id) if maker_run_id else None
-    record_case_event(
+    """후보 승인·거절 결과는 사건이다. 원래 Case는 그 후보를 만든 Run의 Case다."""
+    maker_id = (
+        run_for_solver_result(tx, candidate.solver_result_id)
+        if candidate.solver_result_id
+        else None
+    )
+    maker = get_run(tx, maker_id) if maker_id else None
+    deliver_event(
         tx,
-        ctx.site_id,
+        ctx.pack,
         "CANDIDATE_DECIDED",
         f"CANDIDATE_DECIDED:{decision_id}",
         {"candidate_id": candidate.candidate_id, "decision_id": decision_id, "type": decision},
         None if maker is None else maker.case_id,
     )
-
-
-MAX_PLAIN_REJECTIONS = 2  # Case당 제약 없는 거절이 2번째면 이관 (T33)
-
-
-def _no_constraint_rejections(tx: sqlite3.Connection, case_id: str) -> int:
-    """이 Case의 후보에 대한 제약 없는 거절(TASK_IMMOVABLE이 아닌 REJECT) 수."""
-    return tx.execute(
-        "SELECT COUNT(*) FROM decision d JOIN candidate c ON c.candidate_id = d.candidate_id"
-        " JOIN solver_job j ON j.solver_result_id = c.solver_result_id"
-        " JOIN agent_run r ON r.run_id = j.run_id"
-        " WHERE r.case_id = ? AND d.type = 'REJECT' AND d.reason_code <> 'TASK_IMMOVABLE'",
-        (case_id,),
-    ).fetchone()[0]
 
 
 def reject_candidate(

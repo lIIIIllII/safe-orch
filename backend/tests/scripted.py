@@ -2,8 +2,16 @@
 
 llm.ChatModel 프로토콜(bind_tools + invoke)을 따른다. 응답은 AIMessage 또는 AIMessage를 돌려주는
 함수(호출 순간의 부수 효과를 주입할 때)다. 응답이 모자라면 예외를 내고, 그 Run은 ERROR가 된다.
+
+판단을 시험하지 않는 자리에는 기본 응답(auto)이 있다. 스크립트를 주지 않은 Agent에만 쓴다:
+- 메인: 통지 → 신고 대응 → 협의 → 재계획(요청 작업을 가진 Unit) 순으로 받아들여지는 호출을 부르고,
+  없으면 기다릴 것이 있을 때 WAIT, 열린 일이 없으면 CLOSE, 그것도 아니면 ESCALATE.
+- Replanning: 검증을 통과한 살아 있는 후보가 있으면 RETURN_RESULT(DONE). 스크립트보다 먼저 본다
+  (Run이 깨어날 때마다 모델이 새로 만들어져 스크립트가 처음부터 다시 시작되기 때문이다).
+- Coordination: 협의는 요청할 항목마다 변경 요청 → 답 대기 → 결과, 통지는 대상마다 통지 → 결과.
 """
 
+import json
 import uuid
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -124,11 +132,115 @@ def escalate(reason: str = "더 시도할 전략이 없다") -> AIMessage:
     return blocked(reason)
 
 
+AGENT_TITLES = {
+    "MAIN": "Main Agent",
+    "INTAKE": "Work Intake Agent",
+    "COORDINATION": "Coordination Agent",
+    "EVENT_RESPONSE": "Event Response Agent",
+    "REPLANNING": "Replanning Agent",
+}
+
+
+def agent_kind(messages: Sequence[BaseMessage]) -> str:
+    """System 첫 문장("너는 SAFE-ORCH의 … Agent다")으로 어느 Agent인지 안다."""
+    head = str(messages[0].content)[:60]
+    return next((k for k, title in AGENT_TITLES.items() if title in head), "REPLANNING")
+
+
+def _observation(messages: Sequence[BaseMessage]) -> dict[str, Any]:
+    return json.loads(str(messages[1].content).split("\n", 1)[1])
+
+
+def _limits(tools: Sequence[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    for t in tools:
+        if t["function"]["name"] == name:
+            return t["function"]["parameters"]["properties"]
+    return None
+
+
+def auto_main(obs: dict[str, Any]) -> AIMessage:
+    """메인의 기본 응답(판단을 시험하지 않는 자리)."""
+    calls = obs["calls"]
+
+    def first(**want: Any) -> dict[str, Any] | None:
+        return next((c for c in calls if all(c.get(k) == v for k, v in want.items())), None)
+
+    failed = {
+        (r["call"].get("group_id"), r["call"].get("acting_unit_id"))
+        for r in obs["child_results"]
+        if r["call"] and r["run_status"] != "SUCCEEDED"
+    }
+    requesters = {
+        (g["group_id"], u["unit_id"])
+        for g in obs["groups"]
+        for u in g["units"]
+        if u["request_task_ids"] or not any(x["request_task_ids"] for x in g["units"])
+    } - failed
+    replanning = next(
+        (
+            c
+            for c in calls
+            if c["agent"] == "REPLANNING" and (c["group_id"], c["acting_unit_id"]) in requesters
+        ),
+        None,
+    )
+    chosen = (
+        first(agent="COORDINATION", phase="NOTICE")
+        or first(agent="EVENT_RESPONSE")
+        or first(agent="COORDINATION", phase="CONSULT")
+        # 검토 대기 후보가 있으면 재계획을 더 부르지 않고 기다린다
+        or (None if obs["waiting_for"]["candidates"] else replanning)
+    )
+    if chosen is not None and obs["budget_remaining"]["agent_calls"] > 0:
+        return main_call(**chosen)
+    if obs["waiting_for"]["candidates"] or obs["waiting_for"]["holds"]:
+        return main_wait()
+    return main_close() if not obs["open_work"] else main_escalate()
+
+
+def auto_coordination(obs: dict[str, Any], tools: Sequence[dict[str, Any]]) -> AIMessage:
+    """Coordination의 기본 응답: 요청·통지를 빠짐없이 보내고, 기다릴 것이 있으면 기다리고, 끝낸다."""
+    send, notice = _limits(tools, "SEND_CHANGE_REQUEST"), _limits(tools, "SEND_NOTICE")
+    if send is not None:
+        task_id = send["task_id"]["enum"][0]
+        return call("SEND_CHANGE_REQUEST", task_id=task_id, message="후보의 변경을 확인해 주세요.")
+    if notice is not None:
+        target = next(t for t in obs["notice_targets"] if not t["sent"])
+        return call(
+            "SEND_NOTICE",
+            actor_id=target["actor_id"],
+            task_ids=target["task_ids"],
+            message="확정된 계획을 알립니다.",
+        )
+    if _limits(tools, "WAIT_FOR_REPLIES") is not None:
+        return call("WAIT_FOR_REPLIES")
+    return done("협의·통지 결과를 돌려준다")
+
+
+def auto_reply(
+    kind: str, tools: Sequence[dict[str, Any]], messages: Sequence[BaseMessage]
+) -> AIMessage | None:
+    """그 Agent의 기본 응답. 없으면 None."""
+    if kind == "MAIN":
+        return auto_main(_observation(messages))
+    if kind == "COORDINATION":
+        return auto_coordination(_observation(messages), tools)
+    if kind == "REPLANNING":
+        result = _limits(tools, "RETURN_RESULT")
+        if result is not None and "DONE" in result["status"]["enum"]:
+            return done("검증을 통과한 후보가 있다")
+    return None
+
+
 class ScriptedChatModel:
+    """스크립트는 Replanning(과 Intake·Event Response)의 응답이다. 메인과 Coordination은 기본 응답으로
+    돈다(auto=False면 스크립트만 쓴다). Agent별 스크립트가 필요하면 Router를 쓴다."""
+
     model_name = "scripted"
 
-    def __init__(self, replies: Sequence[Reply]):
+    def __init__(self, replies: Sequence[Reply], auto: bool = True):
         self.replies = list(replies)
+        self.auto = auto
         self.calls: list[dict[str, Any]] = []
         self._bound: tuple[list[dict[str, Any]], dict[str, Any]] = ([], {})
 
@@ -139,6 +251,8 @@ class ScriptedChatModel:
     def invoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
         tools, kwargs = self._bound
         self.calls.append({"tools": tools, "kwargs": kwargs, "messages": list(messages)})
+        if self.auto and (reply := auto_reply(agent_kind(messages), tools, messages)) is not None:
+            return reply
         if not self.replies:
             raise RuntimeError("script exhausted")
         reply = self.replies.pop(0)
@@ -148,19 +262,12 @@ class ScriptedChatModel:
         return [t["function"]["name"] for t in self.calls[i]["tools"]]
 
 
-AGENT_TITLES = {
-    "MAIN": "Main Agent",
-    "INTAKE": "Work Intake Agent",
-    "COORDINATION": "Coordination Agent",
-    "EVENT_RESPONSE": "Event Response Agent",
-    "REPLANNING": "Replanning Agent",
-}
-
-
 class Router:
     """agent_type별 응답 큐. 한 model_factory로 Replanning·Coordination Run을 함께 돌린다.
 
     모델은 System 첫 문장("너는 SAFE-ORCH의 … Agent다")으로 어느 Agent인지 안다.
+    스크립트를 준 Agent는 스크립트대로, 주지 않은 메인·Coordination은 기본 응답으로 돈다.
+    Replanning은 DONE을 낼 수 있으면 기본 응답으로 낸다(auto_done=False면 스크립트대로).
     """
 
     def __init__(
@@ -170,7 +277,12 @@ class Router:
         event_response: Sequence[Reply] = (),
         intake: Sequence[Reply] = (),
         main: Sequence[Reply] = (),
+        auto_done: bool = True,
     ):
+        self.auto_done = auto_done
+        self.scripted = {
+            kind for kind, replies in (("MAIN", main), ("COORDINATION", coordination)) if replies
+        }
         self.queues = {
             "MAIN": list(main),
             "REPLANNING": list(replanning),
@@ -200,9 +312,13 @@ class RoutedChatModel(ScriptedChatModel):
     def invoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
         tools, kwargs = self._bound
         self.calls.append({"tools": tools, "kwargs": kwargs, "messages": list(messages)})
-        head = str(messages[0].content)[:60]
-        kind = next(k for k, title in AGENT_TITLES.items() if title in head)
+        kind = agent_kind(messages)
         queue = self.router.queues[kind]
+        use_auto = (
+            self.router.auto_done if kind == "REPLANNING" else kind not in self.router.scripted
+        )
+        if use_auto and (auto := auto_reply(kind, tools, messages)) is not None:
+            return auto
         if not queue:
             raise RuntimeError("script exhausted")
         reply = queue.pop(0)

@@ -101,11 +101,15 @@ class AskTaskOwner(Action):
 
 
 class ReturnResult(Action, ResultFields):
-    """탐색 범위 확대, 자원 조회, 대체 자원 시도, 담당자 확인으로 열 수 있는 대안이 남아 있지 않을 때만
-    막힌 결과를 돌려주고 Run을 끝낸다. 시도한 범위와 결과를 요약에 적고, 무엇이 풀리면 해가 열리는지
-    알면 길마다 필요한 것을 적는다."""
+    """결과를 돌려주고 Run을 끝낸다. 검증을 통과한 살아 있는 후보가 있으면 DONE으로 돌려준다(승인·거절은
+    사람이 하고 그 결과는 이 Run이 받지 않는다). 탐색 범위 확대, 자원 조회, 대체 자원 시도, 담당자
+    확인으로 열 수 있는 대안이 남아 있지 않을 때만 BLOCKED로 돌려주고, 시도한 범위와 결과를 요약에,
+    무엇이 풀리면 해가 열리는지 알면 길마다 필요한 것을 적는다."""
 
-    OPENS = "언제나 열려 있다. 단 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
+    OPENS = (
+        "언제나 열려 있다. DONE은 검증을 통과한 살아 있는 후보가 있을 때만, BLOCKED는 조회·확인으로 열 수 "
+        "있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
+    )
 
 
 ACTIONS: dict[str, type[Action]] = {
@@ -214,8 +218,9 @@ def valid_actions(
             "axis": ["RESOURCE"],
             "allowed_values": _union(c["ASK"]),
         }
-    # 후보를 낸 Run은 승인·거절까지 열려 있으므로 스스로 끝내는 결과는 막힘뿐이다
-    out["RETURN_RESULT"] = {"status": ["BLOCKED"]}
+    # DONE은 검증을 통과한 살아 있는 후보가 있을 때만 유효하다(사실 조건)
+    ready = bool((hidden or {}).get("done_ready"))
+    out["RETURN_RESULT"] = {"status": ["DONE", "BLOCKED"] if ready else ["BLOCKED"]}
     return out
 
 

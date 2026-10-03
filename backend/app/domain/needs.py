@@ -21,6 +21,7 @@ REF_FIELDS = (
     "axis",
     "values",
     "unit_id",
+    "group_id",
     "field",
     "resource_id",
     "pool_id",
@@ -32,7 +33,7 @@ REF_FIELDS = (
 # 종류 → (반드시 있어야 하는 참조, 그중 정확히 하나가 있어야 하는 참조, 있어도 되는 참조)
 NEED_REFS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {
     "OWNER_CONSENT": (("task_id", "axis"), (), ("values",)),
-    "OTHER_UNIT": (("unit_id",), (), ()),
+    "OTHER_UNIT": (("group_id", "unit_id"), (), ()),
     "FACT_CHANGE": (("field",), ("task_id", "resource_id", "pool_id"), ()),
     "HUMAN_INFO": (("actor_id",), ("event_id", "task_id"), ()),
     "HUMAN_DECISION": ((), ("candidate_id", "event_id", "message_id"), ()),
@@ -59,7 +60,7 @@ class Need(BaseModel):
     kind: NeedKind = Field(
         description=(
             "OWNER_CONSENT 작업 담당자가 그 작업의 축(값)을 열어 줘야 한다(task_id, axis, 자원이면 values). "
-            "OTHER_UNIT 다른 Unit의 작업을 움직이는 재계획이 필요하다(unit_id). "
+            "OTHER_UNIT 그 충돌 그룹을 다른 Unit으로 재계획해야 한다(group_id, unit_id). "
             "FACT_CHANGE 사실이 바뀌어야 한다(field와 대상 하나: task_id·resource_id·pool_id). "
             "HUMAN_INFO 사람에게서 답을 받지 못했다(actor_id와 event_id 또는 task_id). "
             "HUMAN_DECISION 사람의 판단이 필요하다(candidate_id·event_id·message_id 중 하나)"
@@ -69,6 +70,7 @@ class Need(BaseModel):
     axis: Literal["TIME", "RESOURCE"] | None = Field(default=None, description="이동 축")
     values: list[str] = Field(default_factory=list, description="허용이 필요한 자원 ID(자원 축)")
     unit_id: str | None = Field(default=None, description="Unit ID")
+    group_id: str | None = Field(default=None, description="충돌 그룹 ID")
     field: FactField | None = Field(
         default=None,
         description=(

@@ -100,32 +100,13 @@ class IntakeExecutor:
         obs: Observation,
         action: spec.ReturnResult,
     ) -> GatewayResult:
-        """접수 미완 (AG-06). 요청자에게 서버 문구 통지(NOTICE, 사유 코드)를 남기고 Run을 BLOCKED로 끝낸다.
-
-        Supervisor 이관도 메인 연결도 없다. 사유 코드는 서버가 관찰 사실에서 만든다.
+        """접수 미완 (AG-06). Run을 BLOCKED로 끝낸다. 요청자 통지(서버 문구, 사유 코드)는 Run 종료
+        처리가 남긴다. Supervisor 이관도 메인 연결도 없다. 사유 코드는 서버가 관찰 사실에서 만든다.
         """
-        site = get_site(tx, self.pack.site_id)
-        assert site is not None
         request = obs.data["request"]
         codes = blocked_reason_codes(obs.data)
-        body = blocked_text(request["task_id"], codes)
         produced: dict[str, Any] = {"task_id": request["task_id"], "reason_codes": codes}
-        outcome = self.return_result(tx, run_id, step_no, meta, parsed, produced)
-        if outcome.kind == "DONE":
-            insert_message(
-                tx,
-                self.pack.site_id,
-                new_id("msg"),
-                run_id=run_id,
-                step_no=step_no,
-                to_actor_id=request["requester_actor_id"],
-                type_="NOTICE",
-                proposal_id=None,
-                body=body,
-                agent_text=action.summary,
-                context_version=site.context_version,
-            )
-        return outcome
+        return self.return_result(tx, run_id, step_no, meta, parsed, produced)
 
     def _done(
         self,
@@ -339,14 +320,6 @@ def blocked_reason_codes(data: dict[str, Any]) -> list[str]:
     if data["human_rounds"]["remaining"] <= 0 and not data["can_complete"]:
         codes.append("HUMAN_ROUNDS_EXHAUSTED")
     return list(dict.fromkeys(codes)) or ["NOT_COMPLETED"]
-
-
-def blocked_text(task_id: str, codes: list[str]) -> str:
-    """접수 미완 통지의 서버 문구."""
-    return (
-        f"작업 요청 {task_id} 접수가 완료되지 않았습니다(사유: {', '.join(codes)}). "
-        "작업은 만들어지지 않았습니다. 값을 확인해 다시 요청해 주세요."
-    )
 
 
 def requirement_text(pack: LoadedPack, req: dict[str, Any]) -> str:

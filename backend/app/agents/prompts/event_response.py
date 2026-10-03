@@ -19,7 +19,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p13"
+PROMPT_VERSION = "event-response-p14"
 
 
 def tool_catalog() -> str:
@@ -147,4 +147,5 @@ PROMPT_FINGERPRINTS = {
     "event-response-p11": "f75e1caf5a1689e8fb4688ac3ca1e0cde0030c90866d28ce07d404bcda9c0230",  # 대상은 신고 문장·답으로만 정한다, 분 변환 문장 삭제
     "event-response-p12": "5f52f45cd36dfc8c7a1f1d4c7175be7d80ef3013e8b4f8a7522f1548e6e48936",  # System 규칙: 대상 후보는 조회로 찾고 대상은 신고 문장·답으로 정한다(FACT_UPDATE 지침과 맞춤)
     "event-response-p13": "04bb2d49774b061b1ac30ac17528af623c8746c78d5bb850dadab056f0f29630",  # 종료는 RETURN_RESULT: 막힌 결과와 길 묶음 (AG-23)
+    "event-response-p14": "43a0642c3ea495c7c3358a2cb764e25f7826a7db6437e7e67ab980521bce7c36",  # 결과의 OTHER_UNIT에 충돌 그룹 참조
 }

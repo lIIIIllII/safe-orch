@@ -52,7 +52,7 @@ def _gates(state):
 
 
 def _alpha_ready(client, pack):
-    """폼 A(API) → 워커(스크립트 모델) → Alpha 검토 대기."""
+    """폼 A(API) → 워커(스크립트 모델: 메인 → Replanning → 협의 Run이 답 대기) → Alpha 검토 대기."""
     res = client.post(f"/api/sites/{SITE}/task-requests", json=_form(pack), headers=_h("planner_a"))
     assert res.status_code == 200, res.text
     run_until_idle(pack, model_factory=lambda: ScriptedChatModel(list(GATE_SCRIPT)))
@@ -189,7 +189,7 @@ def test_status_code_mapping(client, seeded, monkeypatch):
 # ── API로 게이트 경로 ──────────────────────────────────────────
 
 
-def test_gate_path_via_api(client, seeded):
+def test_gate_path_via_api(client, seeded, main_on):
     state, alpha = _alpha_ready(client, seeded)
     assert alpha["display_status"] == "OPEN" and alpha["validation"]["status"] == "PASS"
     assert {i["task_id"]: i["item_status"] for i in alpha["consultation"]["items"]} == {
@@ -203,19 +203,25 @@ def test_gate_path_via_api(client, seeded):
     res = _approve(client, alpha, state["site"]["context_version"])
     assert (res.status_code, res.json()["plan_revision"]) == (200, 1)
 
+    # 승인 결과로 메인이 깨어나 통지를 부르고 끝낸다
+    run_until_idle(seeded, model_factory=lambda: ScriptedChatModel(list(GATE_SCRIPT)))
     after = _state(client)
     assert (
         after["plan"]["plan_revision"] == 1
         and after["plan"]["candidate_id"] == alpha["candidate_id"]
     )
-    assert after["runs"][0]["status"] == "SUCCEEDED"
+    assert {r["agent_type"]: r["status"] for r in after["runs"]} == {
+        "MAIN": "SUCCEEDED",
+        "REPLANNING": "SUCCEEDED",
+        "COORDINATION": "SUCCEEDED",
+    }
     assert {g for g, _ in _gates(after).values()} == {"ALLOW"}
     committed = next(c for c in after["candidates"] if c["candidate_id"] == alpha["candidate_id"])
     assert committed["display_status"] == "COMMITTED" and after["review_queue"] == []
 
     run = client.get(f"/api/runs/{alpha['run_id']}", headers=_h(key=False)).json()
     steps = client.get(f"/api/runs/{alpha['run_id']}/steps", headers=_h(key=False)).json()
-    assert run["status"] == "SUCCEEDED" and [s["step_no"] for s in steps] == [1, 2]
+    assert run["status"] == "SUCCEEDED" and [s["step_no"] for s in steps] == [1, 2, 3]
     assert client.get("/api/runs/run_nope", headers=_h(key=False)).status_code == 404
 
 
@@ -237,7 +243,7 @@ def test_gate_allow_stale_and_hold(client, seeded):
     assert site_hold
 
 
-def test_stale_candidate_display(client, seeded):
+def test_stale_candidate_display(client, seeded, main_on):
     _, alpha = _alpha_ready(client, seeded)
     _event(client)
     state = _state(client)
@@ -247,13 +253,18 @@ def test_stale_candidate_display(client, seeded):
         stale["validation"]["display_status"] == "STALE" and stale["validation"]["status"] == "PASS"
     )
     assert stale["consultation"]["status"] == "CANCELLED" and state["review_queue"] == []
-    assert state["runs"][0]["status"] == "STALE"
+    # 신고는 열린 전문 Agent Run만 무효로 만든다. 메인은 남는다
+    assert {r["agent_type"]: r["status"] for r in state["runs"]} == {
+        "MAIN": "WAITING_HUMAN",
+        "REPLANNING": "SUCCEEDED",
+        "COORDINATION": "STALE",
+    }
 
 
 # ── Event·Hold·T18 ─────────────────────────────────────────────
 
 
-def test_t18_event_hold_list_and_release_via_api(client, seeded):
+def test_t18_event_hold_list_and_release_via_api(client, seeded, main_on):
     state, alpha = _alpha_ready(client, seeded)
     _waive_c(client, alpha)
     expected = state["site"]["context_version"]  # 검토 화면을 연 시점
@@ -283,16 +294,20 @@ def test_t18_event_hold_list_and_release_via_api(client, seeded):
 # ── cancel ─────────────────────────────────────────────────────
 
 
-def test_cancel_waiting_run(client, seeded):
-    _, alpha = _alpha_ready(client, seeded)
-    url = f"/api/runs/{alpha['run_id']}/cancel"
+def test_cancel_waiting_run(client, seeded, main_on):
+    state, _ = _alpha_ready(client, seeded)
+    runs = {r["agent_type"]: r["run_id"] for r in state["runs"]}
+    url = f"/api/runs/{runs['MAIN']}/cancel"
     assert client.post(url, headers=_h("planner_a")).status_code == 403
     res = client.post(url, headers=_h())
     assert (
         res.status_code == 200 and res.json()["result_refs"]["previous_status"] == "WAITING_HUMAN"
     )
-    run = client.get(f"/api/runs/{alpha['run_id']}", headers=_h(key=False)).json()
+    run = client.get(f"/api/runs/{runs['MAIN']}", headers=_h(key=False)).json()
     assert (run["status"], run["end_reason"]) == ("CANCELLED", "CANCELLED_BY:supervisor")
+    # 메인을 취소하면 답을 기다리던 하위 Run도 같이 끝난다
+    child = client.get(f"/api/runs/{runs['COORDINATION']}", headers=_h(key=False)).json()
+    assert (child["status"], child["end_reason"]) == ("CANCELLED", "PARENT_ENDED")
     again = client.post(url, headers=_h())
     assert (again.status_code, again.json()["reason_codes"]) == (409, ["RUN_NOT_ACTIVE"])
     missing = client.post("/api/runs/run_nope/cancel", headers=_h())

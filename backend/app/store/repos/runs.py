@@ -10,8 +10,8 @@ from app.domain.models import AgentRun
 from app.store.repos._rows import dumps, loads, rows
 
 ACTIVE = ("RUNNING", "WAITING_HUMAN")
-# 열린 Case를 이루는 agent_type. Coordination의 Case 관계는 그 Agent를 붙일 때 정한다.
-CASE_AGENT_TYPES = ("REPLANNING",)
+# 열린 Case를 이루는 agent_type: 메인 Run 하나 = Case 하나. 하위 Run은 메인의 Case를 쓴다.
+CASE_AGENT_TYPES = ("MAIN",)
 
 
 def insert_run(tx: sqlite3.Connection, site_id: str, run: AgentRun) -> None:
@@ -252,15 +252,18 @@ def tried_search_keys(conn: sqlite3.Connection, site_id: str, case_id: str) -> s
 
 
 def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
-    """이 Run의 Solver 시도 (Observation attempts)."""
+    """이 Run이 속한 Case의 Solver 시도 (Observation attempts). 같은 Case의 앞 Run 것도 넣는다:
+    메인이 재계획을 다시 부르면 새 Run이고, 미시도 판정도 Case 단위다 (CV-13)."""
     found = rows(
         conn,
-        "SELECT j.step_no, j.status AS job_status, s.scope_level, s.search_key,"
+        "SELECT j.run_id, j.step_no, j.status AS job_status, s.scope_level, s.search_key,"
         " s.resource_alternatives, r.stage1, r.stage2, c.candidate_id FROM solver_job j"
         " JOIN search_spec s ON s.search_spec_id = j.search_spec_id"
+        " JOIN agent_run a ON a.run_id = j.run_id"
         " LEFT JOIN solver_result r ON r.solver_result_id = j.solver_result_id"
         " LEFT JOIN candidate c ON c.solver_result_id = j.solver_result_id"
-        " WHERE j.run_id = ? ORDER BY j.step_no",
+        " WHERE a.case_id = (SELECT case_id FROM agent_run WHERE run_id = ?)"
+        " ORDER BY j.rowid",
         (run_id,),
     )
     out = []
@@ -269,6 +272,8 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
         out.append(
             {
                 "step_no": r["step_no"],
+                # 이 Run의 시도인가(아니면 같은 Case의 앞 Run)
+                "this_run": r["run_id"] == run_id,
                 "job_status": r["job_status"],
                 "scope_level": r["scope_level"],
                 "try_resources": loads(r["resource_alternatives"]),  # TRY 시도
@@ -313,6 +318,15 @@ def list_active_runs(conn: sqlite3.Connection, site_id: str) -> list[AgentRun]:
         )
     ]
     return [run for rid in ids if (run := get_run(conn, rid)) is not None]
+
+
+def set_contract_version(tx: sqlite3.Connection, run_id: str, version: str) -> None:
+    """사건 트랜잭션에서 만든 Run은 실행 계약 버전을 첫 호출 때 적는다."""
+    tx.execute(
+        "UPDATE agent_run SET exec_contract_version = ? WHERE run_id = ?"
+        " AND exec_contract_version = ''",
+        (version, run_id),
+    )
 
 
 def mark_restart(tx: sqlite3.Connection, run_id: str) -> int | None:

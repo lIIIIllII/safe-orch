@@ -26,8 +26,6 @@ from app.store.repos.messages import (
     message_for_proposal,
     set_message_reply,
 )
-from app.store.repos.records import get_candidate
-from app.store.repos.runs import run_for_solver_result
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
@@ -198,21 +196,12 @@ def _answer(
             f"FACT_CONFIRMED:{proposal['proposal_id']}",
         )
     if constraint is not None:
-        # 제약 확정: 후보가 무효가 되므로 협의 Run을 끝내고 후보의 Replanning Run을 깨운다
+        # 제약 확정: 후보가 무효가 되므로 협의 Run을 끝낸다. 하위 Run이 끝나면 메인이 깨어난다
         assert proposal is not None
         candidate_id = proposal["payload"]["candidate_id"]
         end_candidate_runs(
             tx, ctx.pack, candidate_id, "STALE", f"CONSTRAINT:{constraint['constraint_id']}"
         )
-        candidate = get_candidate(tx, site_id, candidate_id)
-        replanning = (
-            run_for_solver_result(tx, candidate.solver_result_id)
-            if candidate is not None and candidate.solver_result_id
-            else None
-        )
-        if replanning is not None:
-            wake_run(tx, site_id, replanning)
-        refs["replanning_run_id"] = replanning
     # 메시지를 만든 Run을 깨운다. 이미 끝났으면 아무것도 하지 않는다.
     woke = wake_run(tx, site_id, message["run_id"])
     r.refs = {**refs, "run_id": message["run_id"], "woke": woke}

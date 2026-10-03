@@ -31,9 +31,11 @@ RUN_KINDS = {"START_RUN": start_run, "RESUME_RUN": resume_run, "CONTINUE_RUN": c
 
 def process_next(pack: LoadedPack, model_factory: ModelFactory | None = None) -> int | None:
     """job 1건을 처리하고 job_id를 반환한다. 처리할 job이 없으면 None."""
-    kinds = HANDLED_KINDS + (tuple(RUN_KINDS) if model_factory is not None else ())
+    # 서버 계산(검증·협의 항목·재확인)을 먼저 끝낸 뒤 Agent를 부른다: Agent는 정리된 사실을 관찰한다
     with db.write() as tx:
-        job = claim_next(tx, pack.site_id, kinds)
+        job = claim_next(tx, pack.site_id, HANDLED_KINDS)
+        if job is None and model_factory is not None:
+            job = claim_next(tx, pack.site_id, tuple(RUN_KINDS))
     if job is None:
         return None
     try:

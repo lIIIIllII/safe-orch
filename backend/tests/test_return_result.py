@@ -2,13 +2,14 @@
 
 import pytest
 from conftest import add_run
+from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 from scripted import Router, ScriptedChatModel, blocked, call, done, solve
 from test_intake import _complete, _intake, _messages, _reply, _request, _runs, _steps, _task
 
 from app.agents import runtime
 from app.agents.observers import replanning as replanning_observer
-from app.agents.tool_gateway import temp_parentless_end
+from app.agents.specs import intake as intake_spec
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.needs import Need, Path, ResultFields
 from app.store import db
@@ -23,7 +24,7 @@ from app.store.repos.runs import list_steps
     [
         {"kind": "OWNER_CONSENT", "task_id": "A", "axis": "RESOURCE", "values": ["R1"]},
         {"kind": "OWNER_CONSENT", "task_id": "A", "axis": "TIME"},
-        {"kind": "OTHER_UNIT", "unit_id": "UB"},
+        {"kind": "OTHER_UNIT", "group_id": "grp_1", "unit_id": "UB"},
         {"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": "A"},
         {"kind": "FACT_CHANGE", "field": "QUANTITY", "pool_id": "P"},
         {"kind": "HUMAN_INFO", "actor_id": "reporter", "event_id": "evt_1"},
@@ -40,7 +41,13 @@ def test_need_takes_the_references_of_its_kind(need):
         {"kind": "BUDGET"},  # Budget 소진은 need가 아니다
         {"kind": "OWNER_CONSENT", "task_id": "A"},  # 축이 없다
         {"kind": "OWNER_CONSENT", "task_id": "A", "axis": "TIME", "values": ["R1"]},
-        {"kind": "OTHER_UNIT", "unit_id": "UB", "task_id": "A"},  # 다른 종류의 참조
+        {"kind": "OTHER_UNIT", "unit_id": "UB"},  # 충돌 그룹이 없다
+        {
+            "kind": "OTHER_UNIT",
+            "group_id": "g",
+            "unit_id": "UB",
+            "task_id": "A",
+        },  # 다른 종류의 참조
         {"kind": "FACT_CHANGE", "field": "WINDOW", "resource_id": "R1"},  # 필드와 대상이 다르다
         {"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": "A", "pool_id": "P"},
         {"kind": "HUMAN_INFO", "actor_id": "reporter"},
@@ -54,7 +61,7 @@ def test_need_rejects_wrong_references(need):
 
 
 def test_result_shape_paths_may_be_empty_and_done_has_none():
-    path = Path(needs=[Need(kind="OTHER_UNIT", unit_id="UB")])
+    path = Path(needs=[Need(kind="OTHER_UNIT", group_id="grp_1", unit_id="UB")])
     assert ResultFields(status="BLOCKED", summary="해 없음").paths == []
     assert len(ResultFields(status="BLOCKED", summary="길 둘", paths=[path, path]).paths) == 2
     with pytest.raises(ValidationError):
@@ -63,14 +70,6 @@ def test_result_shape_paths_may_be_empty_and_done_has_none():
         ResultFields(status="BLOCKED", summary="길 넷", paths=[path] * 4)
     with pytest.raises(ValidationError):
         Path(needs=[])
-
-
-def test_temp_parentless_end_maps_only_the_old_endings():
-    assert temp_parentless_end("REPLANNING", "BLOCKED") == ("ESCALATED", "ESCALATE_NO_SOLUTION")
-    assert temp_parentless_end("COORDINATION", "DONE") == ("SUCCEEDED", "REPORT_TO_SUPERVISOR")
-    assert temp_parentless_end("COORDINATION", "BLOCKED") == ("ESCALATED", "ESCALATE")
-    assert temp_parentless_end("EVENT_RESPONSE", "BLOCKED") == ("ESCALATED", "ESCALATE")
-    assert temp_parentless_end("INTAKE", "BLOCKED") is None
 
 
 # ── Replanning: 길 묶음과 서버 검증 ────────────────────────────
@@ -103,26 +102,31 @@ def test_blocked_result_keeps_paths_and_server_fills_the_rest(with_a):
         "candidate_ids": [],
         "latest_validation": None,
     }
-    # 부모 없는 Run은 임시 연결로 옛 종료가 된다
-    assert (run.status, run.end_reason) == ("ESCALATED", "ESCALATE_NO_SOLUTION")
+    # 전문 Agent는 이관 상태가 되지 않는다. 막힘으로 끝난다 (AG-06)
+    assert (run.status, run.end_reason) == ("BLOCKED", "RETURN_BLOCKED")
 
 
 def test_needs_are_checked_against_facts(with_a):
     with db.read() as conn:
         obs = replanning_observer.build_observation(conn, with_a, add_run(with_a, "probe"))
-    assert obs.data["conflicts"]
+    gid = obs.data["group"]["group_id"]
+    assert obs.data["group"]["unit_ids"] == ["UA", "UB"]
     bad = [
         {"kind": "OWNER_CONSENT", "task_id": "NOPE", "axis": "TIME"},
         {"kind": "OWNER_CONSENT", "task_id": "A", "axis": "RESOURCE", "values": ["B-CR-01"]},
-        {"kind": "OTHER_UNIT", "unit_id": "UA"},
-        {"kind": "OTHER_UNIT", "unit_id": "SITE"},
+        {"kind": "OTHER_UNIT", "group_id": gid, "unit_id": "UA"},
+        {"kind": "OTHER_UNIT", "group_id": gid, "unit_id": "SITE"},
+        {"kind": "OTHER_UNIT", "group_id": "grp_none", "unit_id": "UB"},
         {"kind": "FACT_CHANGE", "field": "QUANTITY", "pool_id": "NOPE"},
         {"kind": "HUMAN_INFO", "actor_id": "nobody", "task_id": "A"},
         {"kind": "HUMAN_DECISION", "candidate_id": "cand_none"},
     ]
     replies = [
         blocked("틀린 참조", [{"needs": bad[:4]}, {"needs": bad[4:]}]),
-        blocked("풀 길 없음"),
+        # 그 그룹에 작업을 가진 다른 Unit은 유효한 참조다
+        blocked(
+            "다른 Unit", [{"needs": [{"kind": "OTHER_UNIT", "group_id": gid, "unit_id": "UB"}]}]
+        ),
     ]
     run, steps, _ = _invoke(with_a, replies)
     assert steps[0]["guard"] == {"verdict": "REJECTED", "reason_code": "NEED_INVALID"}
@@ -132,19 +136,20 @@ def test_needs_are_checked_against_facts(with_a):
         (0, 0, "TASK_NOT_FOUND"),
         (0, 1, "RESOURCE_NOT_ELIGIBLE"),
         (0, 2, "SAME_UNIT"),
-        (0, 3, "UNIT_NOT_IN_CONFLICT"),
-        (1, 0, "TARGET_NOT_FOUND"),
-        (1, 1, "ACTOR_NOT_FOUND"),
-        (1, 2, "TARGET_NOT_FOUND"),
+        (0, 3, "UNIT_NOT_IN_GROUP"),
+        (1, 0, "GROUP_NOT_FOUND"),
+        (1, 1, "TARGET_NOT_FOUND"),
+        (1, 2, "ACTOR_NOT_FOUND"),
+        (1, 3, "TARGET_NOT_FOUND"),
     ]
     # 거절은 형식 오류가 아니다. Run은 계속되고 다음 결과로 끝난다
-    assert (steps[1]["result_kind"], run.status) == ("DONE", "ESCALATED")
+    assert (steps[1]["result_kind"], run.status) == ("DONE", "BLOCKED")
 
 
 def test_replanning_cannot_return_done_while_candidate_decision_is_open(with_a):
     run, steps, _ = _invoke(with_a, [done("끝"), blocked()])
     assert steps[0]["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
-    assert run.status == "ESCALATED"
+    assert run.status == "BLOCKED"
 
 
 def test_child_run_result_is_not_mapped_to_old_ending(with_a):
@@ -227,3 +232,31 @@ def test_intake_observation_says_when_completion_is_possible(seeded):
     last = steps[-1]["observation"]
     assert (last["human_rounds"]["remaining"], last["can_complete"]) == (0, True)
     assert (run.status, _task(pack, "A").lifecycle) == ("SUCCEEDED", "READY")
+
+
+def test_intake_server_ended_runs_also_notify_requester(seeded, monkeypatch):
+    """완료가 아닌 종료는 모두 접수 미완이다: 형식 오류 2회(BLOCKED)와 Budget 소진에도 요청자에게 알린다."""
+    pack = seeded
+    assert _intake(pack).status == "APPLIED"
+    bad = AIMessage(content="도구를 부르지 않는다")
+    run_until_idle(pack, model_factory=Router(intake=[bad, bad]).factory())
+    [run] = _runs("INTAKE")
+    assert (run.status, run.end_reason) == ("BLOCKED", "MALFORMED_TWICE")
+    [notice] = _messages("NOTICE")
+    assert (notice["to_actor_id"], notice["run_id"], notice["agent_text"]) == (
+        "planner_a",
+        run.run_id,
+        None,
+    )
+    assert "A 접수가 완료되지 않았습니다(사유: MALFORMED_TWICE)" in notice["body"]
+
+    monkeypatch.setitem(intake_spec.SPEC.budget, "steps", 1)
+    assert _intake(pack, task_id="A2").status == "APPLIED"
+    lookup = call("LOOKUP_RESOURCE", resource_type="CRANE")
+    run_until_idle(pack, model_factory=Router(intake=[lookup]).factory())
+    second = _runs("INTAKE")[-1]
+    assert (second.status, second.end_reason) == ("BUDGET_EXHAUSTED", "BUDGET_EXHAUSTED")
+    last = _messages("NOTICE")[-1]
+    assert last["run_id"] == second.run_id and "사유: BUDGET_EXHAUSTED" in last["body"]
+    # Supervisor에게는 아무것도 가지 않는다(이관 없음)
+    assert {m["to_actor_id"] for m in _messages("NOTICE")} == {"planner_a"}

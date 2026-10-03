@@ -16,7 +16,7 @@ from app.coordinator.dispatcher import (
     requeue_claimed_jobs,
     run_until_idle,
 )
-from app.domain.models import Assignment, Conflict
+from app.domain.models import Conflict
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
 from app.solver.candidate import build_candidate
@@ -141,22 +141,17 @@ def gate_r1(seeded):
 # ── 게이트 경로·T34 ────────────────────────────────────────────
 
 
-def test_gate_path_with_worker(seeded):
+def test_gate_path_with_worker(seeded, main_on):
     pack = seeded
     _submit_a(pack)
     run_until_idle(pack)
-    [start] = _jobs(pack, "START_RUN")
-    assert start["status"] == "PENDING" and start["attempts"] == 0  # 처리하는 쪽 없음(3단계)
-    assert start["dedupe_key"] == "START_RUN:REPLANNING:ctx1:plan0"
-    p = start["payload"]
-    assert (p["agent_type"], p["acting_unit_id"], p["acting_actor_id"]) == (
-        "REPLANNING",
-        "UA",
-        "planner_a",
-    )
-    assert p["conflict"] == {"rule_id": "SEP-LIFT-BELOW", "task_ids": ["A", "B"]}
-    assert (p["context_version"], p["plan_revision"]) == (1, 0)
-    assert p["cause"]["kind"] == "FORM" and p["cause"]["task_id"] == "A"
+    # 사건이 메인을 띄운다. 모델이 없으면 메인은 아직 돌지 않는다(CONTINUE_RUN 대기)
+    [start] = _jobs(pack, "CONTINUE_RUN")
+    assert start["status"] == "PENDING" and start["attempts"] == 0
+    with db.read() as conn:
+        [main] = conn.execute("SELECT agent_type, status, run_id FROM agent_run").fetchall()
+    assert tuple(main) == ("MAIN", "RUNNING", start["run_id"])
+    assert _jobs(pack, "START_RUN") == []  # 재계획은 메인이 부른다
 
     snap = take_snapshot(pack)
     l0, none = _solve(pack, snap, "L0")
@@ -169,7 +164,7 @@ def test_gate_path_with_worker(seeded):
     view = _view(pack, alpha.candidate_id)
     assert {i.task_id: i.base_status for i in view.items} == {"A": "COVERED", "C": "PENDING"}
     assert _queue(pack) == [alpha.candidate_id]
-    assert {(j["kind"], j["status"]) for j in _jobs(pack) if j["kind"] != "START_RUN"} == {
+    assert {(j["kind"], j["status"]) for j in _jobs(pack) if j["kind"] != "CONTINUE_RUN"} == {
         ("RECHECK", "DONE"),
         ("VALIDATE", "DONE"),
         ("BUILD_CONSULTATION", "DONE"),
@@ -229,7 +224,9 @@ def test_recheck_twice_has_one_effect(seeded):
     with db.write() as tx:  # 같은 job이 다시 배달된 경우
         tx.execute("UPDATE dispatch_job SET status = 'PENDING' WHERE kind = 'RECHECK'")
     run_until_idle(seeded)
-    assert len(_jobs(seeded, "START_RUN")) == 1 and _count("snapshot") == snapshots
+    # 충돌이 있으면 RECHECK는 아무것도 만들지 않는다(재계획은 메인이 부른다)
+    assert _jobs(seeded, "START_RUN") == []
+    assert (_count("snapshot"), _count("candidate")) == (snapshots, 0)
 
 
 def test_recheck_reuses_reconfirm_candidate(gate_r1):
@@ -244,7 +241,9 @@ def test_recheck_reuses_reconfirm_candidate(gate_r1):
     assert len(_validations(pack, rc)) == 1
 
 
-def test_choose_acting_cause_then_smallest_task():
+def test_conflict_groups_share_tasks_and_list_units():
+    """충돌 그룹 = 작업을 공유하는 충돌의 묶음. 그룹마다 작업을 가진 Unit이 나온다."""
+    from app.domain.groups import conflict_groups
     from app.domain.models import SnapshotContent
 
     def task(tid, unit):
@@ -280,27 +279,18 @@ def test_choose_acting_cause_then_smallest_task():
             "plan": {"plan_revision": 0, "assignments": []},
         }
     )
+    tasks = facts.task_map()
     c_ab = Conflict(rule_id="R1", task_ids=("A", "B"), zone_ids=("B",), interval=(0, 10))
     c_e = Conflict(rule_id="R2", task_ids=("E",), zone_ids=("B",), interval=(0, 10))
-    assert transitions.choose_acting(facts, [c_ab, c_e], {"task_id": "B"}) == ("UB", c_ab)
-    assert transitions.choose_acting(facts, [c_ab, c_e], {"task_id": "E"}) == ("UB", c_ab)
-    assert transitions.choose_acting(facts, [c_e, c_ab], {}) == ("UA", c_ab)  # 가장 작은 A
-
-    # cause 작업이 충돌에 없으면(철회 뒤 RECHECK) Plan에 없는 요청 작업의 Unit이 먼저다
-    in_plan = facts.model_copy(
-        update={
-            "plan": facts.plan.model_copy(
-                update={
-                    "assignments": (
-                        Assignment(task_id="A", start=0, end=10),
-                        Assignment(task_id="E", start=0, end=10),
-                    )
-                }
-            )
-        }
-    )
-    withdraw = {"kind": "WITHDRAW", "task_id": "N5"}
-    assert transitions.choose_acting(in_plan, [c_ab], withdraw) == ("UB", c_ab)  # 요청 B
+    c_be = Conflict(rule_id="R3", task_ids=("B", "E"), zone_ids=("B",), interval=(0, 10))
+    first, second = conflict_groups([c_ab, c_e], tasks)
+    assert (first.task_ids, first.units) == (("A", "B"), {"UA": ("A",), "UB": ("B",)})
+    assert (second.task_ids, second.units) == (("E",), {"UB": ("E",)})
+    assert first.group_id != second.group_id
+    # 작업을 공유하는 충돌은 한 그룹이다. 그룹 ID는 작업 집합에서 나온다(탐지 순서와 무관)
+    [merged] = conflict_groups([c_ab, c_e, c_be], tasks)
+    assert (merged.task_ids, merged.units) == (("A", "B", "E"), {"UA": ("A",), "UB": ("B", "E")})
+    assert conflict_groups([c_be, c_e, c_ab], tasks)[0].group_id == merged.group_id
 
 
 # ── VALIDATE ───────────────────────────────────────────────────
@@ -393,4 +383,3 @@ def test_worker_thread_smoke(seeded):
     finally:
         worker.stop()
     assert not worker._thread.is_alive()
-    assert len(_jobs(seeded, "START_RUN")) == 1

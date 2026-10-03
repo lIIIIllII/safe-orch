@@ -88,7 +88,7 @@ def test_answer_intake_question_via_api(seeded, client):
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
 
 
-def test_answer_reporter_question_via_api(seeded, client, event_response_on):
+def test_answer_reporter_question_via_api(seeded, client, main_on):
     """신고자 확인 질문(ER ASK_REPORTER)에 ANSWER → 200 APPLIED."""
     _r1(seeded)
     _report(seeded, seeded.demo_events[1].text)
@@ -100,7 +100,7 @@ def test_answer_reporter_question_via_api(seeded, client, event_response_on):
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
 
 
-def test_answer_on_proposal_question_is_rejected_via_api(seeded, client):
+def test_answer_on_proposal_question_is_rejected_via_api(seeded, client, main_on):
     """제안이 붙은 질문(담당자 이동 가능 여부)에는 ANSWER를 쓸 수 없다 → 409 INVALID_DECISION."""
     waiting = _ask_waiting(seeded)
     res = _reply(client, "planner_a", waiting.wait_ref, "ANSWER", "SITE-CR-01 써도 됩니다")
@@ -110,14 +110,14 @@ def test_answer_on_proposal_question_is_rejected_via_api(seeded, client):
 # ── Coordination: 변경 요청 답, 제약 초안 확정·폐기 ─────
 
 
-def test_change_request_accept_via_api(seeded, client, coordination_on):
+def test_change_request_accept_via_api(seeded, client, main_on):
     _alpha_consulting(seeded)
     [cr] = _rows("message", "CHANGE_REQUEST")
     res = _reply(client, "foreman_a2", cr["message_id"], "ACCEPT")
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
 
 
-def test_change_request_objection_via_api(seeded, client, coordination_on):
+def test_change_request_objection_via_api(seeded, client, main_on):
     """이견(DECLINE)은 사유가 필요하다 → 빈 사유 409 COMMENT_REQUIRED, 사유 있으면 200."""
     _alpha_consulting(seeded)
     [cr] = _rows("message", "CHANGE_REQUEST")
@@ -140,14 +140,14 @@ def _drafted(pack):
     return confirm, draft
 
 
-def test_draft_constraint_confirm_via_api(seeded, client, coordination_on):
+def test_draft_constraint_confirm_via_api(seeded, client, main_on):
     confirm, _ = _drafted(seeded)
     res = _reply(client, "foreman_a2", confirm["message_id"], "ACCEPT")
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
     assert _rows("proposal", "FEEDBACK_CONSTRAINT")[0]["status"] == "CONFIRMED"
 
 
-def test_draft_constraint_discard_via_api(seeded, client, coordination_on):
+def test_draft_constraint_discard_via_api(seeded, client, main_on):
     """제안 폐기 경로(/proposals/{id}/discard)도 reply와 같은 처리다."""
     _, draft = _drafted(seeded)
     res = _post(client, f"proposals/{draft['proposal_id']}/discard", "foreman_a2", {"comment": ""})
@@ -167,7 +167,7 @@ def _release(client, hold_id, resolution):
     return _post(client, f"holds/{hold_id}/release", "supervisor", body)
 
 
-def test_fact_update_confirm_and_fact_confirmed_release_via_api(seeded, client, event_response_on):
+def test_fact_update_confirm_and_fact_confirmed_release_via_api(seeded, client, main_on):
     refs, _ = _to_proposal(seeded)
     # 확인 전 FACT_CONFIRMED 해제는 거절
     assert _reasons(_release(client, refs["hold_id"], "FACT_CONFIRMED")) == (
@@ -182,7 +182,7 @@ def test_fact_update_confirm_and_fact_confirmed_release_via_api(seeded, client, 
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
 
 
-def test_fact_update_discard_via_api(seeded, client, event_response_on):
+def test_fact_update_discard_via_api(seeded, client, main_on):
     _to_proposal(seeded)
     [confirm] = _rows("message", "CONFIRMATION")
     res = _reply(client, "supervisor", confirm["message_id"], "DECLINE")

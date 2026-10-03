@@ -5,12 +5,17 @@ import uuid
 
 import pytest
 from conftest import add_run
-from scripted import ScriptedChatModel, escalate, solve
+from scripted import Router, ScriptedChatModel, escalate, solve
 
 from app.agents import runtime
 from app.agents.observers import main as main_observer
 from app.agents.observers import replanning as replanning_observer
-from app.commands.approval import RejectRequest, reject_candidate
+from app.commands.approval import (
+    ApproveRequest,
+    RejectRequest,
+    approve_and_commit,
+    reject_candidate,
+)
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.task_request import (
     TaskRequestForm,
@@ -92,7 +97,10 @@ def test_case_event_is_immutable(seeded):
 
 
 def test_commands_record_each_event_once(seeded):
-    """작업 준비됨·후보 결과·신고·Hold 해제를 생긴 트랜잭션에서 한 번씩 적는다. 재전송은 다시 적지 않는다."""
+    """후보 결과·신고·Hold 해제를 생긴 트랜잭션에서 한 번씩 적는다. 재전송은 다시 적지 않는다.
+
+    메인 자동 시작이 꺼져 있으면 사건은 기록만 된다(후보를 만든 Run의 Case, 신고는 새 Case).
+    """
     pack = seeded
     key = _key()
     _submit_a(pack, key)
@@ -100,8 +108,11 @@ def test_commands_record_each_event_once(seeded):
     assert submit_task_request(pack, "planner_a", key, _form(pack)).status == "REPLAYED"
     [ready] = _events(pack)
     assert (ready["kind"], ready["ref"]["task_id"]) == ("TASK_READY", "A")
+    assert _runs() == []  # 메인이 뜨지 않는다
 
-    run_until_idle(pack, model_factory=_factory(solve("L0"), solve("L1")))
+    add_run(pack, "r", case_id="case_r")
+    runtime.invoke(pack, {"run_id": "r"}, ScriptedChatModel([solve("L0"), solve("L1")]))
+    run_until_idle(pack)  # 검증·협의 항목(서버 계산)만
     [run] = _runs()
     alpha = run.wait_ref
     with db.read() as conn:
@@ -120,7 +131,7 @@ def test_commands_record_each_event_once(seeded):
     reject_candidate(pack, "supervisor", key, body)
     [decided] = _events(pack, "CANDIDATE_DECIDED")
     assert (decided["case_id"], decided["ref"]["candidate_id"], decided["ref"]["type"]) == (
-        run.case_id,
+        "case_r",
         alpha,
         "REJECT",
     )
@@ -129,9 +140,7 @@ def test_commands_record_each_event_once(seeded):
     out = receive_event(pack, "reporter", _key(), report)
     receive_event(pack, "reporter", _key(), report)  # 같은 source_event_id 재전송
     [reported] = _events(pack, "EVENT_REPORTED")
-    # 신고는 열린 Case의 사건이다(그 Run은 같은 tx에서 STALE이 된다)
-    assert reported["case_id"] == run.case_id
-    assert _runs()[0].status == "STALE"
+    assert _runs()[0].status == "STALE"  # 열린 전문 Agent Run은 같은 tx에서 무효가 된다
 
     with db.read() as conn:
         ctx = get_site(conn, pack.site_id).context_version
@@ -151,21 +160,41 @@ def test_commands_record_each_event_once(seeded):
     ]
 
 
-def test_withdraw_and_queue_promotion_record_events(seeded):
+def test_withdraw_and_queue_promotion_record_events(seeded, main_on):
     pack = seeded
     _submit_a(pack)
-    run_until_idle(pack, model_factory=_factory(solve("L0"), solve("L1")))
+    run_until_idle(pack, model_factory=Router(replanning=[solve("L0"), solve("L1")]).factory())
     second = _form(pack).model_copy(update={"task_id": "A2"})
     out = submit_task_request(pack, "planner_a", _key(), second)
-    assert out.result_refs["queued"] is True
+    assert out.result_refs["queued"] is True  # 열린 메인이 있는 동안은 대기열
     assert len(_events(pack, "TASK_READY")) == 1  # 대기열 작업은 승격 때 적는다
 
     body = TaskWithdraw(task_id="A")
     assert withdraw_task_request(pack, "planner_a", _key(), body).status == "APPLIED"
     [withdrawn] = _events(pack, "TASK_REQUEST_WITHDRAWN")
     assert withdrawn["ref"]["task_id"] == "A"
+    # 철회로 사실이 바뀌어 재확인 후보가 생긴다. 메인은 그 승인을 기다린다
+    factory = Router(replanning=[solve("L0"), solve("L1")]).factory()
+    run_until_idle(pack, model_factory=factory)
+    [main] = [r for r in _runs() if r.agent_type == "MAIN"]
+    assert (main.status, main.wait_kind) == ("WAITING_HUMAN", "HUMAN_DECISION")
+    with db.read() as conn:
+        site = get_site(conn, pack.site_id)
+        reconfirm = main.wait_ref
+        [validation] = list_validations(conn, pack.site_id, reconfirm)
+    approve = ApproveRequest(
+        candidate_id=reconfirm,
+        validation_id=validation.validation_id,
+        expected_context_version=site.context_version,
+    )
+    assert approve_and_commit(pack, "supervisor", _key(), approve).status == "APPLIED"
+    # 메인이 열린 일이 없음을 보고 끝내면 대기열에서 1건이 올라가고 새 메인이 받는다
+    run_until_idle(pack, model_factory=factory)
     promoted = _events(pack, "TASK_READY")[-1]
     assert (promoted["ref"]["task_id"], promoted["ref"]["kind"]) == ("A2", "QUEUE")
+    mains = [r for r in _runs() if r.agent_type == "MAIN"]
+    assert mains[0].status == "SUCCEEDED" and len(mains) == 2
+    assert promoted["case_id"] == mains[1].case_id != mains[0].case_id
 
 
 def test_child_run_end_is_recorded_once(seeded):
@@ -256,12 +285,23 @@ def _crash_after_execute(monkeypatch, at_call):
     monkeypatch.setattr(runtime.StoreRunPort, "execute", execute)
 
 
-def test_restart_after_committed_action_does_not_repeat_it(seeded, monkeypatch):
-    pack = seeded
-    _submit_a(pack)
+def _replanning_run(pack, *replies):
+    """손으로 만든 Replanning Run을 한 번 부른다(메인 없이)."""
+    with db.read() as conn:
+        if get_run(conn, "r") is None:
+            exists = False
+        else:
+            exists = True
+    if not exists:
+        add_run(pack, "r")
+    return runtime.invoke(pack, {"run_id": "r"}, ScriptedChatModel(list(replies)))
+
+
+def test_restart_after_committed_action_does_not_repeat_it(with_a, monkeypatch):
+    pack = with_a
     _crash_after_execute(monkeypatch, at_call=1)
     with pytest.raises(Crash):
-        run_until_idle(pack, model_factory=_factory(solve("L0")))
+        _replanning_run(pack, solve("L0"))
     [run] = _runs()
     assert (run.status, run.steps_used, run.solver_calls_used) == ("RUNNING", 1, 1)
 
@@ -275,10 +315,10 @@ def test_restart_after_committed_action_does_not_repeat_it(seeded, monkeypatch):
     steps = _steps(run.run_id)
     assert [(s["action"]["name"], s["status"]) for s in steps] == [
         ("SOLVE_WITH_SCOPE", "COMPLETED"),
-        (steps[-1]["action"]["name"], "COMPLETED"),
+        ("RETURN_RESULT", "COMPLETED"),
     ]
     assert (run.status, run.steps_used, run.solver_calls_used, run.restart_count) == (
-        "ESCALATED",
+        "BLOCKED",
         2,
         1,
         1,
@@ -293,34 +333,32 @@ def test_restart_after_committed_action_does_not_repeat_it(seeded, monkeypatch):
         )
 
 
-def test_done_action_ends_run_in_the_same_transaction(seeded, monkeypatch):
+def test_done_action_ends_run_in_the_same_transaction(with_a, monkeypatch):
     """종료 Action을 커밋한 직후 죽어도 Run은 이미 끝나 있다. 재기동 뒤 다시 행동하지 않는다."""
-    pack = seeded
-    _submit_a(pack)
+    pack = with_a
     _crash_after_execute(monkeypatch, at_call=2)
     with pytest.raises(Crash):
-        run_until_idle(pack, model_factory=_factory(solve("L0"), escalate()))
+        _replanning_run(pack, solve("L0"), escalate())
     [run] = _runs()
-    assert (run.status, run.steps_used) == ("ESCALATED", 2)
+    assert (run.status, run.steps_used) == ("BLOCKED", 2)
 
     recover_on_startup(pack)
     with db.read() as conn:
         assert [j for j in list_jobs(conn, pack.site_id) if j["kind"] == "CONTINUE_RUN"] == []
     run_until_idle(pack, model_factory=_factory())  # 모델을 부르면 script exhausted로 실패한다
     [run] = _runs()
-    assert (run.status, run.steps_used, run.restart_count) == ("ESCALATED", 2, 0)
+    assert (run.status, run.steps_used, run.restart_count) == ("BLOCKED", 2, 0)
 
 
-def test_restart_aborts_reserved_step_and_observes_again(seeded):
+def test_restart_aborts_reserved_step_and_observes_again(with_a):
     """LLM 호출 중 죽으면 step은 예약만 남는다. 기동 때 정리하고 관찰부터 다시 한다."""
-    pack = seeded
-    _submit_a(pack)
+    pack = with_a
 
     def crash():
         raise Crash
 
     with pytest.raises(Crash):
-        run_until_idle(pack, model_factory=_factory(crash))
+        _replanning_run(pack, crash)
     [run] = _runs()
     assert (run.status, _steps(run.run_id)[0]["status"]) == ("RUNNING", "RESERVED")
 
@@ -332,4 +370,4 @@ def test_restart_aborts_reserved_step_and_observes_again(seeded):
         ("ABORTED", "RESTART"),
         ("COMPLETED", None),
     ]
-    assert (run.status, run.steps_used, run.restart_count) == ("ESCALATED", 3, 1)
+    assert (run.status, run.steps_used, run.restart_count) == ("BLOCKED", 3, 1)

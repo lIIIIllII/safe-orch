@@ -137,8 +137,8 @@ def test_skill_not_open_and_tool_not_in_skill_are_rejected(with_a):
     )  # 고른 스킬은 step JSON에 남는다
     assert steps[1]["observation"]["last_guard"]["reason_code"] == "SKILL_NOT_OPEN"
     assert (run.status, run.end_reason, run.solver_calls_used) == (
-        "ESCALATED",
-        "ESCALATE_NO_SOLUTION",
+        "BLOCKED",
+        "RETURN_BLOCKED",
         0,
     )
 
@@ -155,7 +155,7 @@ def test_skill_rejections_do_not_count_as_malformed_twice(with_a):
         "MALFORMED",
         None,
     ]
-    assert (run.status, run.end_reason) == ("ESCALATED", "ESCALATE_NO_SOLUTION")
+    assert (run.status, run.end_reason) == ("BLOCKED", "RETURN_BLOCKED")
 
 
 def test_missing_skill_argument_is_malformed(with_a):

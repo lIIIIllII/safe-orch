@@ -1,10 +1,11 @@
-"""골든 테스트: Replanning 기록과 모델 입력이 고정한 값과 같은지 확인한다.
+"""골든 테스트: Replanning과 메인의 기록·모델 입력이 고정한 값과 같은지 확인한다.
 
-대상은 Run 행, AgentStep 행(created_at 제외), Gateway CommandResult(created_at 제외), 모델이 받은
-입력(System·Human 메시지, 바인딩한 도구, bind 인자)이다.
+대상은 Agent 종류별로 그 종류의 Run 행, AgentStep 행(created_at 제외), Gateway CommandResult(created_at
+제외), 모델이 받은 입력(System·Human 메시지, 바인딩한 도구, bind 인자)이다. Replanning 골든은 Run 단위다:
+메인이 같은 Case에서 다시 부른 Run이 따로 남는다. 메인 골든은 같은 흐름의 메인 Run이다(메인과
+Coordination은 스크립트의 기본 응답으로 돈다).
 uuid4 ID와 hash는 실행마다 달라지므로 등장 순서대로 치환한 뒤 hash한다.
-2단계 배관(replanning-p12)에서 다시 만들었다: 종료 도구 이름이 RETURN_RESULT로 바뀌고 agent_run에 칸이
-늘었다(스키마 9). step 순서·Action·결과·가드 사유·남은 Budget은 그 전과 같다.
+2단계 메인(replanning-p13, main-p1)에서 다시 만들었다.
 """
 
 import json
@@ -13,8 +14,9 @@ import uuid
 
 import httpx
 import openai
+import pytest
 from langchain_core.messages import AIMessage
-from scripted import ScriptedChatModel, call, escalate, solve
+from scripted import Router, agent_kind, call, escalate, solve
 
 from app.commands.approval import (
     ApproveRequest,
@@ -27,6 +29,7 @@ from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.canonical import canonical_hash
 from app.store import db
+from app.store.repos.consultations import list_review_queue
 from app.store.repos.records import list_validations
 from app.store.repos.site import get_site
 
@@ -34,10 +37,13 @@ PREFIXED_ID = re.compile(r"(?<![0-9a-z_])([a-z]+)_[0-9a-f]{32}(?![0-9a-f])")
 BARE_ID = re.compile(r"(?<![0-9a-f_])[0-9a-f]{32}(?![0-9a-f])")
 HASH = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 REQ = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-# 2단계 배관 뒤 다시 만든 값
+pytestmark = pytest.mark.usefixtures("main_on")
+
+# 2단계 메인 뒤 다시 만든 값
 GOLDEN = {
-    "plan_b": "37889c1fb17dd0e0e1945eca688dbc2fa380f5f606dc2e418851d7fd2be159cc",
-    "rejections": "2476a3100e3f09e7947e653c417f1ada89aa9b2ffe598f91c144dc5e5e82d4ff",
+    "plan_b": "ec2880f356f200a2bff60dc890b7b59d867bfaa5673812f8ad9e8e6758b87b32",
+    "rejections": "8b0fb7e4d8dad24adbc0d52452bb172e2c37ceb71717d30a282c90e1ce4d9c6c",
+    "main_plan_b": "2cdeaae4c38ad3855556b9bfb9a491ef75f9da9812f36b934c8e7e408ed41e52",
 }
 
 
@@ -56,49 +62,64 @@ def normalize(text: str) -> str:
 
 
 class Recorder:
-    """ScriptedChatModel 팩토리. 만든 모델을 모두 모아 모델 입력을 기록한다."""
+    """Replanning 스크립트를 주는 Router 팩토리. 만든 모델을 모두 모아 모델 입력을 기록한다."""
 
     def __init__(self):
-        self.models: list[ScriptedChatModel] = []
+        self.routers: list[Router] = []
 
     def factory(self, *replies):
-        def make():
-            model = ScriptedChatModel(list(replies))
-            self.models.append(model)
-            return model
+        router = Router(replanning=replies)
+        self.routers.append(router)
+        return router.factory()
 
-        return make
-
-    def inputs(self) -> list[dict]:
+    def inputs(self, agent_type: str) -> list[dict]:
         return [
             {
                 "messages": [[type(m).__name__, m.content] for m in c["messages"]],
                 "tools": c["tools"],
                 "kwargs": c["kwargs"],
             }
-            for model in self.models
+            for router in self.routers
+            for model in router.models
             for c in model.calls
+            if agent_kind(c["messages"]) == agent_type
         ]
 
 
-def _table(conn, sql: str) -> list[dict]:
-    cur = conn.execute(sql)
+def _table(conn, sql: str, params: tuple = ()) -> list[dict]:
+    cur = conn.execute(sql, params)
     cols = [d[0] for d in cur.description]
-    return [{k: v for k, v in zip(cols, r) if k != "created_at"} for r in cur.fetchall()]
+    return [
+        {k: v for k, v in zip(cols, r, strict=True) if k != "created_at"} for r in cur.fetchall()
+    ]
 
 
-def _dump(rec: Recorder) -> dict:
+def _dump(rec: Recorder, agent_type: str = "REPLANNING") -> dict:
     with db.read() as conn:
-        runs = _table(conn, "SELECT * FROM agent_run ORDER BY rowid")
-        steps = _table(conn, "SELECT * FROM agent_step ORDER BY rowid")
-        results = _table(
-            conn, "SELECT * FROM command_result WHERE actor_id LIKE 'run:%' ORDER BY rowid"
+        runs = _table(
+            conn, "SELECT * FROM agent_run WHERE agent_type = ? ORDER BY rowid", (agent_type,)
         )
-    return {"runs": runs, "steps": steps, "command_results": results, "model": rec.inputs()}
+        marks = ", ".join("?" for _ in runs) or "NULL"
+        ids = tuple(r["run_id"] for r in runs)
+        steps = _table(
+            conn, f"SELECT * FROM agent_step WHERE run_id IN ({marks}) ORDER BY rowid", ids
+        )
+        results = _table(
+            conn,
+            f"SELECT * FROM command_result WHERE actor_id IN ({marks}) ORDER BY rowid",
+            tuple(f"run:{i}" for i in ids),
+        )
+    return {
+        "runs": runs,
+        "steps": steps,
+        "command_results": results,
+        "model": rec.inputs(agent_type),
+    }
 
 
-def _digest(rec: Recorder) -> str:
-    text = json.dumps(_dump(rec), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+def _digest(rec: Recorder, agent_type: str = "REPLANNING") -> str:
+    data = _dump(rec, agent_type)
+    text = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return canonical_hash(normalize(text))
 
 
@@ -118,11 +139,17 @@ def _submit_a(pack):
     assert out.status == "APPLIED"
 
 
-def _run():
+def _runs(agent_type):
     with db.read() as conn:
         return conn.execute(
-            "SELECT run_id, status, wait_ref FROM agent_run ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
+            "SELECT run_id, status, wait_ref FROM agent_run WHERE agent_type = ? ORDER BY rowid",
+            (agent_type,),
+        ).fetchall()
+
+
+def _review_candidate(pack):
+    with db.read() as conn:
+        return list_review_queue(conn, pack.site_id)[-1]
 
 
 def test_normalize_replaces_ids_in_order():
@@ -133,11 +160,12 @@ def test_normalize_replaces_ids_in_order():
 
 
 def test_golden_plan_b(seeded):
-    """기본안 B 전체: Alpha → 거절(C 고정) → 재개 → LIST → ASK → 수락 → TRY → Beta → 승인."""
+    """기본안 B 전체: Alpha → 거절(C 고정) → 메인이 재계획을 다시 부름 → LIST → ASK → 수락 → TRY → Beta →
+    승인 → 통지 → 메인 CLOSE."""
     pack, rec = seeded, Recorder()
     _submit_a(pack)
     run_until_idle(pack, model_factory=rec.factory(solve("L0"), solve("L1")))
-    _, _, alpha = _run()
+    alpha = _review_candidate(pack)
     x = pack.demo_rejections[0]
     body = RejectRequest(
         candidate_id=alpha,
@@ -158,7 +186,7 @@ def test_golden_plan_b(seeded):
     )
     listing = call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A")
     run_until_idle(pack, model_factory=rec.factory(listing, ask))
-    _, status, message_id = _run()
+    _, status, message_id = _runs("REPLANNING")[-1]
     assert status == "WAITING_HUMAN"
     reply = ReplyRequest(message_id=message_id, decision="ACCEPT", comment="좋습니다")
     assert reply_message(pack, "planner_a", _key(), reply).status == "APPLIED"
@@ -166,7 +194,7 @@ def test_golden_plan_b(seeded):
         "TRY_ALTERNATIVE_RESOURCE", "SITE-CR-01 시도", task_id="A", resource_id="SITE-CR-01"
     )
     run_until_idle(pack, model_factory=rec.factory(try_beta))
-    _, _, beta = _run()
+    beta = _review_candidate(pack)
     with db.read() as conn:
         ctx = get_site(conn, pack.site_id).context_version
     approve = ApproveRequest(
@@ -175,8 +203,35 @@ def test_golden_plan_b(seeded):
         expected_context_version=ctx,
     )
     assert approve_and_commit(pack, "supervisor", _key(), approve).status == "APPLIED"
-    assert _run()[1] == "SUCCEEDED"
+    run_until_idle(pack, model_factory=rec.factory())
+    assert [r[1] for r in _runs("REPLANNING")] == ["SUCCEEDED", "SUCCEEDED"]
+    assert [r[1] for r in _runs("MAIN")] == ["SUCCEEDED"]
+    # Replanning: Run 둘(L0·L1·DONE / LIST·ASK·TRY·DONE)
+    steps = _dump(rec)["steps"]
+    assert [json.loads(s["action"])["name"] for s in steps] == [
+        "SOLVE_WITH_SCOPE",
+        "SOLVE_WITH_SCOPE",
+        "RETURN_RESULT",
+        "LIST_ASSIGNABLE_RESOURCES",
+        "ASK_TASK_OWNER",
+        "TRY_ALTERNATIVE_RESOURCE",
+        "RETURN_RESULT",
+    ]
     assert _digest(rec) == GOLDEN["plan_b"]
+    # 메인: 재계획 → 협의 → 재계획 → 승인 대기 → 통지 → CLOSE
+    main_steps = _dump(rec, "MAIN")["steps"]
+    assert [
+        (json.loads(s["action"])["name"], json.loads(s["action"])["args"].get("agent"))
+        for s in main_steps
+    ] == [
+        ("CALL_AGENT", "REPLANNING"),
+        ("CALL_AGENT", "COORDINATION"),
+        ("CALL_AGENT", "REPLANNING"),
+        ("WAIT", None),
+        ("CALL_AGENT", "COORDINATION"),
+        ("CLOSE", None),
+    ]
+    assert _digest(rec, "MAIN") == GOLDEN["main_plan_b"]
 
 
 def test_golden_gateway_rejections(seeded):
@@ -197,7 +252,7 @@ def test_golden_gateway_rejections(seeded):
         escalate(),
     )
     run_until_idle(pack, model_factory=rec.factory(*replies))
-    assert _run()[1] == "ESCALATED"
+    assert [r[1] for r in _runs("REPLANNING")] == ["BLOCKED"]
     steps = _dump(rec)["steps"]
     assert [(s["result_kind"], json.loads(s["guard"])["reason_code"]) for s in steps] == [
         ("CONTINUE", None),

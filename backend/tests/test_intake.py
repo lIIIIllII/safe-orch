@@ -135,7 +135,7 @@ def _to_request(pack, replies=None):
 # ── 명확한 요청: 폼과 같은 작업·같은 Replanning ───────────────
 
 
-def test_clear_request_matches_form_path(seeded):
+def test_clear_request_matches_form_path(seeded, main_on):
     pack = seeded
     run = _to_request(pack)
     assert (run.status, run.wait_kind, run.acting_unit_id, run.acting_actor_id) == (
@@ -180,7 +180,7 @@ def test_clear_request_matches_form_path(seeded):
 
     # 폼 A와 같은 Replanning: L0 INFEASIBLE → L1 Alpha(A 10:00 A-CR-01, C 10:30), 변경 2·지연 90
     [rp] = _runs("REPLANNING")
-    steps = _steps(rp.run_id)
+    steps = _steps(rp.run_id)[:2]  # 세 번째 step은 검증 뒤의 DONE이다
     assert [s["tool_result"]["stage1"]["status"] for s in steps] == ["INFEASIBLE", "OPTIMAL"]
     assert (
         steps[1]["tool_result"]["stage1"]["changed"],
@@ -190,10 +190,14 @@ def test_clear_request_matches_form_path(seeded):
         90,
     )
     with db.read() as conn:
-        cand = get_candidate(conn, pack.site_id, rp.wait_ref)
+        cand = get_candidate(conn, pack.site_id, steps[1]["tool_result"]["candidate_id"])
+        [ready] = conn.execute(
+            "SELECT json_extract(ref, '$.kind') FROM case_event WHERE kind = 'TASK_READY'"
+        ).fetchall()
     placed = {x.task_id: (x.start, x.resource_id) for x in cand.assignments}
     assert (placed["A"], placed["C"]) == ((60, "A-CR-01"), (90, "A-CR-01"))
-    assert rp.input_ref["cause"]["kind"] == "INTAKE" and rp.acting_actor_id == "planner_a"
+    # 접수 완료는 "작업 준비됨" 사건이 되어 메인에게 가고, 메인이 요청자의 Unit으로 재계획을 부른다
+    assert ready[0] == "INTAKE" and rp.acting_actor_id == "planner_a"
 
 
 def test_form_and_intake_produce_same_task_values(seeded):
@@ -302,13 +306,13 @@ def test_decline_lets_agent_ask_again(seeded):
     assert len(_messages("CONFIRMATION")) == 2 and run.status == "WAITING_HUMAN"
 
 
-def test_complete_during_open_case_is_queued(seeded):
+def test_complete_during_open_case_is_queued(seeded, main_on):
     pack = seeded
     n1 = next(d for d in pack.demo_requests if d.task_id == "N1")
     form = TaskRequestForm(**n1.model_dump(exclude={"label", "requester"}))
     assert submit_task_request(pack, n1.requester, _key(), form).status == "APPLIED"
     run_until_idle(pack, model_factory=Router(replanning=[solve("L0")]).factory())
-    assert _runs("REPLANNING")[0].status == "WAITING_HUMAN"  # 열린 Case
+    assert _runs("MAIN")[0].status == "WAITING_HUMAN"  # 열린 메인(Case)
     _to_request(pack)
     [confirm] = _messages("CONFIRMATION")
     _reply(pack, confirm["message_id"])

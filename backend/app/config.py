@@ -30,13 +30,9 @@ class Settings(BaseSettings):
     pack: str = "shipyard"  # domain_packs/<pack>/
     dispatch_worker: bool = True  # 기동 시 dispatch 워커 스레드 시작
     dispatch_poll_s: float = 0.5
-    # Agent 자동 시작. 기본은 켜짐이고, 설정은 Agent를 끄는 스위치다.
-    # PASS 후보에 동의 대기 항목이 있으면 Coordination이 담당자와 협의하고 확정 뒤 통지한다(기본안 A).
-    # 끄면 Supervisor 검토 대기(기본안 B)이고 통지가 없다.
-    coordination_enabled: bool = True
-    # 지연 신고(DELAY)를 접수하면 Event Response가 대상 작업·사실 수정안을 찾는다.
-    # 끄면 Hold만 걸고 Supervisor가 처리한다(Scene 4).
-    event_response_enabled: bool = True
+    # 사건 → 메인 자동 시작. 열린 메인이 없을 때 사건이 생기면 메인 Agent를 띄운다.
+    # 끄면 사건은 기록만 되고 메인이 뜨지 않는다(전문 Agent는 메인이 부를 때만 돈다).
+    main_auto_start: bool = True
     # 메인 Agent Budget: step 수와 전문 Agent 호출 수 (LLM 시도는 step × 2)
     main_max_steps: int = 12
     main_max_agent_calls: int = 8

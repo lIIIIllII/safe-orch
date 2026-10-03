@@ -81,9 +81,10 @@ class MainExecutor:
             # 하위 Run은 한 번에 하나다. 열려 있으면 부르지도 끝내지도 못한다
             return "CHILD_RUN_OPEN"
         if isinstance(action, spec.CallAgent):
-            if "CALL_AGENT" not in available:
-                return "ACTION_NOT_AVAILABLE"
-            return self._call_refusal(data, spec.call_refs(action))
+            reason = self._call_refusal(data, spec.call_refs(action))
+            if reason is None and "CALL_AGENT" not in available:
+                return "ACTION_NOT_AVAILABLE"  # 호출 Budget이 없다
+            return reason
         # 끝내기: 아직 보지 않은 사건이 있으면 다시 관찰한다
         if any(e["new"] for e in data["events"]):
             return "NEW_EVENT"

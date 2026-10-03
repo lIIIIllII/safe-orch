@@ -9,8 +9,9 @@ import uuid
 import pytest
 from conftest import take_snapshot, with_facts
 from fastapi.testclient import TestClient
-from scripted import ScriptedChatModel, escalate, solve
+from scripted import Router, escalate, solve
 
+from app.agents import casefacts
 from app.commands.approval import ApproveRequest, WaiveRequest, approve_and_commit, waive
 from app.commands.task_request import (
     TaskRequestForm,
@@ -18,7 +19,6 @@ from app.commands.task_request import (
     submit_task_request,
     withdraw_task_request,
 )
-from app.coordinator import transitions
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.calendar import (
     fits_work_interval,
@@ -33,11 +33,14 @@ from app.rules.engine import detect_conflicts
 from app.solver import cpsat
 from app.solver.search_spec import build_search_spec
 from app.store import db
+from app.store.repos.consultations import list_review_queue
 from app.store.repos.records import list_validations
 from app.store.repos.runs import get_run
 from app.store.repos.site import get_site
 from app.store.repos.tasks import list_current_tasks
 from scripts import verify_demo_values as verify
+
+pytestmark = pytest.mark.usefixtures("main_on")
 
 SITE = "YARD-01"
 CAL = ((0, 480), (1440, 1920), (2880, 3360))
@@ -88,14 +91,23 @@ def _site(pack):
         return get_site(conn, pack.site_id)
 
 
-def _runs():
+def _runs(agent_type="REPLANNING"):
     with db.read() as conn:
         ids = [r[0] for r in conn.execute("SELECT run_id FROM agent_run ORDER BY rowid")]
-        return [get_run(conn, rid) for rid in ids]
+        runs = [get_run(conn, rid) for rid in ids]
+    return [r for r in runs if agent_type is None or r.agent_type == agent_type]
 
 
 def _factory(*replies):
-    return lambda: ScriptedChatModel(list(replies))
+    """Replanning 스크립트. 메인과 Coordination은 기본 응답으로 돈다."""
+    return Router(replanning=replies).factory()
+
+
+def _last_candidate():
+    with db.read() as conn:
+        return conn.execute(
+            "SELECT candidate_id, assignments FROM candidate ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
 
 
 # ── 근무 달력 순수 함수 ────────────────────────────────────────
@@ -182,8 +194,11 @@ def test_demo_request_expected_values(seeded, task_id):
     facts = snap.facts()
     conflicts = detect_conflicts(snap, facts.check_assignments(), pack)
     assert [(c.rule_id, c.task_ids) for c in conflicts] == conflicts_exp
-    cause = {"kind": "FORM", "task_id": task_id, "actor_id": d.requester}
-    unit, primary = transitions.choose_acting(facts, conflicts, cause)
+    # 요청 작업의 Unit이 주체이고, 주 충돌은 그 Unit의 작업을 포함한 그룹의 첫 충돌이다
+    with db.read() as conn:
+        _, _, [group] = casefacts.current_groups(conn, pack)
+    unit = facts.task_map()[d.task_id].unit_id
+    primary = casefacts.primary_for(group, facts, unit)
     assert (unit, (primary.rule_id, primary.task_ids)) == (unit_exp, conflicts_exp[0])
     base = facts.base_assignments()[task_id].start
     # 상대 작업이 모두 다른 Unit의 고정 작업이라 L1·L2로 넓혀도 같은 결과다
@@ -230,9 +245,9 @@ def test_cpsat_fixed_task_outside_calendar_infeasible(with_a):
 
 
 def _approve_pending(pack, waive_tasks=()):
+    """검토 대기 후보를 (필요하면 수용하고) 승인한다. 메인이 통지를 부르고 끝낼 때까지 돌린다."""
     with db.read() as conn:
-        [run] = [r for r in _runs() if r.status == "WAITING_HUMAN"]
-        cand_id = run.wait_ref
+        cand_id = list_review_queue(conn, pack.site_id)[-1]
         [v] = list_validations(conn, pack.site_id, cand_id)
     assert v.status == "PASS"
     if waive_tasks:
@@ -245,6 +260,8 @@ def _approve_pending(pack, waive_tasks=()):
     )
     out = approve_and_commit(pack, "supervisor", _key(), approve)
     assert out.status == "APPLIED", out.reason_codes
+    run_until_idle(pack, model_factory=_factory())
+    assert _runs("MAIN")[-1].status == "SUCCEEDED"
     return cand_id
 
 
@@ -258,17 +275,10 @@ def test_sequence_alpha_then_n1_to_n4(seeded):
     for task_id in ("N1", "N2", "N3", "N4"):
         _submit(pack, task_id)
         run_until_idle(pack, model_factory=_factory(solve("L0", "상대가 다른 Unit 고정 작업")))
-        start = EXPECTED[task_id][2][4]
-        with TestClient(app) as client:
-            state = client.get(f"/api/sites/{SITE}/state", headers={"X-Actor": "supervisor"})
-        cand = next(c for c in state.json()["candidates"] if c["display_status"] == "OPEN")
-        assert cand["consultation"]["status"] == "COMPLETE"
-        [change] = cand["changes"]
-        assert (change["task_id"], change["after"]["start"]) == (task_id, start)
         _approve_pending(pack)
-    assert _site(pack).plan_revision == 5
     snap = take_snapshot(pack)
     assert detect_conflicts(snap, snap.facts().check_assignments(), pack) == []
+    assert _site(pack).plan_revision == 5 and len(_runs("MAIN")) == 5
 
 
 # ── 근무 분 지연: state의 changes와 Solver 요약 ────────────────
@@ -317,12 +327,8 @@ def test_form_accepts_night_start_and_replans_calendar(seeded):
     assert ("CALENDAR", ("N2",)) in [(c.rule_id, c.task_ids) for c in found]
     run_until_idle(seeded, model_factory=_factory(solve("L0")))
     [run] = _runs()
-    assert run.status == "WAITING_HUMAN"
-    with db.read() as conn:
-        sol = conn.execute(
-            "SELECT assignments FROM candidate WHERE candidate_id = ?", (run.wait_ref,)
-        ).fetchone()[0]
-    assert '"task_id":"N2"' in sol.replace(" ", "")
+    assert run.status == "SUCCEEDED"
+    assert '"task_id":"N2"' in _last_candidate()[1].replace(" ", "")
 
 
 # ── 철회 ──────────────────────────────────────────────────
@@ -334,12 +340,15 @@ def test_withdraw_unblocks_later_requests(seeded):
     _submit(pack, "N5")
     run_until_idle(pack, model_factory=_factory(solve("L0"), solve("L2"), escalate()))
     [n5_run] = _runs()
-    assert (n5_run.status, n5_run.acting_unit_id) == ("ESCALATED", "UB")
+    assert (n5_run.status, n5_run.acting_unit_id) == ("BLOCKED", "UB")
+    assert _runs("MAIN")[0].status == "ESCALATED"  # 메인이 이관했다. N5는 READY로 남는다
 
+    # 새 메인: N1과 남은 N5가 K로 엮여 한 그룹이다. UA로 재계획해도 해가 없다
     _submit(pack, "N1")
-    run_until_idle(pack, model_factory=_factory(solve("L0"), solve("L2"), escalate()))
-    n1_run = _runs()[-1]
-    assert n1_run.status == "ESCALATED"
+    replies = (solve("L0"), solve("L2"), escalate(), escalate())
+    run_until_idle(pack, model_factory=_factory(*replies))
+    n1_run = next(r for r in _runs() if r.acting_unit_id == "UA")
+    assert n1_run.status == "BLOCKED"
     with db.read() as conn:
         statuses = [
             r[0]
@@ -351,6 +360,7 @@ def test_withdraw_unblocks_later_requests(seeded):
             )
         ]
     assert statuses == ["INFEASIBLE", "INFEASIBLE"]
+    assert _runs("MAIN")[-1].status == "ESCALATED"
 
     out = withdraw_task_request(pack, "planner_b", _key(), TaskWithdraw(task_id="N5"))
     assert out.status == "APPLIED"
@@ -360,32 +370,31 @@ def test_withdraw_unblocks_later_requests(seeded):
         audit = conn.execute("SELECT command FROM audit ORDER BY rowid DESC LIMIT 1").fetchone()[0]
     assert (n5.revision, n5.lifecycle, audit) == (2, "NEEDS_INFO", "WITHDRAW_TASK_REQUEST")
 
-    # 철회 뒤 RECHECK: 남은 요청 N1의 Unit(UA)이 재계획한다 (cause N5는 충돌에 없다)
+    # 철회는 사건이다. 새 메인이 남은 요청 N1의 Unit(UA)으로 재계획을 부른다(그룹이 달라졌다)
     run_until_idle(pack, model_factory=_factory(solve("L0")))
     run = _runs()[-1]
-    assert (run.status, run.acting_unit_id, run.input_ref["cause"]["kind"]) == (
-        "WAITING_HUMAN",
-        "UA",
-        "WITHDRAW",
-    )
-    with db.read() as conn:
-        asg = conn.execute(
-            "SELECT assignments FROM candidate WHERE candidate_id = ?", (run.wait_ref,)
-        ).fetchone()[0]
+    assert (run.status, run.acting_unit_id) == ("SUCCEEDED", "UA")
+    assert run.input_ref["group_task_ids"] == ["K", "N1"]
+    asg = _last_candidate()[1]
     assert '{"end":1620,"resource_id":"SITE-GC-01","start":1560,"task_id":"N1"}' in asg.replace(
         " ", ""
     )
 
 
-def test_withdraw_stales_open_run(seeded):
+def test_withdraw_wakes_main(seeded):
     _submit(seeded, "N1")
     run_until_idle(seeded, model_factory=_factory(solve("L0")))
-    [run] = _runs()
-    assert run.status == "WAITING_HUMAN"
+    [main] = _runs("MAIN")
+    assert (main.status, main.wait_kind) == ("WAITING_HUMAN", "HUMAN_DECISION")
     out = withdraw_task_request(seeded, "planner_a", _key(), TaskWithdraw(task_id="N1"))
     assert out.status == "APPLIED"
-    [stale] = _runs()
-    assert (stale.status, stale.end_reason) == ("STALE", "WITHDRAW:N1")
+    [woke] = _runs("MAIN")
+    assert woke.wake_seq == main.wake_seq + 1
+    with db.read() as conn:
+        event = conn.execute(
+            "SELECT kind, case_id FROM case_event ORDER BY seq DESC LIMIT 1"
+        ).fetchone()
+    assert tuple(event) == ("TASK_REQUEST_WITHDRAWN", main.case_id)
 
 
 def test_withdraw_permissions_and_targets(seeded):
@@ -450,7 +459,7 @@ def test_withdraw_rejects_task_with_queued_successor(seeded):
     pack = seeded
     _submit(pack, "N1")
     run_until_idle(pack, model_factory=_factory(solve("L0")))
-    assert _runs()[-1].status == "WAITING_HUMAN"  # 열린 Case → 새 요청은 대기열
+    assert _runs("MAIN")[-1].status == "WAITING_HUMAN"  # 열린 메인 → 새 요청은 대기열
     form = _form(pack, "N2", predecessors=({"task_id": "N1"},))
     out = submit_task_request(pack, "planner_a", _key(), form)
     assert out.result_refs["queued"] is True
@@ -641,10 +650,10 @@ def test_steps_api_reports_work_delay_without_storing(client, seeded):
     [run] = _runs()
     res = client.get(f"/api/runs/{run.run_id}/steps", headers={"X-Actor": "supervisor"})
     assert res.status_code == 200, res.text
-    [step] = res.json()
+    step = res.json()[0]
     assert step["tool_result"]["stage2"] == {"status": "OPTIMAL", "delay": 1140, "work_delay": 180}
     with db.read() as conn:
         stored = conn.execute(
-            "SELECT tool_result FROM agent_step WHERE run_id = ?", (run.run_id,)
+            "SELECT tool_result FROM agent_step WHERE run_id = ? AND step_no = 1", (run.run_id,)
         ).fetchone()[0]
     assert "work_delay" not in stored

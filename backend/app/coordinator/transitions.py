@@ -10,17 +10,17 @@ from typing import Any
 
 from app.agents import runtime
 from app.commands.consultation import build_consultation
-from app.config import get_settings
+from app.domain.canonical import canonical_hash
 from app.domain.hashes import candidate_hash
 from app.domain.ids import new_id
-from app.domain.models import AgentRun, Candidate, Conflict, SnapshotContent
+from app.domain.models import AgentRun, Candidate, Snapshot, SnapshotContent
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.store import db
 from app.store.repos.case_events import record_case_event
-from app.store.repos.cases import claim_resume, end_case_run, register_coordination, wake_run
-from app.store.repos.consultations import candidate_state, consultation_view
-from app.store.repos.dispatch import job_exists, mark_done, register_job, set_job_run
+from app.store.repos.cases import claim_resume, end_case_run, wake_run
+from app.store.repos.consultations import candidate_state
+from app.store.repos.dispatch import mark_done, register_job, set_job_run
 from app.store.repos.events import get_hold, list_active_holds
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import (
@@ -34,13 +34,13 @@ from app.store.repos.records import (
 )
 from app.store.repos.runs import (
     get_run,
-    has_open_case,
     insert_run,
     mark_restart,
     run_for_solver_result,
+    set_contract_version,
 )
-from app.store.repos.site import get_site, list_actors
-from app.store.repos.snapshots import create_snapshot
+from app.store.repos.site import get_site
+from app.store.repos.snapshots import build_snapshot_content, create_snapshot
 from app.store.repos.tasks import list_current_tasks
 from app.validator.validator import validate
 
@@ -72,40 +72,6 @@ def recover_running_runs(pack: LoadedPack) -> list[str]:
                 )
                 out.append(run_id)
     return out
-
-
-def choose_acting(
-    facts: SnapshotContent, conflicts: list[Conflict], cause: dict[str, Any]
-) -> tuple[str, Conflict]:
-    """acting_unit과 주 충돌.
-
-    cause 작업이 충돌에 있으면 그 Unit, 아니면 충돌 작업 중 Plan에 없는 요청 작업(task_id가 가장
-    작은 것)의 Unit, 그것도 없으면 충돌 작업 중 task_id가 가장 작은 작업의 Unit (철회 뒤
-    RECHECK처럼 cause 작업이 충돌에 없을 때 남은 요청의 요청자가 재계획한다).
-    주 충돌 = detect_conflicts 순서에서 acting_unit 작업을 포함한 첫 충돌.
-    """
-    tasks = facts.task_map()
-    in_conflict = sorted({tid for c in conflicts for tid in c.task_ids})
-    in_plan = {a.task_id for a in facts.plan.assignments}
-    requests = [tid for tid in in_conflict if tid not in in_plan]
-    cause_task = cause.get("task_id")
-    acting_task = cause_task if cause_task in in_conflict else (requests or in_conflict)[0]
-    unit = tasks[acting_task].unit_id
-    primary = next(c for c in conflicts if any(tasks[t].unit_id == unit for t in c.task_ids))
-    return unit, primary
-
-
-def _acting_actor(
-    tx: sqlite3.Connection, site_id: str, unit: str, cause: dict[str, Any]
-) -> str | None:
-    if cause.get("kind") in ("FORM", "QUEUE", "INTAKE"):
-        return cause.get("actor_id")  # 요청자 (대기열에서 올라온 요청도 요청자가 재계획한다)
-    planners = [
-        a.actor_id
-        for a in list_actors(tx, site_id)
-        if a.unit_id == unit and "UNIT_PLANNER" in a.roles
-    ]
-    return planners[0] if planners else None
 
 
 def _reconfirm_candidate(snapshot_id: str, snapshot_hash: str, facts: SnapshotContent) -> Candidate:
@@ -140,48 +106,35 @@ def _register_validate(tx: sqlite3.Connection, site_id: str, candidate_id: str) 
 
 
 def recheck(pack: LoadedPack, job: Job) -> None:
-    """ACTIVE Hold 없음 ∧ 열린 Case 없음 ∧ (Plan이 현재 Context보다 뒤처짐 ∨ Plan 밖 READY 작업
-    있음)일 때만: 충돌이면 START_RUN 등록, 없으면 RECONFIRM 후보 + VALIDATE. 한 write 트랜잭션.
-    START_RUN 키에 plan을 넣는다(확정은 context를 바꾸지 않는다)."""
+    """ACTIVE Hold 없음 ∧ (Plan이 현재 Context보다 뒤처짐 ∨ Plan 밖 READY 작업 있음) ∧ 충돌 없음일 때
+    RECONFIRM 후보 + VALIDATE를 만든다. 한 write 트랜잭션. 충돌이 있으면 아무것도 하지 않는다:
+    재계획을 부를지는 메인이 판단한다."""
     site_id = pack.site_id
-    cause = job["payload"].get("cause") or {}
     with db.write() as tx:
         site = get_site(tx, site_id)
         plan = get_current_plan(tx, site_id)
         assert site is not None and plan is not None
         ctx, rev = site.context_version, site.plan_revision
-        start_key = f"START_RUN:REPLANNING:ctx{ctx}:plan{rev}"
         in_plan = {a.task_id for a in plan.assignments}
         pending_requests = any(
             t.lifecycle == "READY" and t.task_id not in in_plan
             for t in list_current_tasks(tx, site_id, pack)
         )
-        if (
-            list_active_holds(tx, site_id)
-            or has_open_case(tx, site_id)
-            or (plan.committed_context_version == ctx and not pending_requests)
+        if list_active_holds(tx, site_id) or (
+            plan.committed_context_version == ctx and not pending_requests
         ):
-            pass  # 재계획하지 않는다
+            pass  # 다시 확인할 것이 없다
         elif (existing := find_reconfirm_candidate(tx, site_id, ctx, rev)) is not None:
             _register_validate(tx, site_id, existing.candidate_id)
-        elif not job_exists(tx, site_id, start_key):
-            snapshot = create_snapshot(tx, site_id, pack)
-            facts = snapshot.facts()
-            conflicts = detect_conflicts(snapshot, facts.check_assignments(), pack)
-            if conflicts:
-                unit, primary = choose_acting(facts, conflicts, cause)
-                payload = {
-                    "agent_type": "REPLANNING",
-                    "acting_unit_id": unit,
-                    "acting_actor_id": _acting_actor(tx, site_id, unit, cause),
-                    "snapshot_id": snapshot.snapshot_id,
-                    "conflict": {"rule_id": primary.rule_id, "task_ids": list(primary.task_ids)},
-                    "context_version": ctx,
-                    "plan_revision": rev,
-                    "cause": cause,
-                }
-                register_job(tx, site_id, "START_RUN", start_key, payload)
-            else:
+        else:
+            # 충돌 검사는 저장하지 않은 Snapshot으로 한다. 재확인 후보를 만들 때만 저장한다
+            content = build_snapshot_content(tx, site_id, pack)
+            probe = Snapshot(
+                snapshot_id="recheck", snapshot_hash=canonical_hash(content), content=content
+            )
+            if not detect_conflicts(probe, probe.facts().check_assignments(), pack):
+                snapshot = create_snapshot(tx, site_id, pack)
+                facts = snapshot.facts()
                 candidate = _reconfirm_candidate(
                     snapshot.snapshot_id, snapshot.snapshot_hash, facts
                 )
@@ -218,7 +171,7 @@ def validate_candidate(pack: LoadedPack, job: Job) -> None:
             insert_validation(tx, site_id, validation)
             stored = [validation]
         # Solver 후보가 C01–C10 FAIL이면 모델·검증 불일치로 Run ERROR.
-        # C11만 걸린 INCOMPLETE(비PASS)는 Run을 깨운다.
+        # 그 밖의 검증 결과(PASS 포함)는 후보를 만든 Run을 깨운다: Run은 검증까지만 산다 (AG-25).
         candidate = get_candidate(tx, site_id, candidate_id)
         if (
             candidate is not None
@@ -229,7 +182,7 @@ def validate_candidate(pack: LoadedPack, job: Job) -> None:
             failed = any(c.status == "FAIL" for v in stored for c in v.checks)
             if run_id is not None and failed:
                 end_case_run(tx, pack, run_id, "ERROR", "MODEL_VALIDATION_MISMATCH")
-            elif run_id is not None and not any(v.status == "PASS" for v in stored):
+            elif run_id is not None:
                 wake_run(tx, site_id, run_id)
         if any(v.status == "PASS" for v in stored):
             register_job(
@@ -243,27 +196,11 @@ def validate_candidate(pack: LoadedPack, job: Job) -> None:
 
 
 def build_consultation_job(pack: LoadedPack, job: Job) -> None:
-    """Consultation 생성. 설정이 켜졌고 Run이 만든 후보에 동의 대기(PENDING) 항목이 있으면 같은 tx에서
-    Coordination 협의 Run을 등록한다(기본안 A). 꺼져 있으면 검토 대기(기본안 B)."""
+    """Consultation 생성. 협의 Run을 부를지는 메인이 판단한다."""
     candidate_id = job["payload"]["candidate_id"]
     with db.write() as tx:
         build_consultation(tx, pack.site_id, candidate_id)
-        if get_settings().coordination_enabled:
-            _register_consult(tx, pack, candidate_id)
         mark_done(tx, job["job_id"])
-
-
-def _register_consult(tx: sqlite3.Connection, pack: LoadedPack, candidate_id: str) -> None:
-    candidate = get_candidate(tx, pack.site_id, candidate_id)
-    if candidate is None or candidate.kind != "REPLAN" or candidate.solver_result_id is None:
-        return
-    run_id = run_for_solver_result(tx, candidate.solver_result_id)
-    run = get_run(tx, run_id) if run_id else None
-    view = consultation_view(tx, pack.site_id, candidate_id)
-    if run is None or view is None or "PENDING" not in view.item_status.values():
-        return
-    key = f"START_RUN:COORDINATION:CONSULT:{candidate_id}"
-    register_coordination(tx, pack, "CONSULT", key, candidate_id, run.case_id)
 
 
 def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, Any]) -> bool:
@@ -281,13 +218,11 @@ def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, 
         hold = get_hold(tx, pack.site_id, payload.get("hold_id") or "")
         return hold is not None and hold["status"] == "ACTIVE"
     if payload["agent_type"] != "COORDINATION":
-        # 메인이 부른 재계획은 메인의 Case 안에서 돈다(열린 Case 검사는 부모 없는 시작에만)
-        return (
-            not list_active_holds(tx, pack.site_id)
-            and (payload.get("parent_run_id") is not None or not has_open_case(tx, pack.site_id))
-            and (payload.get("context_version"), payload.get("plan_revision"))
-            == (site.context_version, site.plan_revision)
-        )
+        # 재계획: Hold가 없고, 메인이 부를 때 본 사실 그대로일 때만
+        return not list_active_holds(tx, pack.site_id) and (
+            payload.get("context_version"),
+            payload.get("plan_revision"),
+        ) == (site.context_version, site.plan_revision)
     if payload.get("phase") == "NOTICE":
         return payload.get("plan_revision") == site.plan_revision
     candidate = get_candidate(tx, pack.site_id, payload["candidate_id"])
@@ -408,6 +343,8 @@ def continue_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory
     run_id = job["run_id"]
     with db.write() as tx:
         run = get_run(tx, run_id)
+        if run is not None:
+            set_contract_version(tx, run_id, runtime.exec_contract_version(run.agent_type))
         mark_done(tx, job["job_id"])
     if run is None or run.status != "RUNNING":
         return False

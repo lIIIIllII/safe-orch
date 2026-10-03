@@ -24,8 +24,13 @@ from app.domain.models import (
     pool_for,
 )
 from app.packs.loader import LoadedPack, confirmed_fields
-from app.store.repos.case_events import record_case_event
-from app.store.repos.cases import end_case_run, queued_task_ids, register_recheck, wake_run
+from app.store.repos.cases import (
+    deliver_event,
+    end_case_run,
+    queued_task_ids,
+    register_recheck,
+    wake_run,
+)
 from app.store.repos.consents import insert_consent
 from app.store.repos.plans import get_current_plan
 from app.store.repos.resources import list_pools, list_resources
@@ -182,9 +187,9 @@ def create_requested_task(
         fields=confirmed_fields(data, wt.critical_fields, source_ref),
         lifecycle="READY",
     )
-    # 열린 Replanning Case 중이거나 먼저 접수된 대기 요청이 있으면 대기열(QUEUED): Snapshot·충돌
-    # 검사에 들어가지 않으므로 context를 올리지 않고 RECHECK도 없다. Case가 끝날 때 접수 순서로
-    # READY가 된다. RECONFIRM 승인 대기 중에도 대기 요청을 앞지르지 않는다.
+    # 열린 메인(Case)이 있거나 먼저 접수된 대기 요청이 있으면 대기열(QUEUED): Snapshot·충돌
+    # 검사에 들어가지 않으므로 context를 올리지 않고 RECHECK도 없다. 메인이 끝날 때 접수 순서로
+    # READY가 된다.
     queued = has_open_case(tx, site_id) or bool(queued_task_ids(tx, site_id))
     if queued:
         task = task.model_copy(update={"lifecycle": "QUEUED"})
@@ -218,8 +223,8 @@ def create_requested_task(
         insert_consent(tx, site_id, c, context_version)
     if not queued:
         cause = {"kind": cause_kind, "task_id": task.task_id, "actor_id": actor.actor_id}
-        record_case_event(tx, site_id, "TASK_READY", f"TASK_READY:{task.task_id}:1", cause)
         register_recheck(tx, site_id, cause)
+        deliver_event(tx, pack, "TASK_READY", f"TASK_READY:{task.task_id}:1", cause)
     return {
         "task_id": task.task_id,
         "revision": 1,
@@ -315,8 +320,8 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
             wake_run(tx, site_id, run.run_id)
     cause = {"kind": "WITHDRAW", "task_id": task.task_id, "actor_id": ctx.actor_id}
     key = f"TASK_REQUEST_WITHDRAWN:{task.task_id}:{revision}"
-    record_case_event(tx, site_id, "TASK_REQUEST_WITHDRAWN", key, cause)
     register_recheck(tx, site_id, cause)
+    deliver_event(tx, ctx.pack, "TASK_REQUEST_WITHDRAWN", key, cause)
     return r
 
 

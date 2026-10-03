@@ -1,7 +1,7 @@
 """전문 Agent 호출의 키와 사실 지문 (AG-27).
 
 호출 키 = Agent 종류 + 참조. 사실 지문 = 그 호출에 관련된 사실의 hash다: 현장 버전(context, plan),
-같은 키로 부른 Run들이 만든 후보(또는 참조한 후보)에 대한 모든 결정, 그 Run·후보에 온 답, 그 Run이 낸
+같은 키로 부른 Run들이 만든 후보(또는 참조한 후보)에 대한 모든 승인·거절, 그 Run·후보에 온 답, 그 Run이 낸
 제안의 상태, 보낸 통지, ACTIVE Hold. 제약 없는 거절이나 담당자 답처럼 현장 버전을 올리지 않는 변화도
 지문을 바꾼다. 하위 Run이 끝날 때의 지문을 사건에 적어 두고, 같은 키로 다시 부를 때 지금 지문과 비교한다.
 """
@@ -56,7 +56,9 @@ def fingerprint(conn: sqlite3.Connection, site_id: str, key: str, candidate_id: 
             "versions": [site.context_version, site.plan_revision],
             "decisions": _column(
                 conn,
-                f"SELECT decision_id FROM decision WHERE candidate_id IN ({cmarks}) ORDER BY rowid",
+                # 승인·거절(제약 없는 거절 포함). 협의 항목 수용(WAIVE)은 후보를 바꾸지 않는다
+                f"SELECT decision_id FROM decision WHERE candidate_id IN ({cmarks})"
+                " AND type <> 'WAIVE' ORDER BY rowid",
                 tuple(candidates),
             ),
             "answers": _column(

@@ -2,7 +2,7 @@
 
 모양(종류별 참조)은 app.domain.needs가 검사한다. 여기서는 DB 사실과 대조한다: 작업·자원·풀·Unit·사람·
 신고·후보·메시지가 있는지, 축이 제약으로 고정되지 않았는지, 자원 값이 적격이고 담당자가 거절한 값이
-아닌지, Unit이 지금 충돌에 작업을 가졌는지, 물은 상대가 그 Run의 상대인지. 순서는 보지 않는다.
+아닌지, Unit이 그 충돌 그룹에 작업을 가졌는지, 물은 상대가 그 Run의 상대인지. 순서는 보지 않는다.
 """
 
 import sqlite3
@@ -10,6 +10,7 @@ from typing import Any
 
 from app.domain.canonical import canonical_hash
 from app.domain.eligibility import exclusion_reasons
+from app.domain.groups import conflict_groups
 from app.domain.models import AgentRun, Snapshot
 from app.domain.needs import FACT_TARGET, Need, Path
 from app.packs.loader import LoadedPack
@@ -41,22 +42,20 @@ class _Facts:
         self.frozen = {
             (c.task_id, axis) for c in list_constraints(conn, site_id) for axis in c.frozen_axes
         }
-        self._conflict_units: set[str] | None = None
+        self._group_units: dict[str, set[str]] | None = None
 
-    def conflict_units(self) -> set[str]:
-        """지금 충돌에 작업을 가진 Unit."""
-        if self._conflict_units is None:
+    def group_units(self) -> dict[str, set[str]]:
+        """지금 충돌 그룹 → 그 그룹에 작업을 가진 Unit."""
+        if self._group_units is None:
             content = build_snapshot_content(self.conn, self.pack.site_id, self.pack)
             snapshot = Snapshot(
                 snapshot_id="needs", snapshot_hash=canonical_hash(content), content=content
             )
             facts = snapshot.facts()
-            tasks = facts.task_map()
             conflicts = detect_conflicts(snapshot, facts.check_assignments(), self.pack)
-            self._conflict_units = {
-                tasks[t].unit_id for c in conflicts for t in c.task_ids if t in tasks
-            }
-        return self._conflict_units
+            groups = conflict_groups(conflicts, facts.task_map())
+            self._group_units = {g.group_id: set(g.units) for g in groups}
+        return self._group_units
 
     def declined(self, task_id: str, axis: str) -> set[str]:
         """이 Case에서 그 작업·축에 담당자가 거절한 값."""
@@ -90,9 +89,12 @@ def _check(f: _Facts, need: Need) -> str | None:
             return "VALUE_DECLINED"
         return None
     if need.kind == "OTHER_UNIT":
+        units = f.group_units().get(need.group_id or "")
+        if units is None:
+            return "GROUP_NOT_FOUND"
         if need.unit_id == run.acting_unit_id:
             return "SAME_UNIT"
-        return None if need.unit_id in f.conflict_units() else "UNIT_NOT_IN_CONFLICT"
+        return None if need.unit_id in units else "UNIT_NOT_IN_GROUP"
     if need.kind == "FACT_CHANGE":
         target = FACT_TARGET[need.field or "WINDOW"]
         value = getattr(need, target)

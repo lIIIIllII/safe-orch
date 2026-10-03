@@ -1,6 +1,9 @@
 """Main Agent: 도구 넷의 유효성, 하위 Run 시작·종료, 사실 지문 (AG-24·AG-27, ST-20)."""
 
+import uuid
+
 from conftest import add_run
+from langchain_core.messages import AIMessage
 from scripted import (
     Router,
     blocked,
@@ -8,12 +11,20 @@ from scripted import (
     main_close,
     main_escalate,
     main_wait,
+    solve,
 )
 
 from app.agents import casefacts, runtime
+from app.agents.specs import main as main_spec
+from app.commands.approval import RejectRequest, reject_candidate
+from app.commands.events import EventReport, receive_event
+from app.commands.runs import CancelRun, cancel_run
+from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.store import db
-from app.store.repos.case_events import list_case_events
+from app.store.repos.case_events import list_case_events, record_case_event
+from app.store.repos.consultations import list_review_queue
+from app.store.repos.records import list_validations
 from app.store.repos.runs import get_run, list_steps
 
 
@@ -155,3 +166,224 @@ def test_child_start_refusal_is_reported_to_main(with_a):
     [result] = _steps("main")[-1]["observation"]["child_results"]
     assert (result["run_status"], result["result"]) == ("NOT_STARTED", None)
     assert _runs("MAIN")[0].status == "ESCALATED"
+
+
+# ── 사건 → 메인 (자동 시작) ────────────────────────────────────
+
+
+def _key():
+    return uuid.uuid4().hex
+
+
+def _submit(pack, task_id="A"):
+    if task_id == "A":
+        data = pack.new_task.model_dump(
+            exclude={"requested", "unit_id", "owner_actor_id", "movable"}
+        )
+        actor = "planner_a"
+    else:
+        d = next(x for x in pack.demo_requests if x.task_id == task_id)
+        data, actor = d.model_dump(exclude={"label", "requester"}), d.requester
+    return submit_task_request(pack, actor, _key(), TaskRequestForm(**data))
+
+
+def _events(pack, case_id=None):
+    with db.read() as conn:
+        return [e for e in list_case_events(conn, pack.site_id) if case_id in (None, e["case_id"])]
+
+
+def _review_candidate(pack):
+    with db.read() as conn:
+        return list_review_queue(conn, pack.site_id)[-1]
+
+
+def _reject(pack, candidate_id, reason="PREFERENCE"):
+    with db.read() as conn:
+        [v] = list_validations(conn, pack.site_id, candidate_id)
+    body = RejectRequest(
+        candidate_id=candidate_id, validation_id=v.validation_id, reason_code=reason
+    )
+    return reject_candidate(pack, "supervisor", _key(), body)
+
+
+def _report(pack, event_type="OTHER"):
+    body = EventReport(source_event_id=_key(), event_type=event_type, text="확인 필요")
+    out = receive_event(pack, "reporter", _key(), body)
+    assert out.status == "APPLIED"
+    return out.result_refs
+
+
+def test_events_share_the_one_open_main(seeded, main_on):
+    """열린 메인이 없을 때 사건이 생기면 메인이 뜨고, 뒤이은 사건은 그 메인의 Case에 들어간다."""
+    pack = seeded
+    assert _submit(pack).status == "APPLIED"
+    _report(pack)
+    [main] = _runs("MAIN")
+    assert (main.status, main.acting_actor_id, main.input_ref["trigger"]) == (
+        "RUNNING",
+        None,
+        "TASK_READY:A:1",
+    )
+    assert [(e["kind"], e["case_id"]) for e in _events(pack)] == [
+        ("TASK_READY", main.case_id),
+        ("EVENT_REPORTED", main.case_id),
+    ]
+    # 메인이 열려 있는 동안 새 작업은 대기열에 선다(메인을 더 띄우지 않는다)
+    assert _submit(pack, "N1").result_refs["queued"] is True
+    assert len(_runs("MAIN")) == 1
+
+
+def test_replanning_call_is_refused_while_hold_is_active(seeded, main_on):
+    pack = seeded
+    assert _submit(pack).status == "APPLIED"
+    group = _group(pack)
+    _report(pack)
+    replies = [main_call("REPLANNING", group_id=group.group_id, acting_unit_id="UA"), main_wait()]
+    run_until_idle(pack, model_factory=Router(main=replies).factory())
+    [main] = _runs("MAIN")
+    assert _guards(main.run_id) == [("CALL_AGENT", "HOLD_ACTIVE"), ("WAIT", None)]
+    first = _steps(main.run_id)[0]["observation"]
+    assert first["calls"] == [] and len(first["holds"]) == 1
+    assert (main.wait_kind, _runs("REPLANNING")) == ("HUMAN_DECISION", [])
+
+
+def test_recall_is_allowed_after_plain_rejection_and_refused_when_nothing_changed(seeded, main_on):
+    """사실 지문: 제약 없는 거절은 현장 버전을 올리지 않지만 같은 호출을 다시 받게 한다 (AG-27)."""
+    pack = seeded
+    assert _submit(pack, "N1").status == "APPLIED"
+    group = _group(pack)
+    call = main_call("REPLANNING", group_id=group.group_id, acting_unit_id="UA")
+    # 후보가 나온 뒤 아무것도 바뀌지 않았다: 같은 호출은 거절된다
+    router = Router(replanning=[solve("L0")], main=[call, call, main_wait()])
+    run_until_idle(pack, model_factory=router.factory())
+    [main] = _runs("MAIN")
+    assert _guards(main.run_id) == [
+        ("CALL_AGENT", None),
+        ("CALL_AGENT", "SAME_FACTS"),
+        ("WAIT", None),
+    ]
+    with db.read() as conn:
+        ctx = conn.execute("SELECT context_version FROM site").fetchone()[0]
+    assert _reject(pack, _review_candidate(pack)).status == "APPLIED"
+    with db.read() as conn:
+        assert conn.execute("SELECT context_version FROM site").fetchone()[0] == ctx
+    router = Router(replanning=[blocked()], main=[call, main_escalate()])
+    run_until_idle(pack, model_factory=router.factory())
+    assert _guards(main.run_id)[3:] == [("CALL_AGENT", None), ("ESCALATE", None)]
+    woke = _steps(main.run_id)[3]["observation"]
+    assert woke["rejections"]["without_constraint"] == 1
+    units = {u["unit_id"]: u for u in woke["groups"][0]["units"]}
+    assert units["UA"]["last_result"]["facts_changed"] is True
+    assert len(_runs("REPLANNING")) == 2
+
+
+def test_close_and_escalate_need_no_open_work_and_no_unseen_event(seeded, main_on):
+    pack = seeded
+    assert _submit(pack).status == "APPLIED"
+
+    def with_new_event(reply):
+        """모델이 답을 고르는 사이에 이 Case에 새 사건이 생긴다."""
+
+        def make():
+            with db.write() as tx:
+                [case_id] = tx.execute("SELECT case_id FROM agent_run").fetchone()
+                record_case_event(tx, pack.site_id, "HOLD_RELEASED", _key(), {}, case_id)
+            return reply
+
+        return make
+
+    replies = [
+        main_close(),  # 계획에 들어가지 못한 작업이 이 Case의 열린 일이다
+        with_new_event(main_close()),
+        with_new_event(main_escalate()),
+        main_escalate(),
+    ]
+    run_until_idle(pack, model_factory=Router(main=replies).factory())
+    [main] = _runs("MAIN")
+    assert _guards(main.run_id) == [
+        ("CLOSE", "OPEN_WORK"),
+        ("CLOSE", "NEW_EVENT"),
+        ("ESCALATE", "NEW_EVENT"),
+        ("ESCALATE", None),
+    ]
+    first = _steps(main.run_id)[0]
+    assert first["observation"]["open_work"] == [{"kind": "TASK_UNPLANNED", "task_id": "A"}]
+    assert "CLOSE" not in [t["function"]["name"] for t in first["available_actions"]]
+    assert main.last_event_seq == 3
+
+
+def test_main_budget_exhaustion_notifies_supervisor_and_promotes_queue(
+    seeded, main_on, monkeypatch
+):
+    """Budget 소진으로 끝난 메인의 남은 일은 넘기지 않는다. Supervisor에게 알리고 대기열 1건을 올린다."""
+    pack = seeded
+    monkeypatch.setitem(main_spec.SPEC.budget, "steps", 1)
+    assert _submit(pack).status == "APPLIED"
+    assert _submit(pack, "N1").result_refs["queued"] is True
+    # 첫 메인: 재계획을 부르고(1 step) 막힌 결과로 깨어나면 Budget이 없다
+    run_until_idle(pack, model_factory=Router(replanning=[blocked(), blocked()]).factory())
+    first, second = _runs("MAIN")
+    assert (first.status, first.end_reason) == ("BUDGET_EXHAUSTED", "BUDGET_EXHAUSTED")
+    with db.read() as conn:
+        notices = conn.execute(
+            "SELECT run_id, to_actor_id, body FROM message WHERE type = 'NOTICE' ORDER BY rowid"
+        ).fetchall()
+        task = conn.execute(
+            "SELECT lifecycle FROM task WHERE task_id = 'N1' ORDER BY revision DESC"
+        ).fetchone()[0]
+    assert (notices[0][0], notices[0][1]) == (first.run_id, "supervisor")
+    assert "BUDGET_EXHAUSTED" in notices[0][2] and "넘겨지지 않습니다" in notices[0][2]
+    # 대기열의 N1이 올라가 새 메인이 받는다. 첫 메인의 작업(A)은 새 메인의 사건이 아니다
+    assert task == "READY" and second.case_id != first.case_id
+    ready = [e for e in _events(pack, second.case_id) if e["kind"] == "TASK_READY"]
+    assert [e["ref"]["task_id"] for e in ready] == ["N1"]
+
+
+def test_decision_for_closed_case_goes_to_a_new_main(seeded, main_on):
+    """메인이 끝난 뒤 온 후보 결과는 새 메인이 받는다. 사건은 새 메인의 Case에 들어가 안 본 사건이 된다."""
+    pack = seeded
+    assert _submit(pack, "N1").status == "APPLIED"
+    run_until_idle(pack, model_factory=Router(replanning=[solve("L0")]).factory())
+    [old] = _runs("MAIN")
+    candidate = _review_candidate(pack)
+    out = cancel_run(pack, "supervisor", _key(), CancelRun(run_id=old.run_id))
+    assert out.status == "APPLIED"
+
+    assert _reject(pack, candidate).status == "APPLIED"
+    old, new = _runs("MAIN")
+    assert (old.status, new.status) == ("CANCELLED", "RUNNING")
+    [decided] = [e for e in _events(pack) if e["kind"] == "CANDIDATE_DECIDED"]
+    assert (decided["case_id"], decided["ref"]["origin_case_id"]) == (new.case_id, old.case_id)
+
+    run_until_idle(pack, model_factory=Router(main=[main_escalate()]).factory())
+    seen = _steps(new.run_id)[0]["observation"]
+    assert [(e["kind"], e["new"]) for e in seen["events"]] == [("CANDIDATE_DECIDED", True)]
+    [shown] = [c for c in seen["candidates"] if c["candidate_id"] == candidate]
+    assert (shown["live"], shown["decision"]["type"], shown["decision"]["reason_code"]) == (
+        False,
+        "REJECT",
+        "PREFERENCE",
+    )
+    assert _runs("MAIN")[-1].last_event_seq == decided["seq"]
+
+
+def test_malformed_twice_ends_main_escalated_and_specialist_blocked(seeded, main_on):
+    """형식 오류 2회: 전문 Agent는 막힘(BLOCKED)으로, 메인만 이관 상태로 끝난다 (AG-06)."""
+    pack = seeded
+    assert _submit(pack).status == "APPLIED"
+    bad = AIMessage(content="도구를 부르지 않는다")
+    run_until_idle(pack, model_factory=Router(replanning=[bad, bad]).factory())
+    [child] = _runs("REPLANNING")
+    assert (child.status, child.end_reason) == ("BLOCKED", "MALFORMED_TWICE")
+    [result] = _steps(_runs("MAIN")[0].run_id)[-1]["observation"]["child_results"]
+    assert result["result"] == {"by": "SERVER", "status": "BLOCKED", "paths": []}
+
+    assert _submit(pack, "N1").result_refs["queued"] is False  # 앞 메인은 이관으로 끝났다
+    run_until_idle(pack, model_factory=Router(main=[bad, bad]).factory())
+    main = _runs("MAIN")[-1]
+    assert (main.status, main.end_reason) == ("ESCALATED", "MALFORMED_TWICE")
+    with db.read() as conn:
+        [notice] = conn.execute(
+            "SELECT to_actor_id FROM message WHERE run_id = ?", (main.run_id,)
+        ).fetchall()
+    assert notice[0] == "supervisor"

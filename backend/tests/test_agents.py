@@ -69,7 +69,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p12",
+        "replanning-p13",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -114,7 +114,7 @@ def test_same_effective_spec_is_not_retried_within_case(with_a):
         "RETURN_RESULT",
     ]
     assert _guards(steps)[0] == ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE")
-    assert run.status == "ESCALATED" and run.solver_calls_used == 0
+    assert run.status == "BLOCKED" and run.solver_calls_used == 0
     # 다른 Case의 Run: 같은 탐색을 다시 계산할 수 있다
     run, steps, model = _run(with_a, [solve("L0"), escalate()], run_id="run_3")
     assert model.tool_names(0)[0] == "SOLVE_WITH_SCOPE"
@@ -130,8 +130,8 @@ def test_action_not_available_then_escalate(with_a):
         ("COMPLETED", "DONE", None),
     ]
     assert (run.status, run.end_reason, run.solver_calls_used) == (
-        "ESCALATED",
-        "ESCALATE_NO_SOLUTION",
+        "BLOCKED",
+        "RETURN_BLOCKED",
         1,
     )
     assert steps[2]["tool_result"] == {
@@ -176,7 +176,7 @@ def test_malformed_twice_escalates(with_a, bad):
         ("COMPLETED", "REJECTED", "MALFORMED"),
         ("COMPLETED", "DONE", "MALFORMED"),
     ]
-    assert (run.status, run.end_reason) == ("ESCALATED", "MALFORMED_TWICE")
+    assert (run.status, run.end_reason) == ("BLOCKED", "MALFORMED_TWICE")
     assert run.solver_calls_used == 0 and _count("solver_job") == 0
 
 
@@ -191,7 +191,7 @@ def test_malformed_count_restarts_after_other_result(with_a):
         ("COMPLETED", "REJECTED", "MALFORMED"),
         ("COMPLETED", "DONE", None),
     ]
-    assert (run.status, run.end_reason) == ("ESCALATED", "ESCALATE_NO_SOLUTION")
+    assert (run.status, run.end_reason) == ("BLOCKED", "RETURN_BLOCKED")
 
 
 def test_decision_summary_is_truncated_not_rejected(with_a):
@@ -228,7 +228,7 @@ def test_solver_budget_exhausted_leaves_only_escalate(with_a):
         "ASK_TASK_OWNER",
         "RETURN_RESULT",
     ]
-    assert run.status == "ESCALATED"
+    assert run.status == "BLOCKED"
 
 
 # ── 버전·Run 상태 재확인 ───────────────────────────────────────
@@ -258,7 +258,7 @@ def test_stale_observation_applies_to_escalate(with_a):
         ("COMPLETED", "DONE", None),
     ]
     assert steps[1]["tool_result"]["summary"] == "다시 보고도 해가 없다"
-    assert run.status == "ESCALATED"
+    assert run.status == "BLOCKED"
 
 
 def test_stale_snapshot_at_registration(with_a, monkeypatch):
@@ -275,7 +275,7 @@ def test_stale_snapshot_at_registration(with_a, monkeypatch):
     assert _guards(steps)[0] == ("COMPLETED", "CONTINUE", "STALE_SNAPSHOT")
     with db.read() as conn:
         assert conn.execute("SELECT status FROM solver_job").fetchone()[0] == "STALE"
-    assert _count("candidate") == 0 and run.status == "ESCALATED"
+    assert _count("candidate") == 0 and run.status == "BLOCKED"
 
 
 def test_run_made_inactive_during_llm_aborts_step(with_a):
@@ -357,11 +357,11 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
         "human_rounds": spec.MAX_HUMAN_ROUNDS,
         "solver_calls": spec.MAX_SOLVER_CALLS,
     }
-    assert binding.prompt.PROMPT_VERSION == "replanning-p12"
-    assert runtime.exec_contract_version("REPLANNING") == "replanning-c3"
-    assert runtime.exec_contract_version("COORDINATION") == "coordination-c4"
-    assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c5"
-    assert runtime.exec_contract_version("INTAKE") == "intake-c8"
+    assert binding.prompt.PROMPT_VERSION == "replanning-p13"
+    assert runtime.exec_contract_version("REPLANNING") == "replanning-c4"
+    assert runtime.exec_contract_version("COORDINATION") == "coordination-c5"
+    assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c6"
+    assert runtime.exec_contract_version("INTAKE") == "intake-c9"
     assert runtime.exec_contract_version("ASSISTANT") == "AGENT_TYPE_NOT_REGISTERED"
 
 
@@ -374,18 +374,14 @@ def test_unregistered_agent_type_ends_run_as_error_without_graph(with_a):
     assert model.calls == [] and run.steps_used == 0 and _count("agent_step") == 0
 
 
-def test_agent_auto_start_is_on_by_default(monkeypatch):
-    """운영 기본값: Coordination·Event Response 자동 시작은 켜짐이고 설정은 끄는 스위치다.
+def test_main_auto_start_is_on_by_default(monkeypatch):
+    """운영 기본값: 사건 → 메인 자동 시작은 켜짐이고 설정은 끄는 스위치다.
 
-    테스트는 .env를 읽지 않고 conftest가 둘 다 끈다. 환경변수를 지우면 코드 기본값이 보인다.
+    테스트는 .env를 읽지 않고 conftest가 끈다. 환경변수를 지우면 코드 기본값이 보인다.
     """
     from app.config import Settings
 
-    monkeypatch.delenv("COORDINATION_ENABLED")
-    monkeypatch.delenv("EVENT_RESPONSE_ENABLED")
-    s = Settings()
-    assert (s.coordination_enabled, s.event_response_enabled) == (True, True)
-    monkeypatch.setenv("COORDINATION_ENABLED", "false")
-    monkeypatch.setenv("EVENT_RESPONSE_ENABLED", "false")
-    s = Settings()
-    assert (s.coordination_enabled, s.event_response_enabled) == (False, False)
+    monkeypatch.delenv("MAIN_AUTO_START")
+    assert Settings().main_auto_start is True
+    monkeypatch.setenv("MAIN_AUTO_START", "false")
+    assert Settings().main_auto_start is False

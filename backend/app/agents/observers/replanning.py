@@ -10,18 +10,21 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from app.agents import casefacts
 from app.agents import observe as common
 from app.agents.observe import budget_remaining
 from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 from app.domain.eligibility import exclusion_reasons
+from app.domain.groups import conflict_groups
 from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.solver.search_spec import SearchSpecError, build_search_spec
+from app.store.repos.consultations import candidate_state
 from app.store.repos.decisions import list_case_rejections
 from app.store.repos.messages import list_case_replies
-from app.store.repos.records import list_validations
+from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.runs import get_run, list_attempts, list_steps, tried_search_keys
 from app.store.repos.site import get_site
 from app.store.repos.snapshots import build_snapshot_content
@@ -165,20 +168,33 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         if t.unit_id == run.acting_unit_id
     ]
     acting_ids = {t["task_id"] for t in acting_tasks}
+    # 이전 계산과 마지막 검증은 Case 단위다: 메인이 다시 부른 Run도 앞 Run의 결과를 본다 (CV-13)
     attempts = list_attempts(conn, run_id)
     candidates = [a["candidate_id"] for a in attempts if a["candidate_id"]]
     latest_validation = None
-    if candidates:
-        validations = list_validations(conn, pack.site_id, candidates[-1])
+    done_ready = False
+    for cid in candidates:
+        candidate = get_candidate(conn, pack.site_id, cid)
+        assert candidate is not None
+        state = candidate_state(conn, pack.site_id, candidate)
+        live = not (state.stale or state.rejected or state.committed)
+        validations = list_validations(conn, pack.site_id, cid)
         if validations:
             v = validations[-1]
-            latest_validation = {
-                "candidate_id": candidates[-1],
-                "status": v.status,
-                "failed_checks": [
-                    c.model_dump(mode="json") for c in v.checks if c.status != "PASS"
-                ],
-            }
+            # 검증을 통과한 살아 있는 후보가 있으면 DONE으로 돌려줄 수 있다 (AG-25)
+            done_ready = done_ready or (v.status == "PASS" and live)
+            if cid == candidates[-1]:
+                latest_validation = {
+                    "candidate_id": cid,
+                    "status": v.status,
+                    # 무효가 되었거나(현장 정보 변경) 거절·확정된 후보는 live가 false다
+                    "live": live,
+                    "failed_checks": [
+                        c.model_dump(mode="json") for c in v.checks if c.status != "PASS"
+                    ],
+                }
+    groups = conflict_groups(conflicts, facts.task_map())
+    group = next((g for g in groups if primary is not None and primary in g.conflicts), None)
     steps = [s for s in list_steps(conn, run_id) if s["status"] == "COMPLETED"]
     recent = [
         {
@@ -232,7 +248,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 and h not in tried
             ],
         }
-    hidden = {"eligible": eligible}
+    hidden = {"eligible": eligible, "done_ready": done_ready}
 
     data = {
         "run": {
@@ -248,6 +264,14 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         },
         "conflicts": [c.model_dump(mode="json") for c in conflicts],
         "primary_conflict": None if primary is None else primary.model_dump(mode="json"),
+        # 맡은 충돌이 속한 충돌 그룹(공유 작업으로 묶은 것)과 그 그룹에 작업을 가진 Unit
+        "group": None
+        if group is None
+        else {
+            "group_id": group.group_id,
+            "task_ids": list(group.task_ids),
+            "unit_ids": sorted(group.units),
+        },
         "acting_tasks": acting_tasks,
         "constraints": [c.model_dump(mode="json") for c in facts.constraints],
         "consents": [c.model_dump(mode="json") for c in facts.consents if c.task_id in acting_ids],
@@ -257,6 +281,11 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "latest_validation": latest_validation,
         # 이 Case 후보에 대한 Supervisor 거절. comment는 인용 데이터다
         "rejections": list_case_rejections(conn, run.case_id),
+        # 거절 사실(서버 계산): 제약 있는·없는 거절 수, 마지막 거절, 미시도 범위가 남았는지
+        "rejection_facts": {
+            **casefacts.rejection_facts(conn, run.case_id),
+            "untried_remaining": bool(untried),
+        },
         "assignable_resources": listings,
         # 이 Case가 담당자에게 보낸 질문과 답. comment는 인용 데이터다
         "human_replies": list_case_replies(conn, run.case_id),

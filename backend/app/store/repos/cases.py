@@ -1,4 +1,6 @@
-"""Case 수명: wake·재개 claim·Case 종료와 대기열.
+"""Case 수명: 사건 전달·메인 시작, wake·재개 claim·Case 종료와 대기열.
+
+- deliver_event: 사건을 적고 열린 메인에게 전한다. 열린 메인이 없으면 같은 tx에서 메인을 만든다(AG-07).
 
 - wake_run: 영향받는 Run의 wake_seq += 1, 대기 중이면 RESUME_RUN 등록(Run당 PENDING 1개).
 - claim_resume: `WAITING_HUMAN ∧ wait_generation 일치` 조건부 claim.
@@ -11,15 +13,25 @@
 import sqlite3
 from typing import Any
 
+from app.config import get_settings
 from app.domain.ids import new_id
-from app.domain.models import Consent
+from app.domain.models import AgentRun, Consent
 from app.packs.loader import LoadedPack
 from app.store.repos._rows import loads, rows
 from app.store.repos.calls import fingerprint
-from app.store.repos.case_events import record_case_event
+from app.store.repos.case_events import case_of, record_case_event
 from app.store.repos.consents import insert_consent
 from app.store.repos.dispatch import register_job
-from app.store.repos.runs import ACTIVE, CASE_AGENT_TYPES, end_run, get_run, has_open_case
+from app.store.repos.messages import insert_message
+from app.store.repos.runs import (
+    ACTIVE,
+    CASE_AGENT_TYPES,
+    end_run,
+    get_run,
+    has_open_case,
+    insert_run,
+    list_steps,
+)
 from app.store.repos.site import bump_context_version, get_site, list_actors
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
@@ -39,6 +51,78 @@ def register_recheck(tx: sqlite3.Connection, site_id: str, cause: dict[str, Any]
         recheck_key(site.context_version, site.plan_revision),
         {"cause": cause},
     )
+
+
+# ── 사건 전달 ──────────────────────────────────────────────────
+
+
+def open_main(conn: sqlite3.Connection, site_id: str) -> AgentRun | None:
+    """열린 메인 Run (site당 하나, ST-18)."""
+    row = conn.execute(
+        "SELECT run_id FROM agent_run WHERE site_id = ? AND agent_type = 'MAIN'"
+        " AND status IN (?, ?)",
+        (site_id, *ACTIVE),
+    ).fetchone()
+    return None if row is None else get_run(conn, row[0])
+
+
+def deliver_event(
+    tx: sqlite3.Connection,
+    pack: LoadedPack,
+    kind: str,
+    dedupe_key: str,
+    ref: dict[str, Any],
+    origin_case_id: str | None = None,
+) -> bool:
+    """사건을 적고 메인에게 전한다. 사건이 생기는 tx 안에서 부른다. 새로 적었으면 True.
+
+    사건은 열린 메인의 Case에 들어간다. 열린 메인이 없으면 이 tx에서 메인을 만들고 그 Case에 넣는다
+    (닫힌 Case에서 온 사건도 새 메인이 받는다. 원래 Case는 ref.origin_case_id에 남긴다).
+    메인이 하위 Run을 기다리는 동안에는 깨우지 않는다: 하위 Run이 끝날 때 깨어나 사건을 본다.
+    자동 시작이 꺼져 있으면 기록만 한다.
+    """
+    site_id = pack.site_id
+    if case_of(tx, site_id, dedupe_key) is not None:
+        return False
+    main = open_main(tx, site_id)
+    started = False
+    if main is None and get_settings().main_auto_start:
+        main, started = _start_main(tx, pack, dedupe_key), True
+    case_id = origin_case_id if main is None else main.case_id
+    if origin_case_id is not None and origin_case_id != case_id:
+        ref = {**ref, "origin_case_id": origin_case_id}
+    record_case_event(tx, site_id, kind, dedupe_key, ref, case_id)
+    if main is not None and not started and main.wait_kind != "CHILD_RUN":
+        wake_run(tx, site_id, main.run_id)
+    return True
+
+
+def _start_main(tx: sqlite3.Connection, pack: LoadedPack, trigger: str) -> AgentRun | None:
+    """메인 Run을 만들고 CONTINUE_RUN으로 부른다. acting unit은 Supervisor의 Unit을 적어 두지만
+    권한 판정에는 쓰지 않는다."""
+    supervisor = supervisor_actor(tx, pack)
+    if supervisor is None:
+        return None
+    run = AgentRun(
+        run_id=new_id("run"),
+        agent_type="MAIN",
+        case_id=new_id("case"),
+        acting_actor_id=None,
+        acting_unit_id=supervisor.unit_id,
+        input_ref={"trigger": trigger},
+        exec_contract_version="",
+        status="RUNNING",
+    )
+    insert_run(tx, pack.site_id, run)
+    register_job(
+        tx,
+        pack.site_id,
+        "CONTINUE_RUN",
+        f"CONTINUE_RUN:{run.run_id}:0",
+        {"run_id": run.run_id},
+        run_id=run.run_id,
+    )
+    return run
 
 
 # ── wake와 재개 ────────────────────────────────────────────────
@@ -144,9 +228,73 @@ def end_case_run(
         ).fetchall():
             if end_run(tx, child, "CANCELLED", "PARENT_ENDED", ACTIVE):
                 cancel_requests(tx, child)
+    if before.status in ACTIVE:
+        _notify_end(tx, pack, before, status, end_reason)
     if before.status in ACTIVE and before.agent_type in CASE_AGENT_TYPES:
         close_case(tx, pack)
     return True
+
+
+def _notify_end(
+    tx: sqlite3.Connection, pack: LoadedPack, run: AgentRun, status: str, end_reason: str
+) -> None:
+    """서버 문구 통지가 필요한 종료.
+
+    - Intake가 완료가 아닌 종료(BLOCKED·BUDGET_EXHAUSTED)로 끝나면 요청자에게 접수 미완을 알린다 (AG-06).
+    - 메인이 스스로 끝내지 못하면(Budget 소진·오류·형식 오류 2회) Supervisor에게 알린다. 그 Case의 남은
+      일은 다음 메인에 넘기지 않는다 (AG-08).
+    통지는 step이 아니므로 마지막 step 다음 번호에 붙인다.
+    """
+    site = get_site(tx, pack.site_id)
+    assert site is not None
+    to_actor, body, agent_text = None, "", None
+    if run.agent_type == "INTAKE" and status in ("BLOCKED", "BUDGET_EXHAUSTED"):
+        steps = [s for s in list_steps(tx, run.run_id) if s["status"] == "COMPLETED"]
+        result = (steps[-1]["tool_result"] or {}) if steps and status == "BLOCKED" else {}
+        codes = result.get("reason_codes") or [end_reason]
+        to_actor = run.input_ref.get("requester_actor_id")
+        body = intake_incomplete_text(run.input_ref.get("task_id"), codes)
+        agent_text = result.get("summary")
+    elif run.agent_type == "MAIN" and (
+        status in ("BUDGET_EXHAUSTED", "ERROR") or end_reason.endswith("_TWICE")
+    ):
+        supervisor = supervisor_actor(tx, pack)
+        to_actor = None if supervisor is None else supervisor.actor_id
+        body = main_ended_text(status, end_reason)
+    if to_actor is None:
+        return
+    used = tx.execute(
+        "SELECT COALESCE(MAX(step_no), 0) FROM message WHERE run_id = ?", (run.run_id,)
+    ).fetchone()[0]
+    insert_message(
+        tx,
+        pack.site_id,
+        new_id("msg"),
+        run_id=run.run_id,
+        step_no=max(run.last_step_no, used) + 1,
+        to_actor_id=to_actor,
+        type_="NOTICE",
+        proposal_id=None,
+        body=body,
+        agent_text=agent_text,
+        context_version=site.context_version,
+    )
+
+
+def intake_incomplete_text(task_id: str | None, codes: list[str]) -> str:
+    """접수 미완 통지의 서버 문구."""
+    return (
+        f"작업 요청 {task_id} 접수가 완료되지 않았습니다(사유: {', '.join(codes)}). "
+        "작업은 만들어지지 않았습니다. 값을 확인해 다시 요청해 주세요."
+    )
+
+
+def main_ended_text(status: str, end_reason: str) -> str:
+    """메인이 스스로 끝내지 못했을 때의 서버 문구."""
+    return (
+        f"메인 Agent가 일을 마치지 못하고 끝났습니다({status}: {end_reason}). 이 Case의 남은 일은 다음 "
+        "메인에 넘겨지지 않습니다. Agent 활동에서 남은 충돌과 후보를 확인해 주세요."
+    )
 
 
 def end_candidate_runs(
@@ -174,56 +322,9 @@ def supervisor_actor(conn: sqlite3.Connection, pack: LoadedPack) -> Any:
     return found[0] if found else None
 
 
-def register_event_response(
-    tx: sqlite3.Connection, pack: LoadedPack, event_id: str, hold_id: str
-) -> bool:
-    """Event Response START_RUN. Event 접수 tx 안에서 부른다. Event마다 새 Case."""
-    supervisor = supervisor_actor(tx, pack)
-    if supervisor is None:
-        return False
-    payload = {
-        "agent_type": "EVENT_RESPONSE",
-        "event_id": event_id,
-        "hold_id": hold_id,
-        "case_id": new_id("case"),
-        "acting_unit_id": supervisor.unit_id,
-    }
-    return register_job(
-        tx, pack.site_id, "START_RUN", f"START_RUN:EVENT_RESPONSE:{event_id}", payload
-    )
-
-
-def register_coordination(
-    tx: sqlite3.Connection,
-    pack: LoadedPack,
-    phase: str,
-    key: str,
-    candidate_id: str,
-    case_id: str,
-    **extra: Any,
-) -> bool:
-    """Coordination START_RUN 등록. 원인 tx 안에서 부른다.
-
-    phase CONSULT(협의)·NOTICE(통지). Case는 후보 Run의 case_id를 잇고, acting_unit은 SUPERVISOR의 Unit이다
-    (Pack ID를 코드에 두지 않는다). acting_actor는 없다.
-    """
-    supervisor = supervisor_actor(tx, pack)
-    if supervisor is None:
-        return False
-    unit = supervisor.unit_id
-    payload = {
-        "agent_type": "COORDINATION",
-        "phase": phase,
-        "candidate_id": candidate_id,
-        "case_id": case_id,
-        "acting_unit_id": unit,
-        **extra,
-    }
-    return register_job(tx, pack.site_id, "START_RUN", key, payload)
-
-
 def stale_active_runs(tx: sqlite3.Connection, pack: LoadedPack, end_reason: str) -> list[str]:
-    """열린 Run을 STALE로(Event 접수). 마지막 Run이 닫힐 때 대기열 1건을 올린다.
+    """열린 전문 Agent Run을 STALE로(Event 접수). 메인은 무효로 만들지 않는다: 하위 Run이 끝나면
+    깨어나 신고를 본다.
 
     Work Intake Run은 뺀다: 폼이 Hold 중에도 접수되듯 Intake의 값은 아직 사실이 아니고, 완료할 때
     검증을 다시 한다.
@@ -232,7 +333,7 @@ def stale_active_runs(tx: sqlite3.Connection, pack: LoadedPack, end_reason: str)
         r[0]
         for r in tx.execute(
             "SELECT run_id FROM agent_run WHERE site_id = ? AND status IN (?, ?)"
-            " AND agent_type <> 'INTAKE' ORDER BY rowid",
+            " AND agent_type NOT IN ('INTAKE', 'MAIN') ORDER BY rowid",
             (pack.site_id, *ACTIVE),
         )
     ]
@@ -306,6 +407,6 @@ def promote_queued(tx: sqlite3.Connection, pack: LoadedPack) -> str | None:
     context_version = bump_context_version(tx, site_id)
     copy_consents(tx, site_id, task.task_id, task.revision, revision, context_version)
     cause = {"kind": "QUEUE", "task_id": task.task_id, "actor_id": task.owner_actor_id}
-    record_case_event(tx, site_id, "TASK_READY", f"TASK_READY:{task.task_id}:{revision}", cause)
     register_recheck(tx, site_id, cause)
+    deliver_event(tx, pack, "TASK_READY", f"TASK_READY:{task.task_id}:{revision}", cause)
     return task.task_id

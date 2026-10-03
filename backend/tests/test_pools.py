@@ -305,7 +305,7 @@ def test_form_rejects_when_required_pool_is_missing(seeded):
     )  # 필수 직종 없음
 
 
-def test_pool_excess_becomes_conflict_and_replanning_resolves_it(seeded):
+def test_pool_excess_becomes_conflict_and_replanning_resolves_it(seeded, main_on):
     """UA 작업 인원: Q 4 + M 3 + X 5 = 12 > 10 → POOL_CAPACITY 충돌 → 재계획이 Q가 끝난 10:30으로 옮긴다."""
     pack = seeded
     form = TaskRequestForm(
@@ -321,10 +321,13 @@ def test_pool_excess_becomes_conflict_and_replanning_resolves_it(seeded):
     assert submit_task_request(pack, "planner_a", _key(), form).status == "APPLIED"
     run_until_idle(pack, model_factory=Router(replanning=[solve("L0")]).factory())
     with db.read() as conn:
-        [run_id] = [r[0] for r in conn.execute("SELECT run_id FROM agent_run")]
+        [run_id] = [
+            r[0]
+            for r in conn.execute("SELECT run_id FROM agent_run WHERE agent_type = 'REPLANNING'")
+        ]
         run = get_run(conn, run_id)
-        [step] = list_steps(conn, run_id)
-        cand = get_candidate(conn, pack.site_id, run.wait_ref)
+        step = list_steps(conn, run_id)[0]
+        cand = get_candidate(conn, pack.site_id, step["tool_result"]["candidate_id"])
     excess = {"pool_id": "UA-WRK", "kind": "WORKER", "at": 2910, "demand": 12, "quantity": 10}
     assert run.input_ref["conflict"] == {"rule_id": "POOL_CAPACITY", "task_ids": ["M", "Q", "X"]}
     obs = step["observation"]

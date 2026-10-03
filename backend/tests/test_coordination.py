@@ -5,6 +5,7 @@
 """
 
 import uuid
+from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
 from scripted import Router, blocked, call, solve
@@ -22,6 +23,7 @@ from app.commands.approval import (
 )
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.messages import ReplyRequest, reply_message
+from app.commands.runs import CancelRun, cancel_run
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.consultation import change_hash, item_statuses
@@ -140,14 +142,21 @@ def _draft(message_id, axes=("TIME", "RESOURCE"), reason_code="TASK_IMMOVABLE", 
 
 
 def _alpha_consulting(pack):
-    """폼 A → L0·L1 → Alpha(WAIT) → PASS → Coordination이 A2에게 변경 요청 → 답 대기."""
+    """폼 A → 메인 → Replanning(L0·L1 → Alpha → 검증 → DONE) → 메인이 협의를 부른다 → Coordination이
+    A2에게 변경 요청 → 답 대기. (Replanning Run과 Alpha 후보, 협의 Run)."""
     _submit_a(pack)
     router = Router(replanning=[solve("L0"), solve("L1")], coordination=[_request_c(), _wait()])
     run_until_idle(pack, model_factory=router.factory())
     assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
     [rp] = _runs("REPLANNING")
     [coord] = _runs("COORDINATION")
-    return rp, coord
+    alpha = coord.input_ref["candidate_id"]
+    return SimpleNamespace(run_id=rp.run_id, case_id=rp.case_id, wait_ref=alpha), coord
+
+
+def _candidate_of(run_id):
+    ids = [(s["tool_result"] or {}).get("candidate_id") for s in _steps(run_id)]
+    return [c for c in ids if c][-1]
 
 
 def _objected(pack, comment=OBJECTION):
@@ -161,12 +170,18 @@ def _objected(pack, comment=OBJECTION):
 # ── 기본안 A 전체 ──────────────────────────────────────────────
 
 
-def test_plan_a_full_e2e(seeded, coordination_on):
-    """Alpha → 변경 요청 → 이견 → 제약 초안 → A2 확정 → Replanning 재개 → Beta → R1 → 통지 2건."""
+def test_plan_a_full_e2e(seeded, main_on):
+    """Alpha → 변경 요청 → 이견 → 제약 초안 → A2 확정 → 메인이 재계획을 다시 부름 → Beta → R1 → 통지 2건
+    → 메인 CLOSE."""
     pack = seeded
     rp, coord = _alpha_consulting(pack)
     alpha = rp.wait_ref
-    assert (rp.status, rp.wait_kind) == ("WAITING_HUMAN", "CANDIDATE_OUTCOME")
+    [main] = _runs("MAIN")
+    assert (main.wait_kind, main.wait_ref, coord.parent_run_id) == (
+        "CHILD_RUN",
+        coord.run_id,
+        main.run_id,
+    )
     assert (coord.status, coord.wait_kind, coord.wait_ref) == (
         "WAITING_HUMAN",
         "CONSULTATION",
@@ -210,7 +225,7 @@ def test_plan_a_full_e2e(seeded, coordination_on):
 
     ctx = _site(pack).context_version
     out = _reply(pack, "foreman_a2", confirm["message_id"], "ACCEPT")
-    assert out.status == "APPLIED" and out.result_refs["replanning_run_id"] == rp.run_id
+    assert out.status == "APPLIED"
     assert _site(pack).context_version == ctx + 1
     with db.read() as conn:
         [fc] = list_constraints(conn, pack.site_id)
@@ -222,8 +237,8 @@ def test_plan_a_full_e2e(seeded, coordination_on):
     )
     [ended] = _runs("COORDINATION")
     assert (ended.status, ended.end_reason) == ("STALE", f"CONSTRAINT:{fc.constraint_id}")
-    assert _runs("REPLANNING")[0].wake_seq == 1
 
+    # 협의 Run이 끝나 메인이 깨어나고 재계획을 다시 부른다(같은 Case의 새 Run).
     # 이후는 Scene 3과 같다: C 고정 관찰 → LIST → ASK → 수락 → TRY → Beta
     ask = call(
         "ASK_TASK_OWNER",
@@ -241,30 +256,26 @@ def test_plan_a_full_e2e(seeded, coordination_on):
         "TRY_ALTERNATIVE_RESOURCE", "SITE-CR-01 시도", task_id="A", resource_id="SITE-CR-01"
     )
     run_until_idle(pack, model_factory=Router(replanning=[try_beta]).factory())
-    [rp] = _runs("REPLANNING")
-    beta = rp.wait_ref
-    steps = _steps(rp.run_id)
+    first, second = _runs("REPLANNING")
+    assert (second.case_id, second.status) == (first.case_id, "SUCCEEDED")
+    beta = _candidate_of(second.run_id)
+    steps = _steps(second.run_id)
     assert [(s["action"] or {}).get("name") for s in steps] == [
-        "SOLVE_WITH_SCOPE",
-        "SOLVE_WITH_SCOPE",
         "LIST_ASSIGNABLE_RESOURCES",
         "ASK_TASK_OWNER",
         "TRY_ALTERNATIVE_RESOURCE",
+        "RETURN_RESULT",
     ]
-    assert (rp.steps_used, rp.solver_calls_used, rp.human_rounds_used) == (5, 3, 1)
+    assert (second.steps_used, second.solver_calls_used, second.human_rounds_used) == (4, 1, 1)
     # Replanning 관찰에는 같은 Case의 Coordination 메시지가 섞이지 않는다
-    replies = steps[4]["observation"]["human_replies"]
+    replies = steps[2]["observation"]["human_replies"]
     assert [r["message_id"] for r in replies] == [question["message_id"]]
-    assert steps[2]["observation"]["rejections"] == []  # 제약은 거절이 아니라 확인에서 왔다
-    assert [c["source_type"] for c in steps[2]["observation"]["constraints"]] == ["PROPOSAL"]
+    assert steps[0]["observation"]["rejections"] == []  # 제약은 거절이 아니라 확인에서 왔다
+    assert [c["source_type"] for c in steps[0]["observation"]["constraints"]] == ["PROPOSAL"]
     assert _view(pack, beta).items_status == "COMPLETE"
-    assert len(_runs("COORDINATION")) == 1  # Beta에는 동의 대기가 없어 협의 Run이 없다
+    assert len(_runs("COORDINATION")) == 1  # Beta에는 동의 대기가 없어 협의를 부르지 않는다
 
     assert _approve(pack, beta).status == "APPLIED"
-    assert _runs("REPLANNING")[0].status == "SUCCEEDED"
-    with db.read() as conn:
-        keys = [j["dedupe_key"] for j in list_jobs(conn, pack.site_id) if j["kind"] == "START_RUN"]
-    assert "START_RUN:COORDINATION:NOTICE:plan1" in keys
 
     notices = [
         call(
@@ -287,7 +298,7 @@ def test_plan_a_full_e2e(seeded, coordination_on):
     notice_run = _runs("COORDINATION")[-1]
     assert (notice_run.status, notice_run.end_reason, notice_run.input_ref["phase"]) == (
         "SUCCEEDED",
-        "REPORT_TO_SUPERVISOR",
+        "RETURN_DONE",
         "NOTICE",
     )
     first = _steps(notice_run.run_id)[0]["observation"]["notice_targets"]
@@ -302,12 +313,26 @@ def test_plan_a_full_e2e(seeded, coordination_on):
         ("planner_b", "OPEN"),
     ]
     assert "안전 규칙 '인양–하부 작업 분리'" in sent[1]["body"]
+    # 통지가 끝나 이 Case의 열린 일이 없다. 메인이 끝낸다
+    [main] = _runs("MAIN")
+    assert (main.status, main.end_reason) == ("SUCCEEDED", "CLOSE")
+    calls = [
+        (s["action"]["args"]["agent"], s["action"]["args"]["phase"])
+        for s in _steps(main.run_id)
+        if s["action"]["name"] == "CALL_AGENT"
+    ]
+    assert calls == [
+        ("REPLANNING", None),
+        ("COORDINATION", "CONSULT"),
+        ("REPLANNING", None),
+        ("COORDINATION", "NOTICE"),
+    ]
 
 
 # ── 설정을 켠 채 기본안 B (Supervisor 구조화 거절) ──────────────
 
 
-def test_supervisor_reject_during_consultation_runs_plan_b(seeded, coordination_on):
+def test_supervisor_reject_during_consultation_runs_plan_b(seeded, main_on):
     """협의 중 Supervisor가 Alpha를 구조화 거절하면 협의 Run은 STALE, 이후 기본안 B로 끝까지 간다."""
     pack = seeded
     rp, _ = _alpha_consulting(pack)
@@ -345,17 +370,18 @@ def test_supervisor_reject_during_consultation_runs_plan_b(seeded, coordination_
         "TRY_ALTERNATIVE_RESOURCE", "SITE-CR-01 시도", task_id="A", resource_id="SITE-CR-01"
     )
     run_until_idle(pack, model_factory=Router(replanning=[try_beta]).factory())
-    [rp] = _runs("REPLANNING")
-    assert (rp.steps_used, rp.solver_calls_used, rp.human_rounds_used) == (5, 3, 1)
-    assert _approve(pack, rp.wait_ref).status == "APPLIED"
+    second = _runs("REPLANNING")[-1]
+    assert (second.steps_used, second.solver_calls_used, second.human_rounds_used) == (4, 1, 1)
+    assert _approve(pack, _candidate_of(second.run_id)).status == "APPLIED"
     assert _site(pack).plan_revision == 1
-    assert _runs("REPLANNING")[0].status == "SUCCEEDED"
+    run_until_idle(pack, model_factory=Router().factory())  # 통지 → 메인 CLOSE
+    assert _runs("MAIN")[0].status == "SUCCEEDED"
 
 
 # ── 이견이 작업 고정 요구가 아닐 때 (Agent 판단 근거) ─────────
 
 
-def test_objection_without_fix_request_is_reported_not_drafted(seeded, coordination_on):
+def test_objection_without_fix_request_is_reported_not_drafted(seeded, main_on):
     """선호·일정 불만 같은 이견에는 초안 대신 Supervisor 보고를 고를 수 있다. 제약은 생기지 않는다."""
     pack = seeded
     rp, coord = _alpha_consulting(pack)
@@ -366,7 +392,7 @@ def test_objection_without_fix_request_is_reported_not_drafted(seeded, coordinat
     )
     run_until_idle(pack, model_factory=Router(coordination=[report]).factory())
     [done] = _runs("COORDINATION")
-    assert (done.status, done.end_reason) == ("SUCCEEDED", "REPORT_TO_SUPERVISOR")
+    assert (done.status, done.end_reason) == ("SUCCEEDED", "RETURN_DONE")
     s = _steps(coord.run_id)[-1]
     assert "DRAFT_CONSTRAINT" in [t["function"]["name"] for t in s["available_actions"]]
     assert s["action"]["name"] == "RETURN_RESULT"
@@ -377,7 +403,9 @@ def test_objection_without_fix_request_is_reported_not_drafted(seeded, coordinat
         assert list_constraints(conn, pack.site_id) == []
     view = _view(pack, rp.wait_ref)
     assert (view.item_status["C"], view.items_status) == ("OBJECTED", "BLOCKED")
-    assert _runs("REPLANNING")[0].status == "WAITING_HUMAN"  # Supervisor가 거절해 재탐색할 수 있다
+    # 메인은 Supervisor의 결정을 기다린다(거절하면 다시 재계획을 부를 수 있다)
+    [main] = _runs("MAIN")
+    assert (main.status, main.wait_kind) == ("WAITING_HUMAN", "HUMAN_DECISION")
 
 
 # ── 담당자 답은 변경(change_hash)에 묶인다 (ST-15·ST-16, CV-13) ──
@@ -395,6 +423,10 @@ def _report_event(pack, source="ev1"):
 
 
 def _release_no_change(pack, hold_id):
+    """앞 Case를 닫고(Supervisor가 메인을 취소) Hold를 푼다. 해제 사건은 새 메인이 받는다."""
+    [main] = [r for r in _runs("MAIN") if r.status in ("RUNNING", "WAITING_HUMAN")]
+    out = cancel_run(pack, "supervisor", _key(), CancelRun(run_id=main.run_id))
+    assert out.status == "APPLIED"
     body = HoldRelease(
         hold_id=hold_id,
         resolution="NO_CHANGE",
@@ -404,7 +436,7 @@ def _release_no_change(pack, hold_id):
 
 
 def _replan_in_new_case(pack, coordination=()):
-    """해제 뒤 RECHECK → 새 Case의 Replanning Run이 L0·L1을 다시 계산한다. 새 후보 ID."""
+    """해제 뒤 새 메인(새 Case)이 재계획을 부르고, 그 Run이 L0·L1을 다시 계산한다. 새 후보 ID."""
     router = Router(replanning=[solve("L0"), solve("L1")], coordination=list(coordination))
     run_until_idle(pack, model_factory=router.factory())
     assert router.left()["REPLANNING"] == 0
@@ -413,11 +445,12 @@ def _replan_in_new_case(pack, coordination=()):
     assert [(s["result_kind"], s["guard"]["reason_code"]) for s in _steps(second.run_id)] == [
         ("CONTINUE", None),
         ("WAIT", None),
+        ("DONE", None),
     ]
-    return second.wait_ref
+    return _candidate_of(second.run_id)
 
 
-def test_accept_carries_to_same_change_in_new_case(seeded, coordination_on):
+def test_accept_carries_to_same_change_in_new_case(seeded, main_on):
     """수락한 변경이 새 Case의 후보에 그대로 있으면 처음부터 ACCEPTED다. 다시 묻지 않는다."""
     pack = seeded
     rp, coord = _alpha_consulting(pack)
@@ -451,7 +484,7 @@ def test_accept_carries_to_same_change_in_new_case(seeded, coordination_on):
     assert _approve(pack, beta).status == "APPLIED"
 
 
-def test_objection_carries_and_candidate_waits_for_supervisor(seeded, coordination_on):
+def test_objection_carries_and_candidate_waits_for_supervisor(seeded, main_on):
     """이견 낸 변경이 새 후보에 있으면 처음부터 OBJECTED다. 다시 나가지 않고 Supervisor를 기다린다."""
     pack = seeded
     _alpha_consulting(pack)
@@ -463,14 +496,15 @@ def test_objection_carries_and_candidate_waits_for_supervisor(seeded, coordinati
     view = _view(pack, beta)
     assert (view.item_status["C"], view.status) == ("OBJECTED", "BLOCKED")
     assert view.answer_from["C"]["prior"] is True
-    assert len(_messages("CHANGE_REQUEST")) == 1 and len(_runs("COORDINATION")) == 1
-    waiting = _runs("REPLANNING")[-1]
-    assert (waiting.status, waiting.wait_kind) == ("WAITING_HUMAN", "CANDIDATE_OUTCOME")
+    # 새 협의 Run은 다시 묻지 않고 끝난다. 메인은 Supervisor의 결정을 기다린다
+    assert len(_messages("CHANGE_REQUEST")) == 1
+    waiting = _runs("MAIN")[-1]
+    assert (waiting.status, waiting.wait_kind) == ("WAITING_HUMAN", "HUMAN_DECISION")
     out = _approve(pack, beta)
     assert (out.status, out.reason_codes) == ("REJECTED", ("CONSULTATION_INCOMPLETE",))
 
 
-def test_cancelled_and_late_answers_do_not_carry(seeded, coordination_on):
+def test_cancelled_and_late_answers_do_not_carry(seeded, main_on):
     """신고로 취소된 요청과 Hold 중 늦은 답은 같은 변경이 다시 나와도 세지 않는다. 다시 묻는다."""
     pack = seeded
     _alpha_consulting(pack)
@@ -490,7 +524,7 @@ def test_cancelled_and_late_answers_do_not_carry(seeded, coordination_on):
     assert view.item_status["C"] == "PENDING" and view.answer_from == {}
 
 
-def test_answer_does_not_carry_when_task_revision_changes(seeded, coordination_on):
+def test_answer_does_not_carry_when_task_revision_changes(seeded, main_on):
     """작업 revision이 바뀌면 다른 변경이다. 수락이 넘어오지 않는다."""
     pack = seeded
     _alpha_consulting(pack)
@@ -521,7 +555,7 @@ def test_change_hash_covers_revision_and_both_assignments():
 # ── 서버 검사 ──────────────────────────────────────────────────
 
 
-def test_draft_constraint_server_checks(seeded, coordination_on):
+def test_draft_constraint_server_checks(seeded, main_on):
     """바뀐 축(C는 TIME)이 없는 축, 다른 사유 코드, 다른 작업은 ACTION_NOT_AVAILABLE이다."""
     pack = seeded
     _, coord = _alpha_consulting(pack)
@@ -544,10 +578,10 @@ def test_draft_constraint_server_checks(seeded, coordination_on):
         ("DONE", None),
     ]
     assert _proposals("FEEDBACK_CONSTRAINT") == []
-    assert _runs("COORDINATION")[0].end_reason == "ESCALATE"
+    assert _runs("COORDINATION")[0].end_reason == "RETURN_BLOCKED"
 
 
-def test_change_request_objection_needs_comment(seeded, coordination_on):
+def test_change_request_objection_needs_comment(seeded, main_on):
     pack = seeded
     _alpha_consulting(pack)
     [cr] = _messages("CHANGE_REQUEST")
@@ -555,7 +589,7 @@ def test_change_request_objection_needs_comment(seeded, coordination_on):
     assert (out.status, out.reason_codes) == ("REJECTED", ("COMMENT_REQUIRED",))
 
 
-def test_draft_discard_returns_to_objected_and_wakes(seeded, coordination_on):
+def test_draft_discard_returns_to_objected_and_wakes(seeded, main_on):
     pack = seeded
     rp, _ = _alpha_consulting(pack)
     cr = _objected(pack)
@@ -567,21 +601,22 @@ def test_draft_discard_returns_to_objected_and_wakes(seeded, coordination_on):
     assert _view(pack, rp.wait_ref).item_status["C"] == "OBJECTED"
     assert _proposals("FEEDBACK_CONSTRAINT")[0]["status"] == "DISCARDED"
     run_until_idle(pack, model_factory=Router(coordination=[escalate_coord()]).factory())
-    assert _runs("COORDINATION")[0].status == "ESCALATED"
+    assert _runs("COORDINATION")[0].status == "BLOCKED"
 
 
 def escalate_coord():
     return blocked("담당자가 초안을 폐기")
 
 
-def test_coordination_off_keeps_review_queue(seeded):
-    """설정이 꺼져 있으면(기본값) Coordination을 시작하지 않는다(기본안 B, 기존 동작)."""
+def test_main_auto_start_off_starts_nothing(seeded):
+    """설정이 꺼져 있으면(테스트 기준값) 사건은 기록만 되고 메인도 전문 Agent도 뜨지 않는다."""
     _submit_a(seeded)
-    run_until_idle(seeded, model_factory=Router(replanning=[solve("L0"), solve("L1")]).factory())
-    assert _runs("COORDINATION") == []
+    run_until_idle(seeded, model_factory=Router().factory())
+    assert _runs() == []
     with db.read() as conn:
-        kinds = [j["dedupe_key"] for j in list_jobs(conn, seeded.site_id)]
-    assert not [k for k in kinds if "COORDINATION" in k]
+        kinds = [j["kind"] for j in list_jobs(conn, seeded.site_id)]
+        events = [r[0] for r in conn.execute("SELECT kind FROM case_event")]
+    assert kinds == ["RECHECK"] and events == ["TASK_READY"]
 
 
 # ── 단위 ───────────────────────────────────────────────────────
@@ -611,7 +646,7 @@ def test_item_statuses_with_answers():
     assert item_statuses(items, [], None) == {"A": "PENDING", "C": "PENDING", "E": "PENDING"}
 
 
-def test_coordination_prompt_fingerprint_and_keys(seeded, coordination_on):
+def test_coordination_prompt_fingerprint_and_keys(seeded, main_on):
     assert prompt.fingerprint() == prompt.PROMPT_FINGERPRINTS[prompt.PROMPT_VERSION]
     _, coord = _alpha_consulting(seeded)
     obs = _steps(coord.run_id)[0]["observation"]
@@ -621,7 +656,7 @@ def test_coordination_prompt_fingerprint_and_keys(seeded, coordination_on):
     assert "이견이면" not in system  # 초안을 지시하지 않는다
 
 
-def test_state_shows_item_request_and_inbox_types(seeded, coordination_on):
+def test_state_shows_item_request_and_inbox_types(seeded, main_on):
     """state: 검토 패널 항목의 변경 요청·인용된 이견·초안 축, Inbox의 후보·초안 축."""
 
     pack = seeded

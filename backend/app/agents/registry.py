@@ -40,27 +40,27 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=replanning_prompt,
         observer=replanning_observer,
         executor=ReplanningExecutor,
-        exec_contract_version="replanning-c3",  # 기록만. 종료는 RETURN_RESULT(길 묶음) (AG-23)
+        exec_contract_version="replanning-c4",  # 기록만. 검증까지만 살고 DONE을 낸다 (AG-25)
     ),
     coordination_spec.AGENT_TYPE: AgentBinding(
         spec=coordination_spec.SPEC,
         prompt=coordination_prompt,
         observer=coordination_observer,
         executor=CoordinationExecutor,
-        exec_contract_version="coordination-c4",  # 기록만. 종료는 RETURN_RESULT(길 묶음) (AG-23)
+        exec_contract_version="coordination-c5",  # 기록만. 결과의 OTHER_UNIT에 충돌 그룹 참조 (AG-23)
     ),
     event_response_spec.AGENT_TYPE: AgentBinding(
         spec=event_response_spec.SPEC,
         prompt=event_response_prompt,
         observer=event_response_observer,
         executor=EventResponseExecutor,
-        exec_contract_version="event-response-c5",  # 기록만. 종료는 RETURN_RESULT(길 묶음) (AG-23)
+        exec_contract_version="event-response-c6",  # 기록만. 결과의 OTHER_UNIT에 충돌 그룹 참조 (AG-23)
     ),
     intake_spec.AGENT_TYPE: AgentBinding(
         spec=intake_spec.SPEC,
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-c8",  # 기록만. 막히면 RETURN_RESULT로 접수 미완 (AG-06)
+        exec_contract_version="intake-c9",  # 기록만. 결과의 OTHER_UNIT에 충돌 그룹 참조 (AG-23)
     ),
 }

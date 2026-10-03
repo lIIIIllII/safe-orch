@@ -37,21 +37,8 @@ from app.store.repos.site import get_site
 
 ACCEPTED = "ACCEPTED"
 REJECTED = "REJECTED"
-# 연속 2회면 이관하는 실패: 형식 오류와 전송 실패 (Test Case API 오류)
+# 연속 2회면 Run을 끝내는 실패: 형식 오류와 전송 실패 (Test Case API 오류)
 RETRY_ONCE = {"MALFORMED", "LLM_ERROR"}
-
-
-def temp_parentless_end(agent_type: str, status: str) -> tuple[str, str] | None:
-    """임시 연결: 부모 없는 전문 Agent Run의 결과를 옛 종료(Run 상태, 종료 사유)로 옮긴다.
-
-    메인이 결과를 받기 전까지만 쓴다. Intake는 메인 밖 입구라 여기 없다 (AG-06).
-    """
-    return {
-        ("REPLANNING", "BLOCKED"): ("ESCALATED", "ESCALATE_NO_SOLUTION"),
-        ("COORDINATION", "DONE"): ("SUCCEEDED", "REPORT_TO_SUPERVISOR"),
-        ("COORDINATION", "BLOCKED"): ("ESCALATED", "ESCALATE"),
-        ("EVENT_RESPONSE", "BLOCKED"): ("ESCALATED", "ESCALATE"),
-    }.get((agent_type, status))
 
 
 RESULT_END = {"DONE": ("SUCCEEDED", "RETURN_DONE"), "BLOCKED": ("BLOCKED", "RETURN_BLOCKED")}
@@ -179,11 +166,14 @@ class ToolGateway:
         parsed: _Parsed,
         reason: str,
     ) -> GatewayResult:
-        """REJECTED 결과. MALFORMED·LLM_ERROR가 연속 2회면 이관(DONE → ESCALATED <사유>_TWICE)."""
+        """REJECTED 결과. MALFORMED·LLM_ERROR가 연속 2회면 Run을 끝낸다(<사유>_TWICE).
+
+        전문 Agent는 막힘(BLOCKED, 길 없음)으로 끝난다. 이관 상태는 메인뿐이다 (AG-06)."""
         if reason in RETRY_ONCE:
             done = [s for s in list_steps(tx, run_id) if s["status"] == "COMPLETED"]
             if done and (done[-1]["guard"] or {}).get("reason_code") in RETRY_ONCE:
-                outcome = GatewayResult("DONE", reason, "ESCALATED", f"{reason}_TWICE")
+                status = "ESCALATED" if self.binding.spec.agent_type == "MAIN" else "BLOCKED"
+                outcome = GatewayResult("DONE", reason, status, f"{reason}_TWICE")
                 self._complete(
                     tx,
                     run_id,
@@ -297,10 +287,7 @@ class ToolGateway:
                 tool_result={"invalid_needs": invalid},
             )
             return GatewayResult("REJECTED", NEED_INVALID)
-        end = RESULT_END[action.status]
-        if run.parent_run_id is None:
-            end = temp_parentless_end(run.agent_type, action.status) or end
-        outcome = GatewayResult("DONE", None, *end)
+        outcome = GatewayResult("DONE", None, *RESULT_END[action.status])
         self._complete(
             tx,
             run_id,
