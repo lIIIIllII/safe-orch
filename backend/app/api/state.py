@@ -265,6 +265,8 @@ def run_summary(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
         "run_id": run.run_id,
         "agent_type": run.agent_type,
         "case_id": run.case_id,
+        # 부른 메인 Run(하위 Run일 때). 메인과 Intake는 없다
+        "parent_run_id": run.parent_run_id,
         "acting_unit_id": run.acting_unit_id,
         "status": run.status,
         "wait_kind": run.wait_kind,

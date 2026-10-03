@@ -252,8 +252,9 @@ def tried_search_keys(conn: sqlite3.Connection, site_id: str, case_id: str) -> s
 
 
 def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
-    """이 Run이 속한 Case의 Solver 시도 (Observation attempts). 같은 Case의 앞 Run 것도 넣는다:
-    메인이 재계획을 다시 부르면 새 Run이고, 미시도 판정도 Case 단위다 (CV-13)."""
+    """이 Run이 속한 Case에서 같은 주체 Unit으로 한 Solver 시도 (Observation attempts). 같은 Case의
+    앞 Run 것도 넣는다: 메인이 재계획을 다시 부르면 새 Run이고, 미시도 판정도 Case 단위다 (CV-13).
+    다른 Unit으로 한 계산은 다른 탐색이라 넣지 않는다."""
     found = rows(
         conn,
         "SELECT j.run_id, j.step_no, j.status AS job_status, s.scope_level, s.search_key,"
@@ -262,7 +263,8 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
         " JOIN agent_run a ON a.run_id = j.run_id"
         " LEFT JOIN solver_result r ON r.solver_result_id = j.solver_result_id"
         " LEFT JOIN candidate c ON c.solver_result_id = j.solver_result_id"
-        " WHERE a.case_id = (SELECT case_id FROM agent_run WHERE run_id = ?)"
+        " WHERE (a.case_id, a.acting_unit_id) ="
+        " (SELECT case_id, acting_unit_id FROM agent_run WHERE run_id = ?)"
         " ORDER BY j.rowid",
         (run_id,),
     )

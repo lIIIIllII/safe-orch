@@ -254,6 +254,8 @@ export interface RunSummary {
   run_id: string
   agent_type: string
   case_id: string
+  /** 부른 메인 Run. 메인과 Intake는 null */
+  parent_run_id: string | null
   acting_unit_id: string
   status: string
   wait_kind: string | null

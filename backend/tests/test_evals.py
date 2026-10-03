@@ -111,8 +111,7 @@ def test_s1_passes_with_scripted_model(pack):
             call("COMPLETE_TASKSPEC", values=S1_VALUES),
         ],
         replanning=[solve("L0")],
-        coordination=[_report()],  # 확정 뒤 통지 Run
-    )
+    )  # 메인과 확정 뒤 통지(Coordination)는 기본 응답으로 돈다
     r = run_once(_scn(pack, "S1"), pack.name, router.factory())
     assert (r["valid"], r["end"], r["grade"]) == (True, "DONE", "PASS")
     assert all(c["ok"] for c in r["must"].values())

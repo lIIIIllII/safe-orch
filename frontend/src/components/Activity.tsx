@@ -36,7 +36,15 @@ interface Props {
 }
 
 const BUDGET_MAX: Record<string, Record<string, number>> = {
+  MAIN: { steps: 12, agent_calls: 8 },
   REPLANNING: { steps: 15, solver_calls: 6, human_rounds: 2 },
+}
+
+/** 메인 Run 바로 아래에 그 메인이 부른 하위 Run을 둔다(서버가 준 순서는 그대로). */
+function withChildren(runs: RunSummary[]): RunSummary[] {
+  const ids = new Set(runs.map((r) => r.run_id))
+  const top = runs.filter((r) => r.parent_run_id === null || !ids.has(r.parent_run_id))
+  return top.flatMap((r) => [r, ...runs.filter((c) => c.parent_run_id === r.run_id)])
 }
 
 export function Activity({ state, actorId, selectedRunId, onSelectRun, isSupervisor, busy, run, refreshKey }: Props) {
@@ -49,7 +57,7 @@ export function Activity({ state, actorId, selectedRunId, onSelectRun, isSupervi
       </div>
       <div className="runs">
         {state.runs.length === 0 && <p className="muted">아직 Run이 없습니다.</p>}
-        {state.runs.map((r) => (
+        {withChildren(state.runs).map((r) => (
           <RunRow
             key={r.run_id}
             r={r}
@@ -90,8 +98,11 @@ function RunRow({
   const max = BUDGET_MAX[r.agent_type] ?? {}
   const active = ['RUNNING', 'WAITING_HUMAN', 'ERROR'].includes(r.status)
   return (
-    <div className={`run-row ${on ? 'run-on' : ''}`} onClick={onClick}>
-      <span className="strong">{AGENT_TYPE[r.agent_type] ?? r.agent_type}</span>
+    <div className={`run-row ${on ? 'run-on' : ''} ${r.parent_run_id ? 'run-child' : ''}`} onClick={onClick}>
+      <span className="strong">
+        {r.parent_run_id && '└ '}
+        {AGENT_TYPE[r.agent_type] ?? r.agent_type}
+      </span>
       <span className={`badge run-${r.status.toLowerCase()}`}>{RUN_STATUS[r.status] ?? r.status}</span>
       {r.resume_count > 0 && <span className="badge badge-resume">재개 {r.resume_count}회</span>}
       {r.wait_kind && (
@@ -107,6 +118,7 @@ function RunRow({
         {max.solver_calls ?? '—'}
         {(r.budget_used.human_rounds ?? 0) > 0 &&
           ` · 사람 확인 ${r.budget_used.human_rounds}/${max.human_rounds ?? '—'}`}
+        {max.agent_calls !== undefined && ` · 호출 ${r.budget_used.agent_calls ?? 0}/${max.agent_calls}`}
       </span>
       {r.end_reason && <span className="small">{endReason(r.end_reason)}</span>}
       {active && (

@@ -322,8 +322,9 @@ def outcome_no_solution(conn: sqlite3.Connection, pack: LoadedPack, data: dict) 
     task_id = data["outcome"]["task"]
     plan = get_current_plan(conn, pack.site_id)
     committed = plan is not None and any(a.task_id == task_id for a in plan.assignments)
-    replanning = _runs(conn, "REPLANNING")
-    last = replanning[-1] if replanning else None
+    # 이관은 메인만 한다: 마지막 메인이 자기 행동으로 이관했는가
+    mains = _runs(conn, "MAIN")
+    last = mains[-1] if mains else None
     detail = {
         "not_committed": not committed,
         "escalated": last is not None and last["status"] == "ESCALATED",

@@ -189,7 +189,7 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
   }
   const demoReq = demo === null ? null : (scenario?.task_requests[demo] ?? null)
   const openRun = state.runs.some(
-    (r) => r.agent_type === 'REPLANNING' && (r.status === 'RUNNING' || r.status === 'WAITING_HUMAN'),
+    (r) => r.agent_type === 'MAIN' && (r.status === 'RUNNING' || r.status === 'WAITING_HUMAN'),
   )
   const queued = state.task_queue.length
   const es = minute('es')

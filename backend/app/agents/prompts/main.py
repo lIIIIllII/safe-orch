@@ -60,6 +60,8 @@ Coordination, 신고의 대상·사실 수정안은 Event Response가 한다. �
 - 충돌 그룹(groups): 지금 충돌을 공유 작업으로 묶은 것이다. 그룹의 작업(task_ids), 걸린 규칙(rule_ids), \
 Hold가 걸린 작업(held_task_ids), 그룹에 작업을 가진 Unit(units)이 있다. Unit마다 그 Unit의 작업, 그중 아직 \
 계획에 없는 요청 작업(request_task_ids), 그 Unit으로 재계획할 때 아직 시도하지 않은 탐색 범위(untried_levels), \
+담당자에게 허용을 물어 열 수 있는 대체 자원(askable: 자원 축이 확인되지 않은 작업과 물을 수 있는 자원. \
+묻는 일은 재계획 Agent가 한다), \
 그 그룹·Unit으로 마지막에 부른 재계획의 결과(last_result: 결과 상태, 풀 수 있는 길, 그 뒤 관련 사실이 \
 바뀌었는지 facts_changed)가 있다. 재계획은 주체 Unit의 작업만 움직인다.
 - Hold(holds): 신고로 걸린 보류와 그 신고의 유형·사실 수정안 상태다. ACTIVE Hold가 하나라도 있으면 재계획·협의 \
@@ -139,5 +141,5 @@ def fingerprint() -> str:
 
 # prompt_version별 fingerprint. 바꾸면 버전을 올리고 한 줄 더한다(값은 서로 달라야 한다).
 PROMPT_FINGERPRINTS: dict[str, str] = {
-    "main-p1": "7012047a25b6382ba6b7dbaf8746b36e462086e9ac28a47a4e29d3f18dc446d6",
+    "main-p1": "fbe0921febcaffac21fd2ad723eb71ce427cf08a4aca6b2dec202f8b29b80f6b",
 }

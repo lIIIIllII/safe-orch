@@ -22,7 +22,7 @@
 
 | Agent | Goal | 끝나는 방식 | Budget |
 |---|---|---|---|
-| Main | 맡은 사건을 끝까지 처리한다 | 맡은 일이 모두 닫히면 `CLOSE`. 풀 수 없으면 Supervisor에게 `ESCALATE` | step, 전문 Agent 호출 수 (값 미정). 사건을 합치면 더하되 상한 |
+| Main | 맡은 사건을 끝까지 처리한다 | 이 Case의 열린 일이 없으면 `CLOSE`. 풀 수 없으면 Supervisor에게 `ESCALATE` | step 12, 전문 Agent 호출 8 (설정값). 사건을 합칠 때의 가산은 3단계 |
 | Intake | 확인된 작업 묶음 | `COMPLETE_TASK_BATCH`로 완료. 막히면 `RETURN_RESULT(BLOCKED)`: 접수 미완으로 끝나고 요청자에게 사유를 통지한다 | step 12, 사람 라운드 3 |
 | Replanning | 검증 가능한 후보 묶음과 서버 지표 기반 설명 | `RETURN_RESULT` | step 15, Solver 6, 알아보기 계산 (값 미정) |
 | Coordination | 협의 항목 해소, 확정 뒤 통지 | `RETURN_RESULT` | step 12, 사람 라운드 (값 미정) |
@@ -32,7 +32,8 @@
 - LLM 시도 Budget은 모든 Agent가 step × 2다.
 - 전문 Agent는 다른 Agent를 부르지 않고 사람에게 이관하지도 않는다. 막히면 `RETURN_RESULT(BLOCKED)`에 요약과 풀 수 있는 길을 담아 메인에게 돌려준다. Supervisor 이관은 메인만 한다.
 - Intake는 메인이 부르지 않는 입구다. 접수에서 시작하고, 완료하면 작업이 준비되며, 막히면 이관 없이 요청자에게 접수 미완을 알린다.
-- 메인은 한 번에 하나다. 새 사건은 열린 메인을 깨우고, 열린 메인이 없으면 새 메인을 띄운다.
+- 메인은 한 번에 하나다. 사건(작업 준비됨, 신고, Hold 해제, 후보 승인·거절, 하위 Run 종료, 요청 철회)이 생겼는데 열린 메인이 없으면 새 메인을 띄운다. 열린 메인은 하위 Run이 끝날 때, 또는 열린 하위 Run이 없을 때 그 Case의 사건이 생기면 깨어난다(하위 Run이 사람을 기다리는 동안에는 깨우지 않는다). 사람의 답은 사건이 아니라 물은 전문 Agent가 받는다.
+- 열린 메인이 있는 동안 새 작업은 대기열에 서고, 메인이 어떤 상태로 끝나든 대기열에서 1건이 올라간다(사건을 합치거나 미루는 판단은 3단계).
 
 ## 3. 도구
 
@@ -41,11 +42,12 @@
 **메인 전용**
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `CALL_AGENT(agent, input)` | 전문 Agent Run을 요청하고 결과를 기다린다 | W |
-| `MERGE_EVENT(event)` / `DEFER_EVENT(event)` | 새 사건을 지금 일에 합치거나 뒤로 미룬다 | C |
-| `SEND_TO_REVIEW(group, candidate_set)` | 후보 묶음을 사람 검토 대기로 보낸다. 승인은 사람만 한다 | W |
-| `ESCALATE(reason, needs)` | Supervisor에게 이관한다 | D |
-| `CLOSE(summary)` | 맡은 일이 모두 닫혔을 때 끝낸다(서버가 열린 일 없음 확인) | D |
+| `CALL_AGENT(agent, 참조)` | 전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다(자유 문장 없음): 재계획은 충돌 그룹과 주체 Unit, 협의·통지는 단계와 후보, 신고 대응은 신고. 하위 Run은 한 번에 하나다. 주체 Unit이 그 그룹에 작업을 가졌는지 서버가 검사하고, ACTIVE Hold 중의 재계획·협의와 관련 사실이 바뀌지 않은 재호출은 거절한다 | W |
+| `WAIT()` | 사람의 결정(후보 승인·거절, Hold 해제)을 기다린다. 검토 대기 후보나 ACTIVE Hold가 있을 때만 유효하다 | W |
+| `MERGE_EVENT(event)` / `DEFER_EVENT(event)` | 새 사건을 지금 일에 합치거나 뒤로 미룬다 (3단계) | C |
+| `SEND_TO_REVIEW(group, candidate_set)` | 후보 묶음을 사람 검토 대기로 보낸다. 승인은 사람만 한다 (4단계. 지금 검토 대기는 서버가 계산한다) | W |
+| `ESCALATE(summary, needs)` | Supervisor에게 이관한다(서버 문구 통지가 남는다). 열린 하위 Run이나 아직 보지 않은 사건이 있으면 거절한다 | D |
+| `CLOSE(summary)` | 맡은 일이 모두 닫혔을 때 끝낸다. 서버가 이 Case의 열린 일(검토 대기 후보, 통지 안 된 확정, 계획에 못 들어간 작업, 이 Case 작업의 충돌, 풀리지 않은 Hold)과 아직 보지 않은 사건이 없음을 확인한다 | D |
 
 **조회** (읽기)
 | 도구 | 하는 일 |
@@ -53,8 +55,8 @@
 | `LOOKUP_TASKS(filter)` | 작업 찾기(유형·구역·자원·시간·문구) |
 | `LOOKUP_RESOURCES(task \| type, zone, work_type)` | 쓸 수 있는 자원과 제외된 자원(이유 포함). Intake는 구역·작업 유형을 주면 유형을 가리지 않고 판정 결과를 받는다(작업 유형 기본 요구 조건은 서버가 붙인다). 유형으로 좁혔는데 없으면 다른 유형에서 쓸 수 있는 자원 수도 받는다 |
 | `LOOKUP_ZONES(ref)` | 구역과 구역 관계 |
-| `GET_GROUPS(batch)` | 서버가 계산한 엮임 그룹 |
-| `GET_STATE(scope)` | 상태 요약: 충돌·후보·검증·Hold·Run |
+| `GET_GROUPS(batch)` | 서버가 계산한 엮임 그룹. 메인에게는 도구가 아니라 관찰로 준다(지금은 충돌을 공유 작업으로 묶은 그룹과 그룹별 Unit. 묶음 등록용 엮임 계산은 3단계) |
+| `GET_STATE(scope)` | 상태 요약: 충돌·후보·검증·Hold·Run. 메인에게는 도구가 아니라 관찰로 준다 |
 
 **알아보기** (계산, 후보를 등록하지 않음)
 | 도구 | 하는 일 |
@@ -114,13 +116,13 @@
 
 | 스킬 | 열리는 조건 | 도구 | 쓰는 Agent |
 |---|---|---|---|
-| 조율 | 맡은 사건이 있음 | 메인 전용 도구 | Main |
+| 조율 | 맡은 사건이 있음 | `CALL_AGENT`, `WAIT`, `ESCALATE`, `CLOSE` | Main |
 | 상황 파악 | 항상 | 조회 도구 | 전부 |
 | 작업 접수 | 작성 중인 작업 묶음이 있음 | `REQUEST_CONFIRMATION`, `COMPLETE_TASK_BATCH` | Intake |
 | 원인 찾기 | 풀리지 않은 충돌 그룹이 있음 | `DIAGNOSE`, `TEST_RELAXATION`, `PREVIEW` | Replanning |
 | 후보 구성 | 충돌 그룹이 있음 | `SOLVE`, `COMPARE_CANDIDATES`, `SUBMIT_CANDIDATES` | Replanning |
 | 거절 반영 | 이 Case 후보에 거절·이견이 있음 | `DIAGNOSE`, `SOLVE`, `COMPARE_CANDIDATES` | Replanning |
-| 영향 분석 | 분석할 변경(신고·후보·가정)이 있음 | `ANALYZE_IMPACT`, `PREVIEW` | Main, Replanning, Event Response, Coordination |
+| 영향 분석 | 분석할 변경(신고·후보·가정)이 있음 | `ANALYZE_IMPACT`, `PREVIEW` | Replanning, Event Response, Coordination (Main은 4단계) |
 | 요청자 질문 | 작성 중인 작업 묶음이 있음 | `ASK_REQUESTER`, `WAIT_FOR_REPLIES` | Intake |
 | 신고자 질문 | 신고가 있음 | `ASK_REPORTER`, `WAIT_FOR_REPLIES` | Event Response |
 | 협의 | 확인 대기 항목이나 이견이 있음 | `ASK_OWNER`, `WAIT_FOR_REPLIES`, `DRAFT_CONSTRAINT` | Coordination |
@@ -133,7 +135,7 @@
 
 | Agent | 허용 도구 |
 |---|---|
-| Main | 메인 전용, 조회, `ANALYZE_IMPACT`, `PREVIEW`, `COMPARE_CANDIDATES` |
+| Main | `CALL_AGENT`, `WAIT`, `ESCALATE`, `CLOSE`. 조회·영향 분석·알아보기 도구는 4단계 |
 | Intake | 조회, `ASK_REQUESTER`, `REQUEST_CONFIRMATION`, `WAIT_FOR_REPLIES`, `COMPLETE_TASK_BATCH`, `RETURN_RESULT` |
 | Replanning | 조회, 알아보기 전부, `SOLVE`, `SUBMIT_CANDIDATES`, `RETURN_RESULT`. 사람 도구 없음 |
 | Coordination | 조회, `ANALYZE_IMPACT`, `ASK_OWNER`, `WAIT_FOR_REPLIES`, `DRAFT_CONSTRAINT`, `SEND_NOTICE`, `RETURN_RESULT` |
@@ -146,11 +148,9 @@
 - Replanning `LIST_ASSIGNABLE_RESOURCES`, Intake `LOOKUP_RESOURCE` → `LOOKUP_RESOURCES`
 - Replanning `ASK_TASK_OWNER`, Coordination `SEND_CHANGE_REQUEST` → Coordination `ASK_OWNER`
 - Intake `ASK_CLARIFICATION` → `ASK_REQUESTER`, `COMPLETE_TASKSPEC` → `COMPLETE_TASK_BATCH`
-- 전문 Agent의 종료는 `RETURN_RESULT`로 옮겼다. 메인이 생기기 전까지 부모 없는 Replanning·Coordination·Event Response Run의 결과는 옛 종료(이관·보고)로 이어지고, Replanning·Event Response는 BLOCKED만 돌려준다. 이관은 메인 `ESCALATE`로 옮긴다
-- Coordinator가 사건마다 전문 Agent를 자동 시작하던 것 → 메인이 `CALL_AGENT`로 부른다
 
 ## 7. 열린 값
 
-- 메인 Budget 상한, 사건을 합칠 때 더하는 양, Coordination 사람 라운드, 알아보기 계산 Budget
+- 사건을 합칠 때 메인 Budget에 더하는 양과 상한(3단계), Coordination 사람 라운드, 알아보기 계산 Budget
 - 기준 프로필 목록(비용 중심·지연 중심·변경 최소 외)
 - `ASK_*`를 보낸 뒤 바로 기다릴지(지금 방식), 다른 일을 하다 `WAIT_FOR_REPLIES`로 기다릴지(위 도구 표)

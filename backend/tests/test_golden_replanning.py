@@ -41,9 +41,9 @@ pytestmark = pytest.mark.usefixtures("main_on")
 
 # 2단계 메인 뒤 다시 만든 값
 GOLDEN = {
-    "plan_b": "ec2880f356f200a2bff60dc890b7b59d867bfaa5673812f8ad9e8e6758b87b32",
-    "rejections": "8b0fb7e4d8dad24adbc0d52452bb172e2c37ceb71717d30a282c90e1ce4d9c6c",
-    "main_plan_b": "2cdeaae4c38ad3855556b9bfb9a491ef75f9da9812f36b934c8e7e408ed41e52",
+    "plan_b": "0941ab85e328b7f8e27faf819b83b922c29b17b14cb2b7232360d1d71a74522e",
+    "rejections": "0da5325bc57961e5945054ed3e5e3873717419215fe70e21461b9a962df3f717",
+    "main_plan_b": "719cd74a2cb2b4030cbe10ccf053b0dff0eed5a18460709732b9aeabecfb7fdd",
 }
 
 

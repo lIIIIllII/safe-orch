@@ -980,6 +980,10 @@ textarea {
   border-bottom: 1px solid #f0f2f5;
 }
 
+.run-child {
+  margin-left: 18px;
+}
+
 .run-on {
   background: #e8f0fe;
 }

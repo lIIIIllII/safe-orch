@@ -71,7 +71,7 @@ Goal: {goal}
 - 움직일 수 있는 작업(acting_tasks): 이동이 확인된 축(movable), 기준 배정(base), 필요한 자원 유형(required_resource_type)이 있다.
 - 확인된 제약(constraints)은 고정된 작업·축, 동의 범위(consents)는 작업 담당자가 동의한 시작 범위·자원이다.
 - 아직 시도하지 않은 탐색 범위(untried_levels): L0은 충돌 당사자만, L1은 같은 구역·같은 자원의 작업까지, L2는 acting_unit 작업 전부를 움직일 수 있게 한다. 범위가 넓을수록 바뀌는 작업이 늘 수 있다.
-- 이전 계산(attempts): 이 Case의 계산 전부다(this_run이 false면 같은 Case의 앞 Run이 한 것). 1단계(stage1)는 변경 작업 수 최소화, 2단계(stage2)는 총 지연 최소화 결과다. 대체 자원 시도(try_resources)가 있으면 그 자원을 더한 계산이다.
+- 이전 계산(attempts): 이 Case에서 acting_unit으로 한 계산 전부다(this_run이 false면 같은 Case의 앞 Run이 한 것). 1단계(stage1)는 변경 작업 수 최소화, 2단계(stage2)는 총 지연 최소화 결과다. 대체 자원 시도(try_resources)가 있으면 그 자원을 더한 계산이다.
 - 마지막 검증(latest_validation)은 마지막 후보의 독립 검증이고 live가 false면 그 후보는 무효가 되었거나 거절·확정되었다. 직전 거절 사유(last_guard)는 직전 행동이 받아들여지지 않은 이유다.
 - 후보 거절(rejections): 이 Case 후보에 대한 Supervisor 거절이다. has_constraint면 확인된 제약이 생겼다. 아니면 거절된 배정과 같은 배정은 다시 후보가 되지 않는다. quoted_comment는 인용이다. 거절 사실(rejection_facts)은 제약 있는 거절 수, 제약 없는 거절 수, 마지막 거절, 미시도 범위가 남았는지(untried_remaining)다.
 - 자원 조회 결과(assignable_resources): 작업별로 쓸 수 있는 자원(assignable), 쓸 수 없는 자원과 이유(excluded의 reasons: NOT_ALLOWED 이 Unit 사용 권한 없음, NO_AVAILABILITY 가용 구간 없음, ZONE_NOT_ALLOWED 작업 구역에서 쓸 수 없음, REQUIREMENT_NOT_MET 작업의 자원 요구 조건을 맞추지 못함이고 attribute가 어느 속성인지다), 현재 자원(current), 아직 시도하지 않은 대체 자원(untried_alternatives)이다. 대체 자원은 자원 축이 확인된 작업에서만 시도할 수 있고, 서버는 쓸 수 있는 자원만 받는다.
@@ -167,5 +167,5 @@ PROMPT_FINGERPRINTS = {
     "replanning-p10": "6d9a8a4c3c7d8f098af76c4923a01f5f5e05075da3f19d1c86f12598c3906e68",  # 자원 조회 제외 사유에 구역·요구 조건(어느 속성인지) (CV-20)
     "replanning-p11": "33fb3d9f286ba13da7c9acd873a0d11c649f5484f0595a101f1eb8d31aa1aeae",  # 풀 초과 충돌(풀·종류·초과 시각), 작업의 수요 (CV-23)
     "replanning-p12": "6886789507ed65d76a164c3eacb484bece923f1341a3ff269af615279e9d39eb",  # 종료는 RETURN_RESULT: 막힌 결과와 길 묶음 (AG-23)
-    "replanning-p13": "2b44ed9d97a4c052e448f813a6286232b3d9d6a8b734a295c72568f791655687",  # 종료는 검증까지: DONE, 이전 계산 Case 단위, 충돌 그룹·거절 사실, OTHER_UNIT에 그룹 (AG-25)
+    "replanning-p13": "0397a3a992e57300c0447b096ae45c39b1928fd9a8759865b35cc4cd5420d193",  # 종료는 검증까지: DONE, 이전 계산 Case 단위, 충돌 그룹·거절 사실, OTHER_UNIT에 그룹 (AG-25)
 }

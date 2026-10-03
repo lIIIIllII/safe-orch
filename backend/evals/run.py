@@ -3,7 +3,7 @@
     cd backend && uv run python -m evals.run --scenario S1|S2|S3|all [--hidden] [--runs 10]
 
 - 회차마다 임시 DB를 쓴다. 개발 DB는 건드리지 않는다.
-- 설정은 .env와 무관하게 명시 고정한다: Agent 자동 시작 두 스위치 켬, SITE_NOW = 시나리오 값.
+- 설정은 .env와 무관하게 명시 고정한다: 사건 → 메인 자동 시작 켬, SITE_NOW = 시나리오 값.
   모델·온도·seed·reasoning_effort는 .env 그대로 쓰고 결과 첫 줄에 남긴다.
 - 루프: idle까지 실행 → 사람 규칙 평가 → 사람 행동 하나 → 반복.
 - 종료: DONE(할 일 없음) / END_POINT(단계별 종료 지점) / STALLED(답할 규칙이 없는 대기) /
@@ -46,7 +46,7 @@ OUT_DIR = REPO_ROOT / "data" / "evals"
 TIME_LIMIT_S = 300
 MAX_HUMAN_ACTIONS = 30
 MAX_INVALID_IN_A_ROW = 2
-AGENT_FLAGS = {"COORDINATION_ENABLED": "true", "EVENT_RESPONSE_ENABLED": "true"}
+AGENT_FLAGS = {"MAIN_AUTO_START": "true"}
 
 
 def _start(pack: LoadedPack, scn: Scenario, humans: Humans) -> str | None:

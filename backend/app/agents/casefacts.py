@@ -8,6 +8,7 @@ import sqlite3
 from typing import Any
 
 from app.domain.canonical import canonical_hash
+from app.domain.eligibility import exclusion_reasons
 from app.domain.groups import ConflictGroup, conflict_groups
 from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent
 from app.packs.loader import LoadedPack
@@ -19,7 +20,7 @@ from app.store.repos.case_events import list_case_events
 from app.store.repos.consultations import candidate_state, consultation_view
 from app.store.repos.decisions import list_case_rejections, list_decisions
 from app.store.repos.events import get_event
-from app.store.repos.messages import list_fact_updates
+from app.store.repos.messages import list_case_replies, list_fact_updates
 from app.store.repos.plans import get_plan, get_plan_by_candidate
 from app.store.repos.records import find_reconfirm_candidate, get_candidate, list_validations
 from app.store.repos.runs import get_run, list_steps, tried_search_keys
@@ -334,6 +335,44 @@ def untried_levels(
     return out
 
 
+def askable_resources(
+    conn: sqlite3.Connection, facts: SnapshotContent, unit_id: str, case_id: str
+) -> list[dict[str, Any]]:
+    """그 Unit의 작업 가운데 자원 축이 아직 확인되지 않았고, 담당자에게 허용을 물을 수 있는 대체 자원이
+    있는 것. 제약으로 고정된 작업, 이 Case에서 담당자가 거절한 값, 답을 기다리는 질문이 있는 작업은 뺀다.
+    (묻는 일은 재계획 Agent가 한다. 메인은 이 길이 남아 있는지만 본다.)"""
+    frozen = {c.task_id for c in facts.constraints if "RESOURCE" in c.frozen_axes}
+    replies = list_case_replies(conn, case_id)
+    waiting = {h["task_id"] for h in replies if h["status"] == "OPEN"}
+    declined = {
+        (h["task_id"], v)
+        for h in replies
+        if h["decision"] == "DECLINE"
+        for v in h["allowed_values"]
+    }
+    base = facts.base_assignments()
+    out = []
+    for t in sorted(facts.tasks, key=lambda t: t.task_id):
+        if (
+            t.unit_id != unit_id
+            or not t.required_resource_type
+            or t.movable.resource
+            or t.task_id in frozen
+            or t.task_id in waiting
+        ):
+            continue
+        values = [
+            r.resource_id
+            for r in sorted(facts.resources, key=lambda r: r.resource_id)
+            if r.resource_id != base[t.task_id].resource_id
+            and not exclusion_reasons(t, r, unit_id)
+            and (t.task_id, r.resource_id) not in declined
+        ]
+        if values:
+            out.append({"task_id": t.task_id, "resource_ids": values})
+    return out
+
+
 def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[str, Any]:
     """메인 관찰의 사실 부분과 유효성 판정에 쓰는 값."""
     site_id, case_id = pack.site_id, main.case_id
@@ -399,6 +438,8 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                     "untried_levels": untried_levels(
                         snapshot, primary_for(g, facts, unit), unit, tried
                     ),
+                    # 담당자에게 허용을 물어 열 수 있는 대체 자원(자원 축 미확인 작업)
+                    "askable": askable_resources(conn, facts, unit, case_id),
                     "last_result": last_view,
                 }
             )
@@ -427,7 +468,14 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                 calls.append({"agent": "COORDINATION", "phase": "CONSULT", "candidate_id": cid})
         notice = c["notice"]
         if notice and notice["unsent"] and notice["plan_revision"] == site.plan_revision:
-            calls.append({"agent": "COORDINATION", "phase": "NOTICE", "candidate_id": cid})
+            refs = {
+                "phase": "NOTICE",
+                "candidate_id": cid,
+                "plan_revision": notice["plan_revision"],
+            }
+            # 통지 Run이 아무것도 보내지 않고 끝났으면 같은 호출을 다시 받지 않는다
+            if not same_facts(conn, site_id, call_key("COORDINATION", refs), cid):
+                calls.append({"agent": "COORDINATION", "phase": "NOTICE", "candidate_id": cid})
     for h in holds:
         if h["event_type"] == "DELAY":
             key = call_key("EVENT_RESPONSE", {"event_id": h["event_id"]})

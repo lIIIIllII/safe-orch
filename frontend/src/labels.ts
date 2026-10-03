@@ -94,16 +94,23 @@ export const REASON: Record<string, string> = {
   NO_ACTING_TASKS: '움직일 수 있는 작업 없음',
   RESOURCE_AXIS_NOT_ALLOWED: '자원 축 이동 불가',
   TIME_AXIS_NOT_ALLOWED: '시간 축 이동 불가',
+  // 메인 도구의 거절 사유
+  CHILD_RUN_OPEN: '부른 하위 Run이 아직 열려 있음',
+  UNIT_NOT_IN_GROUP: '그 충돌 그룹에 작업이 없는 Unit',
+  GROUP_NOT_FOUND: '지금 없는 충돌 그룹',
+  SAME_FACTS: '마지막 결과 뒤로 관련 사실이 바뀌지 않음',
+  NEW_EVENT: '아직 보지 않은 사건이 있음',
+  OPEN_WORK: '이 Case에 열린 일이 남아 있음',
+  NOTHING_TO_WAIT_FOR: '기다릴 후보·Hold가 없음',
   // end_reason
-  ESCALATE_NO_SOLUTION: '해를 찾지 못해 이관',
-  MALFORMED_TWICE: '응답 형식 오류 연속 2회로 이관',
-  LLM_ERROR_TWICE: '모델 호출 실패 연속 2회로 이관',
+  CLOSE: '맡은 일을 마치고 종료',
+  PARENT_ENDED: '부른 메인이 끝나 함께 종료',
+  MALFORMED_TWICE: '응답 형식 오류 연속 2회로 종료',
+  LLM_ERROR_TWICE: '모델 호출 실패 연속 2회로 종료',
   MODEL_VALIDATION_MISMATCH: 'Solver·검증 불일치(오류)',
   RECURSION_LIMIT: '반복 한도 초과(오류)',
   CANCELLED: '취소됨',
-  REJECTED_TWICE: '제약 없는 거절 2회로 이관',
-  REPORT_TO_SUPERVISOR: 'Supervisor에게 보고하고 종료',
-  ESCALATE: '이관',
+  ESCALATE: 'Supervisor에게 이관',
   RETURN_DONE: '결과를 돌려주고 종료',
   RETURN_BLOCKED: '막힌 결과를 돌려주고 종료',
   NEED_INVALID: '결과의 필요한 것이 가리키는 대상이 없음',
@@ -190,8 +197,6 @@ export function endReason(code: string | null): string {
       return `예외: ${rest}`
     case 'LLM_CONFIG':
       return `모델 설정 오류: ${rest}`
-    case 'ESCALATE_NO_SOLUTION':
-      return `해를 찾지 못해 이관: ${rest}`
     default:
       return code
   }
@@ -269,6 +274,7 @@ export const ITEM_STATUS: Record<string, string> = {
 }
 
 export const AGENT_TYPE: Record<string, string> = {
+  MAIN: '메인 Agent',
   REPLANNING: '재계획 Agent',
   COORDINATION: '협의 Agent',
   INTAKE: '작업 접수 Agent',
@@ -289,7 +295,9 @@ export const RUN_STATUS: Record<string, string> = {
 }
 
 export const WAIT_KIND: Record<string, string> = {
-  CANDIDATE_OUTCOME: '후보 검증·검토 결과 대기',
+  CANDIDATE_OUTCOME: '후보 검증 결과 대기',
+  CHILD_RUN: '부른 전문 Agent의 결과 대기',
+  HUMAN_DECISION: '사람의 결정 대기(승인·거절, Hold 해제)',
   MESSAGE: '답변 대기',
   CONSULTATION: '협의 답변 대기',
 }
@@ -309,6 +317,10 @@ export const RESULT_KIND: Record<string, string> = {
 }
 
 export const ACTION_NAME: Record<string, string> = {
+  CALL_AGENT: '전문 Agent 부르기',
+  WAIT: '사람의 결정 기다리기',
+  ESCALATE: 'Supervisor에게 이관',
+  CLOSE: '끝내기',
   SOLVE_WITH_SCOPE: '탐색 범위 지정 Solver 실행',
   RETURN_RESULT: '결과 돌려주기',
   LIST_ASSIGNABLE_RESOURCES: '사용 가능 자원 조회',

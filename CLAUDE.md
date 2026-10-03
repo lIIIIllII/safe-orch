@@ -29,6 +29,6 @@ cd backend && uv run uvicorn app.main:app --reload --port 8000
 cd backend && uv run pytest
 cd frontend && npm run dev
 ```
-- Agent 자동 시작 스위치: `COORDINATION_ENABLED`·`EVENT_RESPONSE_ENABLED`(기본 true). 테스트는 .env를 읽지 않고 conftest가 둘 다 끈다.
+- 사건 → 메인 자동 시작 스위치: `MAIN_AUTO_START`(기본 true). 사건이 생기면 메인 Agent가 뜨고, 전문 Agent는 메인이 부른다. 테스트는 .env를 읽지 않고 conftest가 끈다(켜는 fixture는 `main_on`).
 - 현장의 지금: `SITE_NOW`(ISO 8601, 오프셋 필수). 비면 실제 시계. 테스트는 conftest가 고정한다.
 - 평가(실제 모델): `cd backend && uv run python -m evals.run --scenario S1|S2|S3|all [--hidden] [--runs 10]`, 비교는 `uv run python -m evals.compare a.jsonl b.jsonl`. 숨긴 판 파일(`evals/scenarios/*/hidden/`)은 지침을 고치는 동안 열지 않는다.

@@ -11,7 +11,7 @@ import yaml
 from conftest import add_run
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
-from scripted import Router, ScriptedChatModel, call, escalate, field_judgments, solve
+from scripted import Router, ScriptedChatModel, call, done, escalate, field_judgments, solve
 
 from app.agents import llm, runtime
 from app.agents.observers.replanning import build_observation
@@ -153,7 +153,7 @@ def test_llm_error_on_two_consecutive_steps_escalates(with_a):
         ("REJECTED", "LLM_ERROR"),
         ("DONE", "LLM_ERROR"),
     ]
-    assert (run.status, run.end_reason) == ("ESCALATED", "LLM_ERROR_TWICE")
+    assert (run.status, run.end_reason) == ("BLOCKED", "LLM_ERROR_TWICE")
     assert [s["llm_attempts"] for s in steps] == [2, 2] and run.llm_attempts_used == 4
     assert run.solver_calls_used == 0
 
@@ -165,7 +165,7 @@ def test_llm_error_then_malformed_escalates(with_a):
         ("REJECTED", "LLM_ERROR"),
         ("DONE", "MALFORMED"),
     ]
-    assert (run.status, run.end_reason) == ("ESCALATED", "MALFORMED_TWICE")
+    assert (run.status, run.end_reason) == ("BLOCKED", "MALFORMED_TWICE")
 
 
 def test_llm_config_error_ends_run_as_error(with_a):
@@ -315,44 +315,59 @@ def test_live_run_exits_without_key(tmp_path, monkeypatch, capsys):
     assert "OPENAI_API_KEY" in capsys.readouterr().err
 
 
+def _use(monkeypatch, router):
+    """live run의 모델을 스크립트로 바꾼다. 메인(과 스크립트를 주지 않은 Coordination)은 기본 응답으로 돈다."""
+    make = router.factory()
+    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
+    return Settings(openai_api_key="sk-test", openai_model="m", openai_temperature="0")
+
+
 def test_live_run_flow_with_scripted_model(monkeypatch):
-    """스크립트 흐름 확인. 실제 모델 대신 스크립트 모델을 넣는다(API 호출 없음)."""
-    monkeypatch.setattr(
-        live_run, "openai_model", lambda s: ScriptedChatModel([solve("L0"), solve("L1")])
-    )
-    settings = Settings(openai_api_key="sk-test", openai_model="m", openai_temperature="0")
+    """경로 A. 스크립트 흐름 확인. 실제 모델 대신 스크립트 모델을 넣는다(API 호출 없음)."""
+    settings = _use(monkeypatch, Router(replanning=[solve("L0"), solve("L1")]))
     [r] = live_run.run_once(1, settings, "shipyard", raw=False)
     assert r.get("error") is None, r.get("error")
-    assert (r["success"], r["l0_first"], r["first_solve_level"]) == (True, True, "L0")
-    assert r["committed"] == {"status": "APPLIED", "reason_codes": []}
-    assert (r["run_status"], r["end_reason"]) == ("SUCCEEDED", "COMMITTED:1")
-    assert [(s["action"], s["level"], s["result_kind"]) for s in r["steps"]] == [
-        ("SOLVE_WITH_SCOPE", "L0", "CONTINUE"),
-        ("SOLVE_WITH_SCOPE", "L1", "WAIT"),
-    ]
+    c = r["success_criteria"]
+    assert r["success"], c
+    assert (r["l0_first"], r["first_solve_level"]) == (True, "L0")
+    assert (c["replanning_done"], c["committed"], c["notices_sent"], c["main_closed"]) == (
+        True,
+        True,
+        True,
+        True,
+    )
+    assert (r["run_status"], r["end_reason"]) == ("SUCCEEDED", "CLOSE")
+    # 메인이 고른 행동 순서와 쓴 step·호출 수가 기록에 남는다
+    assert r["main"] == {
+        "runs": 1,
+        "steps": 5,
+        "agent_calls": 3,
+        "actions": [
+            "CALL_AGENT(REPLANNING·UA)",
+            "CALL_AGENT(COORDINATION·CONSULT)",
+            "WAIT",
+            "CALL_AGENT(COORDINATION·NOTICE)",
+            "CLOSE",
+        ],
+    }
+    assert r["agent_flags"] == {"main_auto_start": True}
     assert r["model_settings"]["temperature"] == 0.0 and "api_key" not in r["model_settings"]
-    assert r["success_criteria"]["forbidden_actions"] == 0
     assert (r["request"], r["expected_outcome"], r["matches_expected"]) == ("A", "CANDIDATE", True)
     assert r["actual"]["level"] == "L1" and r["actual"]["moved"] == {
         "A": [60, "A-CR-01"],
         "C": [90, "A-CR-01"],
     }
-
-
-def _scripted_each_run(*replies):
-    """START_RUN마다 새 스크립트 모델(같은 응답 순서)."""
-    return lambda s: ScriptedChatModel(list(replies))
+    assert [e for e in r["events"] if "waive" in e] == [{"waive": ["C"], "status": "APPLIED"}]
 
 
 def test_live_run_requests_in_sequence(monkeypatch):
     """--request N1,N2,N3,N4: 같은 DB에서 하나씩 확정한다. 기대값은 verify_demo_values와 같은 출처."""
-    monkeypatch.setattr(live_run, "openai_model", _scripted_each_run(solve("L0")))
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    settings = _use(monkeypatch, Router(replanning=[solve("L0")] * 4))
     records = live_run.run_once(1, settings, "shipyard", False, ["N1", "N2", "N3", "N4"])
     assert [r.get("error") for r in records] == [None] * 4
     assert [r["request"] for r in records] == ["N1", "N2", "N3", "N4"]
     assert all(r["success"] and r["matches_expected"] and r["l0_first"] for r in records)
-    assert [r["committed"]["status"] for r in records] == ["APPLIED"] * 4
+    assert [r["main"]["runs"] for r in records] == [1] * 4  # 요청마다 메인 하나
     assert [(r["actual"]["delay"], r["actual"]["work_delay"]) for r in records] == [
         (60, 60),
         (45, 45),
@@ -364,19 +379,17 @@ def test_live_run_requests_in_sequence(monkeypatch):
 
 
 def test_live_run_no_solution_request_succeeds_by_escalation(monkeypatch):
-    """--request N5: 모든 범위 INFEASIBLE이 기대값이므로 후보 없음 + 막힌 결과(RETURN_RESULT) 종료가 성공."""
-    monkeypatch.setattr(
-        live_run, "openai_model", _scripted_each_run(solve("L0"), solve("L2"), escalate())
-    )
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
+    """--request N5: 모든 범위 INFEASIBLE이 기대값이므로 후보 없음 + 막힌 결과 + 메인 이관이 성공."""
+    settings = _use(monkeypatch, Router(replanning=[solve("L0"), solve("L2"), escalate()]))
     [r] = live_run.run_once(1, settings, "shipyard", False, ["N5"])
     assert r.get("error") is None, r.get("error")
     assert r["expected_outcome"] == "ESCALATE"
     assert {e["status"] for e in r["expected"].values()} == {"INFEASIBLE"}
-    assert (r["actual"], r["committed"]) == (None, None)
-    assert r["run_status"] == "ESCALATED" and r["end_reason"].startswith("ESCALATE_NO_SOLUTION")
+    assert r["actual"] is None
+    assert (r["run_status"], r["end_reason"]) == ("ESCALATED", "ESCALATE")
     assert r["success"] and r["matches_expected"]
-    assert r["success_criteria"]["pass_reached"] is False
+    c = r["success_criteria"]
+    assert (c["no_candidate"], c["replanning_blocked"], c["main_escalated"]) == (True, True, True)
 
 
 def test_live_run_rejects_unknown_request(capsys):
@@ -385,13 +398,7 @@ def test_live_run_rejects_unknown_request(capsys):
     assert "X9" in capsys.readouterr().err
 
 
-def _shared_script(*replies):
-    """START_RUN·RESUME_RUN이 같은 스크립트를 이어서 쓴다(기본안 B는 재개가 두 번 있다)."""
-    model = ScriptedChatModel(list(replies))
-    return lambda s: model
-
-
-def _plan_b_script(*after_reply):
+def _plan_b_replies(*after_reply):
     ask = call(
         "ASK_TASK_OWNER",
         "자원 축 확인",
@@ -400,119 +407,78 @@ def _plan_b_script(*after_reply):
         allowed_values=["SITE-CR-01"],
         question="SITE-CR-01을 써도 되나요?",
     )
-    return _shared_script(
+    return [
         solve("L0"),
         solve("L1"),
         call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
         ask,
         *after_reply,
-    )
+    ]
 
 
 def test_live_run_path_b_with_scripted_model(monkeypatch):
-    """--path B: 거절 → 재개 → LIST → ASK → 스크립트가 수락 → TRY → Beta → 승인 R1."""
+    """--path B: 거절 → 메인이 재계획을 다시 부름 → LIST → ASK → 스크립트가 수락 → TRY → Beta → 승인 R1."""
     try_ = call("TRY_ALTERNATIVE_RESOURCE", "대체 자원", task_id="A", resource_id="SITE-CR-01")
-    monkeypatch.setattr(live_run, "openai_model", _plan_b_script(try_))
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
-    r = live_run.run_path_b(1, settings, "shipyard", False, decline=False)
+    router = Router(replanning=_plan_b_replies(try_))
+    settings = _use(monkeypatch, router)
+    r = live_run.run_path(1, settings, "shipyard", False, "B")
     assert r.get("error") is None, r.get("error")
     c = r["success_criteria"]
     assert r["success"], c
-    assert (r["run_status"], r["end_reason"], r["step_count"]) == ("SUCCEEDED", "COMMITTED:1", 5)
-    assert c["ask_uses_listed_alternative"] and c["no_try_before_accept"]
-    assert (r["alpha_matches_expected"], r["beta_matches_expected"]) == (True, True)
-    assert r["first_action_after_reject"] == "LIST_ASSIGNABLE_RESOURCES"  # 거절 뒤 L0 재시도 없음
-    assert [e.get("reply") for e in r["events"] if "reply" in e] == ["ACCEPT"]
-    assert r["beta"]["moved"] == {"A": [60, "SITE-CR-01"]}
-    assert (r["first_solve_level"], r["l0_first"]) == ("L0", True)
-
-
-def test_live_run_path_b_fixes_agent_flags_regardless_of_env(monkeypatch):
-    """경로가 Agent 설정을 명시한다: 환경변수가 둘 다 켜져 있어도 --path B는 둘 다 끈 채로 잰다."""
-    monkeypatch.setenv("COORDINATION_ENABLED", "true")
-    monkeypatch.setenv("EVENT_RESPONSE_ENABLED", "true")
-    try_ = call("TRY_ALTERNATIVE_RESOURCE", "대체 자원", task_id="A", resource_id="SITE-CR-01")
-    monkeypatch.setattr(live_run, "openai_model", _plan_b_script(try_))
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
-    r = live_run.run_path_b(1, settings, "shipyard", False, decline=False)
-    assert r.get("error") is None, r.get("error")
-    assert r["success"], r["success_criteria"]
-    assert r["agent_flags"] == {"coordination": False, "event_response": False}
-    assert [x["agent_type"] for x in r["runs"]] == ["REPLANNING"]
-    assert os.environ["COORDINATION_ENABLED"] == "true"  # 끝나면 되돌린다
-
-
-def test_live_run_path_b_coord_with_scripted_model(monkeypatch):
-    """--path B --coord: Alpha 협의 Run이 변경 요청 → Supervisor 거절로 STALE → Beta → R1 → 통지."""
-
-    def report():
-        args = {
-            "decision_summary": "보고",
-            "skill": "WRAP_UP",
-            "status": "DONE",
-            "summary": "통지 완료",
-        }
-        return AIMessage(
-            content="", tool_calls=[{"name": "RETURN_RESULT", "args": args, "id": "r"}]
-        )
-
-    router = Router(
-        replanning=[
-            solve("L0"),
-            solve("L1"),
-            call("LIST_ASSIGNABLE_RESOURCES", "조회", task_id="A"),
-            call(
-                "ASK_TASK_OWNER",
-                "확인",
-                task_id="A",
-                axis="RESOURCE",
-                allowed_values=["SITE-CR-01"],
-                question="SITE-CR-01?",
-            ),
-            call("TRY_ALTERNATIVE_RESOURCE", "시도", task_id="A", resource_id="SITE-CR-01"),
-        ],
-        coordination=[
-            call("SEND_CHANGE_REQUEST", "요청", task_id="C", message="C 이동 안"),
-            call("WAIT_FOR_REPLIES", "대기"),
-            call("SEND_NOTICE", "통지", actor_id="planner_a", task_ids=["A"], message="A 변경"),
-            call("SEND_NOTICE", "통지", actor_id="planner_b", task_ids=["B"], message="B 유지"),
-            report,
-        ],
+    assert (c["alpha_pass"], c["recalled_after_reject"], c["beta_pass"]) == (True, True, True)
+    assert (c["consultation_complete"], c["committed"], c["notices_sent"]) == (True, True, True)
+    assert (r["run_status"], r["end_reason"], r["alpha_matches_expected"]) == (
+        "SUCCEEDED",
+        "CLOSE",
+        True,
     )
-    make = router.factory()
-    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
-    r = live_run.run_path_b(1, settings, "shipyard", False, decline=False, coord=True)
-    assert r.get("error") is None, r.get("error")
-    c = r["success_criteria"]
-    assert r["success"], c
-    assert r["path"] == "B-coord"
-    assert r["agent_flags"] == {"coordination": True, "event_response": False}
-    assert c["consult_stale_rejected"] and c["notices_complete"]
-    assert c["noticed"] == ["planner_a", "planner_b"]
-    assert [(x["agent_type"], x["phase"], x["status"]) for x in r["runs"]] == [
-        ("REPLANNING", None, "SUCCEEDED"),
-        ("COORDINATION", "CONSULT", "STALE"),
-        ("COORDINATION", "NOTICE", "SUCCEEDED"),
+    assert r["main"]["actions"] == [
+        "CALL_AGENT(REPLANNING·UA)",
+        "CALL_AGENT(COORDINATION·CONSULT)",
+        "CALL_AGENT(REPLANNING·UA)",
+        "WAIT",
+        "CALL_AGENT(COORDINATION·NOTICE)",
+        "CLOSE",
     ]
-    assert (r["run_status"], r["end_reason"]) == ("SUCCEEDED", "COMMITTED:1")
-    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
+    assert (r["main"]["steps"], r["main"]["agent_calls"]) == (6, 4)
+    # 사람 역할: Supervisor 거절 → 담당자 질문 수락 → 승인. 변경 요청에는 답하지 않는다
+    assert [
+        next(k for k in e if k in ("form", "reject", "reply", "approve")) for e in r["events"]
+    ] == [
+        "form",
+        "reject",
+        "reply",
+        "approve",
+    ]
+    assert router.left()["REPLANNING"] == 0
 
 
-def test_live_run_summary_counts_path_b(monkeypatch, tmp_path, capsys):
-    """--path B 요약 줄도 L0 먼저와 Alpha·Beta 기대값 일치를 센다."""
+def test_live_run_path_sets_main_auto_start_regardless_of_env(monkeypatch):
+    """경로가 자동 시작과 현장의 지금을 명시한다. .env·환경변수가 꺼져 있어도 메인이 뜬다."""
+    monkeypatch.setenv("MAIN_AUTO_START", "false")
+    try_ = call("TRY_ALTERNATIVE_RESOURCE", "대체 자원", task_id="A", resource_id="SITE-CR-01")
+    settings = _use(monkeypatch, Router(replanning=_plan_b_replies(try_)))
+    r = live_run.run_path(1, settings, "shipyard", False, "B")
+    assert r["success"], r.get("error") or r["success_criteria"]
+    assert r["agent_flags"] == {"main_auto_start": True}
+    assert r["site_now"] == "2026-10-12T00:00:00Z"
+    assert os.environ["MAIN_AUTO_START"] == "false"  # 끝나면 되돌린다
+
+
+def test_live_run_summary_line(monkeypatch, tmp_path, capsys):
+    """요약 줄: 경로와 성공 수, 메인의 step·호출 수와 행동 순서."""
     record = {
         "index": 1,
         "path": "B",
         "success": True,
-        "l0_first": True,
-        "alpha_matches_expected": True,
-        "beta_matches_expected": True,
+        "run_status": "SUCCEEDED",
+        "end_reason": "CLOSE",
+        "main": {"steps": 6, "agent_calls": 4, "actions": ["CALL_AGENT(REPLANNING·UA)", "CLOSE"]},
         "tokens_in": 1,
         "tokens_out": 1,
     }
     monkeypatch.setattr(live_run, "OUT_DIR", tmp_path)
-    monkeypatch.setattr(live_run, "run_path_b", lambda *a: dict(record))
+    monkeypatch.setattr(live_run, "run_path", lambda *a: dict(record))
     monkeypatch.setattr(
         live_run,
         "get_settings",
@@ -520,31 +486,34 @@ def test_live_run_summary_counts_path_b(monkeypatch, tmp_path, capsys):
     )
     assert live_run.main(["--path", "B"]) == 0
     out = capsys.readouterr().out
-    assert "L0 first 1/1, alpha matches 1/1, beta matches 1/1" in out
-    # B-decline은 Beta가 없는 경로: 0/N이 아니라 "해당 없음"
-    monkeypatch.setattr(
-        live_run, "run_path_b", lambda *a: {**record, "beta_matches_expected": None}
-    )
-    assert live_run.main(["--path", "B-decline"]) == 0
-    assert "beta matches 해당 없음" in capsys.readouterr().out
+    assert "main=SUCCEEDED/CLOSE main_steps=6 calls=4" in out
+    assert "CALL_AGENT(REPLANNING·UA) → CLOSE" in out
+    assert "success 1/1 (path B), tokens 2" in out
 
 
-def test_live_run_path_b_decline_ends_in_escalation(monkeypatch):
-    """--path B-decline: 스크립트가 거절 → 같은 질문 미노출 → 이관이면 성공."""
-    monkeypatch.setattr(live_run, "openai_model", _plan_b_script(escalate()))
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
-    r = live_run.run_path_b(1, settings, "shipyard", False, decline=True)
+def test_live_run_path_b_decline_ends_in_main_escalation(monkeypatch):
+    """--path B-decline: 스크립트가 거절 → 같은 값을 다시 묻지 않음 → 막힌 결과 → 메인이 이관하면 성공."""
+    settings = _use(monkeypatch, Router(replanning=_plan_b_replies(escalate())))
+    r = live_run.run_path(1, settings, "shipyard", False, "B-decline")
     assert r.get("error") is None, r.get("error")
-    assert r["success"], r["success_criteria"]
-    assert (r["run_status"], r["committed"], r["messages"]) == ("ESCALATED", None, 1)
-    assert r["success_criteria"]["no_ask_or_try_after_decline"]
-    assert r["beta_matches_expected"] is None
+    c = r["success_criteria"]
+    assert r["success"], c
+    assert (c["decline_applied"], c["no_reask_after_decline"], c["replanning_blocked"]) == (
+        True,
+        True,
+        True,
+    )
+    assert (r["run_status"], r["end_reason"]) == ("ESCALATED", "ESCALATE")
+    assert r["main"]["actions"][-1] == "ESCALATE"
 
 
 def test_live_run_path_needs_request_a(capsys):
     with pytest.raises(SystemExit):
         live_run.main(["--path", "B", "--request", "N1"])
-    assert "--path B" in capsys.readouterr().err
+    assert "runs only --request A" in capsys.readouterr().err
+    # 옛 --coord 경로는 없다(B와 event에 합쳤다)
+    with pytest.raises(SystemExit):
+        live_run.main(["--path", "B", "--coord"])
 
 
 def test_system_lists_every_action_with_open_condition(pack):
@@ -561,7 +530,8 @@ def test_system_lists_every_action_with_open_condition(pack):
 
 
 def test_live_run_path_coord_with_scripted_model(monkeypatch):
-    """--path coord(기본안 A): 변경 요청 → 스크립트 이견 → 초안 → 스크립트 확정 → 재개 → Beta → R1 → 통지."""
+    """--path coord: 변경 요청 → 스크립트 이견 → 초안 → 스크립트 확정 → 메인이 재계획을 다시 부름 → Beta → R1
+    → 통지 → 메인 CLOSE."""
 
     def draft():
         with db.read() as conn:
@@ -576,17 +546,6 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
             task_id="C",
             axes=["TIME", "RESOURCE"],
             message="C 고정 확인",
-        )
-
-    def report():
-        args = {
-            "decision_summary": "보고",
-            "skill": "WRAP_UP",
-            "status": "DONE",
-            "summary": "통지 완료",
-        }
-        return AIMessage(
-            content="", tool_calls=[{"name": "RETURN_RESULT", "args": args, "id": "r"}]
         )
 
     wait = call("WAIT_FOR_REPLIES", "대기")
@@ -612,53 +571,48 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
             wait,
             call("SEND_NOTICE", "통지", actor_id="planner_a", task_ids=["A"], message="A 변경"),
             call("SEND_NOTICE", "통지", actor_id="planner_b", task_ids=["B"], message="B 유지"),
-            report,
+            done("통지 완료"),
         ],
     )
-    make = router.factory()
-    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
-    r = live_run.run_path_coord(1, settings, "shipyard", False)
+    settings = _use(monkeypatch, router)
+    r = live_run.run_path(1, settings, "shipyard", False, "coord")
     assert r.get("error") is None, r.get("error")
     c = r["success_criteria"]
     assert r["success"], c
-    assert (c["notice_targets"], c["noticed"]) == (
-        ["planner_a", "planner_b"],
-        ["planner_a", "planner_b"],
+    assert (c["change_request_sent"], c["constraint_from_proposal"], c["beta_pass"]) == (
+        True,
+        True,
+        True,
     )
     assert [e.get("type") for e in r["events"] if "reply" in e] == [
         "CHANGE_REQUEST",
         "CONFIRMATION",
         "QUESTION",
     ]
+    assert r["main"]["actions"] == [
+        "CALL_AGENT(REPLANNING·UA)",
+        "CALL_AGENT(COORDINATION·CONSULT)",
+        "CALL_AGENT(REPLANNING·UA)",
+        "WAIT",
+        "CALL_AGENT(COORDINATION·NOTICE)",
+        "CLOSE",
+    ]
     assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
-    assert (r["run_status"], r["end_reason"]) == ("SUCCEEDED", "COMMITTED:1")
 
 
 def test_live_run_path_event_with_scripted_model(monkeypatch):
-    """--path event --coord: R1 스크립트 준비 → 신고 → ER 조회·분석·제안 → 확인·해제 → Gamma → 협의 → R2 → 통지."""
-
-    def report(text):
-        args = {
-            "decision_summary": "보고",
-            "skill": "WRAP_UP",
-            "status": "DONE",
-            "summary": text,
-        }
-        return AIMessage(
-            content="", tool_calls=[{"name": "RETURN_RESULT", "args": args, "id": text}]
-        )
-
+    """--path event: R1 스크립트 준비(메인 없음) → 신고 → 메인 → ER 조회·분석·제안 → 확인·해제 → Gamma → 협의 →
+    R2 → 통지 → 메인 CLOSE."""
     router = Router(
         replanning=[solve("L0")],
         coordination=[
             call("SEND_CHANGE_REQUEST", "요청", task_id="E", message="E 15분 지연"),
             call("WAIT_FOR_REPLIES", "대기"),
-            report("협의 완료"),
+            done("협의 완료"),
             call(
                 "SEND_NOTICE", "통지", actor_id="planner_b", task_ids=["E", "D"], message="E 10:00"
             ),
-            report("통지 완료"),
+            done("통지 완료"),
         ],
         event_response=[
             call("LOOKUP_TASKS", "조회", work_type="PAINTING"),
@@ -672,16 +626,37 @@ def test_live_run_path_event_with_scripted_model(monkeypatch):
             ),
         ],
     )
-    make = router.factory()
-    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
-    r = live_run.run_path_event(1, settings, "shipyard", False, coord=True)
+    settings = _use(monkeypatch, router)
+    r = live_run.run_path(1, settings, "shipyard", False, "event")
     assert r.get("error") is None, r.get("error")
     c = r["success_criteria"]
     assert r["success"], c
-    assert c["gamma_changed_delay"] == [1, 15] and c["noticed"] == ["planner_b"]
+    assert (c["fact_confirmed"], c["hold_fact_confirmed"], c["no_replanning_during_hold"]) == (
+        True,
+        True,
+        True,
+    )
+    [gamma] = r["candidates"]
+    assert (gamma["actual"]["changed"], gamma["actual"]["delay"]) == (1, 15)
     assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
-    assert (r["run_status"], r["released"]) == ("SUCCEEDED", "APPLIED")
+    assert (r["run_status"], r["end_reason"]) == ("SUCCEEDED", "CLOSE")
+    # 준비 구간(R1)의 Run은 기록에 넣지 않는다. 신고로 바뀐 작업(E)의 Unit으로 재계획한다
+    assert [x["agent_type"] for x in r["runs"]] == [
+        "MAIN",
+        "EVENT_RESPONSE",
+        "REPLANNING",
+        "COORDINATION",
+        "COORDINATION",
+    ]
+    assert r["main"]["actions"] == [
+        "CALL_AGENT(EVENT_RESPONSE)",
+        "WAIT",
+        "CALL_AGENT(REPLANNING·UB)",
+        "CALL_AGENT(COORDINATION·CONSULT)",
+        "WAIT",
+        "CALL_AGENT(COORDINATION·NOTICE)",
+        "CLOSE",
+    ]
 
 
 INTAKE_VALUES = {
@@ -698,7 +673,7 @@ INTAKE_VALUES = {
 
 @pytest.mark.parametrize("ambiguous", [False, True], ids=["clear", "ambiguous"])
 def test_live_run_path_intake_with_scripted_model(monkeypatch, ambiguous):
-    """--path intake [--ambiguous]: 질문(모호) → 값 확인 → 완료 → Replanning Alpha."""
+    """--path intake [--ambiguous]: 질문(모호) → 값 확인 → 완료 → 작업 준비됨 → 메인 → Replanning Alpha."""
     ask = call(
         "ASK_CLARIFICATION",
         "질문",
@@ -711,14 +686,19 @@ def test_live_run_path_intake_with_scripted_model(monkeypatch, ambiguous):
         call("COMPLETE_TASKSPEC", "완료", values=INTAKE_VALUES),
     ]
     router = Router(intake=intake, replanning=[solve("L0"), solve("L1")])
-    make = router.factory()
-    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
-    r = live_run.run_path_intake(1, settings, "shipyard", False, ambiguous)
+    settings = _use(monkeypatch, router)
+    r = live_run.run_path(1, settings, "shipyard", False, "intake", ambiguous)
     assert r.get("error") is None, r.get("error")
-    assert r["success"], r["success_criteria"]
-    assert r["asks"] == (1 if ambiguous else 0)
-    assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
+    c = r["success_criteria"]
+    assert r["success"], c
+    assert (c["intake_succeeded"], c["main_started"], c["alpha_pass"]) == (True, True, True)
+    assert c.get("asked_requester", True) is True and r["alpha_matches_expected"] is True
+    assert r["path"] == ("intake-ambiguous" if ambiguous else "intake")
+    assert r["answer_kinds"] == (["FIRST"] if ambiguous else [])
+    # Intake는 메인 밖 입구다: 부모가 없다. 재계획은 메인이 불렀다
+    parents = {x["agent_type"]: x["parent"] for x in r["runs"]}
+    assert (parents["INTAKE"], parents["REPLANNING"]) == (False, True)
+    assert router.left()["INTAKE"] == 0
 
 
 def test_live_run_path_event_ambiguous_with_scripted_model(monkeypatch):
@@ -734,16 +714,15 @@ def test_live_run_path_event_ambiguous_with_scripted_model(monkeypatch):
             ),
         ],
     )
-    make = router.factory()
-    monkeypatch.setattr(live_run, "openai_model", lambda settings: make())
-    settings = Settings(openai_api_key="sk-test", openai_model="m")
-    r = live_run.run_path_event(1, settings, "shipyard", False, coord=False, ambiguous=True)
+    settings = _use(monkeypatch, router)
+    r = live_run.run_path(1, settings, "shipyard", False, "event", True)
     assert r.get("error") is None, r.get("error")
     c = r["success_criteria"]
     assert r["success"], c
-    assert (c["asks"], c["gamma_changed_delay"]) == (1, [1, 30])
+    [gamma] = r["candidates"]
+    assert (gamma["actual"]["changed"], gamma["actual"]["delay"]) == (1, 30)
     assert next(e["reply"] for e in r["events"] if "reply" in e) == "ANSWER"
-    assert r["answer_kinds"] == ["FIRST"]
+    assert r["answer_kinds"] == ["FIRST"] and r["path"] == "event-ambiguous"
 
 
 def test_live_run_human_answer_repeats_after_first():

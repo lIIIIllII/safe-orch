@@ -1,8 +1,11 @@
 """시작 상태 준비(LLM 없음). 스크립트 응답은 Action 이름·인자를 쓰므로 실행 계약 버전별 표로 둔다.
 
 판정기와 달리 여기만 Action 이름에 묶인다. 계약이 바뀌면(skill 인자, 이름 변경) 표에 한 줄을 더한다.
+메인은 관찰의 "지금 받아들여지는 호출"에서 고른다(참조는 실행 중에 정해진다): 협의가 있으면 협의,
+없으면 첫 호출.
 """
 
+import json
 import uuid
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -54,13 +57,35 @@ def _consulting_v2(task: str) -> dict[str, list[AIMessage]]:
     }
 
 
-# (Replanning 계약, Coordination 계약) → 준비 스크립트
-CONSULTING: dict[tuple[str, str], Callable[[str], dict[str, list[AIMessage]]]] = {
-    ("replanning-d5", "coordination-a24"): _consulting_v1,
-    ("replanning-c2", "coordination-c2"): _consulting_v2,
-    ("replanning-c2", "coordination-c3"): _consulting_v2,  # 스킬 상대별 분할(CONSULT는 그대로)
-    ("replanning-c3", "coordination-c4"): _consulting_v2,  # 종료 도구만 RETURN_RESULT로 바뀜
+def _consulting_v3(task: str) -> dict[str, list[AIMessage]]:
+    """메인이 부른다: 메인 → Replanning L0·L1 → 검증 뒤 DONE → 메인 → Coordination 변경 요청 → 답 대기."""
+    queues = _consulting_v2(task)
+    queues["REPLANNING"].append(
+        _call("RETURN_RESULT", "WRAP_UP", status="DONE", summary="평가 시작 상태 준비(스크립트)")
+    )
+    return queues
+
+
+# (메인 계약, Replanning 계약, Coordination 계약) → 준비 스크립트. 메인이 없던 계약은 None
+CONSULTING: dict[tuple[str | None, str, str], Callable[[str], dict[str, list[AIMessage]]]] = {
+    (None, "replanning-d5", "coordination-a24"): _consulting_v1,
+    (None, "replanning-c2", "coordination-c2"): _consulting_v2,
+    (
+        None,
+        "replanning-c2",
+        "coordination-c3",
+    ): _consulting_v2,  # 스킬 상대별 분할(CONSULT는 그대로)
+    (None, "replanning-c3", "coordination-c4"): _consulting_v2,  # 종료 도구만 RETURN_RESULT로 바뀜
+    ("main-c1", "replanning-c4", "coordination-c5"): _consulting_v3,  # 메인이 부른다, 검증 뒤 DONE
 }
+
+
+def _main_call(messages: Sequence[BaseMessage]) -> AIMessage:
+    """메인의 준비 응답: 받아들여지는 호출 중 협의가 있으면 협의, 없으면 첫 호출."""
+    obs = json.loads(str(messages[1].content).split("\n", 1)[1])
+    calls = obs["calls"]
+    chosen = next((c for c in calls if c["agent"] == "COORDINATION"), calls[0])
+    return _call("CALL_AGENT", "ORCHESTRATE", **chosen)
 
 
 class _PrepModel:
@@ -80,12 +105,16 @@ class _PrepModel:
         return self
 
     def invoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
+        if self.kind == "MAIN":
+            return _main_call(messages)
         return self.queues[self.kind].pop(0)
 
 
 def consulting_factory(task: str) -> Callable[[], _PrepModel] | None:
     """지금 계약 버전의 준비 스크립트. 표에 없으면 None(그 회차는 무효)."""
+    main = BINDINGS.get("MAIN")
     key = (
+        None if main is None else main.exec_contract_version,
         BINDINGS["REPLANNING"].exec_contract_version,
         BINDINGS["COORDINATION"].exec_contract_version,
     )
