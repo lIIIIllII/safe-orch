@@ -477,24 +477,27 @@ RunStatus = Literal[
     "WAITING_HUMAN",
     "SUCCEEDED",
     "ESCALATED",
+    "BLOCKED",
     "BUDGET_EXHAUSTED",
     "STALE",
     "CANCELLED",
     "ERROR",
 ]
-AgentType = Literal["REPLANNING", "COORDINATION", "INTAKE", "EVENT_RESPONSE", "ASSISTANT"]
+AgentType = Literal["REPLANNING", "COORDINATION", "INTAKE", "EVENT_RESPONSE", "ASSISTANT", "MAIN"]
+WaitKind = Literal["MESSAGE", "CONSULTATION", "CANDIDATE_OUTCOME", "CHILD_RUN", "HUMAN_DECISION"]
 
 
 class AgentRun(Frozen):
     run_id: str
     agent_type: AgentType
     case_id: str
+    parent_run_id: str | None = None
     acting_actor_id: str | None
     acting_unit_id: str
     input_ref: dict[str, Any]
     exec_contract_version: str
     status: RunStatus
-    wait_kind: Literal["MESSAGE", "CONSULTATION", "CANDIDATE_OUTCOME"] | None = None
+    wait_kind: WaitKind | None = None
     wait_ref: str | None = None
     wait_generation: int = Field(default=0, ge=0)
     wake_seq: int = Field(default=0, ge=0)
@@ -507,6 +510,8 @@ class AgentRun(Frozen):
     solver_calls_used: int = Field(default=0, ge=0)
     solver_seconds_used: float = Field(default=0, ge=0)
     restart_count: int = Field(default=0, ge=0)
+    agent_calls_used: int = Field(default=0, ge=0)
+    last_event_seq: int = Field(default=0, ge=0)
 
     @property
     def budget_used(self) -> dict[str, float]:

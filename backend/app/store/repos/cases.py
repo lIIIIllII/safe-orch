@@ -15,6 +15,7 @@ from app.domain.ids import new_id
 from app.domain.models import Consent
 from app.packs.loader import LoadedPack
 from app.store.repos._rows import loads, rows
+from app.store.repos.case_events import record_case_event
 from app.store.repos.consents import insert_consent
 from app.store.repos.dispatch import register_job
 from app.store.repos.runs import ACTIVE, CASE_AGENT_TYPES, end_run, get_run, has_open_case
@@ -121,6 +122,16 @@ def end_case_run(
     if before is None or not end_run(tx, run_id, status, end_reason, from_statuses):
         return False
     cancel_requests(tx, run_id)
+    if before.status in ACTIVE and before.parent_run_id is not None:
+        # 하위 Run이 끝났다(자기 행동이든 서버가 끝냈든). 부른 쪽 Case의 사건이다
+        record_case_event(
+            tx,
+            pack.site_id,
+            "CHILD_RUN_ENDED",
+            f"CHILD_RUN_ENDED:{run_id}",
+            {"run_id": run_id, "parent_run_id": before.parent_run_id, "status": status},
+            before.case_id,
+        )
     if before.status in ACTIVE and before.agent_type in CASE_AGENT_TYPES:
         close_case(tx, pack)
     return True
@@ -282,9 +293,7 @@ def promote_queued(tx: sqlite3.Connection, pack: LoadedPack) -> str | None:
     )
     context_version = bump_context_version(tx, site_id)
     copy_consents(tx, site_id, task.task_id, task.revision, revision, context_version)
-    register_recheck(
-        tx,
-        site_id,
-        {"kind": "QUEUE", "task_id": task.task_id, "actor_id": task.owner_actor_id},
-    )
+    cause = {"kind": "QUEUE", "task_id": task.task_id, "actor_id": task.owner_actor_id}
+    record_case_event(tx, site_id, "TASK_READY", f"TASK_READY:{task.task_id}:{revision}", cause)
+    register_recheck(tx, site_id, cause)
     return task.task_id

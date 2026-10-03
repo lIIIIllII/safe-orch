@@ -21,6 +21,7 @@ from app.agents.types import AgentBinding, AgentSpec, GatewayResult, StepMeta
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 from app.store import db
+from app.store.repos.cases import end_case_run
 from app.store.repos.commands import insert_command_result
 from app.store.repos.runs import (
     abort_step,
@@ -115,7 +116,9 @@ class ToolGateway:
         result_kind: str,
         tool_result: dict[str, Any] | None = None,
         state_changes: dict[str, Any] | None = None,
+        end: GatewayResult | None = None,
     ) -> None:
+        """step 완료 기록. end(DONE 결과)가 있으면 같은 tx에서 Run도 끝낸다 (ST-19)."""
         run = get_run(tx, run_id)
         assert run is not None
         guard = {"verdict": verdict, "reason_code": reason}
@@ -147,6 +150,8 @@ class ToolGateway:
             changes,
             {"result_kind": result_kind, "guard": guard},
         )
+        if end is not None and end.kind == "DONE" and end.end_status is not None:
+            end_case_run(tx, self.pack, run_id, end.end_status, end.end_reason or "", ("RUNNING",))
 
     def _reject(
         self,
@@ -161,6 +166,7 @@ class ToolGateway:
         if reason in RETRY_ONCE:
             done = [s for s in list_steps(tx, run_id) if s["status"] == "COMPLETED"]
             if done and (done[-1]["guard"] or {}).get("reason_code") in RETRY_ONCE:
+                outcome = GatewayResult("DONE", reason, "ESCALATED", f"{reason}_TWICE")
                 self._complete(
                     tx,
                     run_id,
@@ -171,8 +177,9 @@ class ToolGateway:
                     reason=reason,
                     result_kind="DONE",
                     tool_result={"error": parsed.error},
+                    end=outcome,
                 )
-                return GatewayResult("DONE", reason, "ESCALATED", f"{reason}_TWICE")
+                return outcome
         self._complete(
             tx,
             run_id,
@@ -267,6 +274,7 @@ class ToolGateway:
                 return GatewayResult("INACTIVE")
             charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
             if reason == "LLM_CONFIG":
+                outcome = GatewayResult("DONE", reason, "ERROR", f"LLM_CONFIG: {meta.error}")
                 self._complete(
                     tx,
                     run_id,
@@ -277,6 +285,7 @@ class ToolGateway:
                     reason=reason,
                     result_kind="DONE",
                     tool_result={"error": meta.error},
+                    end=outcome,
                 )
-                return GatewayResult("DONE", reason, "ERROR", f"LLM_CONFIG: {meta.error}")
+                return outcome
             return self._reject(tx, run_id, step_no, meta, parsed, reason)

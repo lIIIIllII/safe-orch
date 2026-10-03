@@ -1,16 +1,23 @@
 """dispatch 워커. 스레드 1개, job_id 순서.
 
 처리하는 kind는 RECHECK·VALIDATE·BUILD_CONSULTATION, 그리고 model_factory가 있으면 START_RUN·
-RESUME_RUN이다. CONTINUE_RUN(과 model_factory가 없을 때의 START_RUN·RESUME_RUN)은 claim하지
-않고 PENDING으로 두며 순서를 막지 않는다.
-실패하면 롤백하고 attempts < 3이면 PENDING, 3이면 FAILED. 재시작 복구는 CLAIMED → PENDING만 한다.
+RESUME_RUN·CONTINUE_RUN이다. model_factory가 없으면 이 셋은 claim하지 않고 PENDING으로 두며 순서를
+막지 않는다.
+실패하면 롤백하고 attempts < 3이면 PENDING, 3이면 FAILED. 기동 복구는 CLAIMED → PENDING과, RUNNING으로
+남은 Run의 CONTINUE_RUN 등록이다 (ST-19).
 """
 
 import logging
 import threading
 
 from app.agents.runtime import ModelFactory
-from app.coordinator.transitions import HANDLERS, resume_run, start_run
+from app.coordinator.transitions import (
+    HANDLERS,
+    continue_run,
+    recover_running_runs,
+    resume_run,
+    start_run,
+)
 from app.packs.loader import LoadedPack
 from app.store import db
 from app.store.repos.dispatch import claim_next, mark_failed_attempt, requeue_claimed
@@ -19,22 +26,20 @@ log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 HANDLED_KINDS = tuple(HANDLERS)
+RUN_KINDS = {"START_RUN": start_run, "RESUME_RUN": resume_run, "CONTINUE_RUN": continue_run}
 
 
 def process_next(pack: LoadedPack, model_factory: ModelFactory | None = None) -> int | None:
     """job 1건을 처리하고 job_id를 반환한다. 처리할 job이 없으면 None."""
-    kinds = HANDLED_KINDS + (("START_RUN", "RESUME_RUN") if model_factory is not None else ())
+    kinds = HANDLED_KINDS + (tuple(RUN_KINDS) if model_factory is not None else ())
     with db.write() as tx:
         job = claim_next(tx, pack.site_id, kinds)
     if job is None:
         return None
     try:
-        if job["kind"] == "START_RUN":
+        if job["kind"] in RUN_KINDS:
             assert model_factory is not None
-            start_run(pack, job, model_factory)
-        elif job["kind"] == "RESUME_RUN":
-            assert model_factory is not None
-            resume_run(pack, job, model_factory)
+            RUN_KINDS[job["kind"]](pack, job, model_factory)
         else:
             HANDLERS[job["kind"]](pack, job)
     except Exception as e:  # noqa: BLE001 — 핸들러 예외는 job 실패로 기록한다
@@ -60,6 +65,12 @@ def run_until_idle(
 def requeue_claimed_jobs(pack: LoadedPack) -> int:
     with db.write() as tx:
         return requeue_claimed(tx, pack.site_id)
+
+
+def recover_on_startup(pack: LoadedPack) -> None:
+    """기동 때 한 번: CLAIMED job을 되돌리고, RUNNING으로 남은 Run을 이어 가게 한다."""
+    requeue_claimed_jobs(pack)
+    recover_running_runs(pack)
 
 
 class DispatchWorker:
@@ -111,7 +122,7 @@ class DispatchWorker:
                         if self._stop.is_set():
                             break
                         if not requeued:
-                            requeue_claimed_jobs(self.pack)
+                            recover_on_startup(self.pack)
                             requeued = True
                         job_id = process_next(self.pack, self.model_factory)
                 except Exception:

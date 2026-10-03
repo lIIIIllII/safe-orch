@@ -128,6 +128,7 @@ class EventResponseExecutor:
             result_kind=outcome.kind,
             tool_result=tool_result,
             state_changes=state_changes,
+            end=outcome,
         )
         return outcome
 

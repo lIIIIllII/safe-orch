@@ -1,4 +1,4 @@
-"""schema v5 제약·불변 트리거(T51)와 init_db."""
+"""schema 제약·불변 트리거(T51)와 init_db."""
 
 import json
 import sqlite3
@@ -45,7 +45,7 @@ def _insert_chain(tx: sqlite3.Connection, site_id: str) -> None:
 
 def test_init_db_creates_v5_tables(temp_db):
     with db.read() as conn:
-        assert db.get_schema_version(conn) == db.SCHEMA_VERSION == 8
+        assert db.get_schema_version(conn) == db.SCHEMA_VERSION == 9
         assert {
             "schema_meta",
             "site",
@@ -65,6 +65,7 @@ def test_init_db_creates_v5_tables(temp_db):
             "hold",
             "consent",
             "consultation",
+            "case_event",
             "dispatch_job",
             "agent_run",
             "agent_step",

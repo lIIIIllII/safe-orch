@@ -1,4 +1,4 @@
--- SAFE-ORCH schema. schema_version 6.
+-- SAFE-ORCH schema. schema_version 9.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -288,6 +288,22 @@ CREATE TABLE hold (
                                      AND released_context_version IS NOT NULL))
 );
 
+-- 메인에게 갈 사건. 생긴 트랜잭션에서 한 번만 적는다(dedupe_key). 처리 상태는 저장하지 않는다.
+-- ref: 종류별 참조(task_id·event_id·hold_id·candidate_id·decision_id·run_id).
+CREATE TABLE case_event (
+    seq                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id                 TEXT NOT NULL REFERENCES site (site_id),
+    kind                    TEXT NOT NULL CHECK (kind IN ('TASK_READY', 'EVENT_REPORTED',
+                                                          'HOLD_RELEASED', 'CANDIDATE_DECIDED',
+                                                          'CHILD_RUN_ENDED',
+                                                          'TASK_REQUEST_WITHDRAWN')),
+    ref                     TEXT NOT NULL CHECK (json_valid(ref)),
+    case_id                 TEXT NOT NULL,
+    dedupe_key              TEXT NOT NULL,
+    created_context_version INTEGER NOT NULL CHECK (created_context_version >= 0),
+    UNIQUE (site_id, dedupe_key)
+);
+
 -- scope: TIME {start_min, start_max} / RESOURCE {resource_ids}
 CREATE TABLE consent (
     consent_id              TEXT PRIMARY KEY,
@@ -340,17 +356,20 @@ CREATE TABLE agent_run (
     site_id               TEXT NOT NULL REFERENCES site (site_id),
     agent_type            TEXT NOT NULL CHECK (agent_type IN ('REPLANNING', 'COORDINATION',
                                                               'INTAKE', 'EVENT_RESPONSE',
-                                                              'ASSISTANT')),
+                                                              'ASSISTANT', 'MAIN')),
     case_id               TEXT NOT NULL,
+    -- 부른 Run. MAIN은 부모가 없다
+    parent_run_id         TEXT REFERENCES agent_run (run_id),
     acting_actor_id       TEXT,
     acting_unit_id        TEXT NOT NULL,
     input_ref             TEXT NOT NULL CHECK (json_valid(input_ref)),
     exec_contract_version TEXT NOT NULL,
     status                TEXT NOT NULL CHECK (status IN ('RUNNING', 'WAITING_HUMAN', 'SUCCEEDED',
-                                                          'ESCALATED', 'BUDGET_EXHAUSTED', 'STALE',
-                                                          'CANCELLED', 'ERROR')),
+                                                          'ESCALATED', 'BLOCKED', 'BUDGET_EXHAUSTED',
+                                                          'STALE', 'CANCELLED', 'ERROR')),
     wait_kind             TEXT CHECK (wait_kind IS NULL
-                                      OR wait_kind IN ('MESSAGE', 'CONSULTATION', 'CANDIDATE_OUTCOME')),
+                                      OR wait_kind IN ('MESSAGE', 'CONSULTATION', 'CANDIDATE_OUTCOME',
+                                                       'CHILD_RUN', 'HUMAN_DECISION')),
     wait_ref              TEXT,
     wait_generation       INTEGER NOT NULL DEFAULT 0 CHECK (wait_generation >= 0),
     wake_seq              INTEGER NOT NULL DEFAULT 0 CHECK (wake_seq >= 0),
@@ -363,9 +382,19 @@ CREATE TABLE agent_run (
     solver_calls_used     INTEGER NOT NULL DEFAULT 0 CHECK (solver_calls_used >= 0),
     solver_seconds_used   REAL NOT NULL DEFAULT 0 CHECK (solver_seconds_used >= 0),
     restart_count         INTEGER NOT NULL DEFAULT 0 CHECK (restart_count >= 0),
+    agent_calls_used      INTEGER NOT NULL DEFAULT 0 CHECK (agent_calls_used >= 0),
+    -- 마지막으로 본 case_event 순번
+    last_event_seq        INTEGER NOT NULL DEFAULT 0 CHECK (last_event_seq >= 0),
     CHECK ((status = 'WAITING_HUMAN') = (wait_kind IS NOT NULL)),
+    CHECK (agent_type <> 'MAIN' OR parent_run_id IS NULL),
     FOREIGN KEY (site_id, acting_unit_id) REFERENCES work_unit (site_id, unit_id)
 );
+
+-- 열린 MAIN은 site당 하나, 열린 하위 Run은 부모당 하나 (ST-18)
+CREATE UNIQUE INDEX agent_run_one_open_main ON agent_run (site_id)
+    WHERE agent_type = 'MAIN' AND status IN ('RUNNING', 'WAITING_HUMAN');
+CREATE UNIQUE INDEX agent_run_one_open_child ON agent_run (parent_run_id)
+    WHERE parent_run_id IS NOT NULL AND status IN ('RUNNING', 'WAITING_HUMAN');
 
 -- step은 LLM 호출 전에 예약하고(RESERVED), COMPLETED 또는 ABORTED로 한 번만 끝난다.
 CREATE TABLE agent_step (
@@ -468,7 +497,7 @@ CREATE TRIGGER message_no_delete BEFORE DELETE ON message
 BEGIN SELECT RAISE(ABORT, 'message: no delete'); END;
 
 CREATE TRIGGER agent_run_no_revive BEFORE UPDATE ON agent_run
-WHEN OLD.status IN ('SUCCEEDED', 'ESCALATED', 'BUDGET_EXHAUSTED', 'STALE', 'CANCELLED')
+WHEN OLD.status IN ('SUCCEEDED', 'ESCALATED', 'BLOCKED', 'BUDGET_EXHAUSTED', 'STALE', 'CANCELLED')
      AND NEW.status <> OLD.status
 BEGIN SELECT RAISE(ABORT, 'agent_run: terminal status'); END;
 CREATE TRIGGER agent_run_no_decrease BEFORE UPDATE ON agent_run
@@ -479,7 +508,9 @@ WHEN NEW.steps_used < OLD.steps_used OR NEW.llm_attempts_used < OLD.llm_attempts
      OR NEW.wait_generation < OLD.wait_generation OR NEW.wake_seq < OLD.wake_seq
      OR NEW.handled_wake_seq < OLD.handled_wake_seq OR NEW.last_step_no < OLD.last_step_no
      OR NEW.restart_count < OLD.restart_count
+     OR NEW.agent_calls_used < OLD.agent_calls_used OR NEW.last_event_seq < OLD.last_event_seq
      OR NEW.run_id <> OLD.run_id OR NEW.case_id <> OLD.case_id
+     OR NEW.parent_run_id IS NOT OLD.parent_run_id
 BEGIN SELECT RAISE(ABORT, 'agent_run: counters must not decrease'); END;
 CREATE TRIGGER agent_run_no_delete BEFORE DELETE ON agent_run
 BEGIN SELECT RAISE(ABORT, 'agent_run: no delete'); END;
@@ -558,6 +589,11 @@ CREATE TRIGGER event_no_update BEFORE UPDATE ON event
 BEGIN SELECT RAISE(ABORT, 'immutable: event'); END;
 CREATE TRIGGER event_no_delete BEFORE DELETE ON event
 BEGIN SELECT RAISE(ABORT, 'immutable: event'); END;
+
+CREATE TRIGGER case_event_no_update BEFORE UPDATE ON case_event
+BEGIN SELECT RAISE(ABORT, 'immutable: case_event'); END;
+CREATE TRIGGER case_event_no_delete BEFORE DELETE ON case_event
+BEGIN SELECT RAISE(ABORT, 'immutable: case_event'); END;
 
 CREATE TRIGGER consent_no_update BEFORE UPDATE ON consent
 BEGIN SELECT RAISE(ABORT, 'immutable: consent'); END;

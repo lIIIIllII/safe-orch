@@ -195,6 +195,7 @@ class ReplanningExecutor:
             if rejected is not None:
                 return rejected
             assert isinstance(parsed.action, spec.EscalateNoSolution)
+            outcome = GatewayResult("DONE", None, "ESCALATED", "ESCALATE_NO_SOLUTION")
             self._complete(
                 tx,
                 run_id,
@@ -205,8 +206,9 @@ class ReplanningExecutor:
                 reason=None,
                 result_kind="DONE",
                 tool_result={"reason": parsed.action.reason},
+                end=outcome,
             )
-            return GatewayResult("DONE", None, "ESCALATED", "ESCALATE_NO_SOLUTION")
+            return outcome
 
     def _solve(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
         """SOLVE_WITH_SCOPE(level)와 TRY_ALTERNATIVE_RESOURCE(주 충돌 L0 + 대체 자원 1개)."""
@@ -320,6 +322,7 @@ class ReplanningExecutor:
                 result_kind=outcome.kind,
                 tool_result=tool_result,
                 state_changes=changes,
+                end=outcome,
             )
             return outcome
 

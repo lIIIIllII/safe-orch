@@ -1,4 +1,4 @@
-"""Coordinator 핸들러. RECHECK·VALIDATE·BUILD_CONSULTATION·START_RUN.
+"""Coordinator 핸들러. RECHECK·VALIDATE·BUILD_CONSULTATION·START_RUN·RESUME_RUN·CONTINUE_RUN.
 
 핸들러는 job 1건을 처리하고, 효과와 job DONE을 같은 write 트랜잭션에서 기록한다. 같은 job을
 두 번 처리해도 효과는 1회다. app.solver를 import하지 않는다(Solver는 Replanning Run이 부른다).
@@ -31,13 +31,44 @@ from app.store.repos.records import (
     insert_validation,
     list_validations,
 )
-from app.store.repos.runs import get_run, has_open_case, insert_run, run_for_solver_result
+from app.store.repos.runs import (
+    get_run,
+    has_open_case,
+    insert_run,
+    mark_restart,
+    run_for_solver_result,
+)
 from app.store.repos.site import get_site, list_actors
 from app.store.repos.snapshots import create_snapshot
 from app.store.repos.tasks import list_current_tasks
 from app.validator.validator import validate
 
 Job = dict[str, Any]
+
+
+def recover_running_runs(pack: LoadedPack) -> list[str]:
+    """기동 복구 (ST-19). RUNNING으로 남은 Run마다 예약만 된 step을 정리하고 CONTINUE_RUN을 등록한다.
+
+    워커가 하나라 기동 시점의 RUNNING Run은 모두 중단된 것이다. 완료된 step은 그대로 두고 관찰부터
+    다시 부르므로 커밋된 Action은 다시 실행되지 않는다. 등록한 run_id 목록.
+    """
+    out = []
+    with db.write() as tx:
+        ids = [
+            r[0]
+            for r in tx.execute(
+                "SELECT run_id FROM agent_run WHERE site_id = ? AND status = 'RUNNING'"
+                " ORDER BY rowid",
+                (pack.site_id,),
+            )
+        ]
+        for run_id in ids:
+            count = mark_restart(tx, run_id)
+            if count is not None:
+                key = f"CONTINUE_RUN:{run_id}:{count}"
+                register_job(tx, pack.site_id, "CONTINUE_RUN", key, {"run_id": run_id}, run_id=run_id)
+                out.append(run_id)
+    return out
 
 
 def choose_acting(
@@ -315,6 +346,24 @@ def resume_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) 
         claimed = claim_resume(tx, run_id, generation)
         mark_done(tx, job["job_id"])
     if not claimed:
+        return False
+    try:
+        model = model_factory()
+    except Exception as e:  # noqa: BLE001
+        with db.write() as tx:
+            end_case_run(tx, pack, run_id, "ERROR", f"MODEL_UNAVAILABLE: {type(e).__name__}")
+        return True
+    runtime.invoke(pack, {"run_id": run_id}, model)
+    return True
+
+
+def continue_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -> bool:
+    """CONTINUE_RUN: Run이 아직 RUNNING이면 tx 밖에서 같은 run_id로 그래프를 observe부터 부른다."""
+    run_id = job["run_id"]
+    with db.write() as tx:
+        run = get_run(tx, run_id)
+        mark_done(tx, job["job_id"])
+    if run is None or run.status != "RUNNING":
         return False
     try:
         model = model_factory()

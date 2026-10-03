@@ -24,6 +24,7 @@ from app.domain.models import (
     pool_for,
 )
 from app.packs.loader import LoadedPack, confirmed_fields
+from app.store.repos.case_events import record_case_event
 from app.store.repos.cases import end_case_run, queued_task_ids, register_recheck, wake_run
 from app.store.repos.consents import insert_consent
 from app.store.repos.plans import get_current_plan
@@ -217,6 +218,7 @@ def create_requested_task(
         insert_consent(tx, site_id, c, context_version)
     if not queued:
         cause = {"kind": cause_kind, "task_id": task.task_id, "actor_id": actor.actor_id}
+        record_case_event(tx, site_id, "TASK_READY", f"TASK_READY:{task.task_id}:1", cause)
         register_recheck(tx, site_id, cause)
     return {
         "task_id": task.task_id,
@@ -312,6 +314,8 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
         else:
             wake_run(tx, site_id, run.run_id)
     cause = {"kind": "WITHDRAW", "task_id": task.task_id, "actor_id": ctx.actor_id}
+    key = f"TASK_REQUEST_WITHDRAWN:{task.task_id}:{revision}"
+    record_case_event(tx, site_id, "TASK_REQUEST_WITHDRAWN", key, cause)
     register_recheck(tx, site_id, cause)
     return r
 

@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.domain.canonical import canonical_hash
 from app.domain.ids import new_id
 from app.packs.loader import LoadedPack
+from app.store.repos.case_events import case_of, record_case_event
 from app.store.repos.cases import (
     end_case_run,
     register_event_response,
@@ -107,6 +108,14 @@ def _receive(tx: sqlite3.Connection, ctx: CommandContext, body: EventReport) -> 
         body.target_task_id if task_scoped else None,
         context_version,
     )
+    # 신고는 열린 Case의 사건이다(Run을 정리하기 전에 적는다)
+    record_case_event(
+        tx,
+        site_id,
+        "EVENT_REPORTED",
+        f"EVENT_REPORTED:{event_id}",
+        {"event_id": event_id, "hold_id": hold_id, "event_type": body.event_type},
+    )
     # 열린 Case의 Run을 STALE로. 실행 중인 그래프는 다음 RUNNING 확인에서 멈춘다.
     # 보낸 요청은 CANCELLED, Case가 닫히면 대기열 1건이 READY로 올라간다(RECHECK는 Hold로 건너뜀).
     # 응답은 재전송 때와 같아야 하므로 run_id는 넣지 않는다(end_reason EVENT:<event_id>로 찾는다).
@@ -160,6 +169,14 @@ def _release(tx: sqlite3.Connection, ctx: CommandContext, body: HoldRelease) -> 
                 end_case_run(tx, ctx.pack, run.run_id, "STALE", f"HOLD_RELEASED:{body.hold_id}")
     context_version = bump_context_version(tx, site_id)
     release_hold(tx, site_id, body.hold_id, body.resolution, ctx.actor_id, context_version)
+    record_case_event(
+        tx,
+        site_id,
+        "HOLD_RELEASED",
+        f"HOLD_RELEASED:{body.hold_id}",
+        {"hold_id": body.hold_id, "event_id": hold["event_id"], "resolution": body.resolution},
+        case_of(tx, site_id, f"EVENT_REPORTED:{hold['event_id']}"),
+    )
     recheck = not list_active_holds(tx, site_id)
     if recheck:
         cause = {"kind": "HOLD_RELEASE", "hold_id": body.hold_id, "task_id": hold["task_id"]}

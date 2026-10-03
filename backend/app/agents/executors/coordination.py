@@ -117,6 +117,7 @@ class CoordinationExecutor:
             result_kind=outcome.kind,
             tool_result=tool_result,
             state_changes=state_changes,
+            end=outcome,
         )
 
     def _task(self, tx: sqlite3.Connection, task_id: str) -> Task:

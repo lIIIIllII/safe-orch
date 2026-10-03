@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.domain.ids import new_id
 from app.domain.models import Axis, Candidate, FeedbackConstraint, Plan, Validation
 from app.packs.loader import LoadedPack
+from app.store.repos.case_events import record_case_event
 from app.store.repos.cases import (
     close_case,
     end_candidate_runs,
@@ -154,6 +155,8 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
     run_id = None
     if candidate.solver_result_id is not None:
         run_id = run_for_solver_result(tx, candidate.solver_result_id)
+    _record_decided(tx, ctx, candidate, decision_id, "APPROVE", run_id)
+    if candidate.solver_result_id is not None:
         if run_id is not None and not end_case_run(
             tx, ctx.pack, run_id, "SUCCEEDED", f"COMMITTED:{plan_revision}"
         ):
@@ -311,6 +314,7 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
         else None
     )
     run = get_run(tx, run_id) if run_id else None
+    _record_decided(tx, ctx, candidate, decision_id, "REJECT", run_id)
     if run is not None:
         if not immovable and _no_constraint_rejections(tx, run.case_id) >= MAX_PLAIN_REJECTIONS:
             end_case_run(tx, ctx.pack, run.run_id, "ESCALATED", "REJECTED_TWICE")
@@ -318,6 +322,26 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
             wake_run(tx, site_id, run.run_id)
         r.refs["run_id"] = run.run_id
     return r
+
+
+def _record_decided(
+    tx: sqlite3.Connection,
+    ctx: CommandContext,
+    candidate: Candidate,
+    decision_id: str,
+    decision: str,
+    maker_run_id: str | None,
+) -> None:
+    """후보 승인·거절 결과는 그 후보를 만든 Run의 Case 사건이다(Run을 끝내기 전에 적는다)."""
+    maker = get_run(tx, maker_run_id) if maker_run_id else None
+    record_case_event(
+        tx,
+        ctx.site_id,
+        "CANDIDATE_DECIDED",
+        f"CANDIDATE_DECIDED:{decision_id}",
+        {"candidate_id": candidate.candidate_id, "decision_id": decision_id, "type": decision},
+        None if maker is None else maker.case_id,
+    )
 
 
 MAX_PLAIN_REJECTIONS = 2  # Case당 제약 없는 거절이 2번째면 이관 (T33)

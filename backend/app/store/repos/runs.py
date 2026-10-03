@@ -16,14 +16,15 @@ CASE_AGENT_TYPES = ("REPLANNING",)
 
 def insert_run(tx: sqlite3.Connection, site_id: str, run: AgentRun) -> None:
     tx.execute(
-        "INSERT INTO agent_run (run_id, site_id, agent_type, case_id, acting_actor_id,"
-        " acting_unit_id, input_ref, exec_contract_version, status)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO agent_run (run_id, site_id, agent_type, case_id, parent_run_id,"
+        " acting_actor_id, acting_unit_id, input_ref, exec_contract_version, status)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             run.run_id,
             site_id,
             run.agent_type,
             run.case_id,
+            run.parent_run_id,
             run.acting_actor_id,
             run.acting_unit_id,
             dumps(run.input_ref),
@@ -310,6 +311,22 @@ def list_active_runs(conn: sqlite3.Connection, site_id: str) -> list[AgentRun]:
         )
     ]
     return [run for rid in ids if (run := get_run(conn, rid)) is not None]
+
+
+def mark_restart(tx: sqlite3.Connection, run_id: str) -> int | None:
+    """기동 복구: RUNNING Run의 예약만 된 step·SolverJob을 ABORTED로 두고 restart_count += 1 (ST-19).
+
+    새 restart_count를 돌려준다. RUNNING이 아니면 None.
+    """
+    row = tx.execute(
+        "UPDATE agent_run SET restart_count = restart_count + 1"
+        " WHERE run_id = ? AND status = 'RUNNING' RETURNING restart_count",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    abort_reserved(tx, run_id, "RESTART")
+    return row[0]
 
 
 def abort_reserved(tx: sqlite3.Connection, run_id: str, reason: str) -> None:

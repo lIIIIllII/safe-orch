@@ -93,9 +93,9 @@ def build_graph(
         return {"message": call.message, "meta": meta}
 
     def gateway(state: State) -> State:
+        # DONE이면 Gateway가 step 기록과 같은 tx에서 Run을 이미 끝냈다 (ST-19)
         result = port.execute(state["run_id"], state["step_no"], state["message"], state["meta"])
-        end = (result.end_status, result.end_reason) if result.kind == "DONE" else None
-        return {"result": result, "end": end}
+        return {"result": result, "end": None}
 
     def after_gateway(state: State) -> str:
         kind = state["result"].kind
