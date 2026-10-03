@@ -5,11 +5,9 @@
 - 입력은 Pack YAML(pack·site·plan_r0·scenario·rules)을 yaml.safe_load로 직접 읽는다.
 - 자원 조건(유형·사용 권한·사용 가능 구역·요구 조건)도 여기서 따로 구현한다(`fits`). app의 적격성 함수를 쓰지 않는다.
 - 수량 풀의 누적 제약(겹치는 작업의 수요 합 ≤ 수량)과 필수 직종도 따로 구현한다(`pool_over`).
-- 평가 시나리오 진실(보는 판 S1, 숨긴 판 S1'')도 같은 계산으로 확인한다(`scenario_truths`). 진실 값만 읽는다.
 - 계산은 app 코드(rules·solver·validator)를 import하지 않는 독립 구현이다. CP-SAT 모델(CALENDAR 포함)과
   전수 열거를 함께 돌려 상태·변경 수·지연·해가 같은지 대조하고, 최적해가 하나뿐인지 센다.
 - 결과는 콘솔에만 쓴다. pytest(tests/test_demo_extension.py)가 같은 값을 운영 코드로 재현한다.
-- scripts/live_run.py --request가 `load`·`expected`·`advance`로 요청별 기대값을 같은 출처에서 얻는다.
 """
 
 import datetime as dt
@@ -25,7 +23,6 @@ from ortools.sat.python import cp_model
 from ortools.util.python.sorted_interval_list import Domain
 
 PACK = Path(__file__).resolve().parents[2] / "domain_packs" / "shipyard"
-SCENARIOS = Path(__file__).resolve().parents[1] / "evals" / "scenarios" / "shipyard"
 WEEKDAY = "월화수목금토일"
 FIXED = (False, False, ())
 
@@ -591,39 +588,6 @@ def apply(others: list[T], req: T, sol: dict) -> list[T]:
     ]
 
 
-def scenario_truths(w: World, fixture: list[T]) -> None:
-    """평가 시나리오(자연어 접수)의 진실 값으로 기대 결과를 다시 계산한다.
-
-    보는 판 S1과 숨긴 판 S1''. 진실의 earliest_start 범위 양 끝에서 각각 계산하고, 해가 하나이며
-    두 끝의 해가 같은지 확인한다. 요청자는 planner_a(UA), 축은 폼과 같다(시간만).
-    """
-    raw = yaml.safe_load((PACK / "pack.yaml").read_text(encoding="utf-8"))
-    tags = {k: v["hazard_tags"][0] for k, v in raw["work_types"].items()}
-    site = yaml.safe_load((PACK / "site.yaml").read_text(encoding="utf-8"))
-    unit_of = {a["actor_id"]: a["unit_id"] for a in site["actors"]}
-    for path in (SCENARIOS / "S1.yaml", SCENARIOS / "hidden" / "S1.yaml"):
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        truth = data["truth"]["task"]
-        unit = unit_of[data["start"]["requester"]]
-        lo, hi = truth["earliest_start"]
-        print(f"{data['id']} ({unit}) 시작 가능 {w.clock(lo)}~{w.clock(hi)}")
-        found = set()
-        for es in (lo, hi):
-            t = {**truth, "task_id": data["start"]["task_id"], "earliest_start": es}
-            req = make_task(w, tags, t, unit, {"time": True, "resource": False}, None)
-            bad = unmet(w, req, req.res) if req.res else []
-            if bad:
-                raise SystemExit(f"{data['id']}: 진실 자원이 조건에 맞지 않는다 {bad}")
-            status, changed, _delay, sol = solve_request(w, fixture, req, levels=("L0",))["L0"]
-            if status != "OPTIMAL" or changed != 1:
-                raise SystemExit(f"{data['id']}: L0 {status} 변경 {changed}")
-            found.add(sol[req.id])
-        if len(found) != 1:
-            raise SystemExit(f"{data['id']}: 범위 양 끝의 해가 다르다 {found}")
-        (start, res) = next(iter(found))
-        print(f"  → 해 {w.clock(start)}({start}) {res}")
-
-
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     w, fixture, a, demos = load()
@@ -685,9 +649,6 @@ def main() -> None:
             f" 충돌 {r['conflict']} L0 {r['status']} 변경 {r['changed']} 지연 {r['delay']}"
             f"/근무 {r['work_delay']} [{moved}] 전수 일치"
         )
-
-    print("\n평가 시나리오 진실 (R0 기준):")
-    scenario_truths(w, fixture)
 
 
 if __name__ == "__main__":
