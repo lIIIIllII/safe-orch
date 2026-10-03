@@ -1,8 +1,10 @@
 # SAFE-ORCH
 
-설계 기준: `docs/SAFE-ORCH_Project_Blueprint_v1.2.4.md` (구현된 범위. 저장소 §5.4, Agent 실행 계층 §11, 스택·구조 §14, 미구현 설계는 §18.2)
-보충 결정: `docs/SAFE-ORCH_구현_결정_기록.md` A 항목 (블루프린트가 정하지 않은 값·구현 방식. 충돌하면 블루프린트 우선, 구현을 멈추고 확인. 새 결정은 결정 기록의 마지막 A 번호 다음부터)
-대회 계획: `docs/SAFE-ORCH_8일_MVP_구현_우선순위_v2.md` (일정·시연·제출물)
+설계 의도: `docs/SAFE-ORCH_Blueprint_v2.0.md` (무엇을 왜 만드나. 구현 상태는 적지 않음)
+Agent·도구·스킬: `docs/Agent_도구_스킬.md` (목록과 규칙. 지침 원문은 코드)
+결정 기록: `docs/결정_기록.md` (되돌려질 위험이 있는 결정만. 결정 한 줄 + 이유 한 줄, 200줄 상한. 새 결정은 영역별 마지막 번호 다음. 바뀌면 고쳐 쓰고, 구현 기록은 커밋 메시지에)
+기존 자산: `docs/기존_자산_지도.md` (새로 만들기 전에 먼저 찾기. 새 테이블·환경 변수·공용 함수를 만들면 지도에 한 줄 더하기)
+문서와 코드가 다르면 구현을 멈추고 확인. 코드 주석은 결정 기록 번호(예: AG-05)만 가리킨다.
 
 ## 작업 규칙
 - 패키지 설치 전 venv 먼저(`uv venv --python 3.12`), 설치는 `uv add`(개발용 `uv add --dev`). pip 직접 사용 금지.
@@ -26,4 +28,4 @@ cd backend && uv run uvicorn app.main:app --reload --port 8000
 cd backend && uv run pytest
 cd frontend && npm run dev
 ```
-- Agent 자동 시작 스위치: `COORDINATION_ENABLED`·`EVENT_RESPONSE_ENABLED`(기본 true, A.28). 테스트는 .env를 읽지 않고 conftest가 둘 다 끈다.
+- Agent 자동 시작 스위치: `COORDINATION_ENABLED`·`EVENT_RESPONSE_ENABLED`(기본 true). 테스트는 .env를 읽지 않고 conftest가 둘 다 끈다.
