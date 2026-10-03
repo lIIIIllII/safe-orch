@@ -173,7 +173,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 "work_type": k,
                 "display_name": v.display_name,
                 "critical_fields": list(v.critical_fields),
-                # 이 유형 작업에 서버가 붙이는 기본 자원 요구 조건 (CV-19)
+                # 이 유형 작업에 서버가 붙이는 기본 자원 요구 조건 (CV-11)
                 "resource_requirements": [r.model_dump() for r in v.resource_requirements],
                 # 이 유형 작업에 서버가 붙이는 기본 수요(required는 필수 직종)
                 "pool_demands": [d.model_dump() for d in v.pool_demands],

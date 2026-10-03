@@ -129,18 +129,20 @@ def test_s1_passes_with_scripted_model(pack):
     assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
 
 
-def test_s2_passes_at_stage0_end_point(pack):
-    """준비(스크립트) → 신고 → 늦은 답(LATE) → 질문 2회 → 진실과 같은 수정안 → 확인·해제에서 끝난다."""
-    router = Router(
-        event_response=[
-            call("LOOKUP_TASKS", work_type="PAINTING"),
-            call("ASK_REPORTER", question="어느 작업이 얼마나 늦어지나요?"),
-            call("ASK_REPORTER", question="D2 도장(09:45)이 맞나요?"),
-            call("ANALYZE_IMPACT", task_id="E", new_earliest_start=65),
-            call("PROPOSE_FACT_UPDATE", task_id="E", new_earliest_start=65, evidence="신고 인용"),
-        ]
-    )
-    r = run_once(_scn(pack, "S2"), pack.name, router.factory())
+S2_EVENT_RESPONSE = [
+    call("LOOKUP_TASKS", work_type="PAINTING"),
+    call("ASK_REPORTER", question="어느 작업이 얼마나 늦어지나요?"),
+    call("ASK_REPORTER", question="D2 도장(09:45)이 맞나요?"),
+    call("ANALYZE_IMPACT", task_id="E", new_earliest_start=65),
+    call("PROPOSE_FACT_UPDATE", task_id="E", new_earliest_start=65, evidence="신고 인용"),
+]
+
+
+def test_s2_passes_at_end_point_before_stage2(pack):
+    """준비(스크립트) → 신고 → 늦은 답(LATE) → 질문 2회 → 진실과 같은 수정안 → 확인·해제에서 끝난다.
+    종료 지점은 2단계 전의 판정 범위다(stage 1로 돌린다)."""
+    router = Router(event_response=S2_EVENT_RESPONSE)
+    r = run_once(_scn(pack, "S2"), pack.name, router.factory(), stage=1)
     assert (r["valid"], r["end"], r["grade"]) == (True, "END_POINT", "PASS")
     assert r["outcome"]["answers_before_proposal"] == 2
     assert r["metrics"]["late_answers"] == 1
@@ -161,9 +163,43 @@ def test_s2_proposal_before_last_answer_is_short(pack):
             call("PROPOSE_FACT_UPDATE", task_id="E", new_earliest_start=65, evidence="추정"),
         ]
     )
-    r = run_once(_scn(pack, "S2"), pack.name, router.factory())
+    r = run_once(_scn(pack, "S2"), pack.name, router.factory(), stage=1)
     assert (r["end"], r["grade"]) == ("END_POINT", "SHORT")
     assert r["outcome"]["fact_confirmed"] and not r["outcome"]["after_last_answer"]
+
+
+def test_s2_goes_past_hold_release_from_stage2(pack):
+    """2단계부터는 해제에서 끝나지 않는다: 같은 메인이 재계획을 다시 부르고, 판정은 확정까지 본다.
+    지연이 반영된 사실에서는 L0·L1 모두 해가 없어 재계획이 막히고, 메인이 담당자 사전 확인을 부른다.
+    이 스크립트는 거기서 멈추므로(확정 없음) 미달이다."""
+    router = Router(
+        event_response=S2_EVENT_RESPONSE,
+        replanning=[solve("L0"), solve("L1"), solve("L0"), solve("L1"), escalate()],
+    )
+    r = run_once(_scn(pack, "S2"), pack.name, router.factory())
+    assert (r["stage"], r["valid"], r["end"], r["grade"]) == (2, True, "STALLED", "SHORT")
+    outcome = r["outcome"]
+    assert (outcome["fact_confirmed"], outcome["hold_released"], outcome["committed"]) == (
+        True,
+        True,
+        False,
+    )
+    assert [x["agent_type"] for x in r["metrics"]["runs"]] == [
+        "MAIN",
+        "REPLANNING",
+        "COORDINATION",
+        "EVENT_RESPONSE",
+        "REPLANNING",
+        "COORDINATION",
+    ]
+    last = r["metrics"]["requests"][-1]
+    assert (last["kind"], last["to"], last["status"], last["agent"]) == (
+        "MOVABILITY",
+        "planner_a",
+        "OPEN",
+        "COORDINATION",
+    )
+    assert router.left()["REPLANNING"] == 0
 
 
 def test_s3_passes_with_scripted_model(pack):

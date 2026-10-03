@@ -58,9 +58,9 @@ class TaskRequestForm(Body):
     latest_end: int
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
-    # 작업 값. 작업 유형 기본값에 더해진다(빼거나 낮출 수 없다, CV-19)
+    # 작업 값. 작업 유형 기본값에 더해진다(빼거나 낮출 수 없다, CV-11)
     resource_requirements: tuple[Requirement, ...] = ()
-    # 작업 값. 작업 유형 기본 수요보다 낮출 수 없다(큰 쪽을 쓴다, CV-19)
+    # 작업 값. 작업 유형 기본 수요보다 낮출 수 없다(큰 쪽을 쓴다, CV-11)
     pool_demands: tuple[Demand, ...] = ()
     predecessors: tuple[PredecessorInput, ...] = ()
     hazard_tags: tuple[str, ...] = Field(default=(), exclude=True)  # 받으면 버린다

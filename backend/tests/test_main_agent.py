@@ -1,4 +1,4 @@
-"""Main Agent: 도구 넷의 유효성, 하위 Run 시작·종료, 사실 지문 (AG-24·AG-27, ST-20)."""
+"""Main Agent: 도구 넷의 유효성, 하위 Run 시작·종료, 사실 지문 (AG-24, ST-20)."""
 
 import uuid
 
@@ -376,7 +376,7 @@ def test_replanning_call_is_refused_while_hold_is_active(seeded, main_on):
 
 
 def test_recall_is_allowed_after_plain_rejection_and_refused_when_nothing_changed(seeded, main_on):
-    """사실 지문: 제약 없는 거절은 현장 버전을 올리지 않지만 같은 호출을 다시 받게 한다 (AG-27)."""
+    """사실 지문: 제약 없는 거절은 현장 버전을 올리지 않지만 같은 호출을 다시 받게 한다 (AG-24)."""
     pack = seeded
     assert _submit(pack, "N1").status == "APPLIED"
     group = _group(pack)

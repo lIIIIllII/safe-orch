@@ -666,7 +666,7 @@ def test_all_zones_must_be_written_as_star(pack_copy, value):
     assert load_pack(pack_copy).resources[0].allowed_zone_ids == ("*",)
 
 
-# ── 수량 풀·종류 선언·작업 유형 기본 수요 (CV-19·23) ──────────────
+# ── 수량 풀·종류 선언·작업 유형 기본 수요 (CV-11·23) ──────────────
 
 
 def test_pools_loaded(pack):

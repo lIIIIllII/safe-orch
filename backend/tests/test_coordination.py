@@ -394,7 +394,7 @@ def test_objection_without_fix_request_is_reported_not_drafted(seeded, main_on):
     assert (main.status, main.wait_kind) == ("WAITING_HUMAN", "HUMAN_DECISION")
 
 
-# ── 담당자 답은 변경(change_hash)에 묶인다 (ST-15·ST-16, CV-13) ──
+# ── 담당자 답은 변경(change_hash)에 묶인다 (ST-15, CV-13) ──
 
 
 def _report_event(pack, source="ev1"):

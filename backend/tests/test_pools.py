@@ -1,4 +1,4 @@
-"""수량 풀·작업 수요·필수 직종 (CV-19·21·23). 누적 제약을 Rule Engine·Validator·Solver가 같은 기준으로 본다."""
+"""수량 풀·작업 수요·필수 직종 (CV-11·21·23). 누적 제약을 Rule Engine·Validator·Solver가 같은 기준으로 본다."""
 
 import json
 import uuid

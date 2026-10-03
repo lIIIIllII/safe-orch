@@ -10,4 +10,4 @@
 # 4: 메인 Agent(해 없음 판정은 메인의 이관, 준비 스크립트에 메인 줄)
 HARNESS_VERSION = "4"
 # 지금 코드의 단계. 단계를 닫을 때 올린다. 시나리오 정의의 from_stage가 이 값보다 크면 기록만 한다
-EVAL_STAGE = 1
+EVAL_STAGE = 2

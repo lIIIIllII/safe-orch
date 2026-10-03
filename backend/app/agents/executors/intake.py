@@ -351,14 +351,14 @@ def values_check_text(pack: LoadedPack, task_id: str, v: dict[str, Any]) -> str:
         if v.get("requested_resource_id")
         else "없음"
     )
-    # 자원이 맞춰야 하는 조건 = 작업 유형 기본값 + 요청 값 (CV-19)
+    # 자원이 맞춰야 하는 조건 = 작업 유형 기본값 + 요청 값 (CV-11)
     needs = [
         *(r.model_dump() for r in pack.default_requirements(v["work_type"])),
         *(v.get("resource_requirements") or ()),
     ]
     if v.get("requested_resource_id") and needs:
         resource += f"(요구 조건: {', '.join(requirement_text(pack, r) for r in needs)})"
-    # 수요 = 작업 유형 기본값과 요청 값 중 큰 쪽 (CV-19)
+    # 수요 = 작업 유형 기본값과 요청 값 중 큰 쪽 (CV-11)
     demands: dict[str, int] = {}
     for d in (
         *(x.model_dump() for x in pack.default_demands(v["work_type"])),

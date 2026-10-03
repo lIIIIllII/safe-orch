@@ -638,7 +638,7 @@ def test_values_check_text_without_requirements(seeded):
     assert "(요구 조건: 최대 하중 ≥ 20 t, 용도 블록 포함)" in values_check_text(seeded, "X", block)
 
 
-# ── 수량 풀 종류·수요 (CV-19·23) ────────────────────────────────
+# ── 수량 풀 종류·수요 (CV-11·23) ────────────────────────────────
 
 
 def test_observation_has_pool_kinds_and_default_demands(seeded):

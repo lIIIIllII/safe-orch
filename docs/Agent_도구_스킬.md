@@ -1,6 +1,6 @@
 # SAFE-ORCH Agent·도구·스킬
 
-2026-10-03. 목록과 규칙만 적는다. 왜 이런 구조인지는 블루프린트 §5, 지침 원문은 코드(`backend/app/agents/`)에 있다. 도구 이름은 제안이다.
+2026-10-04. 목록과 규칙만 적는다. 왜 이런 구조인지는 블루프린트 §5, 지침 원문은 코드(`backend/app/agents/`)에 있다. 도구 이름은 제안이다.
 
 ## 1. 층과 공통 규칙
 
@@ -14,7 +14,7 @@
 - 스킬이 열리는 조건은 사실 조건(할 일이 있는지)만 둔다. "A를 한 뒤에만 B" 같은 순서 조건은 두지 않는다.
 - 서버에 남는 흐름 규칙은 둘뿐이다.
   - 같은 탐색을 다시 요청하면 계산하지 않고 이전 결과를 "이미 해 본 탐색"으로 돌려준다(Solver Budget 안 씀, step은 씀).
-  - 담당자가 거절한 값은 다시 묻지 못한다. 그 작업에 관련된 버전이 거절 이후 바뀌었을 때만, 바뀐 내용을 서버 문구에 붙여 다시 물을 수 있다.
+  - 담당자가 거절한 값은 다시 묻지 못한다. 판정은 보낸 Run이나 Case가 아니라 메시지 기준으로 현장 전체에서 하고, 같은 작업 revision인 동안 유지된다. 그 작업이 거절 이후 바뀌었을 때만(새 revision), 바뀐 내용을 서버 문구에 붙여 다시 물을 수 있다.
 - 1 step = step 예약 → LLM 1회 → Action 1개. 도구 실행은 Tool Gateway만 거친다.
 - 도구의 시각 인자는 현장 날짜·시각 문자열("YYYY-MM-DD HH:MM")이다. 서버가 분으로 바꾸고, 형식이 틀리거나 Horizon 밖이면 거절한다.
 
@@ -22,15 +22,16 @@
 
 | Agent | Goal | 끝나는 방식 | Budget |
 |---|---|---|---|
-| Main | 맡은 사건을 끝까지 처리한다 | 이 Case의 열린 일이 없으면 `CLOSE`. 풀 수 없으면 Supervisor에게 `ESCALATE` | step 12, 전문 Agent 호출 8 (설정값). 사건을 합칠 때의 가산은 3단계 |
+| Main | 맡은 사건을 끝까지 처리한다 | 이 Case의 열린 일이 없으면 `CLOSE`. 풀 수 없으면 Supervisor에게 `ESCALATE` | step 14, 전문 Agent 호출 10 (설정값). 사건을 합칠 때의 가산은 3단계 |
 | Intake | 확인된 작업 묶음 | `COMPLETE_TASK_BATCH`로 완료. 막히면 `RETURN_RESULT(BLOCKED)`: 접수 미완으로 끝나고 요청자에게 사유를 통지한다 | step 12, 사람 라운드 3 |
 | Replanning | 검증 가능한 후보 묶음과 서버 지표 기반 설명 | `RETURN_RESULT` | step 15, Solver 6, 알아보기 계산 (값 미정) |
-| Coordination | 협의 항목 해소, 확정 뒤 통지 | `RETURN_RESULT` | step 12, 사람 라운드 (값 미정) |
+| Coordination | 협의 항목 해소, 후보 없는 사전 확인, 확정 뒤 통지 | `RETURN_RESULT` | step 12 |
 | Event Response | 신고의 대상·영향·사실 수정안 | `RETURN_RESULT` | step 10, 사람 라운드 2 |
 | Site Assistant | 근거 있는 답 | `ANSWER` | 질문당 step 6 |
 
 - LLM 시도 Budget은 모든 Agent가 step × 2다.
 - 전문 Agent는 다른 Agent를 부르지 않고 사람에게 이관하지도 않는다. 막히면 `RETURN_RESULT(BLOCKED)`에 요약과 풀 수 있는 길을 담아 메인에게 돌려준다. Supervisor 이관은 메인만 한다.
+- 작업 담당자 확인은 Coordination 한 창구다. 후보가 있으면 협의로, 후보가 없으면 사전 확인으로 묻는다. Replanning은 사람에게 묻지 않고, 담당자 확인이 있어야 열리는 해는 막힌 결과의 길로 돌려준다.
 - Intake는 메인이 부르지 않는 입구다. 접수에서 시작하고, 완료하면 작업이 준비되며, 막히면 이관 없이 요청자에게 접수 미완을 알린다.
 - 메인은 한 번에 하나다. 사건(작업 준비됨, 신고, Hold 해제, 후보 승인·거절, 하위 Run 종료, 요청 철회)이 생겼는데 열린 메인이 없으면 새 메인을 띄운다. 열린 메인은 하위 Run이 끝날 때, 또는 열린 하위 Run이 없을 때 그 Case의 사건이 생기면 깨어난다(하위 Run이 사람을 기다리는 동안에는 깨우지 않는다). 사람의 답은 사건이 아니라 물은 전문 Agent가 받는다.
 - 열린 메인이 있는 동안 새 작업은 대기열에 서고, 메인이 어떤 상태로 끝나든 대기열에서 1건이 올라간다(사건을 합치거나 미루는 판단은 3단계).
@@ -42,7 +43,7 @@
 **메인 전용**
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `CALL_AGENT(agent, 참조)` | 전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다(자유 문장 없음): 재계획은 충돌 그룹과 주체 Unit, 협의·통지는 단계와 후보, 신고 대응은 신고. 하위 Run은 한 번에 하나다. 주체 Unit이 그 그룹에 작업을 가졌는지 서버가 검사하고, ACTIVE Hold 중의 재계획·협의와 관련 사실이 바뀌지 않은 재호출은 거절한다 | W |
+| `CALL_AGENT(agent, 참조)` | 전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다(자유 문장 없음): 재계획은 충돌 그룹과 주체 Unit, 협의·통지는 단계와 후보, 사전 확인은 need ID 목록, 신고 대응은 신고. 하위 Run은 한 번에 하나다. 주체 Unit이 그 그룹에 움직일 수 있는 작업을 가졌는지 서버가 검사하고, ACTIVE Hold 중의 재계획·협의·사전 확인과 관련 사실이 바뀌지 않은 재호출은 거절한다 | W |
 | `WAIT()` | 사람의 결정(후보 승인·거절, Hold 해제)을 기다린다. 검토 대기 후보나 ACTIVE Hold가 있을 때만 유효하다 | W |
 | `MERGE_EVENT(event)` / `DEFER_EVENT(event)` | 새 사건을 지금 일에 합치거나 뒤로 미룬다 (3단계) | C |
 | `SEND_TO_REVIEW(group, candidate_set)` | 후보 묶음을 사람 검토 대기로 보낸다. 승인은 사람만 한다 (4단계. 지금 검토 대기는 서버가 계산한다) | W |
@@ -95,7 +96,7 @@
 **마무리·답변**
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `RETURN_RESULT(status, summary, paths)` | 전문 Agent가 결과를 돌려준다. status DONE / BLOCKED. 모델은 요약과 길만 쓰고, 결과물(후보·협의 상태·수정안 등)은 서버가 채운다 | D |
+| `RETURN_RESULT(status, summary, paths)` | 전문 Agent가 결과를 돌려준다. status DONE / BLOCKED. 모델은 요약과 길만 쓰고, 결과물(후보·협의 상태·사전 확인의 답·수정안 등)은 서버가 채운다 | D |
 | `ANSWER(text, evidence_refs)` | 근거 ID를 붙여 답한다. 근거가 없으면 모른다고 답한다 | D |
 
 ### 결과의 길과 needs
@@ -103,14 +104,26 @@
 - 길(path) 하나는 needs 묶음이다. 그 길의 needs가 모두 충족되면 다시 시도할 가치가 있다는 뜻이다. 서로 다른 방법은 다른 길로 낸다(최대 3개, 길마다 needs 최대 4개). 풀 길을 찾지 못했으면 0개다.
 - need는 종류와 그 종류의 참조만 쓴다. 자유 문장은 없다. 서버는 참조가 가리키는 대상이 지금 사실에 있는지 검사하고, 아니면 거절한다(`NEED_INVALID`).
 - Budget 소진은 need가 아니다. Run의 종료 사유로만 남는다.
+- 열 수 있는 것(openers): 서버가 지금 사실에서 계산해 need 모양으로 준다. Replanning 관찰에 넣고, 막힌 결과에도 붙인다(모델이 길을 비워도 메인이 볼 것이 남는다). 서버는 엮지 않는다. 길은 모델이 엮는다.
+  - 담당자 확인(`OWNER_CONSENT`): 자원 축이 확인되지 않은 작업과 물을 수 있는 적격 대체 자원. 거절한 값, 제약으로 고정된 작업, 답을 기다리는 질문이 있는 작업은 뺀다.
+  - 다른 Unit(`OTHER_UNIT`): 그 그룹에 움직일 수 있는 작업을 가진 다른 Unit.
+  - 사실(`FACT_CHANGE`): 풀 초과 충돌의 풀(수량), 자원 조회에서 제외된 자원(사용 권한 없음 → 사용 권한, 가용 없음 → 가용 구간), 모든 범위에서 해가 없는 요청 작업의 시간창.
+- need ID: 결과의 need마다 서버가 ID를 붙인다(Run·길·순번). 모델이 엮은 길의 need와 서버가 붙인 openers의 need는 결과와 기록에서 따로 남고, 메인은 어느 쪽 ID든 같은 방식으로 넘긴다.
 
 | 종류 | 참조 | 서버 검증 |
 |---|---|---|
-| `OWNER_CONSENT` | 작업, 축, (자원 축이면 자원 값) | 현재 계산 대상 작업, 그 축이 확인된 제약으로 고정되지 않음, 자원 값이 적격이고 담당자가 거절한 값이 아님 |
-| `OTHER_UNIT` | Unit | 지금 충돌에 작업을 가진 Unit이고 그 Run의 acting unit이 아님 |
+| `OWNER_CONSENT` | 작업, 축, (자원 축이면 자원 값) | 현재 계산 대상 작업, 그 축이 확인된 제약으로 고정되지 않음, 자원 값이 적격이고 담당자가 거절한 값이 아님(같은 작업 revision이면 현장 전체) |
+| `OTHER_UNIT` | 충돌 그룹, Unit | 그 그룹에 움직일 수 있는 작업을 가진 Unit이고 그 Run의 acting unit이 아님 |
 | `FACT_CHANGE` | 필드와 대상 하나(작업: 시간창·작업 시간·요청 철회, 자원: 가용 구간·사용 권한, 풀: 수량) | 대상이 있음 |
 | `HUMAN_INFO` | 사람, 신고 또는 작업 | 사람과 대상이 있음. Intake는 요청자와 접수 중인 작업, Event Response는 신고자와 그 신고 |
 | `HUMAN_DECISION` | 후보·신고·메시지 중 하나 | 대상이 있음 |
+
+### 사전 확인 (후보 없는 담당자 확인)
+
+- 메인이 `CALL_AGENT(COORDINATION, 단계 ASK, need_ids)`로 부른다. 받는 값은 지금 물을 수 있는 `OWNER_CONSENT` need ID뿐이다: 자원 축이고, 값이 적격이고 거절되지 않았고, 아직 동의 범위에 없다. 시간 축 `OWNER_CONSENT`는 유효한 need지만 사전 확인 대상이 아니다(시간은 Solver가 움직이고 시간 동의는 후보 협의에서 받는다).
+- 여러 길·여러 그룹의 ID를 한 호출에 담을 수 있다. 같은 확인이 겹치면 한 번만 묻고, 서버가 담당자별로 정렬해 Coordination 관찰에 준다.
+- 수락하면 작업 새 revision(자원 축 열림)과 자원 Consent가 생기고 현장 버전이 오른다. 메인이 다시 부른 Replanning은 동의 범위와 열린 자원 축을 보고 대체 자원으로 탐색한다.
+- 결과는 서버가 채운다: need별 수락한 값 / 거절 / 미응답. 전부 답을 받았으면 DONE, 응답을 받을 수 없으면 BLOCKED(`HUMAN_INFO`)다.
 
 ## 4. 스킬
 
@@ -146,11 +159,12 @@
 
 - Replanning `SOLVE_WITH_SCOPE`·`TRY_ALTERNATIVE_RESOURCE` → `SOLVE`
 - Replanning `LIST_ASSIGNABLE_RESOURCES`, Intake `LOOKUP_RESOURCE` → `LOOKUP_RESOURCES`
-- Replanning `ASK_TASK_OWNER`, Coordination `SEND_CHANGE_REQUEST` → Coordination `ASK_OWNER`
+- Coordination `SEND_CHANGE_REQUEST`(후보의 변경 확인), `ASK_OWNER(need_id, message)`(사전 확인, 스킬 `PRE_CONFIRM`) → Coordination `ASK_OWNER`
+- 사전 확인의 `ASK_OWNER`는 지금 need 하나에 질문 하나다. 담당자별 묶음 메시지(`ASK_OWNER(owner, items)`)는 3단계 묶음 등록 때 한다.
 - Intake `ASK_CLARIFICATION` → `ASK_REQUESTER`, `COMPLETE_TASKSPEC` → `COMPLETE_TASK_BATCH`
 
 ## 7. 열린 값
 
-- 사건을 합칠 때 메인 Budget에 더하는 양과 상한(3단계), Coordination 사람 라운드, 알아보기 계산 Budget
+- 사건을 합칠 때 메인 Budget에 더하는 양과 상한(3단계), 알아보기 계산 Budget
 - 기준 프로필 목록(비용 중심·지연 중심·변경 최소 외)
 - `ASK_*`를 보낸 뒤 바로 기다릴지(지금 방식), 다른 일을 하다 `WAIT_FOR_REPLIES`로 기다릴지(위 도구 표)

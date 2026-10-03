@@ -168,7 +168,7 @@ def declined_values(
     conn: sqlite3.Connection, site_id: str, task_id: str, task_revision: int
 ) -> set[str]:
     """그 작업 revision에 담당자가 허용을 거절한 자원 값. 현장 전체에서 본다(Run·Case를 가리지 않는다,
-    AG-09). 작업 revision이 바뀌면 다시 물을 수 있다. 취소된 요청에 온 늦은 답은 세지 않는다 (ST-16)."""
+    AG-09). 작업 revision이 바뀌면 다시 물을 수 있다. 취소된 요청에 온 늦은 답은 세지 않는다 (ST-15)."""
     out: set[str] = set()
     for r in rows(
         conn,
@@ -305,7 +305,7 @@ def list_requests_for_changes(
 
 
 def change_answers(requests: list[dict[str, Any]]) -> dict[str, str]:
-    """change_hash → 담당자 답에 따른 item 상태. 취소된 요청·늦은 답(CANCELLED·LATE)은 세지 않는다 (ST-16).
+    """change_hash → 담당자 답에 따른 item 상태. 취소된 요청·늦은 답(CANCELLED·LATE)은 세지 않는다 (ST-15).
 
     ACCEPT → ACCEPTED, DECLINE(이견) → OBJECTED, 그 이견의 제약 초안이 PENDING이면
     OBJECTION_DRAFT_PENDING. 같은 변경에 답이 여럿이면 마지막 것.

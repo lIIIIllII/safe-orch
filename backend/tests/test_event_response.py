@@ -2,7 +2,7 @@
 
 R1(기본안 B로 확정) → 지연 신고 → 즉시 SITE Hold → ER(LOOKUP → ANALYZE → PROPOSE) → Supervisor 사실 수정 확인
 → FACT_CONFIRMED 해제 → 재검사 → Replanning(UB) → Gamma(E 10:00) → R2. 스크립트 모델(Router)로 돌린다.
-설정 EVENT_RESPONSE_ENABLED를 켠 테스트만 ER이 시작한다(기본값 꺼짐 = Scene 4 그대로).
+Event Response는 메인이 부른다: 사건 → 메인 자동 시작을 켠 테스트(main_on)에서만 시작한다.
 """
 
 import json

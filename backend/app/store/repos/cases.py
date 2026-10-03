@@ -209,7 +209,7 @@ def end_case_run(
     cancel_requests(tx, run_id)
     if before.status in ACTIVE and before.parent_run_id is not None:
         # 하위 Run이 끝났다(자기 행동이든 서버가 끝냈든). 부른 쪽 Case의 사건이고, 부른 메인을 깨운다.
-        # 끝날 때의 사실 지문을 적어 둔다: 같은 호출을 다시 받을지 판정하는 기준이다 (AG-27)
+        # 끝날 때의 사실 지문을 적어 둔다: 같은 호출을 다시 받을지 판정하는 기준이다 (AG-24)
         ref = {"run_id": run_id, "parent_run_id": before.parent_run_id, "status": status}
         key = before.input_ref.get("call_key")
         if key is not None:
@@ -242,7 +242,7 @@ def _notify_end(
 
     - Intake가 완료가 아닌 종료(BLOCKED·BUDGET_EXHAUSTED)로 끝나면 요청자에게 접수 미완을 알린다 (AG-06).
     - 메인이 스스로 끝내지 못하면(Budget 소진·오류·형식 오류 2회) Supervisor에게 알린다. 그 Case의 남은
-      일은 다음 메인에 넘기지 않는다 (AG-08).
+      일은 다음 메인에 넘기지 않는다 (AG-07).
     통지는 step이 아니므로 마지막 step 다음 번호에 붙인다.
     """
     site = get_site(tx, pack.site_id)

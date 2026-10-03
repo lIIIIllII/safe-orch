@@ -331,7 +331,7 @@ def pending_child(conn: sqlite3.Connection, site_id: str, main_run_id: str) -> b
 def same_facts(
     conn: sqlite3.Connection, site_id: str, key: str, candidate_id: str | None = None
 ) -> bool:
-    """같은 키로 부른 마지막 Run이 끝난 뒤 관련 사실이 하나도 바뀌지 않았다 (AG-27)."""
+    """같은 키로 부른 마지막 Run이 끝난 뒤 관련 사실이 하나도 바뀌지 않았다 (AG-24)."""
     last = last_result(conn, site_id, key)
     if last is None or last["end_fingerprint"] is None:
         return False

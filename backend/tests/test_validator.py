@@ -427,7 +427,7 @@ def test_c07_resource_zone_and_requirement(seeded):
 
 
 def test_default_requirements_mismatch_c11(seeded):
-    """작업 유형 기본 요구 조건은 서버가 도출한다. Snapshot 값이 Pack과 다르면 C11 (CV-19)."""
+    """작업 유형 기본 요구 조건은 서버가 도출한다. Snapshot 값이 Pack과 다르면 C11 (CV-11)."""
     snap = _retask(take_snapshot(seeded), "C", default_requirements=())
     v = validate(snap, _reconfirm(snap), None, seeded)
     assert _bad(v) == [("C11", "DEFAULT_REQUIREMENTS_MISMATCH", ("C",))]

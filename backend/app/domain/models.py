@@ -194,10 +194,10 @@ class Task(Frozen):
     latest_end: int
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
-    default_requirements: tuple[Requirement, ...] = ()  # 서버가 Pack의 작업 유형에서 도출 (CV-19)
-    resource_requirements: tuple[Requirement, ...] = ()  # 작업 값. 기본값에 더하기만 한다 (CV-19)
-    default_demands: tuple[PoolDemand, ...] = ()  # 서버가 Pack의 작업 유형에서 도출 (CV-19)
-    pool_demands: tuple[Demand, ...] = ()  # 작업 값. 기본 수요보다 낮출 수 없다 (CV-19)
+    default_requirements: tuple[Requirement, ...] = ()  # 서버가 Pack의 작업 유형에서 도출 (CV-11)
+    resource_requirements: tuple[Requirement, ...] = ()  # 작업 값. 기본값에 더하기만 한다 (CV-11)
+    default_demands: tuple[PoolDemand, ...] = ()  # 서버가 Pack의 작업 유형에서 도출 (CV-11)
+    pool_demands: tuple[Demand, ...] = ()  # 작업 값. 기본 수요보다 낮출 수 없다 (CV-11)
     predecessors: tuple[Predecessor, ...] = ()
     movable: Movable
     fields: dict[str, FieldRecord]

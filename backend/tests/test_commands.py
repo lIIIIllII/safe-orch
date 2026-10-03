@@ -687,7 +687,7 @@ def test_dispatch_dedupe_and_pending_resume_unique(seeded):
 
 
 def test_form_requirements_are_added_to_work_type_defaults(seeded):
-    """작업 값은 조건을 더하기만 한다. 작업 유형 기본값은 서버가 붙인다 (CV-19)."""
+    """작업 값은 조건을 더하기만 한다. 작업 유형 기본값은 서버가 붙인다 (CV-11)."""
     own = [{"attribute": "max_load", "op": "GTE", "value": 40}]
     form = _form_a(seeded, requested_resource_id="SITE-CR-01", resource_requirements=own)
     assert submit_task_request(seeded, "planner_a", _key(), form).status == "APPLIED"

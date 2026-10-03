@@ -162,12 +162,12 @@ class LoadedPack(Frozen):
         return wt.hazard_tags if wt else ()
 
     def default_requirements(self, work_type: str) -> tuple[Requirement, ...]:
-        """작업 유형의 기본 자원 요구 조건. 위험 태그처럼 서버가 도출한다 (CV-19)."""
+        """작업 유형의 기본 자원 요구 조건. 위험 태그처럼 서버가 도출한다 (CV-11)."""
         wt = self.work_types.get(work_type)
         return wt.resource_requirements if wt else ()
 
     def default_demands(self, work_type: str) -> tuple[PoolDemand, ...]:
-        """작업 유형의 기본 수요와 필수 직종. 서버가 도출한다 (CV-19)."""
+        """작업 유형의 기본 수요와 필수 직종. 서버가 도출한다 (CV-11)."""
         wt = self.work_types.get(work_type)
         return wt.pool_demands if wt else ()
 
