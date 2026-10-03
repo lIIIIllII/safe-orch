@@ -368,6 +368,9 @@ def test_nth_answer_and_field_answers():
     assert field_answers(fields, ["resource", "zone_id"], {"resource": 1, "zone_id": 1}) == "r2"
     assert field_answers(fields, ["zone_id"], {"zone_id": 1}) == NEUTRAL  # 바닥나면 중립 답
     assert field_answers(fields, ["duration"], {}) == NEUTRAL
+    # 정해진 답이 없는 필드는 건너뛴다. 답한 필드가 하나도 없을 때만 중립 답
+    assert field_answers(fields, ["work_type", "window"], {}) == "w1"
+    assert field_answers(fields, ["work_type"], {}) == NEUTRAL
 
 
 def test_values_decision_truth_range_and_decline_lines(pack):
@@ -385,7 +388,7 @@ def test_values_decision_truth_range_and_decline_lines(pack):
 
 
 def test_values_decision_requirements_and_demands(pack):
-    """진실에 없는 값: 요구 조건은 진실 자원(SITE-GC-01, 300 t·블록)이 맞추면, 수요는 기본값 이상이면 받는다."""
+    """진실에 없는 값: 요구 조건은 진실 자원(SITE-GC-01, 300 t·블록)이 맞추면 받고, 수요는 서버 적용 값으로 본다."""
     scn = _scn(pack, "S1").data
     truth = scn["truth"]["task"]
     lines = scn["humans"]["values_check"]["planner_a"]["decline_lines"]
@@ -408,10 +411,8 @@ def test_values_decision_requirements_and_demands(pack):
     # 수요: 인양 기본값은 작업 인원 4·신호수 1
     assert decide(pool_demands=[{"kind": "WORKER", "quantity": 4}])[0] == "ACCEPT"
     assert decide(pool_demands=[{"kind": "WORKER", "quantity": 6}])[0] == "ACCEPT"
-    assert decide(pool_demands=[{"kind": "WORKER", "quantity": 3}]) == (
-        "DECLINE",
-        "demands 값이 달라요.",
-    )
+    # 넣은 값이 기본값보다 낮아도 서버는 기본값을 쓴다. 서버가 실제로 쓰는 값으로 보므로 받는다
+    assert decide(pool_demands=[{"kind": "WORKER", "quantity": 3}]) == ("ACCEPT", "")
     # pack 없이 부르면(판정기) 진실에 있는 필드만 본다
     assert wrong_fields({**S1_VALUES, "resource_requirements": [too_heavy]}, truth) == []
 

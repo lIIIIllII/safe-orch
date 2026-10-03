@@ -60,7 +60,10 @@ def nth_answer(answers: list[str], n: int) -> str | None:
 
 
 def field_answers(fields: dict[str, list[str]], field_ids: list[str], asked: dict[str, int]) -> str:
-    """필드별 n번째 답을 물은 필드 순서대로 이어 붙인다. 줄 답이 없으면 중립 답."""
+    """필드별 n번째 답을 물은 필드 순서대로 이어 붙인다.
+
+    시나리오에 정해진 답이 없는 필드는 건너뛴다. 답한 필드가 하나도 없을 때만 중립 답이다.
+    """
     parts = [a for f in field_ids if (a := nth_answer(fields.get(f, []), asked.get(f, 0)))]
     return " ".join(parts) if parts else NEUTRAL
 
@@ -70,8 +73,9 @@ def wrong_fields(
 ) -> list[str]:
     """진실 범위와 다른 필드. 진실 값이 [lo, hi]면 범위, 아니면 같은 값.
 
-    pack을 주면(값 확인) 진실에 없는 값도 본다: 요구 조건은 진실 자원이 맞추는 것만(requirements),
-    수요는 작업 유형 기본값 이상만(demands) 받아들인다.
+    pack을 주면(값 확인) 진실에 없는 값도 본다: 요구 조건은 진실 자원이 맞추는 것만(requirements)
+    받아들인다. 수요(demands)는 모델이 넣은 값이 아니라 서버가 실제로 쓰는 값(작업 유형 기본값과 넣은 값
+    중 큰 쪽)이 기본값 이상인지로 본다. 서버가 기본값보다 낮추지 않으므로 넣은 값이 낮아도 거절하지 않는다.
     """
     out = []
     for name, keys in FIELD_KEYS.items():
@@ -92,7 +96,10 @@ def wrong_fields(
         if any(resource is None or not meets(q, resource) for q in asked):
             out.append("requirements")
         base = {d.kind: d.quantity for d in pack.default_demands(truth["work_type"])}
-        if any(d["quantity"] < base.get(d["kind"], 0) for d in values.get("pool_demands") or []):
+        used = dict(base)  # 서버가 실제로 쓰는 수요
+        for d in values.get("pool_demands") or []:
+            used[d["kind"]] = max(used.get(d["kind"], 0), d["quantity"])
+        if any(used[kind] < quantity for kind, quantity in base.items()):
             out.append("demands")
     return out
 
@@ -163,8 +170,9 @@ def classify(conn: sqlite3.Connection, pack: LoadedPack, m: dict[str, Any]) -> d
             change_hash=m["change_hash"],
         )
     elif m["type"] == "QUESTION":
-        args = (step.get("action") or {}).get("args") or {}
-        req.update(kind="FREE_TEXT", field_ids=args.get("field_ids"))
+        # 물은 필드는 서버가 step 결과에 남긴 값으로 읽는다(Action 인자 모양에 묶이지 않는다, EV-01)
+        result = step.get("tool_result") or {}
+        req.update(kind="FREE_TEXT", field_ids=result.get("field_ids"))
     elif m["type"] == "CONFIRMATION":
         req.update(kind="VALUES_CHECK", values=(step.get("tool_result") or {}).get("values"))
     else:
@@ -292,6 +300,8 @@ class Humans:
             counts = self.field_asked.setdefault(actor, {})
             answer = field_answers(fields, req["field_ids"], counts)
             for f in req["field_ids"]:
+                if f not in fields:
+                    continue  # 시나리오에 정해진 답이 없는 필드는 세지 않는다
                 if f in self.truth.get("in_text", []):
                     self.reasks["in_text"] += 1
                 if counts.get(f, 0) >= len(fields.get(f, [])):
