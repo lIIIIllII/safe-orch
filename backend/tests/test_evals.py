@@ -416,6 +416,15 @@ def test_values_decision_requirements_and_demands(pack):
     assert wrong_fields({**S1_VALUES, "resource_requirements": [too_heavy]}, truth) == []
 
 
+def test_hidden_s1_truth_matches_pack(pack):
+    """S1''의 진실 값은 Pack과 맞아야 한다(자원이 구역·요구 조건에 적격, 창이 근무시간 안)."""
+    truth = _scn(pack, "S1", hidden=True).data["truth"]["task"]
+    gantry = next(r for r in pack.resources if r.resource_id == truth["requested_resource_id"])
+    assert truth["zone_id"] in gantry.allowed_zone_ids
+    assert truth["required_resource_type"] == gantry.resource_type
+    lo, hi = truth["earliest_start"]
+    assert 2880 <= lo <= hi <= truth["latest_start"] <= truth["latest_end"] - truth["duration"]
+
 
 def test_rules_first_match_status_axes_and_from_stage(pack):
     rules = _scn(pack, "S3").data["humans"]["rules"]
@@ -455,12 +464,16 @@ def test_loader_rejects_unknown_pack_ids(pack, tmp_path):
     ]
 
 
+HIDDEN_MARK = {"S1": "''", "S2": "'", "S3": "'"}
+
+
 def test_hidden_scenarios_load_with_warning_header(pack):
     for name in ("S1", "S2", "S3"):
         path = scenario_path(pack.name, name, True)
         assert "지침을 고치는 작업 중에는 열지 않는다" in path.read_text(encoding="utf-8")
         scn = load(path, pack, True)
-        assert scn.hidden and scn.scenario_id == f"{name}'"
+        # S1은 S1''로 바꿨다(S1'은 되돌림 판단 때 열어 봤다, EV-03)
+        assert scn.hidden and scn.scenario_id == f"{name}{HIDDEN_MARK[name]}"
 
 
 def test_compare_refuses_different_conditions():
