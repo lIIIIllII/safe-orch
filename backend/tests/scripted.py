@@ -10,14 +10,32 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage
 
+from app.agents import skills
+from app.agents.registry import BINDINGS
+
 Reply = AIMessage | Callable[[], AIMessage]
+
+# 도구별 기본 스킬: 그 도구를 가진 Agent의 스킬 목록에서 첫 번째. 다른 스킬로 부르려면 skill 인자를 준다
+DEFAULT_SKILL = {
+    name: skills.default_skill(b.spec.skills, name)
+    for b in BINDINGS.values()
+    for name in b.spec.actions
+}
 
 
 def call(name: str, summary: str = "다음 전략을 시도한다", **args: Any) -> AIMessage:
     return AIMessage(
         content="",
         tool_calls=[
-            {"name": name, "args": {"decision_summary": summary, **args}, "id": uuid.uuid4().hex}
+            {
+                "name": name,
+                "args": {
+                    "decision_summary": summary,
+                    "skill": DEFAULT_SKILL.get(name, "WRAP_UP"),
+                    **args,
+                },
+                "id": uuid.uuid4().hex,
+            }
         ],
     )
 

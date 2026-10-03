@@ -61,11 +61,14 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert _guards(steps) == [("COMPLETED", "CONTINUE", None), ("COMPLETED", "WAIT", None)]
     s1, s2 = steps
     assert s1["tool_result"]["stage1"]["status"] == "INFEASIBLE"
-    assert s1["action"] == {"name": "SOLVE_WITH_SCOPE", "args": {"level": "L0"}}
+    assert s1["action"] == {
+        "name": "SOLVE_WITH_SCOPE",
+        "args": {"level": "L0", "skill": "BUILD_CANDIDATE"},
+    }
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p8",
+        "replanning-p9",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -103,8 +106,12 @@ def test_same_effective_spec_is_not_retried_within_case(with_a):
     run, steps, model = _run(
         with_a, [solve("L2"), escalate()], run_id="run_2", case_id="case_run_1"
     )
-    # 계산 Action은 없다. 자원 조회(A·C)는 Solver를 부르지 않으므로 남는다
-    assert model.tool_names(0) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
+    # 계산 Action은 없다. 자원 조회와 담당자 확인은 Solver를 부르지 않으므로 남는다
+    assert model.tool_names(0) == [
+        "LIST_ASSIGNABLE_RESOURCES",
+        "ASK_TASK_OWNER",
+        "ESCALATE_NO_SOLUTION",
+    ]
     assert _guards(steps)[0] == ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE")
     assert run.status == "ESCALATED" and run.solver_calls_used == 0
     # 다른 Case의 Run: 같은 탐색을 다시 계산할 수 있다
@@ -209,7 +216,11 @@ def test_solver_budget_exhausted_leaves_only_escalate(with_a):
         )
     model = ScriptedChatModel([escalate()])
     run = runtime.invoke(with_a, {"run_id": "run_s"}, model)
-    assert model.tool_names(0) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
+    assert model.tool_names(0) == [
+        "LIST_ASSIGNABLE_RESOURCES",
+        "ASK_TASK_OWNER",
+        "ESCALATE_NO_SOLUTION",
+    ]
     assert run.status == "ESCALATED"
 
 
@@ -339,11 +350,11 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
         "human_rounds": spec.MAX_HUMAN_ROUNDS,
         "solver_calls": spec.MAX_SOLVER_CALLS,
     }
-    assert binding.prompt.PROMPT_VERSION == "replanning-p8"
-    assert runtime.exec_contract_version("REPLANNING") == "replanning-d5"
-    assert runtime.exec_contract_version("COORDINATION") == "coordination-a24"
-    assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-a25"
-    assert runtime.exec_contract_version("INTAKE") == "intake-a26"
+    assert binding.prompt.PROMPT_VERSION == "replanning-p9"
+    assert runtime.exec_contract_version("REPLANNING") == "replanning-c2"
+    assert runtime.exec_contract_version("COORDINATION") == "coordination-c2"
+    assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c2"
+    assert runtime.exec_contract_version("INTAKE") == "intake-c2"
     assert runtime.exec_contract_version("ASSISTANT") == "AGENT_TYPE_NOT_REGISTERED"
 
 

@@ -13,12 +13,13 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
+from app.agents import skills
 from app.agents.prompts.replanning import origin_time
 from app.agents.specs import intake as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "intake-p4"
+PROMPT_VERSION = "intake-p5"
 
 
 def tool_catalog() -> str:
@@ -46,6 +47,11 @@ Goal: {goal}
 - 값이 빠졌거나 모호하면 요청자에게 물을 수 있다. 확인 요청이 검증을 통과하지 못하면 사유 코드(last_check)를 보고 값을 고친다.
 - 확인된 작업 요청을 만들 수 없으면 사유를 붙여 이관한다.
 
+스킬 (행동마다 skill에 이번에 쓰는 스킬을 밝힌다. 사실 조건이 맞으면 열리고, 열린 스킬의 도구만 쓸 수 있다. 지침은 순서와 요령이다. 서버는 순서를 강제하지 않으므로 무엇을 먼저 할지는 네가 판단한다)
+"""
+    + skills.catalog(spec.SKILLS, spec.ACTIONS).replace("{", "{{").replace("}", "}}")
+    + """
+
 도구 전체와 열리는 조건 (지금 호출할 수 있는 것은 이번 턴에 주어진 도구뿐이다. 조건이 갖춰지면 다음 턴에 열린다)
 """
     + tool_catalog().replace("{", "{{").replace("}", "}}")
@@ -65,8 +71,10 @@ Goal: {goal}
 - 요청 문장과 확인 질문의 답은 확인 값이 아니다. 값 확인 요청에 요청자가 확인하면 그 values 전체가 확인된다.
 - 마지막 검증(last_check): 검증 실패(TASKSPEC_INVALID)나 확인 값과 다른 완료(CONFIRMED_VALUE_MISMATCH)의 사유다.
 - 근무 구간(work_intervals), 직전 거절 사유(last_guard), 남은 예산(budget_remaining).
+- 열린 스킬(open_skills): 지금 조건이 맞아 열린 스킬 ID다.
 
 출력 규칙
+- 모든 도구에 skill을 쓴다. 열린 스킬(open_skills) 중 그 도구를 가진 스킬이어야 한다.
 - 모든 도구에 decision_summary를 쓴다. 형식은 "이유: …/다음: …"이고, 이 행동을 고른 이유와 다음 예정 단계를 200자 안에 한국어로 쓴다.
 - decision_summary에는 분 숫자 대신 날짜·시각을 쓴다.
 """
@@ -80,6 +88,7 @@ OBSERVATION_KEYS = (
     "confirmations",
     "last_check",
     "last_guard",
+    "open_skills",
     "questions",
     "recent_steps",
     "request",
@@ -127,4 +136,5 @@ PROMPT_FINGERPRINTS = {
     "intake-p2": "fcfca39ebb9411cefaea0362c474a14c0a86414ddf61d8f04c3d1d4ba75a1062",  # 자원 유형 코드·표시 이름, 코드 인자 실행 시 enum, 확인 의미 사실 설명
     "intake-p3": "057c1ac721076deac49fc6b8854256119f800f2a55920e30811c723f56cbfe1e",  # 마지막 라운드는 값 확인용(ASK 열리는 조건), 질문 문장 노출
     "intake-p4": "343e9e3ed1658a1ee4e28e474233a82e05bab87aa89de50df068178968c16a85",  # 현장의 지금 site_now (ST-17)
+    "intake-p5": "5ca8f69c0c3e4a6487c0d5d32f4eb99cf8c9d9eafdf7a7e5d634bd345e1bd028",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-18)
 }

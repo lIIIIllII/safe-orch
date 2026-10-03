@@ -1,10 +1,9 @@
-"""골든 테스트: 실행 계층 일반화 전후로 Replanning 기록과 모델 입력이 같은지 확인한다.
+"""골든 테스트: Replanning 기록과 모델 입력이 고정한 값과 같은지 확인한다.
 
-리팩터링 전 코드에서 값을 만들어 고정했다. 대상은 Run 행, AgentStep 행(created_at 제외), Gateway
-CommandResult(created_at 제외), 모델이 받은 입력(System·Human 메시지, 바인딩한 도구, bind 인자)이다.
+대상은 Run 행, AgentStep 행(created_at 제외), Gateway CommandResult(created_at 제외), 모델이 받은
+입력(System·Human 메시지, 바인딩한 도구, bind 인자)이다.
 uuid4 ID와 hash는 실행마다 달라지므로 등장 순서대로 치환한 뒤 hash한다.
-p8(현장 문구를 Pack에서 받음)은 렌더링한 System이 p7과 글자까지 같고 기록의 prompt_version 라벨만
-다르다. 그래서 라벨만 p7로 되돌려 hash한다. 모델 입력 바이트는 치환 없이 같다.
+스킬 층(replanning-p9, skill 인자·open_skills)에서 다시 만들었다. step 순서와 결과는 그 전과 같다.
 """
 
 import json
@@ -34,12 +33,10 @@ PREFIXED_ID = re.compile(r"(?<![0-9a-z_])([a-z]+)_[0-9a-f]{32}(?![0-9a-f])")
 BARE_ID = re.compile(r"(?<![0-9a-f_])[0-9a-f]{32}(?![0-9a-f])")
 HASH = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 REQ = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-PROMPT_LABEL = ('"replanning-p8"', '"replanning-p7"')  # (현재, 골든을 만든 버전)
-
-# 리팩터링 전 코드에서 만든 값
+# 스킬 층 구현 뒤 다시 만든 값
 GOLDEN = {
-    "plan_b": "67a18e61f6648f9827b0fdee51ce3cb3fdb6e225554886761e6a939452b0220d",
-    "rejections": "c7bb35a4782135b222cbc90acb95c6eb45030d0e12dd3bb7bffb13752c36b73e",
+    "plan_b": "27454e925b4197400e819632f67e51ed25ea14f6a151710080441709d908ccd3",
+    "rejections": "f651126bc04b9a60169fc8edae90b2875284c43a3e0d23defd036ef870ef7e9b",
 }
 
 
@@ -101,9 +98,7 @@ def _dump(rec: Recorder) -> dict:
 
 def _digest(rec: Recorder) -> str:
     text = json.dumps(_dump(rec), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    current, golden = PROMPT_LABEL
-    assert current in text and golden not in text
-    return canonical_hash(normalize(text.replace(current, golden)))
+    return canonical_hash(normalize(text))
 
 
 def _key():

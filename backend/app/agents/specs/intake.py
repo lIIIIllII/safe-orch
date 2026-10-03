@@ -9,6 +9,7 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agents import skills
 from app.agents.types import AgentSpec
 
 AGENT_TYPE = "INTAKE"
@@ -33,6 +34,9 @@ class Action(BaseModel):
     # 열리는 조건 한 줄. prompt의 "도구 전체와 열리는 조건" 절이 이것으로 만든다.
     OPENS: ClassVar[str] = ""
 
+    skill: str = Field(
+        description="이번 행동에 쓰는 스킬 ID. 열린 스킬(open_skills) 중 이 도구를 가진 것"
+    )
     decision_summary: str = Field(
         description="이유: …/다음: … 형식. 이 행동을 고른 이유와 다음 예정 단계 (200자 이내)"
     )
@@ -64,7 +68,7 @@ class LookupResource(Action):
 class AskClarification(Action):
     """빠지거나 모호한 값을 요청자에게 묻는다. 답은 자유 텍스트로 온다."""
 
-    OPENS = "사람 확인 라운드가 2 이상 남았고(마지막 라운드는 값 확인 요청용) 답을 기다리는 질문·확인 요청이 없을 때"
+    OPENS = "사람 확인 라운드가 남았고 답을 기다리는 질문·확인 요청이 없을 때"
 
     field_ids: list[Literal["zone_id", "duration", "window", "resource"]] = Field(
         min_length=1, description="물을 critical field"
@@ -120,12 +124,10 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
     waiting = any(q["status"] == "OPEN" for q in obs["questions"]) or any(
         c["status"] == "OPEN" for c in obs["confirmations"]
     )
-    left = obs["budget_remaining"].get("human_rounds", 0)
-    rounds = left > 0
+    rounds = obs["budget_remaining"].get("human_rounds", 0) > 0
     last = obs["confirmations"][-1] if obs["confirmations"] else None
     return {
-        # 마지막 사람 라운드는 값 확인 요청(REQUEST_CONFIRMATION)용으로 남긴다
-        "ASK": left >= 2 and not waiting,
+        "ASK": rounds and not waiting,
         "REQUEST": rounds and not waiting,
         "COMPLETE": not waiting
         and last is not None
@@ -145,8 +147,26 @@ def code_values(obs: dict[str, Any]) -> dict[str, list[str]]:
     }
 
 
+SKILLS = ("ASSESS", "ASK_PEOPLE", "TASK_INTAKE", "WRAP_UP")
+
+
+def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
+    """스킬이 열리는 사실. 순서 조건은 없다."""
+    request = bool(obs.get("request"))
+    return {"has_draft_request": request, "has_ask_target": request}
+
+
+def open_skills(obs: dict[str, Any]) -> list[str]:
+    return skills.open_skills(SKILLS, skill_facts(obs))
+
+
 def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """{action 이름: 인자 제한}. 코드 인자에는 실행 시 Pack 값으로 enum을 건다(Replanning과 같은 방식)."""
+    """{action 이름: 인자 제한}. 열린 스킬의 도구 ∩ 유효한 도구. skill 인자의 허용 값도 넣는다."""
+    return skills.available(SKILLS, skill_facts(obs), valid_actions(obs))
+
+
+def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """유효한 도구와 인자 제한. 코드 인자에는 실행 시 Pack 값으로 enum을 건다(Replanning과 같은 방식)."""
     c = choices(obs)
     codes = code_values(obs)
     values = {"values": codes}
@@ -210,6 +230,7 @@ SPEC = AgentSpec(
     recursion_limit=RECURSION_LIMIT,
     summary_max=SUMMARY_MAX,
     actions=ACTIONS,
+    skills=SKILLS,
     available_actions=available_actions,
     tool_schemas=tool_schemas,
 )

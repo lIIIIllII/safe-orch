@@ -130,7 +130,6 @@
 - Replanning `ASK_TASK_OWNER`, Coordination `SEND_CHANGE_REQUEST` → Coordination `ASK_OWNER`
 - Intake `ASK_CLARIFICATION` → `ASK_REQUESTER`, `COMPLETE_TASKSPEC` → `COMPLETE_TASK_BATCH`
 - 각 Agent의 `ESCALATE`·`ESCALATE_NO_SOLUTION`, Coordination `REPORT_TO_SUPERVISOR` → 전문 Agent는 `RETURN_RESULT`, 이관은 메인 `ESCALATE`
-- 서버에서 지침으로 옮길 순서 규칙: Replanning "미시도 범위가 없을 때만 ASK"·"LIST 뒤에만 TRY"·"LIST는 주 충돌 L0만", Event Response "조회 뒤에만 ASK_REPORTER", Intake "마지막 라운드는 값 확인용"
 - Coordinator가 사건마다 전문 Agent를 자동 시작하던 것 → 메인이 `CALL_AGENT`로 부른다
 
 ## 7. 열린 값

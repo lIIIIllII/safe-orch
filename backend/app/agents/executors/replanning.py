@@ -59,18 +59,28 @@ class ReplanningExecutor:
             return self._single_tx(run_id, step_no, meta, parsed)
         return self._escalate(run_id, step_no, meta, parsed)
 
-    def _permitted(self, obs: Observation, action: spec.Action) -> bool:
-        """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (작업별 조합까지)."""
+    def _permitted(self, obs: Observation, action: spec.Action) -> bool | str:
+        """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (작업별 조합까지).
+
+        자원을 쓰거나 묻는 행동은 자원 적격성(유형·사용 권한·가용 구간)을 여기서 검사한다.
+        조회했는지는 보지 않는다 (CV-15). 적격이 아니면 RESOURCE_NOT_ELIGIBLE.
+        """
         available = obs.available
         if isinstance(action, spec.SolveWithScope):
             return action.level in available.get("SOLVE_WITH_SCOPE", {}).get("level", [])
-        c = spec.choices(obs.data)
+        c = spec.choices(obs.data, obs.hidden)
         if isinstance(action, spec.ListAssignableResources):
             return "LIST_ASSIGNABLE_RESOURCES" in available and action.task_id in c["LIST"]
+        eligible = obs.hidden.get("eligible", {}).get(getattr(action, "task_id", ""), {})
+        alternatives = set(eligible.get("alternatives", []))
         if isinstance(action, spec.TryAlternativeResource):
+            if eligible and action.resource_id not in alternatives:
+                return "RESOURCE_NOT_ELIGIBLE"
             tries = c["TRY"].get(action.task_id, [])
             return "TRY_ALTERNATIVE_RESOURCE" in available and action.resource_id in tries
         if isinstance(action, spec.AskTaskOwner):
+            if eligible and not set(action.allowed_values) <= alternatives:
+                return "RESOURCE_NOT_ELIGIBLE"
             asks = set(c["ASK"].get(action.task_id, []))
             return "ASK_TASK_OWNER" in available and set(action.allowed_values) <= asks
         return False
@@ -216,7 +226,9 @@ class ReplanningExecutor:
                 step_no,
                 meta,
                 parsed,
-                lambda o: self._permitted(o, action) and o.primary is not None,
+                lambda o: (
+                    v if (v := self._permitted(o, action)) is not True else o.primary is not None
+                ),
             )
             if rejected is not None:
                 return rejected

@@ -298,7 +298,7 @@ def test_er_with_coordination_to_notice(seeded, event_response_on, coordination_
         tool_calls=[
             {
                 "name": "REPORT_TO_SUPERVISOR",
-                "args": {"decision_summary": "보고", "summary": "E 수락"},
+                "args": {"decision_summary": "보고", "skill": "WRAP_UP", "summary": "E 수락"},
                 "id": "r1",
             }
         ],
@@ -316,7 +316,7 @@ def test_er_with_coordination_to_notice(seeded, event_response_on, coordination_
         tool_calls=[
             {
                 "name": "REPORT_TO_SUPERVISOR",
-                "args": {"decision_summary": "보고", "summary": "통지 완료"},
+                "args": {"decision_summary": "보고", "skill": "WRAP_UP", "summary": "통지 완료"},
                 "id": "r2",
             }
         ],
@@ -348,7 +348,7 @@ def test_discard_wakes_and_blocks_same_value(seeded, event_response_on):
         ("PROPOSE_FACT_UPDATE", None),
     ]
     tools = {t["function"]["name"]: t for t in steps[0]["available_actions"]}
-    assert "PROPOSE_FACT_UPDATE" not in tools  # 폐기된 (E, 60)만 통과 분석이었다
+    assert "PROPOSE_FACT_UPDATE" in tools  # 도구는 열려 있고, 폐기된 (E, 60)은 실행 때 거절한다
     assert [p["status"] for p in _proposals("FACT_UPDATE")] == ["DISCARDED", "PENDING"]
     assert _runs("EVENT_RESPONSE")[0].status == "WAITING_HUMAN"
     assert _hold(pack, refs["hold_id"])["status"] == "ACTIVE"
@@ -422,7 +422,9 @@ def test_value_beyond_window_cannot_be_proposed(seeded, event_response_on):
     steps = _steps(er.run_id)
     impact = steps[1]["tool_result"]
     assert (impact["ok"], impact["checks"]["within_latest_start"]) == (False, False)
-    assert steps[2]["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
+    assert (
+        steps[2]["guard"]["reason_code"] == "ANALYSIS_NOT_PASSED"
+    )  # 제출 때 다시 분석한다 (CV-16)
     assert (er.status, er.end_reason) == ("ESCALATED", "ESCALATE")
     assert _proposals("FACT_UPDATE") == []
 
@@ -551,35 +553,36 @@ def test_ask_reporter_closed_while_question_open_or_proposal_pending(seeded, eve
     assert "ASK_REPORTER" in spec.available_actions(free)
 
 
-def test_ask_reporter_opens_only_after_lookup(seeded, event_response_on):
-    """① 사람에게 묻는 시점: 이 Run에서 LOOKUP_TASKS를 하기 전에는 ASK_REPORTER가 닫혀 있다.
-
-    조회 결과가 0건이어도 조회는 한 것이라 열린다(대상을 조회로 알 수 없을 때 묻는 것은 허용).
-    """
+def test_server_does_not_order_lookup_before_ask_reporter(seeded, event_response_on):
+    """순서 규칙은 스킬 지침에 있다 (AG-18). 조회 전에도 서버는 ASK_REPORTER를 막지 않는다."""
     pack = seeded
     _r1(pack)
     _report(pack, pack.demo_events[1].text)
     ask = call(
         "ASK_REPORTER", "이유: 대상·시각이 없다/다음: 답을 본다", question="어느 작업인가요?"
     )
-    run_until_idle(pack, model_factory=Router(event_response=[ask, _lookup(), ask]).factory())
+    run_until_idle(pack, model_factory=Router(event_response=[ask]).factory())
     [er] = _runs("EVENT_RESPONSE")
-    steps = _steps(er.run_id)
-    assert [
-        (s["action"]["name"], s["guard"]["verdict"], s["guard"]["reason_code"]) for s in steps
-    ] == [
-        ("ASK_REPORTER", "REJECTED", "ACTION_NOT_AVAILABLE"),
-        ("LOOKUP_TASKS", "ACCEPTED", None),
-        ("ASK_REPORTER", "ACCEPTED", None),
-    ]
-    assert "ASK_REPORTER" not in _tool_names(steps[0])
-    assert "ASK_REPORTER" in _tool_names(steps[2])
+    [step] = _steps(er.run_id)
+    assert step["observation"]["lookups"] == []
+    assert "ASK_REPORTER" in _tool_names(step)
+    assert (step["guard"]["verdict"], step["result_kind"]) == ("ACCEPTED", "WAIT")
     assert (er.status, er.human_rounds_used) == ("WAITING_HUMAN", 1)
-    # 0건 조회도 조회다
-    obs = steps[2]["observation"]
-    empty = {**obs, "lookups": [{"filters": {"work_type": None, "zone_id": "X"}, "tasks": []}]}
-    assert "ASK_REPORTER" in spec.available_actions(empty)
-    assert "ASK_REPORTER" not in spec.available_actions({**obs, "lookups": []})
+
+
+def test_propose_is_reanalyzed_without_lookup_or_analysis(seeded, event_response_on):
+    """조회·분석을 하지 않아도 READY 작업이면 분석·제안할 수 있다. 제안은 서버가 다시 분석해 통과해야 받는다."""
+    _, er = _to_proposal(seeded, [_propose(60)])
+    [step] = _steps(er.run_id)
+    assert (step["action"]["name"], step["result_kind"]) == ("PROPOSE_FACT_UPDATE", "WAIT")
+    assert (step["observation"]["lookups"], step["observation"]["analyses"]) == ([], [])
+    enum = next(
+        t["function"]["parameters"]["properties"]["task_id"]["enum"]
+        for t in step["available_actions"]
+        if t["function"]["name"] == "ANALYZE_IMPACT"
+    )
+    assert "E" in enum and "A" in enum  # 현재 계산 대상 작업 전부
+    assert [p["status"] for p in _proposals("FACT_UPDATE")] == ["PENDING"]
 
 
 def test_lookup_start_slack_and_analysis_delay_minutes(seeded, event_response_on):

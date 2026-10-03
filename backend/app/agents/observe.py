@@ -3,7 +3,7 @@
 store를 import하지 않는다. agent_type별 관찰 계산은 observers/<agent_type>.py에 있다.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.agents.types import AgentSpec
@@ -17,6 +17,8 @@ class Observation:
     data: dict[str, Any]
     available: dict[str, dict[str, Any]]
     spec: AgentSpec
+    # 서버만 아는 사실(모델에 보이지 않는다): 유효성 판정에 쓴다
+    hidden: dict[str, Any] = field(default_factory=dict)
 
     @property
     def active(self) -> bool:

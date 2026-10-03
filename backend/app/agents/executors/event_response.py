@@ -32,6 +32,7 @@ class EventResponseExecutor:
         self.observer = gateway.binding.observer
         # 공통 도우미 (ToolGateway)
         self._complete = gateway._complete
+        self._reject = gateway._reject
         self.begin_step = gateway.begin_step
         self.wait_or_continue = gateway.wait_or_continue
 
@@ -58,6 +59,12 @@ class EventResponseExecutor:
                     tx, run_id, step_no, meta, parsed, GatewayResult("CONTINUE"), result
                 )
             if isinstance(action, spec.ProposeFactUpdate):
+                # 제출 때 영향 분석을 다시 돌려 통과해야 받는다. 분석을 했는지는 보지 않는다 (CV-16)
+                analysis = self.observer.analyze_impact(
+                    tx, self.pack, action.task_id, action.new_earliest_start
+                )
+                if not analysis["ok"]:
+                    return self._reject(tx, run_id, step_no, meta, parsed, "ANALYSIS_NOT_PASSED")
                 return self._propose(tx, run_id, step_no, meta, parsed, obs, action)
             if isinstance(action, spec.AskReporter):
                 return self._ask_reporter(tx, run_id, step_no, meta, parsed, obs, action)
@@ -68,15 +75,17 @@ class EventResponseExecutor:
     def _permitted(self, obs: Observation, action: Any) -> bool:
         """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가."""
         available = obs.available
-        c = spec.choices(obs.data)
+        c = spec.choices(obs.data, obs.hidden)
         if isinstance(action, spec.LookupTasks):
             return "LOOKUP_TASKS" in available
         if isinstance(action, spec.AnalyzeImpact):
             return "ANALYZE_IMPACT" in available and action.task_id in c["ANALYZE"]
         if isinstance(action, spec.ProposeFactUpdate):
-            return "PROPOSE_FACT_UPDATE" in available and action.new_earliest_start in c[
-                "PROPOSE"
-            ].get(action.task_id, [])
+            return (
+                "PROPOSE_FACT_UPDATE" in available
+                and action.task_id in c["PROPOSE"]
+                and (action.task_id, action.new_earliest_start) not in c["DISCARDED"]
+            )
         if isinstance(action, spec.AskReporter):
             return "ASK_REPORTER" in available
         return isinstance(action, spec.Escalate)

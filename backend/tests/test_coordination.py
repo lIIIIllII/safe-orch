@@ -116,7 +116,7 @@ def _request_c():
 
 def _report(text, summary="이유: 정리해 보고한다/다음: 종료"):
     """REPORT_TO_SUPERVISOR의 인자 이름이 summary라 call()을 쓰지 않는다."""
-    args = {"decision_summary": summary, "summary": text}
+    args = {"decision_summary": summary, "skill": "WRAP_UP", "summary": text}
     return AIMessage(
         content="",
         tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": uuid.uuid4().hex}],

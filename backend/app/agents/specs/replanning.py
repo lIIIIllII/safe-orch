@@ -2,7 +2,7 @@
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터(untried_levels 등)만 보고 계산한다.
 Action: SOLVE_WITH_SCOPE, LIST_ASSIGNABLE_RESOURCES, TRY_ALTERNATIVE_RESOURCE, ASK_TASK_OWNER,
-ESCALATE_NO_SOLUTION. ASK는 계산으로 시도할 범위가 없을 때만 연다(서버 정책).
+ESCALATE_NO_SOLUTION. 순서는 스킬 지침에 있고, 여기 조건은 사실·유효성·Budget뿐이다 (AG-01·AG-18).
 모듈 이름(GOAL, ACTIONS, tool_schemas 등)은 그대로 두고, 그 값으로 SPEC(AgentSpec)을 만든다.
 """
 
@@ -10,6 +10,7 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agents import skills
 from app.agents.types import AgentSpec
 
 AGENT_TYPE = "REPLANNING"
@@ -36,6 +37,9 @@ class Action(BaseModel):
     # 실제 실행 가능 여부는 available_actions가 정한다(이 문장은 안내일 뿐이다).
     OPENS: ClassVar[str] = ""
 
+    skill: str = Field(
+        description="이번 행동에 쓰는 스킬 ID. 열린 스킬(open_skills) 중 이 도구를 가진 것"
+    )
     decision_summary: str = Field(
         description="이유: …/다음: … 형식. 이 행동을 고른 이유와 다음 예정 단계 (200자 이내)"
     )
@@ -54,16 +58,14 @@ class SolveWithScope(Action):
 
 class ListAssignableResources(Action):
     """작업에 쓸 수 있는 자원을 조회한다(유형·사용 권한·가용 구간 기준). 결과는 자원 사실이 같은 동안
-    유효하며, 대체 자원 시도와 담당자 확인 요청은 이 결과에 있는 자원만 쓸 수 있다."""
+    유효하다. 대체 자원 시도와 담당자 확인 요청은 서버가 같은 기준으로 쓸 수 있는 자원만 받는다."""
 
     OPENS = (
-        "맡은 충돌의 당사자 작업(L0) 중 필요한 자원이 있고 자원 축이 확인된 제약으로 고정되지 않은 "
-        "작업을 현재 자원 사실에서 아직 조회하지 않았을 때"
+        "필요한 자원이 있고 자원 축이 확인된 제약으로 고정되지 않은 작업을 현재 자원 사실에서 "
+        "아직 조회하지 않았을 때"
     )
 
-    task_id: str = Field(
-        description="자원을 조회할 작업 (맡은 충돌의 당사자 중 자원이 필요한 acting_unit 작업)"
-    )
+    task_id: str = Field(description="자원을 조회할 작업 (자원이 필요한 acting_unit 작업)")
 
 
 class TryAlternativeResource(Action):
@@ -71,27 +73,28 @@ class TryAlternativeResource(Action):
     있다. 해가 있으면 후보가 등록되고 검증을 기다린다."""
 
     OPENS = (
-        "자원 축이 확인된(담당자 동의) 작업에 자원 조회 결과의 아직 시도하지 않은 대체 자원이 있고 "
+        "자원 축이 확인된(담당자 동의) 작업에 그 작업이 쓸 수 있는 아직 시도하지 않은 대체 자원이 있고 "
         "Solver 호출이 남아 있을 때"
     )
 
     task_id: str = Field(description="자원을 바꿔 볼 작업")
-    resource_id: str = Field(description="시도할 대체 자원 (최근 자원 조회 결과의 쓸 수 있는 자원)")
+    resource_id: str = Field(description="시도할 대체 자원 (그 작업이 쓸 수 있는 자원)")
 
 
 class AskTaskOwner(Action):
     """작업 담당자에게 이동 축(자원)을 열어 줄지 묻고 답을 기다린다. 담당자가 수락하면 그 자원이 동의
-    범위에 들어가고 자원 축이 확인된다. 계산으로 시도할 범위가 남아 있으면 쓸 수 없다."""
+    범위에 들어가고 자원 축이 확인된다."""
 
     OPENS = (
-        "아직 시도하지 않은 탐색 범위가 없고, 자원 축이 미확인인 작업의 자원 조회 결과에 현재 자원 말고 "
-        "담당자가 거절하지 않은 대체 자원이 있으며, 사람 확인 라운드가 남아 있을 때"
+        "자원 축이 미확인인 작업에 현재 자원 말고 담당자가 거절하지 않은 쓸 수 있는 대체 자원이 있고, "
+        "같은 작업·축의 답을 기다리는 질문이 없으며, 사람 확인 라운드가 남아 있을 때"
     )
 
     task_id: str = Field(description="확인을 요청할 작업")
     axis: Literal["RESOURCE"] = Field(description="확인할 이동 축")
     allowed_values: list[str] = Field(
-        min_length=1, description="허용을 요청할 자원 (최근 자원 조회 결과에서 현재 자원을 뺀 것)"
+        min_length=1,
+        description="허용을 요청할 자원 (그 작업이 쓸 수 있는 자원에서 현재 자원을 뺀 것)",
     )
     question: str = Field(min_length=1, description="담당자에게 보일 설명 (한국어)")
 
@@ -121,18 +124,40 @@ FLOW = {
 }
 
 
-def choices(obs: dict[str, Any]) -> dict[str, Any]:
+SKILLS = ("ASSESS", "BUILD_CANDIDATE", "APPLY_REJECTION", "ASK_OWNER_TEMP", "WRAP_UP")
+
+
+def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
+    """스킬이 열리는 사실. 순서 조건은 없다."""
+    return {
+        "has_conflict": bool(obs["conflicts"]),
+        "has_rejection": bool(obs["rejections"]) or bool(obs["constraints"]),
+        "has_unconfirmed_axis": any(
+            t["required_resource_type"] and not t["movable"]["resource"]
+            for t in obs["acting_tasks"]
+        ),
+    }
+
+
+def open_skills(obs: dict[str, Any]) -> list[str]:
+    return skills.open_skills(SKILLS, skill_facts(obs))
+
+
+def choices(obs: dict[str, Any], hidden: dict[str, Any] | None = None) -> dict[str, Any]:
     """작업별 허용 값. Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다.
 
-    LIST: 주 충돌의 L0 작업(acting) 중 필요 자원이 있고 RESOURCE 축이 제약으로 막히지 않았으며 같은
-    자원 사실에서 아직 조회하지 않은 것. TRY 범위(주 충돌 L0 + 대체 자원)와 맞춘다.
-    TRY: 자원 축 허용(movable.resource ∧ RESOURCE 제약 없음) 작업의 유효 조회 결과 중 미시도 대체 자원.
-    ASK: 자원 축 미확인 ∧ RESOURCE 제약 없음 ∧ 같은 작업·축의 열린 질문 없음, 값은 조회 결과 − 현재 자원
-    − 이 Case에서 담당자가 거절(DECLINE)한 값. 거절당한 질문을 같은 사람에게 다시 보내지 않는다.
+    hidden["eligible"]은 서버가 계산한 자원 적격성이다(유형·사용 권한·가용 구간, CV-15):
+    {작업: {"alternatives": 현재 자원 말고 쓸 수 있는 자원, "untried": 그중 아직 시도하지 않은 것}}.
+    자원 조회를 했는지는 보지 않는다.
+    LIST: 필요 자원이 있고 RESOURCE 축이 제약으로 막히지 않았으며 같은 자원 사실에서 아직 조회하지 않은 작업.
+    TRY: 자원 축 허용(movable.resource ∧ RESOURCE 제약 없음) 작업의 미시도 대체 자원.
+    ASK: 자원 축 미확인 ∧ RESOURCE 제약 없음 ∧ 같은 작업·축의 열린 질문 없음, 값은 대체 자원 −
+    이 Case에서 담당자가 거절(DECLINE)한 값. 거절당한 질문을 같은 사람에게 다시 보내지 않는다.
     """
+    eligible = (hidden or {}).get("eligible", {})
     acting = {t["task_id"]: t for t in obs["acting_tasks"]}
     frozen = {(c["task_id"], axis) for c in obs["constraints"] for axis in c["frozen_axes"]}
-    listed = {r["task_id"]: r for r in obs["assignable_resources"] if r["task_id"] in acting}
+    listed = {r["task_id"] for r in obs["assignable_resources"] if r["task_id"] in acting}
     open_asks = {(h["task_id"], h["axis"]) for h in obs["human_replies"] if h["status"] == "OPEN"}
     declined = {
         (h["task_id"], h["axis"], v)
@@ -142,30 +167,21 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
     }
     try_: dict[str, list[str]] = {}
     ask: dict[str, list[str]] = {}
-    for tid, r in listed.items():
-        if (tid, "RESOURCE") in frozen:
+    for tid, e in eligible.items():
+        if tid not in acting or (tid, "RESOURCE") in frozen:
             continue
         if acting[tid]["movable"]["resource"]:
-            if r["untried_alternatives"]:
-                try_[tid] = list(r["untried_alternatives"])
+            if e["untried"]:
+                try_[tid] = list(e["untried"])
         elif (tid, "RESOURCE") not in open_asks:
-            values = [
-                a["resource_id"]
-                for a in r["assignable"]
-                if a["resource_id"] != r["current"]
-                and (tid, "RESOURCE", a["resource_id"]) not in declined
-            ]
+            values = [v for v in e["alternatives"] if (tid, "RESOURCE", v) not in declined]
             if values:
                 ask[tid] = values
-    l0 = set((obs["primary_conflict"] or {}).get("task_ids", []))
     return {
         "LIST": [
             tid
             for tid, t in acting.items()
-            if tid in l0
-            and t["required_resource_type"]
-            and (tid, "RESOURCE") not in frozen
-            and tid not in listed
+            if t["required_resource_type"] and (tid, "RESOURCE") not in frozen and tid not in listed
         ],
         "TRY": try_,
         "ASK": ask,
@@ -176,13 +192,15 @@ def _union(groups: dict[str, list[str]]) -> list[str]:
     return sorted({v for vs in groups.values() for v in vs})
 
 
-def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """{action 이름: 허용 인자 제한}. 작업별 조합은 choices로 Gateway가 다시 검사한다."""
+def valid_actions(
+    obs: dict[str, Any], hidden: dict[str, Any] | None = None
+) -> dict[str, dict[str, Any]]:
+    """유효한 인자 값이 있는 도구와 그 값. 사실·유효성·Budget만 본다(순서 조건 없음)."""
     out: dict[str, dict[str, Any]] = {}
     budget = obs["budget_remaining"]
     if obs["conflicts"] and obs["untried_levels"] and budget["solver_calls"] > 0:
         out["SOLVE_WITH_SCOPE"] = {"level": list(obs["untried_levels"])}
-    c = choices(obs)
+    c = choices(obs, hidden)
     if c["LIST"]:
         out["LIST_ASSIGNABLE_RESOURCES"] = {"task_id": c["LIST"]}
     if c["TRY"] and obs["primary_conflict"] and budget["solver_calls"] > 0:
@@ -190,8 +208,7 @@ def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "task_id": sorted(c["TRY"]),
             "resource_id": _union(c["TRY"]),
         }
-    # 사람에게는 계산으로 할 수 있는 탐색을 먼저 한 뒤에만 묻는다
-    if c["ASK"] and not obs["untried_levels"] and budget["human_rounds"] > 0:
+    if c["ASK"] and budget["human_rounds"] > 0:
         out["ASK_TASK_OWNER"] = {
             "task_id": sorted(c["ASK"]),
             "axis": ["RESOURCE"],
@@ -199,6 +216,13 @@ def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
         }
     out["ESCALATE_NO_SOLUTION"] = {}
     return out
+
+
+def available_actions(
+    obs: dict[str, Any], hidden: dict[str, Any] | None = None
+) -> dict[str, dict[str, Any]]:
+    """{action 이름: 허용 인자 제한}. 열린 스킬의 도구 ∩ 유효한 도구. skill 인자의 허용 값도 넣는다."""
+    return skills.available(SKILLS, skill_facts(obs), valid_actions(obs, hidden))
 
 
 def tool_schemas(available: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -235,6 +259,7 @@ SPEC = AgentSpec(
     recursion_limit=RECURSION_LIMIT,
     summary_max=SUMMARY_MAX,
     actions=ACTIONS,
+    skills=SKILLS,
     available_actions=available_actions,
     tool_schemas=tool_schemas,
 )

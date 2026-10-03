@@ -442,22 +442,22 @@ def test_runtime_enums_on_code_arguments_and_static_schema_has_no_pack_values(se
 # ── 사람에게 묻는 시점 ──────────────────────────────────
 
 
-def test_last_round_is_for_confirmation(seeded):
-    """② 남은 사람 라운드가 1이면 ASK_CLARIFICATION은 닫히고 REQUEST_CONFIRMATION은 열린다."""
+def test_server_does_not_reserve_last_round(seeded):
+    """순서 규칙은 스킬 지침에 있다 (AG-18). 남은 사람 라운드가 1이어도 서버는 질문을 막지 않는다."""
     pack = seeded
     assert _intake(pack, pack.demo_intakes[1].text).status == "APPLIED"
     run_until_idle(pack, model_factory=Router(intake=[_lookup(), _ask()]).factory())
     [run] = _runs("INTAKE")
     obs = _steps(run.run_id)[0]["observation"]
-    for left, ask_open in ((3, True), (2, True), (1, False)):
+    for left, is_open in ((3, True), (2, True), (1, True), (0, False)):
         o = {**obs, "budget_remaining": {**obs["budget_remaining"], "human_rounds": left}}
         available = spec.available_actions(o)
-        assert ("ASK_CLARIFICATION" in available) is ask_open, left
-        assert "REQUEST_CONFIRMATION" in available, left
+        assert ("ASK_CLARIFICATION" in available) is is_open, left
+        assert ("REQUEST_CONFIRMATION" in available) is is_open, left
 
 
-def test_ask_closed_after_two_questions(seeded):
-    """③ 질문 2회 뒤(남은 라운드 1)에는 ASK_CLARIFICATION이 닫혀 값 확인 요청만 낼 수 있다.
+def test_third_question_uses_last_round(seeded):
+    """질문 2회 뒤 세 번째 질문도 받아들여진다. 사람 라운드를 다 쓰면 값 확인 요청은 열리지 않는다.
 
     두 번째 관찰부터 questions[].question에 이 Run이 물은 문장이 보인다.
     """
@@ -468,19 +468,25 @@ def test_ask_closed_after_two_questions(seeded):
         run_until_idle(pack, model_factory=Router(intake=[_ask()]).factory())
         [q] = [m for m in _messages("QUESTION") if m["status"] == "OPEN"]
         assert _reply(pack, q["message_id"], "ANSWER", demo.answer).status == "APPLIED"
-    run_until_idle(pack, model_factory=Router(intake=[_ask(), _request()]).factory())
+    run_until_idle(pack, model_factory=Router(intake=[_ask()]).factory())
     [run] = _runs("INTAKE")
     steps = _steps(run.run_id)
     assert [(s["action"]["name"], s["guard"]["reason_code"]) for s in steps] == [
-        ("ASK_CLARIFICATION", None),
-        ("ASK_CLARIFICATION", None),
-        ("ASK_CLARIFICATION", "ACTION_NOT_AVAILABLE"),
-        ("REQUEST_CONFIRMATION", None),
-    ]
-    assert "ASK_CLARIFICATION" not in _tool_names(steps[2])
-    assert "REQUEST_CONFIRMATION" in _tool_names(steps[2])
+        ("ASK_CLARIFICATION", None)
+    ] * 3
+    assert "ASK_CLARIFICATION" in _tool_names(steps[2])
     assert [q["question"] for q in steps[2]["observation"]["questions"]] == [
         "어느 구역에서, 어떤 크레인으로 하나요?"
     ] * 2
-    run = _runs("INTAKE")[0]
     assert (run.status, run.human_rounds_used) == ("WAITING_HUMAN", 3)
+    [q] = [m for m in _messages("QUESTION") if m["status"] == "OPEN"]
+    assert _reply(pack, q["message_id"], "ANSWER", demo.answer).status == "APPLIED"
+    run_until_idle(
+        pack,
+        model_factory=Router(
+            intake=[_request(), call("ESCALATE", reason="확인 라운드 없음")]
+        ).factory(),
+    )
+    last = _steps(run.run_id)[3:]
+    assert "REQUEST_CONFIRMATION" not in _tool_names(last[0])
+    assert [s["guard"]["reason_code"] for s in last] == ["ACTION_NOT_AVAILABLE", None]

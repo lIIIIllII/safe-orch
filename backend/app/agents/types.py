@@ -41,7 +41,8 @@ class AgentSpec:
     budget: Mapping[str, int]
     recursion_limit: int
     summary_max: int
-    actions: Mapping[str, Any]
+    actions: Mapping[str, Any]  # 허용 도구
+    skills: tuple[str, ...]  # 이 Agent가 쓰는 스킬 (app.agents.skills)
     available_actions: Callable[[dict[str, Any]], dict[str, dict[str, Any]]]
     tool_schemas: Callable[[dict[str, dict[str, Any]]], list[dict[str, Any]]]
 

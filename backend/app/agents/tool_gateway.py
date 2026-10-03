@@ -15,6 +15,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
+from app.agents import skills
 from app.agents.observe import Observation, budget_remaining
 from app.agents.types import AgentBinding, AgentSpec, GatewayResult, StepMeta
 from app.domain.canonical import canonical_hash
@@ -204,23 +205,31 @@ class ToolGateway:
         step_no: int,
         meta: StepMeta,
         parsed: _Parsed,
-        permitted: Callable[[Observation], bool] | None = None,
+        permitted: Callable[[Observation], bool | str] | None = None,
     ) -> tuple[GatewayResult | None, Observation | None]:
-        """Action tx의 첫 부분: Run 활성 확인 → LLM 시도 차감 → STALE_OBSERVATION →
-        (permitted가 있으면) 이 tx에서 다시 관찰해 허용 판정, 아니면 ACTION_NOT_AVAILABLE.
+        """Action tx의 첫 부분: Run 활성 확인 → LLM 시도 차감 → STALE_OBSERVATION → 이 tx에서 다시
+        관찰 → 스킬 검사(SKILL_NOT_OPEN·TOOL_NOT_IN_SKILL) → (permitted가 있으면) 허용 판정.
 
-        결과가 있으면 실행기는 그대로 돌려준다. 없으면 효과를 쓴다(관찰은 permitted가 있을 때만).
+        permitted는 True, False(ACTION_NOT_AVAILABLE), 또는 거절 사유 문자열을 돌려준다.
+        결과가 있으면 실행기는 그대로 돌려준다. 없으면 효과를 쓴다.
         """
         if not self._active(tx, run_id, step_no):
             return GatewayResult("INACTIVE"), None
         charge(tx, run_id, llm_attempts=meta.llm_attempts - 1)
         if self._stale_observation(tx, run_id, step_no):
             return self._reject(tx, run_id, step_no, meta, parsed, "STALE_OBSERVATION"), None
-        if permitted is None:
-            return None, None
         obs = self.binding.observer.build_observation(tx, self.pack, run_id)
-        if not permitted(obs):
-            return self._reject(tx, run_id, step_no, meta, parsed, "ACTION_NOT_AVAILABLE"), None
+        # 고른 스킬이 열려 있고 그 도구를 가졌는가. 형식 오류 연속에는 세지 않는다 (AG-19)
+        assert parsed.action is not None and parsed.name is not None
+        reason = skills.check(parsed.action.skill, parsed.name, obs.data["open_skills"])
+        if reason is not None:
+            return self._reject(tx, run_id, step_no, meta, parsed, reason), None
+        if permitted is None:
+            return None, obs
+        verdict = permitted(obs)
+        if verdict is not True:
+            reason = verdict if isinstance(verdict, str) else "ACTION_NOT_AVAILABLE"
+            return self._reject(tx, run_id, step_no, meta, parsed, reason), None
         return None, obs
 
     def wait_or_continue(

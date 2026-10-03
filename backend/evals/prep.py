@@ -14,8 +14,10 @@ from app.agents.registry import BINDINGS
 PREP_MODEL = "eval-prep"
 
 
-def _call(name: str, **args: Any) -> AIMessage:
+def _call(name: str, skill: str | None = None, **args: Any) -> AIMessage:
     args = {"decision_summary": "평가 시작 상태 준비(스크립트)", **args}
+    if skill is not None:
+        args["skill"] = skill
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": uuid.uuid4().hex}])
 
 
@@ -33,9 +35,29 @@ def _consulting_v1(task: str) -> dict[str, list[AIMessage]]:
     }
 
 
+def _consulting_v2(task: str) -> dict[str, list[AIMessage]]:
+    """v1과 같은 행동. 스킬 층 계약(모든 Action에 skill 인자)."""
+    return {
+        "REPLANNING": [
+            _call("SOLVE_WITH_SCOPE", "BUILD_CANDIDATE", level="L0"),
+            _call("SOLVE_WITH_SCOPE", "BUILD_CANDIDATE", level="L1"),
+        ],
+        "COORDINATION": [
+            _call(
+                "SEND_CHANGE_REQUEST",
+                "CONSULT",
+                task_id=task,
+                message="후보의 변경을 확인해 주세요.",
+            ),
+            _call("WAIT_FOR_REPLIES", "CONSULT"),
+        ],
+    }
+
+
 # (Replanning 계약, Coordination 계약) → 준비 스크립트
 CONSULTING: dict[tuple[str, str], Callable[[str], dict[str, list[AIMessage]]]] = {
     ("replanning-d5", "coordination-a24"): _consulting_v1,
+    ("replanning-c2", "coordination-c2"): _consulting_v2,
 }
 
 

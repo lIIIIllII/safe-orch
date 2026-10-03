@@ -17,7 +17,6 @@ from app.agents import llm, runtime
 from app.agents.observers.replanning import build_observation
 from app.agents.prompts import replanning as prompt
 from app.config import Settings
-from app.domain.canonical import canonical_hash
 from app.main import app
 from app.packs.loader import load_pack
 from app.store import db
@@ -235,9 +234,7 @@ def test_system_prompt_does_not_order_l0_first(pack):
 # ── 현장 문구의 Pack화 ─────────────────────────────
 
 
-def test_shipyard_rendered_system_equals_p7(pack):
-    """p8 템플릿을 shipyard로 렌더링하면 p7 System과 글자까지 같다(모델 입력 바이트가 같다)."""
-    assert canonical_hash(prompt.render_system(pack)) == prompt.P7_RENDERED_SYSTEM_HASH
+def test_origin_time_from_pack(pack):
     assert prompt.origin_time(pack) == "09:00"
 
 
@@ -449,7 +446,7 @@ def test_live_run_path_b_coord_with_scripted_model(monkeypatch):
     """--path B --coord: Alpha 협의 Run이 변경 요청 → Supervisor 거절로 STALE → Beta → R1 → 통지."""
 
     def report():
-        args = {"decision_summary": "보고", "summary": "통지 완료"}
+        args = {"decision_summary": "보고", "skill": "WRAP_UP", "summary": "통지 완료"}
         return AIMessage(
             content="", tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": "r"}]
         )
@@ -577,7 +574,7 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
         )
 
     def report():
-        args = {"decision_summary": "보고", "summary": "통지 완료"}
+        args = {"decision_summary": "보고", "skill": "WRAP_UP", "summary": "통지 완료"}
         return AIMessage(
             content="", tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": "r"}]
         )
@@ -632,7 +629,7 @@ def test_live_run_path_event_with_scripted_model(monkeypatch):
     """--path event --coord: R1 스크립트 준비 → 신고 → ER 조회·분석·제안 → 확인·해제 → Gamma → 협의 → R2 → 통지."""
 
     def report(text):
-        args = {"decision_summary": "보고", "summary": text}
+        args = {"decision_summary": "보고", "skill": "WRAP_UP", "summary": text}
         return AIMessage(
             content="", tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": text}]
         )

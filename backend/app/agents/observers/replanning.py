@@ -32,7 +32,7 @@ RECENT_STEPS = 5
 class Observation(common.Observation):
     """Replanning 관찰. 공통 Observation에 이 Run이 맡은 주 충돌을 더한다."""
 
-    primary: Conflict | None
+    primary: Conflict | None = None
 
 
 def primary_conflict(
@@ -205,6 +205,28 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             }
         )
 
+    # 자원 적격성(유형·사용 권한·가용 구간). 조회했는지와 무관하게 서버가 계산하고 모델에는 보이지 않는다 (CV-15)
+    eligible = {}
+    for t in facts.tasks:
+        if t.unit_id != run.acting_unit_id or not t.required_resource_type:
+            continue
+        r = assignable_resources(facts, t, run.acting_unit_id)
+        alternatives = [
+            a["resource_id"] for a in r["assignable"] if a["resource_id"] != r["current"]
+        ]
+        eligible[t.task_id] = {
+            "alternatives": alternatives,
+            "untried": [
+                rid
+                for rid in alternatives
+                if primary is not None
+                and (h := try_search_key(snapshot, primary, run.acting_unit_id, t.task_id, rid))
+                is not None
+                and h not in tried
+            ],
+        }
+    hidden = {"eligible": eligible}
+
     data = {
         "run": {
             "run_id": run.run_id,
@@ -236,11 +258,13 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "budget_remaining": budget_remaining(run, spec.SPEC),
         "work_intervals": [list(iv) for iv in facts.work_intervals],  # 근무 달력
     }
+    data["open_skills"] = spec.open_skills(data)
     return Observation(
         run=run,
         versions=(site.context_version, site.plan_revision, run.wake_seq),
         data=data,
-        available=spec.available_actions(data),
+        available=spec.available_actions(data, hidden),
         spec=spec.SPEC,
+        hidden=hidden,
         primary=primary,
     )

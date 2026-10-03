@@ -142,6 +142,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "recent_steps": recent_steps(steps),
         "budget_remaining": budget_remaining(run, spec.SPEC),
     }
+    data["open_skills"] = spec.open_skills(data)
     return Observation(
         run=run,
         versions=(site.context_version, site.plan_revision, run.wake_seq),

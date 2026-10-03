@@ -29,27 +29,27 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=replanning_prompt,
         observer=replanning_observer,
         executor=ReplanningExecutor,
-        exec_contract_version="replanning-d5",  # 기록만
+        exec_contract_version="replanning-c2",  # 기록만. 스킬 층(skill 인자, 순서 조건 제거)
     ),
     coordination_spec.AGENT_TYPE: AgentBinding(
         spec=coordination_spec.SPEC,
         prompt=coordination_prompt,
         observer=coordination_observer,
         executor=CoordinationExecutor,
-        exec_contract_version="coordination-a24",  # 기록만
+        exec_contract_version="coordination-c2",  # 기록만
     ),
     event_response_spec.AGENT_TYPE: AgentBinding(
         spec=event_response_spec.SPEC,
         prompt=event_response_prompt,
         observer=event_response_observer,
         executor=EventResponseExecutor,
-        exec_contract_version="event-response-a25",  # 기록만
+        exec_contract_version="event-response-c2",  # 기록만
     ),
     intake_spec.AGENT_TYPE: AgentBinding(
         spec=intake_spec.SPEC,
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-a26",  # 기록만
+        exec_contract_version="intake-c2",  # 기록만
     ),
 }

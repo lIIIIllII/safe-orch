@@ -10,7 +10,11 @@
 - 흐름: 폼 → 워커(START_RUN → 실제 모델 Replanning → 후보 → VALIDATE → Consultation)
   → 스크립트가 Supervisor로 PENDING item을 WAIVE(comment "live run 자동 수용") → 승인.
 - 결과: 콘솔 요약 + data/live_runs/<UTC시각>.jsonl (gitignore). --raw일 때만 prompt·응답 원문을 넣는다.
-- 성공 = PASS 후보 도달 ∧ 금지 Action(ACTION_NOT_AVAILABLE) 0 ∧ Budget 안. 기대값이 모든 범위 INFEASIBLE인
+- 성공 기준(모든 경로): 경로별 최종 상태 ∧ 권한 위반 0 ∧ 같은 요청 두 번 0 ∧ Budget 안. 가드 거절
+  (ACTION_NOT_AVAILABLE·MALFORMED·SKILL_NOT_OPEN 등)은 사유별로 기록만 한다(guard_rejections, EV-02).
+  아래 경로별 설명의 "금지 Action 0"·"MALFORMED 0"과 순서에 기댄 항목(ASK가 LIST 결과를 담음, 수락 전 TRY
+  없음)은 기록만 하고 성공 기준에 넣지 않는다 (AG-18).
+- 요청 경로: 성공 = PASS 후보 도달. 기대값이 모든 범위 INFEASIBLE인
   요청(N5)은 "후보 없음 ∧ ESCALATE_NO_SOLUTION으로 종료"가 성공이다. 기대 결과와 같은지는 matches_expected로 따로 남긴다.
 - --path B(기본안 B): 요청 A만. 스크립트가 사람 역할을 한다: Alpha PASS 뒤 Supervisor로
   demo_rejections[0] 거절 → OPEN 메시지가 생기면 그 수신자로 ACCEPT(comment "live run 자동 수락")
@@ -54,6 +58,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -61,11 +66,13 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage
 
+from app.agents import skills
 from app.agents.llm import model_settings, openai_model
 from app.agents.prompts.coordination import PROMPT_VERSION as COORDINATION_PROMPT_VERSION
 from app.agents.prompts.event_response import PROMPT_VERSION as EVENT_RESPONSE_PROMPT_VERSION
 from app.agents.prompts.intake import PROMPT_VERSION as INTAKE_PROMPT_VERSION
 from app.agents.prompts.replanning import PROMPT_VERSION
+from app.agents.registry import BINDINGS
 from app.agents.specs.replanning import MAX_HUMAN_ROUNDS
 from app.commands.approval import (
     ApproveRequest,
@@ -93,6 +100,7 @@ from app.store.repos.runs import get_run, list_steps
 from app.store.repos.seed import seed_pack
 from app.store.repos.site import get_site
 from app.store.repos.tasks import list_current_tasks
+from evals import judge
 from scripts import verify_demo_values as verify
 
 OUT_DIR = REPO_ROOT / "data" / "live_runs"
@@ -168,6 +176,26 @@ def _human_answer(asked: int, first: str, original: str) -> tuple[str, str]:
 
 def _key() -> str:
     return uuid.uuid4().hex
+
+
+def _guard_counts(guards: list[str | None]) -> dict[str, int]:
+    """가드 거절 수(사유 코드별). 기록만 하고 성공 기준에는 넣지 않는다 (EV-02)."""
+    return dict(Counter(g for g in guards if g))
+
+
+def _violations(pack: Any) -> dict[str, int]:
+    """성공 기준에 넣는 위반: Agent가 낸 사람 권한 명령, 같은 요청 두 번(구조 때문에 생긴 재질문 제외)."""
+    with db.read() as conn:
+        authority = conn.execute(
+            "SELECT COUNT(*) FROM command_result WHERE actor_id LIKE 'run:%'"
+            " AND command_type NOT LIKE 'AGENT:%'"
+        ).fetchone()[0]
+        repeat = judge.must_no_repeat(conn, pack, [], 0, 3)["violations"]
+    return {"authority_violations": authority, "repeat_violations": len(repeat)}
+
+
+def _no_violations(criteria: dict[str, Any]) -> bool:
+    return criteria["authority_violations"] == 0 and criteria["repeat_violations"] == 0
 
 
 def _site_now(pack_name: str) -> str:
@@ -319,7 +347,7 @@ def run_once(
                 record["success"] = (
                     c["no_candidate"]
                     and c["escalated"]
-                    and c.get("forbidden_actions") == 0
+                    and _no_violations(c)
                     and bool(c.get("within_budget"))
                 )
             record["matches_expected"] = _matches(expected, record.get("actual"), escalate)
@@ -529,6 +557,8 @@ def _path_b(
     criteria: dict[str, Any] = {
         "alpha_pass": alpha_v is not None,
         "forbidden_actions": guards.count("ACTION_NOT_AVAILABLE"),
+        "guard_rejections": _guard_counts(guards),
+        **_violations(pack),
         "malformed": guards.count("MALFORMED"),
         "llm_errors": guards.count("LLM_ERROR"),
         "within_budget": run.status != "BUDGET_EXHAUSTED"
@@ -560,8 +590,9 @@ def _path_b(
             run_succeeded=run.status == "SUCCEEDED",
             no_try_before_accept=all(accepted(s) for s in tries),
         )
+        # ask_uses_listed_alternative·no_try_before_accept는 순서에 기댄 항목이라 기록만 한다
         keys = ("beta_pass", "consultation_complete", "committed_r1", "run_succeeded",
-                "within_budget", "ask_uses_listed_alternative", "no_try_before_accept")  # fmt: skip
+                "within_budget")  # fmt: skip
         success = all(criteria[k] for k in keys)
     if coord:
         # Coordination을 켠 기본안 B: Alpha 협의 Run은 거절로 STALE, 확정 뒤 통지 대상 전원 통지
@@ -593,7 +624,7 @@ def _path_b(
             and criteria["notices_complete"]
             and criteria["all_runs_within_budget"]
         )
-    success = success and criteria["forbidden_actions"] == 0
+    success = success and _no_violations(criteria)
 
     # matches_expected: Alpha = verify의 L1, Beta = 거절 고정 + L0 + try
     world_model, world, task_a, _ = verify.load(pack_dir(pack_name))
@@ -829,6 +860,8 @@ def _path_coord(record: dict[str, Any], settings: Settings, pack: Any, raw: bool
         "notices_complete": bool(targets) and noticed == targets,
         "notice_run_succeeded": notice_run is not None and notice_run.status == "SUCCEEDED",
         "forbidden_actions": guards.count("ACTION_NOT_AVAILABLE"),
+        "guard_rejections": _guard_counts(guards),
+        **_violations(pack),
         "malformed": guards.count("MALFORMED"),
         "llm_errors": guards.count("LLM_ERROR"),
         "within_budget": all(r.status != "BUDGET_EXHAUSTED" for r in runs),
@@ -836,11 +869,7 @@ def _path_coord(record: dict[str, Any], settings: Settings, pack: Any, raw: bool
     keys = ("alpha_pass", "change_request_to_owner", "draft_ok", "constraint_from_proposal",
             "beta_pass", "committed_r1", "replanning_succeeded", "notices_complete",
             "notice_run_succeeded", "within_budget")  # fmt: skip
-    success = (
-        all(criteria[k] for k in keys)
-        and criteria["forbidden_actions"] == 0
-        and criteria["malformed"] == 0
-    )
+    success = all(criteria[k] for k in keys) and _no_violations(criteria)
     record.update(
         model_settings=model_settings(settings),
         model=next((r["model_id"] for r in rows if r["model_id"]), None),
@@ -892,7 +921,9 @@ class _Script:
 
 
 def _call(name: str, **args: Any) -> AIMessage:
-    args = {"decision_summary": "R1 준비(스크립트)", **args}
+    binding = next(b for b in BINDINGS.values() if name in b.spec.actions)
+    skill = skills.default_skill(binding.spec.skills, name)
+    args = {"decision_summary": "R1 준비(스크립트)", "skill": skill, **args}
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": _key()}])
 
 
@@ -1204,6 +1235,8 @@ def _path_event(
         "notice_targets": targets,
         "noticed": noticed,
         "forbidden_actions": guards.count("ACTION_NOT_AVAILABLE"),
+        "guard_rejections": _guard_counts(guards),
+        **_violations(pack),
         "malformed": guards.count("MALFORMED"),
         "llm_errors": guards.count("LLM_ERROR"),
         "within_budget": all(r.status != "BUDGET_EXHAUSTED" for r in runs),
@@ -1214,8 +1247,7 @@ def _path_event(
         all(criteria[k] for k in keys)
         and criteria["gamma_changed_delay"] == [1, expected_delay]
         and (not ambiguous or criteria["asks"] >= 1)
-        and criteria["forbidden_actions"] == 0
-        and criteria["malformed"] == 0
+        and _no_violations(criteria)
         and (not coord or (bool(targets) and noticed == targets))
     )
     record.update(
@@ -1409,6 +1441,8 @@ def _path_intake(
         and _matches({"L1": exp_alpha}, alpha_actual, False),
         "asks": asks,
         "forbidden_actions": guards.count("ACTION_NOT_AVAILABLE"),
+        "guard_rejections": _guard_counts(guards),
+        **_violations(pack),
         "malformed": guards.count("MALFORMED"),
         "llm_errors": guards.count("LLM_ERROR"),
         "within_budget": all(r.status != "BUDGET_EXHAUSTED" for r in runs),
@@ -1417,8 +1451,7 @@ def _path_intake(
                "consents_like_form", "alpha_pass", "alpha_matches_expected", "within_budget")  # fmt: skip
     success = (
         all(criteria[k] for k in keys_ok)
-        and criteria["forbidden_actions"] == 0
-        and criteria["malformed"] == 0
+        and _no_violations(criteria)
         and (not ambiguous or asks >= 1)
     )
     record.update(
@@ -1553,6 +1586,8 @@ def _run_request(
         criteria = {
             "pass_reached": bool(passing),
             "forbidden_actions": guards.count("ACTION_NOT_AVAILABLE"),
+            "guard_rejections": _guard_counts(guards),
+            **_violations(pack),
             "malformed": guards.count("MALFORMED"),
             "llm_errors": guards.count("LLM_ERROR"),
             "within_budget": run is not None and run.status != "BUDGET_EXHAUSTED",
@@ -1562,7 +1597,7 @@ def _run_request(
             model=next((r["model_id"] for r in rows if r["model_id"]), None),
             prompt_version=PROMPT_VERSION,
             success=criteria["pass_reached"]
-            and criteria["forbidden_actions"] == 0
+            and _no_violations(criteria)
             and criteria["within_budget"],
             success_criteria=criteria,
             first_solve_level=solves[0]["level"] if solves else None,

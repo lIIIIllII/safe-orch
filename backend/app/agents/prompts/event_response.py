@@ -13,12 +13,13 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
+from app.agents import skills
 from app.agents.prompts.replanning import origin_time
 from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p6"
+PROMPT_VERSION = "event-response-p7"
 
 
 def tool_catalog() -> str:
@@ -47,6 +48,11 @@ Goal: {goal}
 분 변환이 맞는지 확인한다.
 - 이관(ESCALATE)은 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 한다. 신고가 시작 지연이 아니면 사유를 붙여 이관한다.
 
+스킬 (행동마다 skill에 이번에 쓰는 스킬을 밝힌다. 사실 조건이 맞으면 열리고, 열린 스킬의 도구만 쓸 수 있다. 지침은 순서와 요령이다. 서버는 순서를 강제하지 않으므로 무엇을 먼저 할지는 네가 판단한다)
+"""
+    + skills.catalog(spec.SKILLS, spec.ACTIONS).replace("{", "{{").replace("}", "}}")
+    + """
+
 도구 전체와 열리는 조건 (지금 호출할 수 있는 것은 이번 턴에 주어진 도구뿐이다. 조건이 갖춰지면 다음 턴에 열린다)
 """
     + tool_catalog().replace("{", "{{").replace("}", "}}")
@@ -66,8 +72,10 @@ start_slack은 시작 가능 시각을 늦출 수 있는 최대 분이다. 0이�
 - 사실 수정안(proposals): 이 Run이 낸 수정안과 상태(PENDING 확인 대기, CONFIRMED 확정, DISCARDED 폐기)다. 폐기된 값은 다시 낼 수 없다.
 - 신고자 답(reporter_replies): 이 Run이 신고자에게 되물은 질문의 상태와 답(quoted_answer, 인용)이다. 답은 확인된 사실이 아니며 사실 수정은 Supervisor가 확인한다.
 - 근무 구간(work_intervals), 직전 거절 사유(last_guard), 남은 예산(budget_remaining).
+- 열린 스킬(open_skills): 지금 조건이 맞아 열린 스킬 ID다.
 
 출력 규칙
+- 모든 도구에 skill을 쓴다. 열린 스킬(open_skills) 중 그 도구를 가진 스킬이어야 한다.
 - 모든 도구에 decision_summary를 쓴다. 형식은 "이유: …/다음: …"이고, 이 행동을 고른 이유와 다음 예정 단계를 200자 안에 한국어로 쓴다.
 - decision_summary에는 분 숫자 대신 작업 ID와 날짜·시각을 쓴다.
 """
@@ -82,6 +90,7 @@ OBSERVATION_KEYS = (
     "event",
     "last_guard",
     "lookups",
+    "open_skills",
     "proposals",
     "recent_steps",
     "reporter_replies",
@@ -129,4 +138,5 @@ PROMPT_FINGERPRINTS = {
     "event-response-p4": "43842c8b5c1304b33874fae5c1d74ce241097029989f2b24036983a6cdb55053",  # 조회 뒤 질문(ASK_REPORTER 열리는 조건)
     "event-response-p5": "c08d380cc1ecd55316f0ad387152b04c0bea832d6e7dce78668c176b3c9911e6",  # 조회 start_slack·분석 delay_minutes, 이관 조건 문구를 Replanning p7과 맞춤
     "event-response-p6": "32095e40779ecd479c5ece5faa9433e3315739ae6a3fbb36cdd145b81a0f8492",  # 현장의 지금 site_now (ST-17)
+    "event-response-p7": "4568e1f2a0fcf6da84dad2e5fc42596b56be173ef1f8c68bdcfa829d3ae8210c",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-18)
 }

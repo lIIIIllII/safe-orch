@@ -10,6 +10,7 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agents import skills
 from app.agents.types import AgentSpec
 
 AGENT_TYPE = "COORDINATION"
@@ -34,6 +35,9 @@ class Action(BaseModel):
     # 열리는 조건 한 줄. prompt의 "도구 전체와 열리는 조건" 절이 이것으로 만든다.
     OPENS: ClassVar[str] = ""
 
+    skill: str = Field(
+        description="이번 행동에 쓰는 스킬 ID. 열린 스킬(open_skills) 중 이 도구를 가진 것"
+    )
     decision_summary: str = Field(
         description="이유: …/다음: … 형식. 이 행동을 고른 이유와 다음 예정 단계 (200자 이내)"
     )
@@ -160,8 +164,32 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
     return {"REQUEST": request, "DRAFT": draft, "WAIT": waiting, "NOTICE": notice}
 
 
+SKILLS = ("ASK_PEOPLE", "CONSULT", "NOTIFY", "WRAP_UP")
+OPEN_ITEM = ("PENDING", "OBJECTED", "OBJECTION_DRAFT_PENDING")
+
+
+def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
+    """스킬이 열리는 사실. 순서 조건은 없다."""
+    live = bool((obs.get("candidate") or {}).get("live"))
+    consult = live and any(i["status"] in OPEN_ITEM for i in obs["items"])
+    return {
+        "has_ask_target": consult,
+        "has_consult_item": consult,
+        "has_unsent_notice": any(not t["sent"] for t in obs["notice_targets"]),
+    }
+
+
+def open_skills(obs: dict[str, Any]) -> list[str]:
+    return skills.open_skills(SKILLS, skill_facts(obs))
+
+
 def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """{action 이름: 허용 인자 제한}. 조합(메시지·작업, 담당자·작업)은 choices로 Gateway가 다시 검사한다."""
+    """{action 이름: 허용 인자 제한}. 열린 스킬의 도구 ∩ 유효한 도구. skill 인자의 허용 값도 넣는다."""
+    return skills.available(SKILLS, skill_facts(obs), valid_actions(obs))
+
+
+def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """유효한 인자 값이 있는 도구와 그 값. 조합(메시지·작업, 담당자·작업)은 choices로 Gateway가 다시 검사한다."""
     c = choices(obs)
     out: dict[str, dict[str, Any]] = {}
     if c["REQUEST"]:
@@ -213,6 +241,7 @@ SPEC = AgentSpec(
     recursion_limit=RECURSION_LIMIT,
     summary_max=SUMMARY_MAX,
     actions=ACTIONS,
+    skills=SKILLS,
     available_actions=available_actions,
     tool_schemas=tool_schemas,
 )

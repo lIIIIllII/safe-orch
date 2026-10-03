@@ -219,10 +219,14 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "recent_steps": recent_steps(steps),
         "budget_remaining": budget_remaining(run, spec.SPEC),
     }
+    data["open_skills"] = spec.open_skills(data)
+    # 현재 계산 대상 작업. 분석·제안 대상의 유효성에 쓴다(조회했는지는 보지 않는다)
+    hidden = {"ready": [t.task_id for t in _ready(conn, pack)]}
     return Observation(
         run=run,
         versions=(site.context_version, site.plan_revision, run.wake_seq),
         data=data,
-        available=spec.available_actions(data),
+        available=spec.available_actions(data, hidden),
         spec=spec.SPEC,
+        hidden=hidden,
     )

@@ -45,7 +45,7 @@ def _ask(*fields):
 
 def _report(text="정리해 보고한다"):
     """REPORT_TO_SUPERVISOR의 인자 이름이 summary라 call()을 쓰지 않는다."""
-    args = {"decision_summary": "이유: 보고/다음: 종료", "summary": text}
+    args = {"decision_summary": "이유: 보고/다음: 종료", "skill": "WRAP_UP", "summary": text}
     return AIMessage(
         content="",
         tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": uuid.uuid4().hex}],

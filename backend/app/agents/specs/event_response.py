@@ -9,6 +9,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agents import skills
 from app.agents.types import AgentSpec
 
 AGENT_TYPE = "EVENT_RESPONSE"
@@ -32,6 +33,9 @@ class Action(BaseModel):
     # 열리는 조건 한 줄. prompt의 "도구 전체와 열리는 조건" 절이 이것으로 만든다.
     OPENS: ClassVar[str] = ""
 
+    skill: str = Field(
+        description="이번 행동에 쓰는 스킬 ID. 열린 스킬(open_skills) 중 이 도구를 가진 것"
+    )
     decision_summary: str = Field(
         description="이유: …/다음: … 형식. 이 행동을 고른 이유와 다음 예정 단계 (200자 이내)"
     )
@@ -49,24 +53,22 @@ class LookupTasks(Action):
 class AnalyzeImpact(Action):
     """작업의 시작 가능 시각을 새 값으로 늦추면 무엇이 어긋나는지 서버가 계산한다(시간창·근무시간·현재 배정·연결 작업)."""
 
-    OPENS = "조회 결과에 있는 작업이고 Supervisor 확인을 기다리는 사실 수정안이 없을 때"
+    OPENS = "현재 계산 대상(READY) 작업이고 Supervisor 확인을 기다리는 사실 수정안이 없을 때"
 
-    task_id: str = Field(description="분석할 작업 ID(조회 결과에 있는 작업)")
+    task_id: str = Field(description="분석할 작업 ID(현재 계산 대상 작업)")
     new_earliest_start: int = Field(
         description="새 시작 가능 시각. Horizon 원점 기준 정수 분(결과에 날짜·시각이 함께 나온다)"
     )
 
 
 class ProposeFactUpdate(Action):
-    """분석이 통과한 (작업, 새 시작 가능 시각)으로 사실 수정안을 만들고 Supervisor 확인을 기다린다."""
+    """(작업, 새 시작 가능 시각)으로 사실 수정안을 만들고 Supervisor 확인을 기다린다. 서버가 영향 분석을
+    다시 돌려 통과해야 받는다."""
 
-    OPENS = (
-        "같은 작업·값의 분석이 지금 현장 정보에서 통과(ok)했고, 이 Run에서 폐기된 값이 아니며,"
-        " 확인을 기다리는 사실 수정안이 없을 때"
-    )
+    OPENS = "이 Run에서 폐기된 값이 아니고 확인을 기다리는 사실 수정안이 없을 때"
 
     task_id: str = Field(description="사실을 수정할 작업 ID")
-    new_earliest_start: int = Field(description="새 시작 가능 시각(정수 분, 분석한 값)")
+    new_earliest_start: int = Field(description="새 시작 가능 시각(정수 분)")
     evidence: str = Field(
         min_length=1,
         max_length=TEXT_MAX,
@@ -77,10 +79,7 @@ class ProposeFactUpdate(Action):
 class AskReporter(Action):
     """신고 내용이 모호할 때(대상·새 시작 가능 시각 등) 신고자에게 되묻는다. 답은 자유 텍스트로 온다."""
 
-    OPENS = (
-        "이 Run에서 LOOKUP_TASKS를 한 번 이상 했고, 사람 확인 라운드가 남았고,"
-        " 답을 기다리는 질문이나 확인을 기다리는 사실 수정안이 없을 때"
-    )
+    OPENS = "사람 확인 라운드가 남았고 답을 기다리는 질문이나 확인을 기다리는 사실 수정안이 없을 때"
 
     question: str = Field(min_length=1, max_length=TEXT_MAX, description="신고자에게 보이는 질문")
 
@@ -110,54 +109,69 @@ FLOW = {
 }
 
 
-def choices(obs: dict[str, Any]) -> dict[str, Any]:
+SKILLS = ("ASSESS", "IMPACT", "ASK_PEOPLE", "FACT_UPDATE", "WRAP_UP")
+
+
+def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
+    """스킬이 열리는 사실. 순서 조건은 없다."""
+    event = obs.get("event") or {}
+    return {
+        "has_change": bool(event),
+        "has_ask_target": bool(event),
+        "has_hold": (event.get("hold") or {}).get("status") == "ACTIVE",
+    }
+
+
+def open_skills(obs: dict[str, Any]) -> list[str]:
+    return skills.open_skills(SKILLS, skill_facts(obs))
+
+
+def choices(obs: dict[str, Any], hidden: dict[str, Any] | None = None) -> dict[str, Any]:
     """Action별 허용 값. Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다.
 
-    LOOKUP: 확인 대기 제안 없음. ANALYZE: 조회한 작업. PROPOSE: 지금 Context에서 통과한 분석의
-    (작업, 값) 중 이 Run에서 폐기되지 않은 것.
+    hidden["ready"]는 현재 계산 대상(READY) 작업 ID다. 조회했는지는 보지 않는다.
+    LOOKUP: 확인 대기 제안 없음. ANALYZE·PROPOSE: READY 작업. PROPOSE는 이 Run에서 폐기된
+    (작업, 값)을 다시 낼 수 없고, 실행 때 서버가 영향 분석을 다시 돌려 통과해야 받는다 (CV-16).
     """
     pending = any(p["status"] == "PENDING" for p in obs["proposals"])
-    looked = sorted({t["task_id"] for lk in obs["lookups"] for t in lk["tasks"]})
-    declined = {
-        (p["task_id"], p["new_value"]) for p in obs["proposals"] if p["status"] == "DISCARDED"
-    }
-    propose: dict[str, list[int]] = {}
-    for a in obs["analyses"]:
-        key = (a["task_id"], a["new_earliest_start"])
-        if a["ok"] and a["current"] and key not in declined:
-            values = propose.setdefault(a["task_id"], [])
-            if a["new_earliest_start"] not in values:
-                values.append(a["new_earliest_start"])
+    ready = sorted((hidden or {}).get("ready", []))
     asking = any(q["status"] == "OPEN" for q in obs["reporter_replies"])
     rounds = obs["budget_remaining"].get("human_rounds", 0) > 0
-    # 조회로 알 수 있는 것(대상 작업)은 먼저 조회한다. 결과가 0건이어도 조회는 한 것이다
-    looked_up = bool(obs["lookups"])
     return {
         "LOOKUP": not pending,
-        "ANALYZE": [] if pending else looked,
-        "PROPOSE": {} if pending else propose,
-        # 신고자 되묻기: 조회 뒤, 답을 기다리는 질문·확인 대기 수정안이 없고 사람 라운드가 남을 때
-        "ASK": looked_up and rounds and not pending and not asking,
+        "ANALYZE": [] if pending else ready,
+        "PROPOSE": [] if pending else ready,
+        "DISCARDED": {
+            (p["task_id"], p["new_value"]) for p in obs["proposals"] if p["status"] == "DISCARDED"
+        },
+        # 신고자 되묻기: 답을 기다리는 질문·확인 대기 수정안이 없고 사람 라운드가 남을 때
+        "ASK": rounds and not pending and not asking,
     }
 
 
-def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """{action 이름: 허용 인자 제한}. 작업·값 조합은 choices로 Gateway가 다시 검사한다."""
-    c = choices(obs)
+def valid_actions(
+    obs: dict[str, Any], hidden: dict[str, Any] | None = None
+) -> dict[str, dict[str, Any]]:
+    """유효한 인자 값이 있는 도구와 그 값. 사실·유효성·Budget만 본다(순서 조건 없음)."""
+    c = choices(obs, hidden)
     out: dict[str, dict[str, Any]] = {}
     if c["LOOKUP"]:
         out["LOOKUP_TASKS"] = {}
     if c["ANALYZE"]:
         out["ANALYZE_IMPACT"] = {"task_id": c["ANALYZE"]}
     if c["PROPOSE"]:
-        out["PROPOSE_FACT_UPDATE"] = {
-            "task_id": sorted(c["PROPOSE"]),
-            "new_earliest_start": sorted({v for vs in c["PROPOSE"].values() for v in vs}),
-        }
+        out["PROPOSE_FACT_UPDATE"] = {"task_id": c["PROPOSE"]}
     if c["ASK"]:
         out["ASK_REPORTER"] = {}
     out["ESCALATE"] = {}
     return out
+
+
+def available_actions(
+    obs: dict[str, Any], hidden: dict[str, Any] | None = None
+) -> dict[str, dict[str, Any]]:
+    """{action 이름: 허용 인자 제한}. 열린 스킬의 도구 ∩ 유효한 도구. skill 인자의 허용 값도 넣는다."""
+    return skills.available(SKILLS, skill_facts(obs), valid_actions(obs, hidden))
 
 
 def tool_schemas(available: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -193,6 +207,7 @@ SPEC = AgentSpec(
     recursion_limit=RECURSION_LIMIT,
     summary_max=SUMMARY_MAX,
     actions=ACTIONS,
+    skills=SKILLS,
     available_actions=available_actions,
     tool_schemas=tool_schemas,
 )
