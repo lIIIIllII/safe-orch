@@ -29,6 +29,7 @@ humans:
         zone_id: "F구역이에요"
         duration: "한 시간이에요"
         work_type: "들어 올리는 작업이에요"
+        requirements: "그 조건이면 쓰려는 크레인을 못 써요"
   rules: []
 outcome: { kind: INTAKE_COMMITTED }   # Intake 완료 ∧ 값이 진실 범위 ∧ 필드 CONFIRMED ∧ PASS 후보 ∧ 확정
 checks:

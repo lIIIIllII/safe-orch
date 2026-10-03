@@ -19,7 +19,7 @@ from app.agents.specs import intake as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "intake-p9"
+PROMPT_VERSION = "intake-p10"
 
 
 def tool_catalog() -> str:
@@ -64,6 +64,7 @@ Goal: {goal}
 - 도구의 시각 인자는 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다. 분으로 바꾸지 않는다(서버가 바꾼다). 관찰의 날짜·시각 값(site_now.local, work_hours, values_local, available_local)이 같은 형식이고 요일이 붙어 있다.
 - 요청(request): 작업 ID(task_id), 요청 문장(quoted_text, 인용), 요청자와 Unit이다. 작업 ID는 구역이 아니다.
 - 작업 유형(work_types): 코드·현장 표시 이름·확인해야 할 필드(critical_fields)·기본 자원 요구 조건(resource_requirements)이다. 구역(zones)은 구역 ID 목록이다.
+- 수량 풀 종류(pool_kinds): 인원처럼 여러 작업이 수량을 나눠 쓰는 것의 종류 코드(kind)·현장 표시 이름·단위다. 작업 유형의 기본 수요(work_types의 pool_demands)는 서버가 붙이고(required는 필수 직종), 값의 pool_demands는 그보다 큰 수량만 반영된다.
 - 자원 속성(resource_attributes): 이 현장이 선언한 자원 속성의 이름(name)·자료형(type: NUMBER 수치, LIST 목록)·단위(unit)·현장 표시 이름이다.
 - 자원 요구 조건: 자원의 속성 값이 맞춰야 하는 비교다(GTE 수치 이상, LTE 수치 이하, CONTAINS 목록 포함). 작업의 요구 조건은 작업 유형의 기본 요구 조건에 값의 resource_requirements가 더해진 것이고, 값으로 기본 요구 조건을 빼거나 낮출 수 없다.
 - 자원 유형(resource_types): 자원 유형 코드·현장 표시 이름·그 유형의 자원 ID다. 값과 조회의 코드는 이 목록과 work_types·zones의 코드만 쓴다.
@@ -93,6 +94,7 @@ OBSERVATION_KEYS = (
     "last_check",
     "last_guard",
     "open_skills",
+    "pool_kinds",
     "questions",
     "recent_steps",
     "request",
@@ -147,4 +149,5 @@ PROMPT_FINGERPRINTS = {
     "intake-p7": "162d798a30aab6b1b5b6aff27145e73477cc624f38387ef9682713dfc9c0a437",  # 사람과 대화하는 스킬을 상대별로 나눔 (AG-20)
     "intake-p8": "bff8e2276cf36287f65061d14ed59fc3376e455632c29f9fd1120fc2cd065638",  # 도구의 시각 인자는 현장 날짜·시각 문자열, 관찰에 같은 형식의 시각 (AG-21)
     "intake-p9": "dc87d9d7a1e37fe736228f4571bb356c39440621b6f859954e30d3b8e24ae01e",  # 자원 속성 선언·기본 요구 조건·자원 조회의 구역·속성·이유, 값에 요구 조건 (CV-17·19·20)
+    "intake-p10": "dea0de657f87150484ea045e2abfd6329a46e4f0387c85d99e03b44549be7099",  # 수량 풀 종류·작업 유형 기본 수요, 값에 수요 (CV-19·23)
 }

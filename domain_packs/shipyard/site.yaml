@@ -48,3 +48,12 @@ resources:
   - { resource_id: SITE-CR-01, display_name: 현장 공용 크레인 1호,   resource_type: CRANE,  owner_unit_id: SITE, allowed_unit_ids: [UA],     allowed_zone_ids: [B, C, D], capacity: 1, available_intervals: [[0, 3360]], attributes: { max_load: 50,  usage: [일반]       }, cost_per_hour: 220000, note: "" }
   - { resource_id: B-CR-01,    display_name: B사 이동식 크레인 1호,  resource_type: CRANE,  owner_unit_id: UB,   allowed_unit_ids: [UB],     allowed_zone_ids: [B, D],    capacity: 1, available_intervals: [[0, 3360]], attributes: { max_load: 25,  usage: [일반]       }, cost_per_hour: 150000, note: "" }
   - { resource_id: SITE-GC-01, display_name: 안벽 골리앗 크레인 1호, resource_type: GANTRY, owner_unit_id: SITE, allowed_unit_ids: [UA, UB], allowed_zone_ids: [F, H],    capacity: 1, available_intervals: [[0, 3360]], attributes: { max_load: 300, usage: [블록, 일반] }, cost_per_hour: 900000, note: "안벽 레일 구간 전용" }
+
+# 수량 풀. kind는 pack.yaml pool_kinds에 있어야 한다. allowed_unit_ids를 생략하면 소유 Unit만 쓴다.
+# 한 Unit이 한 종류에 쓸 수 있는 풀은 하나다(작업이 쓸 풀이 하나로 정해진다). 수량·단가는 가정값이고,
+# cost_per_hour(1단위·시간당, currency 단위)는 데이터만 두고 계산·판정에 쓰지 않는다.
+pools:
+  - { pool_id: UA-SIG, kind: SIGNALER, display_name: A사 신호수,    owner_unit_id: UA, quantity: 2,  cost_per_hour: 35000 }
+  - { pool_id: UA-WRK, kind: WORKER,   display_name: A사 작업 인원, owner_unit_id: UA, quantity: 10, cost_per_hour: 30000 }
+  - { pool_id: UB-SIG, kind: SIGNALER, display_name: B사 신호수,    owner_unit_id: UB, quantity: 1,  cost_per_hour: 35000 }
+  - { pool_id: UB-WRK, kind: WORKER,   display_name: B사 작업 인원, owner_unit_id: UB, quantity: 10, cost_per_hour: 30000 }

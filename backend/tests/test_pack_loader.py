@@ -558,8 +558,8 @@ def _lifting(d):
 @pytest.mark.parametrize(
     ("fname", "mutate", "expected"),
     [
-        ("pack.yaml", lambda d: d.pop("pack_format"), "pack_format must be 2, got None"),
-        ("pack.yaml", lambda d: d.update(pack_format=1), "pack_format must be 2, got 1"),
+        ("pack.yaml", lambda d: d.pop("pack_format"), "pack_format must be 3, got None"),
+        ("pack.yaml", lambda d: d.update(pack_format=1), "pack_format must be 3, got 1"),
         (
             "pack.yaml",
             lambda d: d["resource_attributes"]["max_load"].update(type="TEXT"),
@@ -664,3 +664,150 @@ def test_resource_model_rejected(pack_copy, fname, mutate, expected):
 def test_all_zones_must_be_written_as_star(pack_copy, value):
     _edit(pack_copy, "site.yaml", lambda d: d["resources"][0].update(allowed_zone_ids=value))
     assert load_pack(pack_copy).resources[0].allowed_zone_ids == ("*",)
+
+
+# ── 수량 풀·종류 선언·작업 유형 기본 수요 (CV-19·23) ──────────────
+
+
+def test_pools_loaded(pack):
+    assert {k: (v.display_name, v.unit) for k, v in pack.pool_kinds.items()} == {
+        "SIGNALER": ("신호수", "명"),
+        "WORKER": ("작업 인원", "명"),
+    }
+    # allowed_unit_ids를 생략하면 소유 Unit만 쓴다
+    found = [
+        (p.pool_id, p.kind, p.owner_unit_id, p.allowed_unit_ids, p.quantity) for p in pack.pools
+    ]
+    assert found == [
+        ("UA-SIG", "SIGNALER", "UA", ("UA",), 2),
+        ("UA-WRK", "WORKER", "UA", ("UA",), 10),
+        ("UB-SIG", "SIGNALER", "UB", ("UB",), 1),
+        ("UB-WRK", "WORKER", "UB", ("UB",), 10),
+    ]
+    assert all(p.display_name and p.cost_per_hour for p in pack.pools)
+    defaults = {k: [d.model_dump() for d in pack.default_demands(k)] for k in pack.work_types}
+    assert defaults == {
+        "LIFTING": [
+            {"kind": "WORKER", "quantity": 4, "required": False},
+            {"kind": "SIGNALER", "quantity": 1, "required": True},
+        ],
+        "WORK_BELOW": [{"kind": "WORKER", "quantity": 3, "required": False}],
+        "HOT_WORK": [{"kind": "WORKER", "quantity": 2, "required": False}],
+        "PAINTING": [{"kind": "WORKER", "quantity": 2, "required": False}],
+    }
+    tasks = {t.task_id: t for t in pack.tasks}
+    assert tasks["K"].demands == {"SIGNALER": 1, "WORKER": 4}
+    assert tasks["K"].pool_demands == () and tasks["K"].required_kinds == ("SIGNALER",)
+
+
+def _pool(d, pool_id):
+    return next(p for p in d["pools"] if p["pool_id"] == pool_id)
+
+
+def _drop_pool(d, pool_id):
+    d["pools"] = [p for p in d["pools"] if p["pool_id"] != pool_id]
+
+
+@pytest.mark.parametrize(
+    ("fname", "mutate", "expected"),
+    [
+        (
+            "pack.yaml",
+            lambda d: d["pool_kinds"]["WORKER"].pop("display_name"),
+            "pack.yaml.pool_kinds.WORKER.display_name",
+        ),
+        (
+            "pack.yaml",
+            lambda d: d["pool_kinds"].pop("SIGNALER"),
+            "LIFTING.pool_demands[1]: undeclared pool kind 'SIGNALER'",
+        ),
+        (
+            "pack.yaml",
+            lambda d: _lifting(d)["pool_demands"].append({"kind": "WORKER", "quantity": 9}),
+            "LIFTING.pool_demands[2]: duplicate pool kind 'WORKER'",
+        ),
+        (
+            "pack.yaml",
+            lambda d: _lifting(d)["pool_demands"][0].update(quantity=0),
+            "LIFTING.pool_demands[0].quantity",
+        ),
+        (
+            "site.yaml",
+            lambda d: _pool(d, "UA-WRK").update(kind="WELDER"),
+            "undeclared pool kind 'WELDER'",
+        ),
+        (
+            "site.yaml",
+            lambda d: _pool(d, "UA-WRK").update(owner_unit_id="UX"),
+            "undefined unit 'UX'",
+        ),
+        (
+            "site.yaml",
+            lambda d: _pool(d, "UA-WRK").update(quantity=0),
+            "site.yaml.pools[1].quantity",
+        ),
+        (
+            "site.yaml",
+            lambda d: _pool(d, "UB-WRK").update(pool_id="UA-WRK"),
+            "duplicate id 'UA-WRK'",
+        ),
+        (
+            # 한 Unit이 한 종류에 쓰는 풀은 하나다: 소유 풀이 둘
+            "site.yaml",
+            lambda d: d["pools"].append({**_pool(d, "UA-WRK"), "pool_id": "UA-WRK-2"}),
+            "unit 'UA' has 2 pools of kind 'WORKER'",
+        ),
+        (
+            # 다른 Unit의 풀을 같이 쓰게 하면 그 Unit의 풀과 겹친다
+            "site.yaml",
+            lambda d: _pool(d, "UA-SIG").update(allowed_unit_ids=["UA", "UB"]),
+            "unit 'UB' has 2 pools of kind 'SIGNALER'",
+        ),
+        (
+            # 필수 직종(인양의 신호수)의 풀이 그 Unit에 없다: plan_r0의 K(UB)
+            "site.yaml",
+            lambda d: _drop_pool(d, "UB-SIG"),
+            "plan_r0.yaml.tasks[4]: unit 'UB' has no pool for required kind 'SIGNALER'",
+        ),
+        (
+            # 시연 요청 N3(UB)
+            "site.yaml",
+            lambda d: _drop_pool(d, "UB-SIG"),
+            "scenario.yaml.demo_requests[2]: unit 'UB' has no pool for required kind 'SIGNALER'",
+        ),
+        (
+            "site.yaml",
+            lambda d: _drop_pool(d, "UA-SIG"),
+            "scenario.yaml.new_task: unit 'UA' has no pool for required kind 'SIGNALER'",
+        ),
+        (
+            "plan_r0.yaml",
+            lambda d: _task(d, "K").update(pool_demands=[{"kind": "WELDER", "quantity": 1}]),
+            "plan_r0.yaml.tasks[4].pool_demands[0]: undeclared pool kind 'WELDER'",
+        ),
+        (
+            "scenario.yaml",
+            lambda d: d["demo_requests"][0].update(
+                pool_demands=[{"kind": "WELDER", "quantity": 1}]
+            ),
+            "scenario.yaml.demo_requests[0].pool_demands[0]: undeclared pool kind 'WELDER'",
+        ),
+    ],
+)
+def test_pools_rejected(pack_copy, fname, mutate, expected):
+    _edit(pack_copy, fname, mutate)
+    assert expected in _reasons(pack_copy)
+
+
+def test_shared_pool_and_missing_optional_pool_load(pack_copy):
+    """풀 하나를 두 Unit이 같이 쓸 수 있다(그 종류의 풀이 Unit마다 하나면). 필수가 아닌 종류는 풀이 없어도 된다."""
+
+    def share(d):
+        _drop_pool(d, "UB-WRK")
+        _pool(d, "UA-WRK").update(allowed_unit_ids=["UA", "UB"])
+
+    _edit(pack_copy, "site.yaml", share)
+    pools = {p.pool_id: p.allowed_unit_ids for p in load_pack(pack_copy).pools}
+    assert pools["UA-WRK"] == ("UA", "UB")
+    _edit(pack_copy, "site.yaml", lambda d: _drop_pool(d, "UA-WRK"))
+    assert "UA-WRK" not in {p.pool_id for p in load_pack(pack_copy).pools}

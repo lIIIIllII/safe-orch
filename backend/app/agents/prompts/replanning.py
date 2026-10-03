@@ -22,7 +22,7 @@ from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "replanning-p10"
+PROMPT_VERSION = "replanning-p11"
 
 
 def tool_catalog() -> str:
@@ -65,6 +65,8 @@ Goal: {goal}
 - 시간은 Horizon 원점(첫날 {origin_time})을 0으로 하는 정수 분이고(1440분 = 하루), 점유는 [start, end)다.
 - 근무 구간(work_intervals): 모든 작업은 근무 구간 하나 안에 있어야 한다(CALENDAR). 같은 날 자리가 없으면 해가 다음 근무일로 갈 수 있다.
 - 현재 충돌(conflicts)은 전부, 맡은 충돌(primary_conflict)은 이 Run이 해소할 충돌이다.
+- 수량 풀 초과(POOL_CAPACITY) 충돌에는 pool이 붙는다: 어느 풀(pool_id)·종류(kind)가 언제(at, 분) 겹친 작업의 수요 합(demand)이 수량(quantity)을 넘었는지다. 인원처럼 여러 작업이 나눠 쓰는 수량이라, 겹치는 작업의 시간을 옮겨야 풀린다.
+- 움직일 수 있는 작업의 수요(demands)는 종류별로 그 작업이 풀에서 쓰는 수량이다.
 - 움직일 수 있는 작업(acting_tasks): 이동이 확인된 축(movable), 기준 배정(base), 필요한 자원 유형(required_resource_type)이 있다.
 - 확인된 제약(constraints)은 고정된 작업·축, 동의 범위(consents)는 작업 담당자가 동의한 시작 범위·자원이다.
 - 아직 시도하지 않은 탐색 범위(untried_levels): L0은 충돌 당사자만, L1은 같은 구역·같은 자원의 작업까지, L2는 acting_unit 작업 전부를 움직일 수 있게 한다. 범위가 넓을수록 바뀌는 작업이 늘 수 있다.
@@ -159,4 +161,5 @@ PROMPT_FINGERPRINTS = {
     "replanning-p8": "24532cde46a7022647e44f07f57c1bdb279472596c1517f85e4b3ffb7c321ff9",  # 현장 설명·원점 시각을 Pack에서. shipyard 렌더링은 p7과 같다
     "replanning-p9": "9bb3db09369abe062b521b9d10fc740e6bfe7087c586284a6f1367f40371ecc3",  # 스킬 층: 스킬별 지침, skill 인자, open_skills, 순서 조건 제거 (AG-18)
     "replanning-p10": "6d9a8a4c3c7d8f098af76c4923a01f5f5e05075da3f19d1c86f12598c3906e68",  # 자원 조회 제외 사유에 구역·요구 조건(어느 속성인지) (CV-20)
+    "replanning-p11": "33fb3d9f286ba13da7c9acd873a0d11c649f5484f0595a101f1eb8d31aa1aeae",  # 풀 초과 충돌(풀·종류·초과 시각), 작업의 수요 (CV-23)
 }

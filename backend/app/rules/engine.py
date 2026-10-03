@@ -8,7 +8,16 @@ from collections.abc import Iterable
 
 from app.domain.calendar import fits_work_interval
 from app.domain.eligibility import exclusion_reasons
-from app.domain.models import Assignment, Conflict, Rule, Snapshot, SnapshotContent, Task
+from app.domain.models import (
+    Assignment,
+    Conflict,
+    PoolExcess,
+    Rule,
+    Snapshot,
+    SnapshotContent,
+    Task,
+    pool_for,
+)
 from app.packs.loader import LoadedPack
 
 
@@ -25,6 +34,7 @@ def _conflict(
     rule_id: str,
     items: list[tuple[Task, Assignment]],
     resource_id: str | None = None,
+    pool: PoolExcess | None = None,
 ) -> Conflict:
     return Conflict(
         rule_id=rule_id,
@@ -32,6 +42,7 @@ def _conflict(
         resource_id=resource_id,
         zone_ids=tuple(sorted({t.zone_id for t, _ in items})),
         interval=(min(a.start for _, a in items), max(a.end for _, a in items)),
+        pool=pool,
     )
 
 
@@ -49,6 +60,8 @@ BASIC_RULE_IDS = frozenset(
         "RESOURCE_REQUIREMENT",
         "AVAILABILITY",
         "CALENDAR",
+        "POOL_MISSING",
+        "POOL_CAPACITY",
     }
 )
 
@@ -103,6 +116,41 @@ def _basic(facts: SnapshotContent, pairs: list[tuple[Task, Assignment]]) -> list
             out.append(_conflict("RESOURCE_REQUIREMENT", [(t, a)], a.resource_id))
         if not any(lo <= a.start and a.end <= hi for lo, hi in r.available_intervals):
             out.append(_conflict("AVAILABILITY", [(t, a)], a.resource_id))
+    return out
+
+
+def _pools(facts: SnapshotContent, pairs: list[tuple[Task, Assignment]]) -> list[Conflict]:
+    """수량 풀: 필수 직종의 풀이 없는 작업(POOL_MISSING)과 풀 초과(POOL_CAPACITY).
+
+    풀을 쓰는 작업 = 그 풀의 허용 Unit 작업 중 그 종류의 수요가 있는 것. 고정 작업도 수요에 들어간다.
+    겹치는 구간의 수요 합은 어떤 작업의 시작 시각에서 가장 크므로 시작 시각마다 합을 본다.
+    같은 작업 집합의 초과는 처음 넘은 시각으로 한 번만 보고한다.
+    """
+    out: list[Conflict] = []
+    for t, a in pairs:
+        if any(pool_for(facts.pools, t.unit_id, kind) is None for kind in t.required_kinds):
+            out.append(_conflict("POOL_MISSING", [(t, a)]))
+    for pool in sorted(facts.pools, key=lambda p: p.pool_id):
+        users = [
+            (t, a, t.demands[pool.kind])
+            for t, a in pairs
+            if t.unit_id in pool.allowed_unit_ids and pool.kind in t.demands
+        ]
+        seen: set[tuple[str, ...]] = set()
+        for at in sorted({a.start for _, a, _ in users}):
+            active = [(t, a, q) for t, a, q in users if a.start <= at < a.end]
+            demand = sum(q for _, _, q in active)
+            ids = tuple(sorted(t.task_id for t, _, _ in active))
+            if demand > pool.quantity and ids not in seen:
+                seen.add(ids)
+                excess = PoolExcess(
+                    pool_id=pool.pool_id,
+                    kind=pool.kind,
+                    at=at,
+                    demand=demand,
+                    quantity=pool.quantity,
+                )
+                out.append(_conflict("POOL_CAPACITY", [(t, a) for t, a, _ in active], pool=excess))
     return out
 
 
@@ -172,10 +220,18 @@ def detect_conflicts(
         ((tasks[a.task_id], a) for a in assignments if a.task_id in tasks),
         key=lambda p: p[0].task_id,
     )
-    out = _basic(facts, pairs)
+    out = _basic(facts, pairs) + _pools(facts, pairs)
     for rule in pack.rules:
         if rule.type == "CAPACITY":
             out += _capacity(rule, pairs)
         elif rule.type == "SEPARATION":
             out += _separation(rule, facts, pairs)
-    return sorted(out, key=lambda c: (c.rule_id, c.task_ids, c.resource_id or ""))
+    return sorted(
+        out,
+        key=lambda c: (
+            c.rule_id,
+            c.task_ids,
+            c.resource_id or "",
+            c.pool.pool_id if c.pool else "",
+        ),
+    )

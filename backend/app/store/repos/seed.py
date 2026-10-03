@@ -59,10 +59,27 @@ def seed_pack(tx: sqlite3.Connection, pack: LoadedPack) -> None:
         ],
     )
     tx.executemany(
+        "INSERT INTO pool (site_id, pool_id, kind, display_name, owner_unit_id, allowed_unit_ids,"
+        " quantity, cost_per_hour) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                sid,
+                p.pool_id,
+                p.kind,
+                p.display_name,
+                p.owner_unit_id,
+                dumps(list(p.allowed_unit_ids)),
+                p.quantity,
+                p.cost_per_hour,
+            )
+            for p in pack.pools
+        ],
+    )
+    tx.executemany(
         "INSERT INTO task (site_id, task_id, revision, unit_id, owner_actor_id, work_type,"
         " zone_id, duration, earliest_start, latest_start, latest_end, required_resource_type,"
-        " requested_resource_id, resource_requirements, predecessors, movable, fields, lifecycle)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " requested_resource_id, resource_requirements, pool_demands, predecessors, movable, fields,"
+        " lifecycle) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 sid,
@@ -79,6 +96,7 @@ def seed_pack(tx: sqlite3.Connection, pack: LoadedPack) -> None:
                 t.required_resource_type,
                 t.requested_resource_id,
                 dumps([r.model_dump() for r in t.resource_requirements]),
+                dumps([d.model_dump() for d in t.pool_demands]),
                 dumps([p.model_dump() for p in t.predecessors]),
                 dumps(t.movable.model_dump()),
                 dumps({k: v.model_dump() for k, v in t.fields.items()}),

@@ -1,5 +1,5 @@
 // 화면은 Pack을 모른다: frontend/src의 따옴표 문자열에 Pack ID가 나오면 실패한다.
-// domain_packs/*/ YAML에서 zone·resource·task·work_type·자원 속성·rule_id·site_id·timezone ID를 읽는다.
+// domain_packs/*/ YAML에서 zone·resource·pool·task·work_type·자원 속성·풀 종류·rule_id·site_id·timezone ID를 읽는다.
 // 한두 글자 ID는 오탐이 많아 길이 3 이상만 검사한다. npm 라이브러리 없이 필요한 키만 정규식으로 읽는다.
 //   node scripts/check-pack-literals.mjs   (npm run lint에 포함)
 
@@ -33,6 +33,7 @@ function packIds(dir) {
       ['site_id', 'site_id'],
       ['timezone', 'timezone'],
       ['resource_id', 'resource'],
+      ['pool_id', 'pool'],
       ['task_id', 'task'],
       ['rule_id', 'rule_id'],
     ]) {
@@ -50,10 +51,15 @@ function packIds(dir) {
     if (wt) {
       for (const m of wt[1].matchAll(/^ {2}([A-Za-z_][\w-]*)\s*:/gm)) add(m[1], 'work_type')
     }
-    // resource_attributes: 아래 2칸 들여쓴 키 (자원 속성 이름)
-    const ra = /^resource_attributes:\s*\n((?:(?:\s{2}.*)?\n?)+)/m.exec(text)
-    if (ra) {
-      for (const m of ra[1].matchAll(/^ {2}([A-Za-z_][\w-]*)\s*:/gm)) add(m[1], 'resource_attribute')
+    // resource_attributes·pool_kinds: 아래 2칸 들여쓴 키 (자원 속성 이름, 수량 풀 종류)
+    for (const [section, kind] of [
+      ['resource_attributes', 'resource_attribute'],
+      ['pool_kinds', 'pool_kind'],
+    ]) {
+      const block = new RegExp(`^${section}:\\s*\\n((?:(?:\\s{2}.*)?\\n?)+)`, 'm').exec(text)
+      if (block) {
+        for (const m of block[1].matchAll(/^ {2}([A-Za-z_][\w-]*)\s*:/gm)) add(m[1], kind)
+      }
     }
   }
   return ids

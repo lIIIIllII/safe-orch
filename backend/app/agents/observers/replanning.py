@@ -157,6 +157,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 "latest_end": t.latest_end,
             },
             "required_resource_type": t.required_resource_type,
+            "demands": t.demands,
             "movable": t.movable.model_dump(),
             "base": base[t.task_id].model_dump(),
         }

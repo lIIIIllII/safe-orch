@@ -86,8 +86,8 @@ def test_snapshot_content(with_a):
     assert snap.snapshot_hash == canonical_hash(content)
     assert set(content) == {
         "site_id", "pack_hash", "horizon_minutes", "work_intervals", "context_version",
-        "plan_revision", "tasks", "resources", "zones", "zone_relations", "plan", "holds",
-        "constraints", "consents",
+        "plan_revision", "tasks", "resources", "pools", "zones", "zone_relations", "plan",
+        "holds", "constraints", "consents",
     }  # fmt: skip
     assert (content["site_id"], content["context_version"], content["plan_revision"]) == (
         "YARD-01",

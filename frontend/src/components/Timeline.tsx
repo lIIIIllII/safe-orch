@@ -6,7 +6,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CandidateView, Conflict, SiteState, Task } from '../types'
 import { CANDIDATE_KIND, CANDIDATE_STATUS, GATE, REASON, gateReason } from '../labels'
-import { ruleName, useEnv, workTypeName } from '../context'
+import { poolExcessText, ruleName, useEnv, workTypeName } from '../context'
 import {
   ALL_ZOOM_DEFAULT,
   DAY_ZOOMS,
@@ -490,10 +490,10 @@ export function Timeline({ state, candidate, overlay, onOverlay, wide, onWide }:
                     if (!box) return null
                     return (
                       <div
-                        key={`${c.rule_id}:${c.task_ids.join(',')}`}
+                        key={`${c.rule_id}:${c.task_ids.join(',')}:${c.pool?.pool_id ?? ''}`}
                         className="tl-conflict"
                         style={{ left: box.left, width: box.width }}
-                        title={`${ruleLabel(c.rule_id)} (${c.rule_id}) · ${c.task_ids.join(', ')} · ${clock.span(c.interval[0], c.interval[1])}`}
+                        title={`${ruleLabel(c.rule_id)} (${c.rule_id}) · ${c.task_ids.join(', ')} · ${clock.span(c.interval[0], c.interval[1])}${c.pool ? ` · ${poolExcessText(meta, c)} (${clock.format(c.pool.at)}부터)` : ''}`}
                       >
                         <span>{ruleLabel(c.rule_id)}</span>
                       </div>
@@ -602,7 +602,7 @@ function BarCard({
   conflicts: Conflict[]
   ruleLabel: (id: string) => string
 }) {
-  const { clock } = useEnv()
+  const { clock, meta } = useEnv()
   const { b, t } = d
   const CARD_W = 320
   const left = x + 14 + CARD_W > window.innerWidth ? x - 14 - CARD_W : x + 14
@@ -648,8 +648,9 @@ function BarCard({
               {conflicts.length === 0
                 ? '없음'
                 : conflicts.map((c) => (
-                    <div key={`${c.rule_id}:${c.task_ids.join(',')}`}>
+                    <div key={`${c.rule_id}:${c.task_ids.join(',')}:${c.pool?.pool_id ?? ''}`}>
                       {ruleLabel(c.rule_id)} · {c.task_ids.join(', ')} · {clock.span(c.interval[0], c.interval[1])}
+                      {c.pool && ` · ${poolExcessText(meta, c)} (${clock.format(c.pool.at)}부터)`}
                     </div>
                   ))}
             </td>

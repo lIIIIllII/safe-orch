@@ -4,6 +4,8 @@
 
 - 입력은 Pack YAML(pack·site·plan_r0·scenario·rules)을 yaml.safe_load로 직접 읽는다.
 - 자원 조건(유형·사용 권한·사용 가능 구역·요구 조건)도 여기서 따로 구현한다(`fits`). app의 적격성 함수를 쓰지 않는다.
+- 수량 풀의 누적 제약(겹치는 작업의 수요 합 ≤ 수량)과 필수 직종도 따로 구현한다(`pool_over`).
+- 평가 시나리오 진실(보는 판 S1, 숨긴 판 S1'')도 같은 계산으로 확인한다(`scenario_truths`). 진실 값만 읽는다.
 - 계산은 app 코드(rules·solver·validator)를 import하지 않는 독립 구현이다. CP-SAT 모델(CALENDAR 포함)과
   전수 열거를 함께 돌려 상태·변경 수·지연·해가 같은지 대조하고, 최적해가 하나뿐인지 센다.
 - 결과는 콘솔에만 쓴다. pytest(tests/test_demo_extension.py)가 같은 값을 운영 코드로 재현한다.
@@ -23,6 +25,7 @@ from ortools.sat.python import cp_model
 from ortools.util.python.sorted_interval_list import Domain
 
 PACK = Path(__file__).resolve().parents[2] / "domain_packs" / "shipyard"
+SCENARIOS = Path(__file__).resolve().parents[1] / "evals" / "scenarios" / "shipyard"
 WEEKDAY = "월화수목금토일"
 FIXED = (False, False, ())
 
@@ -44,6 +47,9 @@ class T:
     start: int | None = None  # Plan 배정. 없으면 신규 작업이고 기준 시작 = es
     # 자원 요구 조건 (속성, 비교, 값) = 작업 유형 기본값 + 작업 값
     needs: tuple[tuple[str, str, Any], ...] = ()
+    # 풀 수요 (종류, 수량) = 작업 유형 기본값과 작업 값 중 큰 쪽. must는 필수 직종
+    use: tuple[tuple[str, int], ...] = ()
+    must: tuple[str, ...] = ()
 
 
 @dataclass
@@ -57,6 +63,10 @@ class World:
     below: set[tuple[str, str]]
     # 자원 ID → (유형, 허용 Unit, 사용 가능 구역("*" = 모든 구역), 속성 값)
     resources: dict[str, tuple[str, set[str], set[str], dict[str, Any]]]
+    # 풀 ID → (종류, 허용 Unit, 수량)
+    pools: dict[str, tuple[str, set[str], int]]
+    type_needs: dict[str, list]
+    type_use: dict[str, list]
 
     def rel(self, a: str, b: str) -> str | None:
         if a == b:
@@ -113,21 +123,24 @@ def load(pack: Path = PACK) -> tuple[World, list[T], T, list[T]]:
             )
             for r in site["resources"]
         },
+        pools={
+            p["pool_id"]: (
+                p["kind"],
+                set(p.get("allowed_unit_ids") or [p["owner_unit_id"]]),
+                p["quantity"],
+            )
+            for p in site.get("pools") or []
+        },
+        type_needs=type_needs,
+        type_use={
+            k: v.get("pool_demands") or [] for k, v in raw["pack.yaml"]["work_types"].items()
+        },
     )
     unit_of = {a["actor_id"]: a["unit_id"] for a in site["actors"]}
     plan = {a["task_id"]: a["start"] for a in raw["plan_r0.yaml"]["assignments"]}
 
     def task(t: dict[str, Any], unit: str, movable: dict[str, bool], start: int | None) -> T:
-        return T(
-            t["task_id"], unit, tags[t["work_type"]], t["zone_id"], t["duration"],
-            t["earliest_start"], t["latest_start"], t["latest_end"],
-            t.get("required_resource_type"), t.get("requested_resource_id"),
-            movable["time"], movable["resource"], start,
-            tuple(
-                (q["attribute"], q["op"], q["value"])
-                for q in type_needs[t["work_type"]] + (t.get("resource_requirements") or [])
-            ),
-        )  # fmt: skip
+        return make_task(world, tags, t, unit, movable, start)
 
     fixture = [
         task(t, t["unit_id"], t["movable"], plan[t["task_id"]])
@@ -141,6 +154,27 @@ def load(pack: Path = PACK) -> tuple[World, list[T], T, list[T]]:
         for d in raw["scenario.yaml"]["demo_requests"]
     ]
     return world, fixture, a, demos
+
+
+def make_task(
+    w: World, tags: dict[str, str], t: dict[str, Any], unit: str, movable: dict[str, bool],
+    start: int | None,
+) -> T:  # fmt: skip
+    use: dict[str, int] = {}
+    for d in w.type_use[t["work_type"]] + (t.get("pool_demands") or []):
+        use[d["kind"]] = max(use.get(d["kind"], 0), d["quantity"])
+    return T(
+        t["task_id"], unit, tags[t["work_type"]], t["zone_id"], t["duration"],
+        t["earliest_start"], t["latest_start"], t["latest_end"],
+        t.get("required_resource_type"), t.get("requested_resource_id"),
+        movable["time"], movable["resource"], start,
+        tuple(
+            (q["attribute"], q["op"], q["value"])
+            for q in w.type_needs[t["work_type"]] + (t.get("resource_requirements") or [])
+        ),
+        tuple(sorted(use.items())),
+        tuple(sorted(d["kind"] for d in w.type_use[t["work_type"]] if d.get("required"))),
+    )  # fmt: skip
 
 
 def base(t: T) -> tuple[int, str | None]:
@@ -187,6 +221,35 @@ def ok_one(w: World, t: T, s: int, r: str | None) -> bool:
     return r is None or fits(w, t, r)
 
 
+def pool_of(w: World, unit: str, kind: str) -> str | None:
+    """그 Unit이 그 종류에 쓰는 풀(Pack 규칙상 하나)."""
+    found = [pid for pid, (k, units, _) in sorted(w.pools.items()) if k == kind and unit in units]
+    if len(found) > 1:
+        raise SystemExit(f"{unit}이 {kind}에 쓸 풀이 {len(found)}개다")
+    return found[0] if found else None
+
+
+def pool_missing(w: World, t: T) -> bool:
+    return any(pool_of(w, t.unit, kind) is None for kind in t.must)
+
+
+def pool_over(w: World, placed: list[tuple[T, int]]) -> list[tuple[str, int, int, tuple[str, ...]]]:
+    """풀 초과 (풀, 시각, 수요 합, 겹친 작업). 수요 합은 어떤 작업의 시작 시각에서 최대다(독립 구현)."""
+    out = []
+    for pid, (kind, units, quantity) in sorted(w.pools.items()):
+        users = [
+            (t, s, dict(t.use)[kind]) for t, s in placed if t.unit in units and kind in dict(t.use)
+        ]
+        seen = set()
+        for at in sorted({s for _, s, _ in users}):
+            on = [(t, q) for t, s, q in users if s <= at < s + t.d]
+            ids = tuple(sorted(t.id for t, _ in on))
+            if sum(q for _, q in on) > quantity and ids not in seen:
+                seen.add(ids)
+                out.append((pid, at, sum(q for _, q in on), ids))
+    return out
+
+
 def sep_violations(w: World, x: T, sx: int, y: T, sy: int) -> list[str]:
     """두 작업이 어기는 SEPARATION rule_id 목록."""
     return [
@@ -223,6 +286,11 @@ def conflicts(w: World, tasks: list[T]) -> list[tuple[str, tuple[str, ...]]]:
                 out.append(("RESOURCE_ZONE", (t.id,)))
             if any(x.startswith("요구 조건") for x in bad):
                 out.append(("RESOURCE_REQUIREMENT", (t.id,)))
+        if pool_missing(w, t):
+            out.append(("POOL_MISSING", (t.id,)))
+    out += [
+        ("POOL_CAPACITY", ids) for _, _, _, ids in pool_over(w, [(t, base(t)[0]) for t in tasks])
+    ]
     for i, x in enumerate(tasks):
         for y in tasks[i + 1 :]:
             (sx, rx), (sy, ry) = base(x), base(y)
@@ -296,6 +364,20 @@ def cpsat(w: World, tasks: list[T], ax: dict) -> tuple:
                 delays.append(dl)
         for ivs in by_res.values():
             m.add_no_overlap(ivs)
+        # 수량 풀: 풀마다 누적 제약. 필수 직종의 풀이 없으면 해가 없다
+        if any(pool_missing(w, t) for t in tasks):
+            m.add_bool_or([])
+        for pid, (kind, units, quantity) in sorted(w.pools.items()):
+            users = [t for t in tasks if t.unit in units and kind in dict(t.use)]
+            if users:
+                m.add_cumulative(
+                    [
+                        m.new_fixed_size_interval_var(starts[t.id], t.d, f"p_{pid}_{t.id}")
+                        for t in users
+                    ],
+                    [dict(t.use)[kind] for t in users],
+                    quantity,
+                )
         for _, ha, hb, rels, gap in w.rules:
             for x, y in itertools.combinations(tasks, 2):
                 for p, q in ((x, y), (y, x)):
@@ -336,6 +418,9 @@ def brute(w: World, tasks: list[T], ax: dict) -> tuple:
         ok_pair(w, x, *base(x), y, *base(y)) for x, y in itertools.combinations(fixed, 2)
     ):
         return "INFEASIBLE", None, None, []
+    if any(pool_missing(w, t) for t in tasks):
+        return "INFEASIBLE", None, None, []
+    fixed_at = [(t, base(t)[0]) for t in fixed]
     options = []
     for t in mov:
         mt, mr, alts = ax[t.id]
@@ -357,6 +442,9 @@ def brute(w: World, tasks: list[T], ax: dict) -> tuple:
             ok_pair(w, mov[i], *combo[i], mov[j], *combo[j])
             for i, j in itertools.combinations(range(len(mov)), 2)
         ):
+            continue
+        # 누적 제약은 쌍으로 볼 수 없어 전체 배치로 본다(고정 작업 포함)
+        if pool_over(w, fixed_at + [(t, s) for t, (s, _) in zip(mov, combo, strict=True)]):
             continue
         key = (
             sum(1 for t, sr in zip(mov, combo, strict=True) if sr != base(t)),
@@ -503,6 +591,39 @@ def apply(others: list[T], req: T, sol: dict) -> list[T]:
     ]
 
 
+def scenario_truths(w: World, fixture: list[T]) -> None:
+    """평가 시나리오(자연어 접수)의 진실 값으로 기대 결과를 다시 계산한다.
+
+    보는 판 S1과 숨긴 판 S1''. 진실의 earliest_start 범위 양 끝에서 각각 계산하고, 해가 하나이며
+    두 끝의 해가 같은지 확인한다. 요청자는 planner_a(UA), 축은 폼과 같다(시간만).
+    """
+    raw = yaml.safe_load((PACK / "pack.yaml").read_text(encoding="utf-8"))
+    tags = {k: v["hazard_tags"][0] for k, v in raw["work_types"].items()}
+    site = yaml.safe_load((PACK / "site.yaml").read_text(encoding="utf-8"))
+    unit_of = {a["actor_id"]: a["unit_id"] for a in site["actors"]}
+    for path in (SCENARIOS / "S1.yaml", SCENARIOS / "hidden" / "S1.yaml"):
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        truth = data["truth"]["task"]
+        unit = unit_of[data["start"]["requester"]]
+        lo, hi = truth["earliest_start"]
+        print(f"{data['id']} ({unit}) 시작 가능 {w.clock(lo)}~{w.clock(hi)}")
+        found = set()
+        for es in (lo, hi):
+            t = {**truth, "task_id": data["start"]["task_id"], "earliest_start": es}
+            req = make_task(w, tags, t, unit, {"time": True, "resource": False}, None)
+            bad = unmet(w, req, req.res) if req.res else []
+            if bad:
+                raise SystemExit(f"{data['id']}: 진실 자원이 조건에 맞지 않는다 {bad}")
+            status, changed, _delay, sol = solve_request(w, fixture, req, levels=("L0",))["L0"]
+            if status != "OPTIMAL" or changed != 1:
+                raise SystemExit(f"{data['id']}: L0 {status} 변경 {changed}")
+            found.add(sol[req.id])
+        if len(found) != 1:
+            raise SystemExit(f"{data['id']}: 범위 양 끝의 해가 다르다 {found}")
+        (start, res) = next(iter(found))
+        print(f"  → 해 {w.clock(start)}({start}) {res}")
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     w, fixture, a, demos = load()
@@ -517,6 +638,17 @@ def main() -> None:
             print(f"  {t.id} {t.zone}구역 {t.rtype} {t.res} 조건 {list(t.needs)} → {bad or '적격'}")
             if bad:
                 raise SystemExit(f"{t.id}: 기준 자원이 조건에 맞지 않는다 {bad}")
+    print("수량 풀 (종류 · 허용 Unit · 수량):")
+    for pid, (kind, units, quantity) in sorted(w.pools.items()):
+        peak = max(
+            (
+                sum(dict(x.use)[kind] for x in fixture if x.unit in units and kind in dict(x.use)
+                    and base(x)[0] <= base(t)[0] < base(x)[0] + x.d)
+                for t in fixture
+            ),
+            default=0,
+        )  # fmt: skip
+        print(f"  {pid} {kind} Unit {sorted(units)} 수량 {quantity} · R0 최대 수요 {peak}")
     print("R0 충돌:", conflicts(w, fixture))
     print(f"\n기본 시연값 A ({a.id}):")
     solve_request(w, fixture, a)
@@ -553,6 +685,9 @@ def main() -> None:
             f" 충돌 {r['conflict']} L0 {r['status']} 변경 {r['changed']} 지연 {r['delay']}"
             f"/근무 {r['work_delay']} [{moved}] 전수 일치"
         )
+
+    print("\n평가 시나리오 진실 (R0 기준):")
+    scenario_truths(w, fixture)
 
 
 if __name__ == "__main__":

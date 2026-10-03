@@ -43,6 +43,7 @@ FORM_FIELDS = (
     "required_resource_type",
     "requested_resource_id",
     "resource_requirements",
+    "pool_demands",
 )
 
 

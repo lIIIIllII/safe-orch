@@ -14,7 +14,7 @@ from ortools.util.python.sorted_interval_list import Domain
 
 from app.domain.calendar import start_domain
 from app.domain.ids import new_id
-from app.domain.models import Movable, SearchSpec, Snapshot, SolverResult
+from app.domain.models import Movable, SearchSpec, Snapshot, SolverResult, pool_for
 from app.packs.loader import LoadedPack
 
 RANDOM_SEED = 0
@@ -104,6 +104,25 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
             if hi > lo
         ]
         m.add_no_overlap(intervals + fixed_ivs)
+
+    # 수량 풀: 풀별 누적 제약(겹치는 구간의 수요 합 ≤ 수량). 고정 작업도 수요에 들어간다.
+    # 필수 직종의 풀이 없으면 해를 내지 않는다(Rule Engine POOL_MISSING과 같은 기준).
+    for t in tasks:
+        if any(pool_for(facts.pools, t.unit_id, kind) is None for kind in t.required_kinds):
+            m.add_bool_or([])
+    for pool in sorted(facts.pools, key=lambda p: p.pool_id):
+        users = [t for t in tasks if t.unit_id in pool.allowed_unit_ids and pool.kind in t.demands]
+        if users:
+            m.add_cumulative(
+                [
+                    m.new_fixed_size_interval_var(
+                        b.starts[t.task_id], t.duration, f"pool_{pool.pool_id}_{t.task_id}"
+                    )
+                    for t in users
+                ],
+                [t.demands[pool.kind] for t in users],
+                pool.quantity,
+            )
 
     # SEPARATION: 순서 bool 쌍
     for rule in pack.rules:

@@ -476,6 +476,22 @@ def test_meta_api(client, seeded):
         "hazard_tags": ["LIFTING"],
         "critical_fields": ["zone_id", "duration", "window", "resource"],
         "resource_requirements": [{"attribute": "max_load", "op": "GTE", "value": 20}],
+        "pool_demands": [
+            {"kind": "WORKER", "quantity": 4, "required": False},
+            {"kind": "SIGNALER", "quantity": 1, "required": True},  # 필수 직종
+        ],
+    }
+    assert meta["pool_kinds"] == [
+        {"kind": "SIGNALER", "display_name": "신호수", "unit": "명"},
+        {"kind": "WORKER", "display_name": "작업 인원", "unit": "명"},
+    ]
+    assert {
+        p["pool_id"]: (p["kind"], p["allowed_unit_ids"], p["quantity"]) for p in meta["pools"]
+    } == {
+        "UA-SIG": ("SIGNALER", ["UA"], 2),
+        "UA-WRK": ("WORKER", ["UA"], 10),
+        "UB-SIG": ("SIGNALER", ["UB"], 1),
+        "UB-WRK": ("WORKER", ["UB"], 10),
     }
     assert meta["work_types"]["HOT_WORK"]["resource_requirements"] == []
     assert meta["resource_attributes"] == [
@@ -531,6 +547,7 @@ def test_dev_scenario_api(client, seeded):
         "required_resource_type": "CRANE",
         "requested_resource_id": "A-CR-01",
         "resource_requirements": [],
+        "pool_demands": [],
     }
     # 골리앗 인양의 큰 값은 작업 값이다(작업 유형 기본값은 공통 하한만)
     assert requests[1]["form"]["resource_requirements"] == [

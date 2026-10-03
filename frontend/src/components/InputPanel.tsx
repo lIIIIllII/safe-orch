@@ -3,8 +3,8 @@
 
 import { useState } from 'react'
 import { newKey } from '../api'
-import type { Requirement, SiteState } from '../types'
-import { attributeText, requirementText, usableInZone, useEnv, workTypeName } from '../context'
+import type { Demand, Requirement, SiteState } from '../types'
+import { attributeText, demandText, requirementText, usableInZone, useEnv, workTypeName } from '../context'
 import type { Run } from './ReviewPanel'
 import { Inbox } from './Inbox'
 import { openInbox } from '../inbox'
@@ -76,9 +76,11 @@ interface FormState {
   requested_resource_id: string
   /** 요구 조건 입력 행: 속성 이름 → 비교·값. 값이 비면 보내지 않는다 */
   req: Record<string, { op: string; value: string }>
+  /** 수요 입력 행: 풀 종류 → 수량. 비면 보내지 않는다(작업 유형 기본 수요만 쓴다) */
+  demand: Record<string, string>
 }
 
-type TextField = Exclude<keyof FormState, 'req'>
+type TextField = Exclude<keyof FormState, 'req' | 'demand'>
 type TimeField = 'es' | 'ls' | 'le'
 
 function emptyForm(firstDay: string): FormState {
@@ -96,6 +98,7 @@ function emptyForm(firstDay: string): FormState {
     required_resource_type: '',
     requested_resource_id: '',
     req: {},
+    demand: {},
   }
 }
 
@@ -122,6 +125,12 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
     return Number.isFinite(n) ? [{ attribute: a.name, op: row.op === 'LTE' ? 'LTE' : 'GTE', value: n }] : []
   })
   const defaults = meta.work_types[f.work_type]?.resource_requirements ?? []
+  // 수요 입력 행은 풀 종류 선언(meta.pool_kinds)으로 만든다
+  const demands: Demand[] = meta.pool_kinds.flatMap((k): Demand[] => {
+    const n = Number((f.demand[k.kind] ?? '').trim() || NaN)
+    return Number.isInteger(n) && n > 0 ? [{ kind: k.kind, quantity: n }] : []
+  })
+  const defaultDemands = meta.work_types[f.work_type]?.pool_demands ?? []
   const chosen = meta.resources.find((r) => r.resource_id === f.requested_resource_id)
   const minute = (field: TimeField): number | null => {
     const time = f[`${field}_time`]
@@ -175,6 +184,7 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
       req: Object.fromEntries(
         (r.resource_requirements ?? []).map((q) => [q.attribute, { op: q.op, value: String(q.value) }]),
       ),
+      demand: Object.fromEntries((r.pool_demands ?? []).map((d) => [d.kind, String(d.quantity)])),
     })
   }
   const demoReq = demo === null ? null : (scenario?.task_requests[demo] ?? null)
@@ -197,6 +207,7 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
       required_resource_type: f.required_resource_type || null,
       requested_resource_id: f.requested_resource_id || null,
       resource_requirements: requirements,
+      pool_demands: demands,
       predecessors: [],
     }
     void run('작업 요청', `/sites/${siteId}/task-requests`, body)
@@ -324,6 +335,26 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
         <p className="muted small span2">
           작업 유형 기본 요구 조건(서버가 붙임): {defaults.map((q) => requirementText(meta, q)).join(', ')}. 입력한
           조건은 여기에 더해집니다.
+        </p>
+      )}
+      {meta.pool_kinds.map((k) => (
+        <label key={k.kind}>
+          수요 · {k.display_name}
+          <span className="row tight">
+            <input
+              inputMode="numeric"
+              placeholder="기본값"
+              value={f.demand[k.kind] ?? ''}
+              onChange={(e) => setF({ ...f, demand: { ...f.demand, [k.kind]: e.target.value } })}
+            />
+            {k.unit && <span className="hint">{k.unit}</span>}
+          </span>
+        </label>
+      ))}
+      {defaultDemands.length > 0 && (
+        <p className="muted small span2">
+          작업 유형 기본 수요(서버가 붙임): {defaultDemands.map((d) => demandText(meta, d)).join(', ')}. 입력한 수량이
+          더 클 때만 반영됩니다.
         </p>
       )}
       {outside && (

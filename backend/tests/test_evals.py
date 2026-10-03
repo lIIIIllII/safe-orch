@@ -384,6 +384,39 @@ def test_values_decision_truth_range_and_decline_lines(pack):
     )
 
 
+def test_values_decision_requirements_and_demands(pack):
+    """진실에 없는 값: 요구 조건은 진실 자원(SITE-GC-01, 300 t·블록)이 맞추면, 수요는 기본값 이상이면 받는다."""
+    scn = _scn(pack, "S1").data
+    truth = scn["truth"]["task"]
+    lines = scn["humans"]["values_check"]["planner_a"]["decline_lines"]
+
+    def decide(**extra):
+        return values_decision({**S1_VALUES, **extra}, truth, lines, pack)
+
+    block = {"attribute": "usage", "op": "CONTAINS", "value": "블록"}
+    heavy = {"attribute": "max_load", "op": "GTE", "value": 100}
+    assert decide(resource_requirements=[block, heavy]) == ("ACCEPT", "")
+    too_heavy = {"attribute": "max_load", "op": "GTE", "value": 500}
+    assert decide(resource_requirements=[block, too_heavy]) == (
+        "DECLINE",
+        "그 조건이면 쓰려는 크레인을 못 써요",
+    )
+    light = {"attribute": "max_load", "op": "LTE", "value": 50}
+    assert wrong_fields({**S1_VALUES, "resource_requirements": [light]}, truth, pack) == [
+        "requirements"
+    ]
+    # 수요: 인양 기본값은 작업 인원 4·신호수 1
+    assert decide(pool_demands=[{"kind": "WORKER", "quantity": 4}])[0] == "ACCEPT"
+    assert decide(pool_demands=[{"kind": "WORKER", "quantity": 6}])[0] == "ACCEPT"
+    assert decide(pool_demands=[{"kind": "WORKER", "quantity": 3}]) == (
+        "DECLINE",
+        "demands 값이 달라요.",
+    )
+    # pack 없이 부르면(판정기) 진실에 있는 필드만 본다
+    assert wrong_fields({**S1_VALUES, "resource_requirements": [too_heavy]}, truth) == []
+
+
+
 def test_rules_first_match_status_axes_and_from_stage(pack):
     rules = _scn(pack, "S3").data["humans"]["rules"]
     draft = {"kind": "CONSTRAINT_DRAFT", "to": "foreman_a2", "task": "C", "status": "OPEN"}

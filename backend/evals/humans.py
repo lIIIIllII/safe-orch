@@ -18,6 +18,8 @@ from app.commands.approval import (
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.messages import ReplyRequest, reply_message
 from app.commands.service import CommandOutcome
+from app.domain.eligibility import meets
+from app.domain.models import Requirement
 from app.packs.loader import LoadedPack
 from app.store import db
 from app.store.repos._rows import rows
@@ -63,8 +65,14 @@ def field_answers(fields: dict[str, list[str]], field_ids: list[str], asked: dic
     return " ".join(parts) if parts else NEUTRAL
 
 
-def wrong_fields(values: dict[str, Any], truth: dict[str, Any]) -> list[str]:
-    """진실 범위와 다른 필드. 진실 값이 [lo, hi]면 범위, 아니면 같은 값."""
+def wrong_fields(
+    values: dict[str, Any], truth: dict[str, Any], pack: LoadedPack | None = None
+) -> list[str]:
+    """진실 범위와 다른 필드. 진실 값이 [lo, hi]면 범위, 아니면 같은 값.
+
+    pack을 주면(값 확인) 진실에 없는 값도 본다: 요구 조건은 진실 자원이 맞추는 것만(requirements),
+    수요는 작업 유형 기본값 이상만(demands) 받아들인다.
+    """
     out = []
     for name, keys in FIELD_KEYS.items():
         for key in keys:
@@ -75,14 +83,28 @@ def wrong_fields(values: dict[str, Any], truth: dict[str, Any]) -> list[str]:
                 ok = got == want
             if not ok and name not in out:
                 out.append(name)
+    if pack is not None:
+        resource = next(
+            (r for r in pack.resources if r.resource_id == truth.get("requested_resource_id")),
+            None,
+        )
+        asked = [Requirement.model_validate(q) for q in values.get("resource_requirements") or []]
+        if any(resource is None or not meets(q, resource) for q in asked):
+            out.append("requirements")
+        base = {d.kind: d.quantity for d in pack.default_demands(truth["work_type"])}
+        if any(d["quantity"] < base.get(d["kind"], 0) for d in values.get("pool_demands") or []):
+            out.append("demands")
     return out
 
 
 def values_decision(
-    values: dict[str, Any], truth: dict[str, Any], lines: dict[str, str]
+    values: dict[str, Any],
+    truth: dict[str, Any],
+    lines: dict[str, str],
+    pack: LoadedPack | None = None,
 ) -> tuple[str, str]:
     """값 확인: 진실 범위면 ACCEPT, 아니면 DECLINE과 틀린 필드마다 한 줄."""
-    wrong = wrong_fields(values, truth)
+    wrong = wrong_fields(values, truth, pack)
     if not wrong:
         return "ACCEPT", ""
     return "DECLINE", " ".join(lines.get(f, f"{f} 값이 달라요.") for f in wrong)
@@ -286,7 +308,9 @@ class Humans:
             cfg = self.humans.get("values_check", {}).get(req["to"])
             if cfg is None or "task" not in self.truth:
                 return None
-            return values_decision(req["values"] or {}, self.truth["task"], cfg["decline_lines"])
+            return values_decision(
+                req["values"] or {}, self.truth["task"], cfg["decline_lines"], self.pack
+            )
         if kind == "FACT_UPDATE":
             # Supervisor 공통 규칙: 진실과 같을 때만 확인한다
             fact = self.truth.get("fact")

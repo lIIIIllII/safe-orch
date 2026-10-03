@@ -36,6 +36,7 @@ VALUES_A = {
     "required_resource_type": "CRANE",
     "requested_resource_id": "A-CR-01",
     "resource_requirements": [],
+    "pool_demands": [],
 }
 
 
@@ -631,3 +632,61 @@ def test_values_check_text_without_requirements(seeded):
         "resource_requirements": [{"attribute": "usage", "op": "CONTAINS", "value": "블록"}],
     }
     assert "(요구 조건: 최대 하중 ≥ 20 t, 용도 블록 포함)" in values_check_text(seeded, "X", block)
+
+
+# ── 수량 풀 종류·수요 (CV-19·23) ────────────────────────────────
+
+
+def test_observation_has_pool_kinds_and_default_demands(seeded):
+    run = _to_request(seeded)
+    obs = _steps(run.run_id)[1]["observation"]
+    assert obs["pool_kinds"] == [
+        {"kind": "SIGNALER", "display_name": "신호수", "unit": "명"},
+        {"kind": "WORKER", "display_name": "작업 인원", "unit": "명"},
+    ]
+    defaults = {w["work_type"]: w["pool_demands"] for w in obs["work_types"]}
+    assert defaults["LIFTING"] == [
+        {"kind": "WORKER", "quantity": 4, "required": False},
+        {"kind": "SIGNALER", "quantity": 1, "required": True},
+    ]
+    tools = {
+        t["function"]["name"]: t["function"] for t in _steps(run.run_id)[1]["available_actions"]
+    }
+    defs = tools["REQUEST_CONFIRMATION"]["parameters"]["$defs"]
+    assert defs["DemandValue"]["properties"]["kind"]["enum"] == ["SIGNALER", "WORKER"]
+    static = json.dumps(spec.tool_schemas({name: {} for name in spec.ACTIONS}), ensure_ascii=False)
+    assert "WORKER" not in static and "WORKER" not in prompt.SYSTEM
+    # 서버 문구에는 작업 유형 기본 수요가 함께 나온다
+    [confirm] = _messages("CONFIRMATION")
+    assert "수요 작업 인원 4명, 신호수 1명." in confirm["body"]
+
+
+def test_demand_value_is_checked_confirmed_and_stored(seeded):
+    """값의 수요는 폼과 같은 검사를 거치고, 값 확인으로 함께 확인된다."""
+    pack = seeded
+    bad = {**VALUES_A, "pool_demands": [{"kind": "WELDER", "quantity": 2}]}
+    more = {**VALUES_A, "pool_demands": [{"kind": "WORKER", "quantity": 6}]}
+    run = _to_request(pack, [_request(bad), _request(more)])
+    s0 = _steps(run.run_id)[0]
+    assert s0["guard"]["reason_code"] == "TASKSPEC_INVALID"
+    assert s0["tool_result"]["reason_codes"] == ["INVALID_DEMAND"]
+    [confirm] = _messages("CONFIRMATION")
+    assert "수요 작업 인원 6명, 신호수 1명." in confirm["body"]
+    _reply(pack, confirm["message_id"])
+    run_until_idle(pack, model_factory=Router(intake=[_complete(more)]).factory())
+    a = _task(pack, "A")
+    assert a.demands == {"SIGNALER": 1, "WORKER": 6}
+    assert sorted(a.fields) == [
+        "duration",
+        "resource",
+        "window",
+        "zone_id",
+    ]  # 새 critical field 없음
+
+
+def test_values_check_text_shows_effective_demand(seeded):
+    """기본값보다 낮은 수요는 반영되지 않는다. 서버 문구는 실제로 쓰는 수요를 보여 준다."""
+    from app.agents.executors.intake import values_check_text
+
+    low = {**VALUES_A, "pool_demands": [{"kind": "WORKER", "quantity": 2}]}
+    assert "수요 작업 인원 4명, 신호수 1명." in values_check_text(seeded, "X", low)

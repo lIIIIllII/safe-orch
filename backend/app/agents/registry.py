@@ -50,6 +50,6 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-c5",  # 기록만. 값에 자원 요구 조건(resource_requirements)
+        exec_contract_version="intake-c6",  # 기록만. 값에 요구 조건·수요(pool_demands)
     ),
 }

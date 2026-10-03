@@ -13,12 +13,21 @@ from app.commands.service import Body, CommandContext, CommandOutcome, Result, r
 from app.domain.calendar import has_work_slot
 from app.domain.eligibility import ResourceNeed, exclusion_reasons, requirement_error
 from app.domain.ids import new_id
-from app.domain.models import Actor, Consent, Movable, Requirement, Site, Task
+from app.domain.models import (
+    Actor,
+    Consent,
+    Demand,
+    Movable,
+    Requirement,
+    Site,
+    Task,
+    pool_for,
+)
 from app.packs.loader import LoadedPack, confirmed_fields
 from app.store.repos.cases import end_case_run, queued_task_ids, register_recheck, wake_run
 from app.store.repos.consents import insert_consent
 from app.store.repos.plans import get_current_plan
-from app.store.repos.resources import list_resources
+from app.store.repos.resources import list_pools, list_resources
 from app.store.repos.runs import has_open_case, list_active_runs
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
@@ -45,6 +54,8 @@ class TaskRequestForm(Body):
     requested_resource_id: str | None = None
     # 작업 값. 작업 유형 기본값에 더해진다(빼거나 낮출 수 없다, CV-19)
     resource_requirements: tuple[Requirement, ...] = ()
+    # 작업 값. 작업 유형 기본 수요보다 낮출 수 없다(큰 쪽을 쓴다, CV-19)
+    pool_demands: tuple[Demand, ...] = ()
     predecessors: tuple[PredecessorInput, ...] = ()
     hazard_tags: tuple[str, ...] = Field(default=(), exclude=True)  # 받으면 버린다
 
@@ -101,6 +112,16 @@ def validate_task_request(
         form.resource_requirements and form.required_resource_type is None
     ):
         r.reject("INVALID_REQUIREMENT")
+    # 수요는 선언된 종류만, 종류마다 하나. 필수 직종은 요청자 Unit에 풀이 있어야 한다 (CV-23)
+    kinds = [d.kind for d in form.pool_demands]
+    if len(set(kinds)) != len(kinds) or any(k not in pack.pool_kinds for k in kinds):
+        r.reject("INVALID_DEMAND")
+    pools = list_pools(tx, site_id)
+    if any(
+        d.required and pool_for(pools, actor.unit_id, d.kind) is None
+        for d in pack.default_demands(form.work_type)
+    ):
+        r.reject("REQUIRED_POOL_MISSING")
     if form.requested_resource_id is not None:
         res = {x.resource_id: x for x in list_resources(tx, site_id)}.get(
             form.requested_resource_id
@@ -155,6 +176,7 @@ def create_requested_task(
         owner_actor_id=actor.actor_id,
         hazard_tags=pack.hazard_tags(form.work_type),
         default_requirements=pack.default_requirements(form.work_type),
+        default_demands=pack.default_demands(form.work_type),
         movable=Movable(time=True, resource=False),  # 자원 축은 MOVABILITY로만 연다
         fields=confirmed_fields(data, wt.critical_fields, source_ref),
         lifecycle="READY",

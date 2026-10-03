@@ -117,6 +117,7 @@ def make_task(pack, *, revision=1, source_ref="scenario:new_task", **overrides):
     data = pack.new_task.model_dump(exclude={"requested"})
     data.update(overrides)
     data.pop("default_requirements", None)  # 서버가 작업 유형에서 도출한다
+    data.pop("default_demands", None)
     critical = pack.work_types[data["work_type"]].critical_fields
     return Task(
         **data,
@@ -124,6 +125,7 @@ def make_task(pack, *, revision=1, source_ref="scenario:new_task", **overrides):
         lifecycle="READY",
         hazard_tags=pack.hazard_tags(data["work_type"]),
         default_requirements=pack.default_requirements(data["work_type"]),
+        default_demands=pack.default_demands(data["work_type"]),
         fields=confirmed_fields(data, critical, source_ref),
     )
 

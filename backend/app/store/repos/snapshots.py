@@ -13,7 +13,7 @@ from app.store.repos.decisions import list_constraints
 from app.store.repos.events import list_active_holds
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import insert_snapshot
-from app.store.repos.resources import list_resources
+from app.store.repos.resources import list_pools, list_resources
 from app.store.repos.site import get_site, list_zone_relations
 from app.store.repos.tasks import list_current_tasks
 
@@ -40,6 +40,7 @@ def build_snapshot_content(
         plan_revision=site.plan_revision,
         tasks=tuple(t for t in list_current_tasks(conn, site_id, pack) if t.lifecycle == "READY"),
         resources=tuple(list_resources(conn, site_id)),
+        pools=tuple(list_pools(conn, site_id)),
         zones=tuple(zones),
         zone_relations=tuple(list_zone_relations(conn, site_id)),
         plan={"plan_revision": plan.plan_revision, "assignments": plan.assignments},

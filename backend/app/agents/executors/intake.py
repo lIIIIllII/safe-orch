@@ -270,6 +270,12 @@ def requirement_text(pack: LoadedPack, req: dict[str, Any]) -> str:
     return f"{name} {'≥' if req['op'] == 'GTE' else '≤'} {req['value']}{unit}"
 
 
+def demand_text(pack: LoadedPack, kind: str, quantity: int) -> str:
+    """수요 하나의 사람용 문구. 종류 표시 이름과 단위는 Pack 선언에서 읽는다."""
+    decl = pack.pool_kinds.get(kind)
+    return f"{decl.display_name if decl else kind} {quantity}{decl.unit if decl else ''}"
+
+
 def values_check_text(pack: LoadedPack, task_id: str, v: dict[str, Any]) -> str:
     """값 확인 요청의 서버 문구: 값을 날짜·시각과 분으로, 확인의 효과(동의)를 함께."""
 
@@ -290,6 +296,15 @@ def values_check_text(pack: LoadedPack, task_id: str, v: dict[str, Any]) -> str:
     ]
     if v.get("requested_resource_id") and needs:
         resource += f"(요구 조건: {', '.join(requirement_text(pack, r) for r in needs)})"
+    # 수요 = 작업 유형 기본값과 요청 값 중 큰 쪽 (CV-19)
+    demands: dict[str, int] = {}
+    for d in (
+        *(x.model_dump() for x in pack.default_demands(v["work_type"])),
+        *(v.get("pool_demands") or ()),
+    ):
+        demands[d["kind"]] = max(demands.get(d["kind"], 0), d["quantity"])
+    if demands:
+        resource += f", 수요 {', '.join(demand_text(pack, k, q) for k, q in demands.items())}"
     return (
         f"작업 요청 {task_id} 값 확인: {name}, {v['zone_id']} 구역, {v['duration']}분, "
         f"시작 {at(v['earliest_start'])}–{at(v['latest_start'])}, 종료 한도 {at(v['latest_end'])}, "

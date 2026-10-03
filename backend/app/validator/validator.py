@@ -37,6 +37,8 @@ BASIC_TO_CHECK = {
     "RESOURCE_REQUIREMENT": "C07",  # 자원 요구 조건
     "AVAILABILITY": "C09",
     "CALENDAR": "C04",  # 근무 달력
+    "POOL_MISSING": "C07",  # 필수 직종의 풀이 없다
+    "POOL_CAPACITY": "C09",  # 수량 풀 초과
 }
 RULE_TYPE_TO_CHECK = {"CAPACITY": "C09", "SEPARATION": "C10"}
 NOT_MOVABLE = Movable(time=False, resource=False)
@@ -171,6 +173,8 @@ def _c11(facts: SnapshotContent, pack: LoadedPack) -> list[Violation]:
             out.append(("C11", (t.task_id,), "HAZARD_TAGS_MISMATCH"))
         if t.default_requirements != wt.resource_requirements:
             out.append(("C11", (t.task_id,), "DEFAULT_REQUIREMENTS_MISMATCH"))
+        if t.default_demands != wt.pool_demands:
+            out.append(("C11", (t.task_id,), "DEFAULT_DEMANDS_MISMATCH"))
         values = _field_values(t)
         for name in wt.critical_fields:
             record = t.fields.get(name)

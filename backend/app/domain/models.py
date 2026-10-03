@@ -6,7 +6,7 @@ app 내부 모듈을 import하지 않는다. 시간은 Horizon 원점 기준 정
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 Role = Literal["UNIT_PLANNER", "REPORTER", "SUPERVISOR"]
 Relation = Literal["SAME", "ADJACENT", "BELOW"]
@@ -45,12 +45,34 @@ class Requirement(Frozen):
     value: int | float | str
 
 
+class PoolKind(Frozen):
+    """Pack이 선언한 수량 풀 종류(직종, 같은 장비 여러 대 등). 코어는 종류 이름을 모른다."""
+
+    kind: str
+    display_name: str = Field(min_length=1)  # 화면 표시용
+    unit: str = ""
+
+
+class Demand(Frozen):
+    """작업이 풀에서 쓰는 수량 (종류별)."""
+
+    kind: str
+    quantity: int = Field(gt=0)
+
+
+class PoolDemand(Demand):
+    """작업 유형의 기본 수요. required면 그 Unit에 이 종류의 풀이 있어야 한다(필수 직종)."""
+
+    required: bool = False
+
+
 class WorkType(Frozen):
     work_type: str
     display_name: str = Field(min_length=1)  # 화면 표시용
     hazard_tags: tuple[str, ...] = Field(min_length=1)
     critical_fields: tuple[str, ...]
     resource_requirements: tuple[Requirement, ...] = ()  # 이 유형 작업의 기본 요구 조건
+    pool_demands: tuple[PoolDemand, ...] = ()  # 이 유형 작업의 기본 수요와 필수 직종
 
 
 class Rule(Frozen):
@@ -120,6 +142,26 @@ class Resource(Frozen):
     note: str = ""
 
 
+class Pool(Frozen):
+    """수량 풀: 고르는 자원(수량 1)과 달리 여러 작업이 수량을 나눠 쓴다 (CV-23)."""
+
+    pool_id: str
+    kind: str
+    display_name: str = ""  # 화면 표시용
+    owner_unit_id: str
+    allowed_unit_ids: tuple[str, ...]  # Pack에서 생략하면 로더가 소유 Unit만 넣는다
+    quantity: int = Field(gt=0)
+    cost_per_hour: int | float | None = None  # 단가. 데이터만 (CV-22)
+
+
+def pool_for(pools: "tuple[Pool, ...] | list[Pool]", unit_id: str, kind: str) -> Pool | None:
+    """그 Unit이 그 종류에 쓰는 풀. 로더가 하나임을 보장한다 (CV-23). 없으면 None."""
+    for pool in sorted(pools, key=lambda p: p.pool_id):
+        if pool.kind == kind and unit_id in pool.allowed_unit_ids:
+            return pool
+    return None
+
+
 class Predecessor(Frozen):
     task_id: str
     min_lag: int = 0
@@ -154,6 +196,8 @@ class Task(Frozen):
     requested_resource_id: str | None = None
     default_requirements: tuple[Requirement, ...] = ()  # 서버가 Pack의 작업 유형에서 도출 (CV-19)
     resource_requirements: tuple[Requirement, ...] = ()  # 작업 값. 기본값에 더하기만 한다 (CV-19)
+    default_demands: tuple[PoolDemand, ...] = ()  # 서버가 Pack의 작업 유형에서 도출 (CV-19)
+    pool_demands: tuple[Demand, ...] = ()  # 작업 값. 기본 수요보다 낮출 수 없다 (CV-19)
     predecessors: tuple[Predecessor, ...] = ()
     movable: Movable
     fields: dict[str, FieldRecord]
@@ -163,6 +207,19 @@ class Task(Frozen):
     def requirements(self) -> tuple[Requirement, ...]:
         """자원이 모두 맞춰야 하는 조건 = 작업 유형 기본값 + 작업 값."""
         return (*self.default_requirements, *self.resource_requirements)
+
+    @property
+    def demands(self) -> dict[str, int]:
+        """종류별 수요 = 작업 유형 기본값과 작업 값 중 큰 쪽. 작업 값으로 낮출 수 없다."""
+        out: dict[str, int] = {}
+        for d in (*self.default_demands, *self.pool_demands):
+            out[d.kind] = max(out.get(d.kind, 0), d.quantity)
+        return dict(sorted(out.items()))
+
+    @property
+    def required_kinds(self) -> tuple[str, ...]:
+        """풀이 꼭 있어야 하는 종류(필수 직종)."""
+        return tuple(sorted({d.kind for d in self.default_demands if d.required}))
 
     @model_validator(mode="after")
     def _window(self) -> "Task":
@@ -247,6 +304,16 @@ class ConsultationItem(Frozen):
     base_status: Literal["COVERED", "PENDING"]
 
 
+class PoolExcess(Frozen):
+    """풀 초과 내용: 어느 풀·종류가 언제(at, 분) 수요 합이 수량을 넘었는가."""
+
+    pool_id: str
+    kind: str
+    at: int
+    demand: int
+    quantity: int
+
+
 class Conflict(Frozen):
     """충돌 탐지 결과. interval은 관련 작업 점유를 모두 덮는 [start, end)."""
 
@@ -255,6 +322,15 @@ class Conflict(Frozen):
     resource_id: str | None = None
     zone_ids: tuple[str, ...]
     interval: tuple[int, int]
+    pool: PoolExcess | None = None  # 풀 초과 충돌에만 있다
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_pool(self, handler: Any) -> dict[str, Any]:
+        """pool은 풀 초과 충돌에서만 내보낸다(다른 충돌의 기록 모양은 그대로)."""
+        data = handler(self)
+        if data.get("pool") is None:
+            data.pop("pool", None)
+        return data
 
 
 class PlanRef(Frozen):
@@ -273,6 +349,7 @@ class SnapshotContent(Frozen):
     plan_revision: int = Field(ge=0)
     tasks: tuple[Task, ...]
     resources: tuple[Resource, ...]
+    pools: tuple[Pool, ...] = ()
     zones: tuple[str, ...]
     zone_relations: tuple[ZoneRelation, ...]
     plan: PlanRef

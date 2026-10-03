@@ -177,8 +177,8 @@ def test_current_task_revision_is_max(seeded):
         tx.execute(
             "INSERT INTO task SELECT site_id, task_id, 2, unit_id, owner_actor_id, work_type,"
             " zone_id, duration, 60, latest_start, latest_end, required_resource_type,"
-            " requested_resource_id, resource_requirements, predecessors, movable, fields,"
-            " lifecycle FROM task WHERE task_id = 'E'"
+            " requested_resource_id, resource_requirements, pool_demands, predecessors, movable,"
+            " fields, lifecycle FROM task WHERE task_id = 'E'"
         )
     with db.read() as conn:
         e = next(t for t in list_current_tasks(conn, "YARD-01", seeded) if t.task_id == "E")

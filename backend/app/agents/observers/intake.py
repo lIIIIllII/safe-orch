@@ -144,6 +144,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 "critical_fields": list(v.critical_fields),
                 # 이 유형 작업에 서버가 붙이는 기본 자원 요구 조건 (CV-19)
                 "resource_requirements": [r.model_dump() for r in v.resource_requirements],
+                # 이 유형 작업에 서버가 붙이는 기본 수요(required는 필수 직종)
+                "pool_demands": [d.model_dump() for d in v.pool_demands],
             }
             for k, v in sorted(pack.work_types.items())
         ],
@@ -161,6 +163,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         ],
         # Pack이 선언한 자원 속성(요구 조건과 자원 속성 값의 이름)
         "resource_attributes": [a.model_dump() for a in pack.resource_attributes.values()],
+        # Pack이 선언한 수량 풀 종류(수요의 종류 코드)
+        "pool_kinds": [k.model_dump() for k in pack.pool_kinds.values()],
         "resource_lookups": list(by_filters.values()),
         "questions": questions,
         "confirmations": confirmations,

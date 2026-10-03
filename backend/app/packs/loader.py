@@ -20,9 +20,13 @@ from app.domain.eligibility import ALL_ZONES, ResourceNeed, exclusion_reasons, r
 from app.domain.models import (
     Actor,
     Assignment,
+    Demand,
     FieldRecord,
     Frozen,
     Movable,
+    Pool,
+    PoolDemand,
+    PoolKind,
     Predecessor,
     Relation,
     Requirement,
@@ -34,9 +38,10 @@ from app.domain.models import (
     WorkUnit,
     Zone,
     ZoneRelation,
+    pool_for,
 )
 
-PACK_FORMAT = 2  # pack.yaml pack_format. 형식이 바뀌면 올린다(1 = 버전 없는 옛 형식)
+PACK_FORMAT = 3  # pack.yaml pack_format. 형식이 바뀌면 올린다(1 = 버전 없는 옛 형식)
 PACK_FILES = ("pack.yaml", "rules.yaml", "site.yaml", "plan_r0.yaml", "scenario.yaml")
 EVALUATORS = {"SEPARATION", "CAPACITY"}
 RULE_RELATIONS = {"SAME", "ADJACENT", "BELOW"}
@@ -69,6 +74,7 @@ class NewTaskRequest(Frozen):
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
     resource_requirements: tuple[Requirement, ...] = ()
+    pool_demands: tuple[Demand, ...] = ()
     predecessors: tuple[Predecessor, ...] = ()
     movable: Movable
     requested: Assignment
@@ -89,6 +95,7 @@ class DemoRequest(Frozen):
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
     resource_requirements: tuple[Requirement, ...] = ()
+    pool_demands: tuple[Demand, ...] = ()
 
 
 class DemoEvent(Frozen):
@@ -127,7 +134,9 @@ class LoadedPack(Frozen):
     work_types: dict[str, WorkType]
     resource_types: dict[str, str] = Field(default_factory=dict)  # 코드 → 표시 이름
     resource_attributes: dict[str, ResourceAttribute] = Field(default_factory=dict)  # 속성 선언
-    currency: str = ""  # 자원 비용의 화폐 단위
+    currency: str = ""  # 자원 비용·풀 단가의 화폐 단위
+    pool_kinds: dict[str, PoolKind] = Field(default_factory=dict)  # 수량 풀 종류 선언
+    pools: tuple[Pool, ...] = ()  # 수량 풀 (CV-23)
     rules: tuple[Rule, ...]
     site_id: str
     site_description: str  # Replanning System prompt의 현장 설명
@@ -156,6 +165,11 @@ class LoadedPack(Frozen):
         """작업 유형의 기본 자원 요구 조건. 위험 태그처럼 서버가 도출한다 (CV-19)."""
         wt = self.work_types.get(work_type)
         return wt.resource_requirements if wt else ()
+
+    def default_demands(self, work_type: str) -> tuple[PoolDemand, ...]:
+        """작업 유형의 기본 수요와 필수 직종. 서버가 도출한다 (CV-19)."""
+        wt = self.work_types.get(work_type)
+        return wt.pool_demands if wt else ()
 
     def rel(self, zone_a: str, zone_b: str) -> Relation | None:
         """hazard_a 작업 구역에서 hazard_b 작업 구역으로 본 관계. 선언이 없으면 None."""
@@ -315,6 +329,37 @@ def _requirements(
     return tuple(out)
 
 
+def _demands(
+    where: str,
+    items: Any,
+    kinds: dict[str, PoolKind],
+    reasons: list[str],
+    model: type[Demand] = Demand,
+) -> tuple[Any, ...]:
+    """수요 목록. 선언되지 않은 종류와 같은 종류의 중복을 거절한다."""
+    out: list[Demand] = []
+    for i, item in enumerate(_as_list(items, where, reasons)):
+        d = _model(model, item, f"{where}[{i}]", reasons)
+        if not d:
+            continue
+        if d.kind not in kinds:
+            reasons.append(f"{where}[{i}]: undeclared pool kind {d.kind!r}")
+        elif any(x.kind == d.kind for x in out):
+            reasons.append(f"{where}[{i}]: duplicate pool kind {d.kind!r}")
+        else:
+            out.append(d)
+    return tuple(out)
+
+
+def _missing_pools(
+    where: str, unit_id: Any, wt: WorkType | None, pools: list[Pool], reasons: list[str]
+) -> None:
+    """필수 직종의 풀이 그 Unit에 없으면 거절한다(폼 검사와 같은 기준)."""
+    for d in wt.pool_demands if wt else ():
+        if d.required and pool_for(pools, unit_id, d.kind) is None:
+            reasons.append(f"{where}: unit {unit_id!r} has no pool for required kind {d.kind!r}")
+
+
 EXCLUSION_TEXT = {
     "TYPE_MISMATCH": "resource type mismatch",
     "NOT_ALLOWED": "requester unit not allowed on resource",
@@ -328,6 +373,8 @@ def _demo_requests(
     scen_doc: dict[str, Any],
     work_types: dict[str, WorkType],
     attributes: dict[str, ResourceAttribute],
+    pool_kinds: dict[str, PoolKind],
+    pools: list[Pool],
     actors: list[Actor],
     zone_ids: set[str],
     resources: list[Resource],
@@ -352,7 +399,12 @@ def _demo_requests(
             reasons,
         )
         out.append(req)
+        _demands(
+            f"{where}.pool_demands", [d.model_dump() for d in req.pool_demands], pool_kinds, reasons
+        )
         requester = actors_by_id.get(req.requester)
+        if requester is not None:
+            _missing_pools(where, requester.unit_id, work_types.get(req.work_type), pools, reasons)
         if requester is None:
             reasons.append(f"{where}: undefined actor {req.requester!r}")
         elif "UNIT_PLANNER" not in requester.roles:
@@ -460,6 +512,16 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         if attr:
             attributes[attr_id] = attr
 
+    # pool_kinds: 수량 풀 종류 선언. 풀과 수요는 여기 선언된 종류만 쓴다
+    pool_kinds: dict[str, PoolKind] = {}
+    for kind_id, spec in _as_dict(
+        pack_doc.get("pool_kinds"), "pack.yaml.pool_kinds", reasons
+    ).items():
+        where = f"pack.yaml.pool_kinds.{kind_id}"
+        kind = _model(PoolKind, {"kind": kind_id, **_as_dict(spec, where, reasons)}, where, reasons)
+        if kind:
+            pool_kinds[kind_id] = kind
+
     # work_types
     work_types: dict[str, WorkType] = {}
     for wt_id, spec in _as_dict(
@@ -475,9 +537,21 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             attributes,
             reasons,
         )
+        demands = _demands(
+            f"pack.yaml.work_types.{wt_id}.pool_demands",
+            spec.get("pool_demands"),
+            pool_kinds,
+            reasons,
+            PoolDemand,
+        )
         wt = _model(
             WorkType,
-            {"work_type": wt_id, **spec, "resource_requirements": defaults},
+            {
+                "work_type": wt_id,
+                **spec,
+                "resource_requirements": defaults,
+                "pool_demands": demands,
+            },
             f"pack.yaml.work_types.{wt_id}",
             reasons,
         )
@@ -680,7 +754,34 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         _check_intervals(where, r.available_intervals, horizon, reasons)
     resource_ids = {r.resource_id for r in resources}
 
+    # pools: 수량 풀. allowed_unit_ids를 생략하면 소유 Unit만 쓴다.
+    pools: list[Pool] = []
+    for i, p in enumerate(_as_list(site_doc.get("pools"), "site.yaml.pools", reasons)):
+        where = f"site.yaml.pools[{i}]"
+        p = _as_dict(p, where, reasons)
+        if p.get("allowed_unit_ids") is None:
+            p = {**p, "allowed_unit_ids": [p.get("owner_unit_id")]}
+        pool = _model(Pool, p, where, reasons)
+        if not pool:
+            continue
+        pools.append(pool)
+        if pool.kind not in pool_kinds:
+            reasons.append(f"{where}: undeclared pool kind {pool.kind!r}")
+        for u in (pool.owner_unit_id, *pool.allowed_unit_ids):
+            if u not in unit_ids:
+                reasons.append(f"{where}: undefined unit {u!r}")
+    _duplicates("site.yaml.pools", [p.pool_id for p in pools], reasons)
+    # 한 Unit이 한 종류에 쓰는 풀은 하나다. 작업이 쓸 풀이 결정적으로 정해져야 한다 (CV-23)
+    for (unit, kind), n in Counter(
+        (u, p.kind) for p in pools for u in dict.fromkeys(p.allowed_unit_ids)
+    ).items():
+        if n > 1:
+            reasons.append(
+                f"site.yaml.pools: unit {unit!r} has {n} pools of kind {kind!r} (one per unit and kind)"
+            )
+
     def check_task_refs(where: str, t: dict[str, Any]) -> None:
+        _missing_pools(where, t.get("unit_id"), work_types.get(t.get("work_type")), pools, reasons)
         if t.get("unit_id") not in unit_ids:
             reasons.append(f"{where}: undefined unit {t.get('unit_id')!r}")
         if t.get("owner_actor_id") not in actor_ids:
@@ -704,6 +805,9 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         t["resource_requirements"] = _requirements(
             f"{where}.resource_requirements", t.get("resource_requirements"), attributes, reasons
         )
+        t["pool_demands"] = _demands(
+            f"{where}.pool_demands", t.get("pool_demands"), pool_kinds, reasons
+        )
         task = _model(
             Task,
             {
@@ -712,6 +816,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
                 "lifecycle": "READY",
                 "hazard_tags": wt.hazard_tags if wt else (),
                 "default_requirements": wt.resource_requirements if wt else (),
+                "default_demands": wt.pool_demands if wt else (),
                 "fields": confirmed_fields(t, wt.critical_fields if wt else (), FIXTURE_SOURCE_REF),
             },
             where,
@@ -765,6 +870,9 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             attributes,
             reasons,
         )
+        nt["pool_demands"] = _demands(
+            "scenario.yaml.new_task.pool_demands", nt.get("pool_demands"), pool_kinds, reasons
+        )
         if isinstance(nt.get("requested"), dict):
             nt["requested"] = {"task_id": nt.get("task_id"), **nt["requested"]}
         new_task = _model(NewTaskRequest, nt, "scenario.yaml.new_task", reasons)
@@ -792,6 +900,8 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         scen_doc,
         work_types,
         attributes,
+        pool_kinds,
+        pools,
         actors,
         zone_ids,
         resources,
@@ -858,6 +968,8 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             resource_types=resource_types,
             resource_attributes=attributes,
             currency=currency,
+            pool_kinds=pool_kinds,
+            pools=tuple(pools),
             rules=tuple(rules),
             site_id=site_doc.get("site_id"),
             site_description=site_description,

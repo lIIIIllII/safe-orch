@@ -55,6 +55,15 @@ class RequirementValue(BaseModel):
     value: int | float | str = Field(description="비교 값. 수치 속성은 숫자, 목록 속성은 문자열")
 
 
+class DemandValue(BaseModel):
+    """수량 수요 하나: 작업이 그 종류의 풀에서 쓰는 수량(예: 인원 수)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(description="수량 풀 종류 코드(관찰의 pool_kinds)")
+    quantity: int = Field(gt=0, description="수량")
+
+
 class TaskValues(BaseModel):
     """작업 요청 값. 시각은 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다(서버가 분으로 바꾼다).
     위험 태그 칸은 없다."""
@@ -74,6 +83,13 @@ class TaskValues(BaseModel):
         description=(
             "자원 요구 조건(선택). 요청 문장이나 요청자 답에 있을 때만 넣는다. "
             "작업 유형의 기본 요구 조건은 서버가 붙이므로 넣지 않는다"
+        ),
+    )
+    pool_demands: list[DemandValue] = Field(
+        default_factory=list,
+        description=(
+            "인원 같은 수량 수요(선택). 요청 문장이나 요청자 답에 수량이 있을 때만 넣는다. "
+            "작업 유형의 기본 수요는 서버가 붙이므로 넣지 않는다"
         ),
     )
 
@@ -166,6 +182,7 @@ def code_values(obs: dict[str, Any]) -> dict[str, list[str]]:
         "required_resource_type": [t["resource_type"] for t in types],
         "requested_resource_id": sorted({r for t in types for r in t["resource_ids"]}),
         "resource_requirements.attribute": [a["name"] for a in obs["resource_attributes"]],
+        "pool_demands.kind": [k["kind"] for k in obs["pool_kinds"]],
     }
 
 
@@ -230,6 +247,11 @@ def tool_schemas(available: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
                         if field_allowed:
                             requirement = params["$defs"]["RequirementValue"]["properties"]
                             _enum(requirement["attribute"], field_allowed)
+                        continue
+                    if field == "pool_demands.kind":
+                        if field_allowed:
+                            demand = params["$defs"]["DemandValue"]["properties"]
+                            _enum(demand["kind"], field_allowed)
                         continue
                     _enum(props[field], field_allowed)
             else:

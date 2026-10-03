@@ -40,6 +40,32 @@ export interface Requirement {
   value: number | string
 }
 
+/** Pack이 선언한 수량 풀 종류 (직종, 같은 장비 여러 대 등). */
+export interface PoolKind {
+  kind: string
+  display_name: string
+  unit: string
+}
+
+/** 수량 풀: 여러 작업이 수량을 나눠 쓴다. 고르는 자원(Resource)과 다른 개념이다. */
+export interface Pool {
+  pool_id: string
+  kind: string
+  display_name: string
+  owner_unit_id: string
+  allowed_unit_ids: string[]
+  quantity: number
+  /** 데이터만 (meta.currency 단위) */
+  cost_per_hour: number | null
+}
+
+/** 작업이 풀에서 쓰는 수량. required는 작업 유형 기본 수요에만 있다(필수 직종). */
+export interface Demand {
+  kind: string
+  quantity: number
+  required?: boolean
+}
+
 export interface Resource {
   resource_id: string
   display_name: string
@@ -74,6 +100,10 @@ export interface Task {
   default_requirements: Requirement[]
   /** 작업 값으로 더한 요구 조건 */
   resource_requirements: Requirement[]
+  /** 작업 유형 기본 수요 (서버 도출) */
+  default_demands: Demand[]
+  /** 작업 값 수요. 기본 수요보다 큰 것만 반영된다 */
+  pool_demands: Demand[]
   movable: { time: boolean; resource: boolean }
   lifecycle: string
   gate: 'ALLOW' | 'HOLD' | 'STALE'
@@ -100,6 +130,8 @@ export interface Conflict {
   resource_id: string | null
   zone_ids: string[]
   interval: [number, number]
+  /** 풀 초과 충돌에만: 어느 풀·종류가 언제(at, 분) 수요 합이 수량을 넘었는가 */
+  pool?: { pool_id: string; kind: string; at: number; demand: number; quantity: number }
 }
 
 export interface SolverView {
@@ -360,8 +392,12 @@ export interface Meta {
       critical_fields: string[]
       /** 이 유형 작업에 서버가 붙이는 기본 자원 요구 조건 */
       resource_requirements: Requirement[]
+      /** 이 유형 작업에 서버가 붙이는 기본 수요와 필수 직종 */
+      pool_demands: Demand[]
     }
   >
+  pool_kinds: PoolKind[]
+  pools: Pool[]
   rules: { rule_id: string; type: string; display_name: string }[]
   timezone: string
   horizon_start_utc: string
@@ -384,6 +420,7 @@ export interface TaskForm {
   required_resource_type: string | null
   requested_resource_id: string | null
   resource_requirements: Requirement[]
+  pool_demands: Demand[]
 }
 
 /** GET /api/dev/scenario (DEMO_MODE). */

@@ -3,7 +3,7 @@
 
 import { createContext, useContext } from 'react'
 import type { Clock } from './time'
-import type { Meta, Requirement, Resource, Scenario } from './types'
+import type { Conflict, Demand, Meta, Requirement, Resource, Scenario } from './types'
 
 export interface Env {
   siteId: string
@@ -58,4 +58,18 @@ export function attributeText(meta: Meta, resource: Resource): string {
 /** 자원을 그 구역에서 쓸 수 있는가 (표시용. 판정은 서버가 한다). */
 export function usableInZone(resource: Resource, zoneId: string): boolean {
   return resource.allowed_zone_ids.includes('*') || resource.allowed_zone_ids.includes(zoneId)
+}
+
+/** 수요 하나의 문구. 종류 표시 이름·단위는 Pack 선언에서 읽는다. */
+export function demandText(meta: Meta, d: Demand): string {
+  const decl = meta.pool_kinds.find((k) => k.kind === d.kind)
+  return `${decl?.display_name ?? d.kind} ${d.quantity}${decl?.unit ?? ''}${d.required ? '(필수)' : ''}`
+}
+
+/** 풀 초과 충돌의 내용: 어느 풀이 수요 합이 수량을 넘었는가. 풀 초과가 아니면 빈 문자열. */
+export function poolExcessText(meta: Meta, c: Conflict): string {
+  if (!c.pool) return ''
+  const pool = meta.pools.find((p) => p.pool_id === c.pool?.pool_id)
+  const unit = meta.pool_kinds.find((k) => k.kind === c.pool?.kind)?.unit ?? ''
+  return `${pool?.display_name || c.pool.pool_id} 수요 ${c.pool.demand}${unit} > 수량 ${c.pool.quantity}${unit}`
 }
