@@ -59,6 +59,7 @@ class StoreRunPort:
                 self.binding.spec.goal,
                 obs.data,
                 self.binding.spec.tool_schemas(obs.available),
+                getattr(obs, "seen_event_seq", 0),
             )
 
     def execute(

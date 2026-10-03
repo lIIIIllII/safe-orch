@@ -8,18 +8,16 @@ registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다.
 import sqlite3
 from typing import Any
 
+from app.agents.casefacts import notice_targets
 from app.agents.observe import Observation, budget_remaining, last_guard, recent_steps
 from app.agents.specs import coordination as spec
 from app.domain.models import Assignment
 from app.packs.loader import LoadedPack
-from app.rules.engine import separation_links
 from app.store.repos.consultations import candidate_state, consultation_view
 from app.store.repos.messages import list_change_requests, list_run_messages
-from app.store.repos.plans import get_plan
 from app.store.repos.records import get_candidate
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
-from app.store.repos.tasks import list_current_tasks
 
 
 def changed_axes(before: Assignment, after: Assignment) -> list[str]:
@@ -72,51 +70,6 @@ def _items(conn: sqlite3.Connection, pack: LoadedPack, run_id: str, candidate_id
         }
         for i in view.items
     ]
-
-
-def notice_targets(
-    conn: sqlite3.Connection, pack: LoadedPack, plan_revision: int
-) -> list[dict[str, Any]]:
-    """확정 Plan과 직전 Plan을 비교한 통지 대상.
-
-    바뀐(새로 들어간) 작업의 담당자와, 새 Plan에서 SEPARATION Rule로 그 작업과 엮인 작업의 담당자.
-    자원 공유는 넣지 않는다.
-    """
-    plan, prev = get_plan(conn, pack.site_id, plan_revision), None
-    if plan_revision > 0:
-        prev = get_plan(conn, pack.site_id, plan_revision - 1)
-    if plan is None:
-        return []
-    before = {a.task_id: a for a in (prev.assignments if prev else ())}
-    tasks = {t.task_id: t for t in list_current_tasks(conn, pack.site_id, pack)}
-    placed = [a for a in plan.assignments if a.task_id in tasks]
-    changed = [a.task_id for a in placed if before.get(a.task_id) != a]
-    targets: dict[str, dict[str, Any]] = {}
-
-    def add(task_id: str, reason: dict[str, Any]) -> None:
-        owner = tasks[task_id].owner_actor_id
-        t = targets.setdefault(owner, {"actor_id": owner, "task_ids": [], "reasons": []})
-        if task_id not in t["task_ids"]:
-            t["task_ids"].append(task_id)
-        t["reasons"].append(reason)
-
-    for tid in changed:
-        add(tid, {"task_id": tid, "kind": "CHANGED"})
-    for tid in changed:
-        for other in placed:
-            if other.task_id == tid or other.task_id in changed:
-                continue
-            for rule_id in separation_links(pack, tasks[tid], tasks[other.task_id]):
-                add(
-                    other.task_id,
-                    {
-                        "task_id": other.task_id,
-                        "kind": "SAFETY_LINK",
-                        "rule_id": rule_id,
-                        "with_task_id": tid,
-                    },
-                )
-    return [targets[k] for k in sorted(targets)]
 
 
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:

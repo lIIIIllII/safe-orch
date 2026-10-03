@@ -57,6 +57,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
         "human_rounds": 0,
         "solver_calls": 2,
         "solver_seconds": 20.0,
+        "agent_calls": 0,
     }
     assert _guards(steps) == [("COMPLETED", "CONTINUE", None), ("COMPLETED", "WAIT", None)]
     s1, s2 = steps
@@ -344,7 +345,7 @@ def test_t51_error_run_can_continue_but_terminal_cannot(with_a):
 def test_registry_binds_replanning_spec_prompt_observer_executor():
     from app.agents.registry import BINDINGS
 
-    assert sorted(BINDINGS) == ["COORDINATION", "EVENT_RESPONSE", "INTAKE", "REPLANNING"]
+    assert sorted(BINDINGS) == ["COORDINATION", "EVENT_RESPONSE", "INTAKE", "MAIN", "REPLANNING"]
     assert all(t == b.spec.agent_type for t, b in BINDINGS.items())
     binding = BINDINGS["REPLANNING"]
     assert binding.spec.agent_type == spec.AGENT_TYPE == "REPLANNING"

@@ -8,6 +8,7 @@ from conftest import add_run
 from scripted import ScriptedChatModel, escalate, solve
 
 from app.agents import runtime
+from app.agents.observers import main as main_observer
 from app.agents.observers import replanning as replanning_observer
 from app.commands.approval import RejectRequest, reject_candidate
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
@@ -213,7 +214,7 @@ def test_main_acting_unit_is_not_used_for_permission(with_a):
     """메인의 acting unit(Supervisor Unit 관례)은 하위 Run의 권한 판정에 들어가지 않는다.
 
     하위 Run의 관찰(움직일 수 있는 작업, 서버 적격성)은 부모가 있든 없든, 부모의 Unit이 무엇이든 같다.
-    메인 Run 자체는 등록된 실행기가 없어 도구를 실행하지 못한다.
+    메인의 관찰에는 자기 acting unit이 없다(호출의 주체 Unit 검사는 test_main_agent에 있다).
     """
     pack = with_a
     with db.read() as conn:
@@ -232,9 +233,9 @@ def test_main_acting_unit_is_not_used_for_permission(with_a):
     assert view("child") == view("alone")
     assert view("child")[0] == "UA"
 
-    run = runtime.invoke(pack, {"run_id": main}, ScriptedChatModel([]))
-    assert (run.status, run.end_reason) == ("ERROR", "AGENT_TYPE_NOT_REGISTERED: MAIN")
-    assert _steps(main) == []
+    with db.read() as conn:
+        seen = main_observer.build_observation(conn, pack, main).data
+    assert "acting_unit_id" not in seen["run"]
 
 
 # ── 종료 트랜잭션과 기동 복구 (ST-19) ──────────────────────────

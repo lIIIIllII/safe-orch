@@ -8,22 +8,33 @@ agent_type마다 AgentSpec·prompt·Observation 계산(observer)·Action 실행�
 from app.agents.executors.coordination import CoordinationExecutor
 from app.agents.executors.event_response import EventResponseExecutor
 from app.agents.executors.intake import IntakeExecutor
+from app.agents.executors.main import MainExecutor
 from app.agents.executors.replanning import ReplanningExecutor
 from app.agents.observers import coordination as coordination_observer
 from app.agents.observers import event_response as event_response_observer
 from app.agents.observers import intake as intake_observer
+from app.agents.observers import main as main_observer
 from app.agents.observers import replanning as replanning_observer
 from app.agents.prompts import coordination as coordination_prompt
 from app.agents.prompts import event_response as event_response_prompt
 from app.agents.prompts import intake as intake_prompt
+from app.agents.prompts import main as main_prompt
 from app.agents.prompts import replanning as replanning_prompt
 from app.agents.specs import coordination as coordination_spec
 from app.agents.specs import event_response as event_response_spec
 from app.agents.specs import intake as intake_spec
+from app.agents.specs import main as main_spec
 from app.agents.specs import replanning as replanning_spec
 from app.agents.types import AgentBinding
 
 BINDINGS: dict[str, AgentBinding] = {
+    main_spec.AGENT_TYPE: AgentBinding(
+        spec=main_spec.SPEC,
+        prompt=main_prompt,
+        observer=main_observer,
+        executor=MainExecutor,
+        exec_contract_version="main-c1",  # 기록만. CALL_AGENT·WAIT·ESCALATE·CLOSE (AG-24)
+    ),
     replanning_spec.AGENT_TYPE: AgentBinding(
         spec=replanning_spec.SPEC,
         prompt=replanning_prompt,

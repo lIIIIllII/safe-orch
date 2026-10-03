@@ -51,18 +51,19 @@ def reserve_step(
     goal: str,
     observation: dict[str, Any],
     available_actions: list[dict[str, Any]],
+    seen_event_seq: int = 0,
 ) -> int | None:
     """Run이 RUNNING이면 새 step_no를 발급해 RESERVED step을 만들고 step·LLM 시도를 1씩 차감한다.
 
-    observed = (context_version, plan_revision, wake_seq). 관찰한 wake_seq를 handled_wake_seq로
-    기록한다. RUNNING이 아니면 None.
+    observed = (context_version, plan_revision, wake_seq). 관찰한 wake_seq를 handled_wake_seq로,
+    관찰에서 본 마지막 사건 순번을 last_event_seq로 기록한다. RUNNING이 아니면 None.
     """
     row = tx.execute(
         "UPDATE agent_run SET last_step_no = last_step_no + 1, steps_used = steps_used + 1,"
         " llm_attempts_used = llm_attempts_used + 1,"
-        " handled_wake_seq = MAX(handled_wake_seq, ?)"
+        " handled_wake_seq = MAX(handled_wake_seq, ?), last_event_seq = MAX(last_event_seq, ?)"
         " WHERE run_id = ? AND status = 'RUNNING' RETURNING last_step_no, site_id",
-        (observed[2], run_id),
+        (observed[2], seen_event_seq, run_id),
     ).fetchone()
     if row is None:
         return None
@@ -169,6 +170,7 @@ def charge(tx: sqlite3.Connection, run_id: str, **amounts: float) -> None:
         "human_rounds": "human_rounds_used",
         "solver_calls": "solver_calls_used",
         "solver_seconds": "solver_seconds_used",
+        "agent_calls": "agent_calls_used",
     }
     for key, amount in amounts.items():
         if amount:

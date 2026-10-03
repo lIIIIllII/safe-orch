@@ -521,4 +521,5 @@ class AgentRun(Frozen):
             "human_rounds": self.human_rounds_used,
             "solver_calls": self.solver_calls_used,
             "solver_seconds": self.solver_seconds_used,
+            "agent_calls": self.agent_calls_used,
         }

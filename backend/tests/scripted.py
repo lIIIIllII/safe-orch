@@ -98,6 +98,27 @@ def done(summary: str = "맡은 일을 마쳤다") -> AIMessage:
     return _result("결과를 돌려준다", "DONE", summary, ())
 
 
+def main_call(agent: str, **refs: Any) -> AIMessage:
+    """메인의 CALL_AGENT. 참조만 넘긴다."""
+    return call("CALL_AGENT", "이유: 부른다/다음: 결과를 본다", agent=agent, **refs)
+
+
+def main_wait() -> AIMessage:
+    return call("WAIT", "이유: 사람의 결정을 기다린다/다음: 다시 본다")
+
+
+def main_close(text: str = "맡은 일을 마쳤다") -> AIMessage:
+    message = call("CLOSE", "이유: 열린 일이 없다/다음: 종료")
+    message.tool_calls[0]["args"]["summary"] = text
+    return message
+
+
+def main_escalate(text: str = "풀 수 없다", needs: Sequence[dict] = ()) -> AIMessage:
+    message = call("ESCALATE", "이유: 풀 수 없다/다음: 이관", needs=list(needs))
+    message.tool_calls[0]["args"]["summary"] = text
+    return message
+
+
 def escalate(reason: str = "더 시도할 전략이 없다") -> AIMessage:
     """부모 없는 Replanning Run의 막힌 결과. 임시 연결로 Run은 ESCALATED가 된다."""
     return blocked(reason)
@@ -128,6 +149,7 @@ class ScriptedChatModel:
 
 
 AGENT_TITLES = {
+    "MAIN": "Main Agent",
     "INTAKE": "Work Intake Agent",
     "COORDINATION": "Coordination Agent",
     "EVENT_RESPONSE": "Event Response Agent",
@@ -147,8 +169,10 @@ class Router:
         coordination: Sequence[Reply] = (),
         event_response: Sequence[Reply] = (),
         intake: Sequence[Reply] = (),
+        main: Sequence[Reply] = (),
     ):
         self.queues = {
+            "MAIN": list(main),
             "REPLANNING": list(replanning),
             "COORDINATION": list(coordination),
             "EVENT_RESPONSE": list(event_response),
@@ -165,7 +189,7 @@ class Router:
         return make
 
     def left(self) -> dict[str, int]:
-        return {k: len(v) for k, v in self.queues.items()}
+        return {k: len(v) for k, v in self.queues.items() if k != "MAIN" or v}
 
 
 class RoutedChatModel(ScriptedChatModel):

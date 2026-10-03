@@ -15,6 +15,7 @@ from app.domain.ids import new_id
 from app.domain.models import Consent
 from app.packs.loader import LoadedPack
 from app.store.repos._rows import loads, rows
+from app.store.repos.calls import fingerprint
 from app.store.repos.case_events import record_case_event
 from app.store.repos.consents import insert_consent
 from app.store.repos.dispatch import register_job
@@ -123,15 +124,26 @@ def end_case_run(
         return False
     cancel_requests(tx, run_id)
     if before.status in ACTIVE and before.parent_run_id is not None:
-        # 하위 Run이 끝났다(자기 행동이든 서버가 끝냈든). 부른 쪽 Case의 사건이다
+        # 하위 Run이 끝났다(자기 행동이든 서버가 끝냈든). 부른 쪽 Case의 사건이고, 부른 메인을 깨운다.
+        # 끝날 때의 사실 지문을 적어 둔다: 같은 호출을 다시 받을지 판정하는 기준이다 (AG-27)
+        ref = {"run_id": run_id, "parent_run_id": before.parent_run_id, "status": status}
+        key = before.input_ref.get("call_key")
+        if key is not None:
+            ref["fingerprint"] = fingerprint(
+                tx, pack.site_id, key, before.input_ref.get("candidate_id")
+            )
         record_case_event(
-            tx,
-            pack.site_id,
-            "CHILD_RUN_ENDED",
-            f"CHILD_RUN_ENDED:{run_id}",
-            {"run_id": run_id, "parent_run_id": before.parent_run_id, "status": status},
-            before.case_id,
+            tx, pack.site_id, "CHILD_RUN_ENDED", f"CHILD_RUN_ENDED:{run_id}", ref, before.case_id
         )
+        wake_run(tx, pack.site_id, before.parent_run_id)
+    if before.status in ACTIVE and before.agent_type == "MAIN":
+        # 메인이 끝나면 열린 하위 Run도 같이 끝낸다(취소·오류). 보낸 요청도 정리된다
+        for (child,) in tx.execute(
+            "SELECT run_id FROM agent_run WHERE parent_run_id = ? AND status IN (?, ?)",
+            (run_id, *ACTIVE),
+        ).fetchall():
+            if end_run(tx, child, "CANCELLED", "PARENT_ENDED", ACTIVE):
+                cancel_requests(tx, child)
     if before.status in ACTIVE and before.agent_type in CASE_AGENT_TYPES:
         close_case(tx, pack)
     return True

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # 지연 신고(DELAY)를 접수하면 Event Response가 대상 작업·사실 수정안을 찾는다.
     # 끄면 Hold만 걸고 Supervisor가 처리한다(Scene 4).
     event_response_enabled: bool = True
+    # 메인 Agent Budget: step 수와 전문 Agent 호출 수 (LLM 시도는 step × 2)
+    main_max_steps: int = 12
+    main_max_agent_calls: int = 8
     # 현장의 지금을 고정한다(ISO 8601, 오프셋 필수). 비면 실제 시계. 읽는 곳은 app.clock.site_now 하나다 (ST-17)
     site_now: datetime | None = None
 

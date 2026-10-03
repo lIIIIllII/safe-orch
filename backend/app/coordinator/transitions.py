@@ -17,6 +17,7 @@ from app.domain.models import AgentRun, Candidate, Conflict, SnapshotContent
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.store import db
+from app.store.repos.case_events import record_case_event
 from app.store.repos.cases import claim_resume, end_case_run, register_coordination, wake_run
 from app.store.repos.consultations import candidate_state, consultation_view
 from app.store.repos.dispatch import job_exists, mark_done, register_job, set_job_run
@@ -280,9 +281,10 @@ def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, 
         hold = get_hold(tx, pack.site_id, payload.get("hold_id") or "")
         return hold is not None and hold["status"] == "ACTIVE"
     if payload["agent_type"] != "COORDINATION":
+        # 메인이 부른 재계획은 메인의 Case 안에서 돈다(열린 Case 검사는 부모 없는 시작에만)
         return (
             not list_active_holds(tx, pack.site_id)
-            and not has_open_case(tx, pack.site_id)
+            and (payload.get("parent_run_id") is not None or not has_open_case(tx, pack.site_id))
             and (payload.get("context_version"), payload.get("plan_revision"))
             == (site.context_version, site.plan_revision)
         )
@@ -293,6 +295,27 @@ def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, 
         return False
     state = candidate_state(tx, pack.site_id, candidate)
     return not (state.stale or state.rejected or state.committed)
+
+
+CALL_REFS = (
+    "agent_type",
+    "group_id",
+    "acting_unit_id",
+    "phase",
+    "candidate_id",
+    "plan_revision",
+    "event_id",
+)
+
+
+def _parent_waits(tx: sqlite3.Connection, parent_id: str, child_id: str) -> bool:
+    """부른 메인이 이 하위 Run을 기다리고 있는가."""
+    parent = get_run(tx, parent_id)
+    return (
+        parent is not None
+        and parent.status == "WAITING_HUMAN"
+        and (parent.wait_kind, parent.wait_ref) == ("CHILD_RUN", child_id)
+    )
 
 
 def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -> str | None:
@@ -306,15 +329,19 @@ def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -
         site = get_site(tx, site_id)
         assert site is not None
         run_id = None
-        if _start_allowed(tx, pack, payload):
-            run_id = new_id("run")
+        parent_id = payload.get("parent_run_id")
+        if parent_id is not None and not _parent_waits(tx, parent_id, payload["run_id"]):
+            pass  # 부른 메인이 이미 끝났거나 다른 것을 기다린다
+        elif _start_allowed(tx, pack, payload):
+            run_id = payload.get("run_id") or new_id("run")
             insert_run(
                 tx,
                 site_id,
                 AgentRun(
                     run_id=run_id,
                     agent_type=payload["agent_type"],
-                    # Coordination은 후보 Run의 Case를 잇는다
+                    parent_run_id=parent_id,
+                    # 하위 Run은 부른 메인의 Case를 쓴다
                     case_id=payload.get("case_id") or new_id("case"),
                     acting_actor_id=payload.get("acting_actor_id"),
                     acting_unit_id=payload["acting_unit_id"],
@@ -324,6 +351,23 @@ def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -
                 ),
             )
             set_job_run(tx, job["job_id"], run_id)
+        elif parent_id is not None:
+            # 시작 조건이 맞지 않는다(Hold, 사실 변경 등). 부른 메인에게 사건으로 알리고 깨운다
+            record_case_event(
+                tx,
+                site_id,
+                "CHILD_RUN_ENDED",
+                f"CHILD_RUN_ENDED:{payload['run_id']}",
+                {
+                    "run_id": payload["run_id"],
+                    "parent_run_id": parent_id,
+                    "status": "NOT_STARTED",
+                    "reason": "START_NOT_ALLOWED",
+                    "call": {k: payload[k] for k in CALL_REFS if k in payload},
+                },
+                payload.get("case_id"),
+            )
+            wake_run(tx, site_id, parent_id)
         mark_done(tx, job["job_id"])
     if run_id is None:
         return None
