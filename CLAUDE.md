@@ -9,7 +9,9 @@ Agent·도구·스킬: `docs/Agent_도구_스킬.md` (목록과 규칙. 지침 �
 ## 작업 규칙
 - 패키지 설치 전 venv 먼저(`uv venv --python 3.12`), 설치는 `uv add`(개발용 `uv add --dev`). pip 직접 사용 금지.
 - 최소 변경. 기존 구조 유지. 파일 전체 재작성 금지(부분 수정).
-- Agent 구현(2~4단계)이 끝날 때까지 평가(실제 모델 반복 측정)는 돌리지 않는다. 구현마다 pytest·ruff·골든과 영향 경로 live run 1회만 한다.
+- 구현 뒤 확인은 pytest·ruff까지 한다. Agent 동작은 사용자가 화면에서 직접 확인한다(EV-06).
+- 기능을 바꾸면서 옛 흐름을 고정한 테스트는 고치거나 지운다. 테스트를 살리려고 서버 규칙을 더하지 않는다.
+- 보고는 수치가 아니라 "이제 무엇을 할 수 있고, 화면에서 어떻게 해 보는지"로 한다.
 
 ## 저장소
 - SQLite + 표준 `sqlite3`. ORM 없음.
@@ -31,4 +33,3 @@ cd frontend && npm run dev
 ```
 - 사건 → 메인 자동 시작 스위치: `MAIN_AUTO_START`(기본 true). 사건이 생기면 메인 Agent가 뜨고, 전문 Agent는 메인이 부른다. 테스트는 .env를 읽지 않고 conftest가 끈다(켜는 fixture는 `main_on`).
 - 현장의 지금: `SITE_NOW`(ISO 8601, 오프셋 필수). 비면 실제 시계. 테스트는 conftest가 고정한다.
-- 평가(실제 모델): `cd backend && uv run python -m evals.run --scenario S1|S2|S3|all [--hidden] [--runs 10]`, 비교는 `uv run python -m evals.compare a.jsonl b.jsonl`. 숨긴 판 파일(`evals/scenarios/*/hidden/`)은 지침을 고치는 동안 열지 않는다.
