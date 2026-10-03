@@ -51,6 +51,24 @@ def work_delay(base_start: int, start: int, work_intervals: Intervals) -> int:
 WEEKDAYS = "월화수목금토일"
 
 
+def now_view(
+    now: datetime, horizon_start_utc: str, timezone: str, horizon_minutes: int
+) -> dict[str, str | int]:
+    """현장의 지금: 현장 날짜·요일·시각, Horizon 원점 기준 분, Horizon 안(IN)·앞(BEFORE)·뒤(AFTER).
+
+    알려 주기만 하는 값이다. 판정·계산에는 쓰지 않는다 (CV-14).
+    """
+    origin = datetime.fromisoformat(horizon_start_utc)
+    minute = int((now - origin).total_seconds() // 60)
+    local = now.astimezone(ZoneInfo(timezone))
+    horizon = "BEFORE" if minute < 0 else "IN" if minute < horizon_minutes else "AFTER"
+    return {
+        "local": f"{local:%Y-%m-%d}({WEEKDAYS[local.weekday()]}) {local:%H:%M}",
+        "minute": minute,
+        "horizon": horizon,
+    }
+
+
 def local_clock(horizon_start_utc: str, timezone: str, minute: int) -> str:
     """Horizon 원점 기준 분 → 현장 시각 "MM/DD(요일) HH:MM" (분 변환 실수를 알아보게)."""
     origin = datetime.fromisoformat(horizon_start_utc).astimezone(ZoneInfo(timezone))

@@ -1,5 +1,6 @@
 """환경 설정. 저장소 루트의 .env를 읽는다."""
 
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -36,12 +37,25 @@ class Settings(BaseSettings):
     # 지연 신고(DELAY)를 접수하면 Event Response가 대상 작업·사실 수정안을 찾는다.
     # 끄면 Hold만 걸고 Supervisor가 처리한다(Scene 4).
     event_response_enabled: bool = True
+    # 현장의 지금을 고정한다(ISO 8601, 오프셋 필수). 비면 실제 시계. 읽는 곳은 app.clock.site_now 하나다 (ST-17)
+    site_now: datetime | None = None
 
-    @field_validator("openai_temperature", "openai_seed", "openai_reasoning_effort", mode="before")
+    @field_validator(
+        "openai_temperature", "openai_seed", "openai_reasoning_effort", "site_now", mode="before"
+    )
     @classmethod
     def _blank_is_none(cls, v: object) -> object:
         """.env의 빈 값은 '넘기지 않음'이다."""
         return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("site_now")
+    @classmethod
+    def _site_now_utc(cls, v: datetime | None) -> datetime | None:
+        if v is None:
+            return None
+        if v.tzinfo is None:
+            raise ValueError("SITE_NOW needs a UTC offset (e.g. 2026-10-12T09:00+09:00)")
+        return v.astimezone(UTC)
 
     @field_validator("db_path")
     @classmethod

@@ -18,7 +18,7 @@ from app.agents.specs import intake as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "intake-p3"
+PROMPT_VERSION = "intake-p4"
 
 
 def tool_catalog() -> str:
@@ -53,6 +53,8 @@ Goal: {goal}
 
 관찰 읽는 법 (괄호 안이 키 이름이다. 설명과 decision_summary에는 키 이름 대신 앞의 한국어 이름만 쓴다)
 - 시간은 Horizon 원점(첫날 {origin_time})을 0으로 하는 정수 분이다(1440분 = 하루). 값 확인의 서버 문구에는 같은 값의 날짜·시각이 함께 나온다.
+- 현장의 지금(site_now): 현장 날짜·요일·시각(local), 같은 시각의 분(minute), Horizon 안(IN)·앞(BEFORE)·뒤(AFTER)다. \
+요청 문장의 상대 날짜(오늘·내일·모레)와 날짜 없는 시각은 현장의 지금 기준이다.
 - 요청(request): 작업 ID(task_id), 요청 문장(quoted_text, 인용), 요청자와 Unit이다. 작업 ID는 구역이 아니다.
 - 작업 유형(work_types): 코드·현장 표시 이름·확인해야 할 필드(critical_fields)다. 구역(zones)은 구역 ID 목록이다.
 - 자원 유형(resource_types): 자원 유형 코드·현장 표시 이름·그 유형의 자원 ID다. 값과 조회의 코드는 이 목록과 work_types·zones의 코드만 쓴다.
@@ -84,6 +86,7 @@ OBSERVATION_KEYS = (
     "resource_lookups",
     "resource_types",
     "run",
+    "site_now",
     "versions",
     "work_intervals",
     "work_types",
@@ -123,4 +126,5 @@ PROMPT_FINGERPRINTS = {
     "intake-p1": "95a9073706ea385c75f36c873aa2f6e5b2ceaa862cc4b055a249d51344725675",
     "intake-p2": "fcfca39ebb9411cefaea0362c474a14c0a86414ddf61d8f04c3d1d4ba75a1062",  # 자원 유형 코드·표시 이름, 코드 인자 실행 시 enum, 확인 의미 사실 설명
     "intake-p3": "057c1ac721076deac49fc6b8854256119f800f2a55920e30811c723f56cbfe1e",  # 마지막 라운드는 값 확인용(ASK 열리는 조건), 질문 문장 노출
+    "intake-p4": "343e9e3ed1658a1ee4e28e474233a82e05bab87aa89de50df068178968c16a85",  # 현장의 지금 site_now (ST-17)
 }

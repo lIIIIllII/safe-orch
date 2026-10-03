@@ -12,6 +12,8 @@ from typing import Any
 
 from app.agents.observe import Observation, budget_remaining, last_guard, recent_steps
 from app.agents.specs import intake as spec
+from app.clock import site_now
+from app.domain.calendar import now_view
 from app.packs.loader import LoadedPack
 from app.store.repos.messages import list_run_messages
 from app.store.repos.resources import list_resources
@@ -131,6 +133,10 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "questions": questions,
         "confirmations": confirmations,
         "last_check": last_check,
+        # 현장의 지금. 상대 날짜·날짜 없는 시각을 푸는 근거로만 준다
+        "site_now": now_view(
+            site_now(), pack.horizon_start_utc, pack.timezone, pack.horizon_minutes
+        ),
         "work_intervals": [list(iv) for iv in pack.work_intervals],
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),

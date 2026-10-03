@@ -431,6 +431,12 @@ def test_event_response_prompt_fingerprint_keys_and_no_pack_values(seeded, event
     assert prompt.fingerprint() == prompt.PROMPT_FINGERPRINTS[prompt.PROMPT_VERSION]
     _, er = _to_proposal(seeded)
     assert tuple(sorted(_steps(er.run_id)[0]["observation"])) == prompt.OBSERVATION_KEYS
+    # 현장의 지금: 테스트 기준 설정이 Horizon 원점으로 고정한다 (ST-17)
+    assert _steps(er.run_id)[0]["observation"]["site_now"] == {
+        "local": "2026-10-12(월) 09:00",
+        "minute": 0,
+        "horizon": "IN",
+    }
     for value in ("도장", "PAINTING", "D2", "YARD-01", "09:00"):
         assert value not in prompt.SYSTEM  # 템플릿에는 Pack 값이 없다
     assert "첫날 09:00" in prompt.render_system(seeded)

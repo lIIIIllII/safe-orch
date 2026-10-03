@@ -22,6 +22,7 @@
 - Agent 자동 시작 설정(COORDINATION_ENABLED·EVENT_RESPONSE_ENABLED)은 경로가 명시한다(.env·기본값과 무관):
   A·B·B-decline·intake = 둘 다 끔, coord = Coordination만, B --coord = Coordination만, event = Event Response
   (--coord면 Coordination도). 기록 agent_flags에 남긴다.
+- 현장의 지금(SITE_NOW)도 경로가 Pack의 Horizon 원점으로 고정한다(.env와 무관). 기록 site_now에 남긴다.
 - --path B-decline: 같은 흐름에서 ACCEPT 대신 DECLINE(comment "live run 자동 거절"). 성공 = Alpha PASS ∧ ASK
   1회 ∧ DECLINE 적용 ∧ 거절 뒤 ASK·TRY 없음 ∧ Run ESCALATED ∧ 금지 Action 0 ∧ Budget 안.
 - --path coord(기본안 A): COORDINATION_ENABLED를 켠 임시 DB에서 요청 A만. 스크립트가 사람 역할을
@@ -169,11 +170,17 @@ def _key() -> str:
     return uuid.uuid4().hex
 
 
-def _flag_env(coordination: bool, event_response: bool) -> dict[str, str]:
-    """Agent 자동 시작 설정을 경로가 명시한다. .env·기본값과 무관하게 같은 조건으로 잰다."""
+def _site_now(pack_name: str) -> str:
+    """현장의 지금 = Pack의 Horizon 원점. 경로가 명시해 .env와 무관하게 같은 조건으로 잰다 (ST-17)."""
+    return load_pack(pack_dir(pack_name)).horizon_start_utc
+
+
+def _flag_env(coordination: bool, event_response: bool, pack_name: str) -> dict[str, str]:
+    """Agent 자동 시작 설정과 현장의 지금을 경로가 명시한다. .env·기본값과 무관하게 같은 조건으로 잰다."""
     return {
         "COORDINATION_ENABLED": "true" if coordination else "false",
         "EVENT_RESPONSE_ENABLED": "true" if event_response else "false",
+        "SITE_NOW": _site_now(pack_name),
     }
 
 
@@ -279,7 +286,9 @@ def run_once(
 ) -> list[dict[str, Any]]:
     """임시 DB 하나에서 요청을 순서대로 하나씩 처리한다(앞 요청을 승인으로 확정한 뒤 다음). 요청마다 기록 1개."""
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
-    old_env = _set_env({"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(False, False)})
+    old_env = _set_env(
+        {"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(False, False, pack_name)}
+    )
     get_settings.cache_clear()
     db.close()
     real_solve = cpsat.solve
@@ -297,6 +306,7 @@ def run_once(
             escalate = bool(expected) and all(e["status"] != "OPTIMAL" for e in expected.values())
             record = _run_request(index, position, name, settings, pack, raw, real_solve)
             record["agent_flags"] = {"coordination": False, "event_response": False}
+            record["site_now"] = _site_now(pack_name)
             record["expected"] = expected
             record["expected_outcome"] = "ESCALATE" if escalate else "CANDIDATE"
             if escalate:
@@ -351,7 +361,9 @@ def run_path_b(
     coord면 Coordination을 켠다(운영 기본값의 기본안 B).
     """
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
-    old_env = _set_env({"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(coord, False)})
+    old_env = _set_env(
+        {"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(coord, False, pack_name)}
+    )
     get_settings.cache_clear()
     db.close()
     real_solve = cpsat.solve
@@ -361,6 +373,7 @@ def run_path_b(
         "request": "A",
         "path": path,
         "agent_flags": {"coordination": coord, "event_response": False},
+        "site_now": _site_now(pack_name),
     }
     t0 = time.perf_counter()
     try:
@@ -650,13 +663,16 @@ def _path_b(
 def run_path_coord(index: int, settings: Settings, pack_name: str, raw: bool) -> dict:
     """COORDINATION_ENABLED를 켠 임시 DB에서 요청 A로 기본안 A를 끝까지 돌린다. 기록 1개."""
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
-    old_env = _set_env({"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(True, False)})
+    old_env = _set_env(
+        {"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(True, False, pack_name)}
+    )
     db.close()
     record: dict[str, Any] = {
         "index": index,
         "request": "A",
         "path": "coord",
         "agent_flags": {"coordination": True, "event_response": False},
+        "site_now": _site_now(pack_name),
     }
     t0 = time.perf_counter()
     try:
@@ -943,9 +959,10 @@ def run_path_event(
 ) -> dict:
     """임시 DB에서 R1을 스크립트로 준비하고, 지연 신고부터 실제 모델로 Scene 4 최소 경로를 돌린다."""
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
-    names = ("DB_PATH", "EVENT_RESPONSE_ENABLED", "COORDINATION_ENABLED")
+    names = ("DB_PATH", "EVENT_RESPONSE_ENABLED", "COORDINATION_ENABLED", "SITE_NOW")
     old = {n: os.environ.get(n) for n in names}
     os.environ["DB_PATH"] = str(Path(tmp.name) / "live.db")
+    os.environ["SITE_NOW"] = _site_now(pack_name)
     os.environ["EVENT_RESPONSE_ENABLED"] = "false"
     os.environ["COORDINATION_ENABLED"] = "false"
     get_settings.cache_clear()
@@ -958,6 +975,7 @@ def run_path_event(
         "ambiguous": ambiguous,
         # 신고부터 잰 구간의 설정. R1 준비(스크립트)는 둘 다 끈다
         "agent_flags": {"coordination": coord, "event_response": True},
+        "site_now": _site_now(pack_name),
     }
     t0 = time.perf_counter()
     try:
@@ -1248,7 +1266,9 @@ def run_path_intake(
 ) -> dict:
     """임시 DB에서 자연어 요청 A → Intake → Replanning Alpha까지 실제 모델로 돌린다."""
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
-    old_env = _set_env({"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(False, False)})
+    old_env = _set_env(
+        {"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(False, False, pack_name)}
+    )
     get_settings.cache_clear()
     db.close()
     path = "intake-ambiguous" if ambiguous else "intake"
@@ -1258,6 +1278,7 @@ def run_path_intake(
         "path": path,
         "ambiguous": ambiguous,
         "agent_flags": {"coordination": False, "event_response": False},
+        "site_now": _site_now(pack_name),
     }
     t0 = time.perf_counter()
     try:

@@ -33,6 +33,8 @@ TEST_ENV = {
     # Agent 자동 시작은 끈다. 켜는 테스트는 coordination_on·event_response_on을 쓴다
     "COORDINATION_ENABLED": "false",
     "EVENT_RESPONSE_ENABLED": "false",
+    # 현장의 지금을 고정한다(Horizon 원점). 실제 시계로 돌면 관찰이 실행마다 달라진다 (ST-17)
+    "SITE_NOW": "2026-10-12T09:00+09:00",
 }
 
 

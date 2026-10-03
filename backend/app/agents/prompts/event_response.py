@@ -18,7 +18,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p5"
+PROMPT_VERSION = "event-response-p6"
 
 
 def tool_catalog() -> str:
@@ -54,6 +54,8 @@ Goal: {goal}
 
 관찰 읽는 법 (괄호 안이 키 이름이다. 설명과 decision_summary에는 키 이름 대신 앞의 한국어 이름만 쓴다)
 - 시간은 Horizon 원점(첫날 {origin_time})을 0으로 하는 정수 분이고(1440분 = 하루), 시각 옆의 *_clock은 같은 값의 현장 날짜·시각이다.
+- 현장의 지금(site_now): 현장 날짜·요일·시각(local), 같은 시각의 분(minute), Horizon 안(IN)·앞(BEFORE)·뒤(AFTER)다. \
+신고 문장의 상대 날짜(오늘·내일·모레)와 날짜 없는 시각은 현장의 지금 기준이다.
 - 신고(event): 유형(event_type), 신고 문장(quoted_text, 인용), 서버가 건 Hold(hold)다.
 - 작업 유형(work_types): 코드와 현장 표시 이름이다. 신고의 작업 표현을 코드로 이을 때 쓴다. 구역(zones)은 구역 ID 목록이다.
 - 조회 결과(lookups): 작업별 담당·시간창(earliest_start 시작 가능 시각, latest_start, latest_end)·현재 배정(assignment)이다. \
@@ -84,6 +86,7 @@ OBSERVATION_KEYS = (
     "recent_steps",
     "reporter_replies",
     "run",
+    "site_now",
     "versions",
     "work_intervals",
     "work_types",
@@ -125,4 +128,5 @@ PROMPT_FINGERPRINTS = {
     "event-response-p3": "67c93218658b928bfe0c31ce80874eb8b1e91177c1192e0d7aaf1553b16f8529",  # ASK_REPORTER와 신고자 답(reporter_replies)
     "event-response-p4": "43842c8b5c1304b33874fae5c1d74ce241097029989f2b24036983a6cdb55053",  # 조회 뒤 질문(ASK_REPORTER 열리는 조건)
     "event-response-p5": "c08d380cc1ecd55316f0ad387152b04c0bea832d6e7dce78668c176b3c9911e6",  # 조회 start_slack·분석 delay_minutes, 이관 조건 문구를 Replanning p7과 맞춤
+    "event-response-p6": "32095e40779ecd479c5ece5faa9433e3315739ae6a3fbb36cdd145b81a0f8492",  # 현장의 지금 site_now (ST-17)
 }

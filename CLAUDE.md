@@ -29,3 +29,4 @@ cd backend && uv run pytest
 cd frontend && npm run dev
 ```
 - Agent 자동 시작 스위치: `COORDINATION_ENABLED`·`EVENT_RESPONSE_ENABLED`(기본 true). 테스트는 .env를 읽지 않고 conftest가 둘 다 끈다.
+- 현장의 지금: `SITE_NOW`(ISO 8601, 오프셋 필수). 비면 실제 시계. 테스트는 conftest가 고정한다.
