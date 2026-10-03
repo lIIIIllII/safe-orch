@@ -237,17 +237,29 @@ def finish_solver_job(
 
 
 def tried_search_keys(conn: sqlite3.Connection, site_id: str, case_id: str) -> set[str]:
-    """이 Case에서 이미 시도한 실효 탐색 키 (RESERVED·REGISTERED). Case가 바뀌면 다시 계산할 수 있다 (CV-13)."""
+    """이 Case에서 이미 시도한 실효 탐색 키 (RESERVED·REGISTERED). Case가 바뀌면 다시 계산할 수 있다.
+
+    무효가 된 후보(현장 버전이 달라진 후보)의 탐색은 미시도로 본다: 거절·확정되지 않은 후보만이다.
+    거절된 후보의 탐색과 후보가 없는 결과(INFEASIBLE·UNKNOWN)는 해 본 탐색으로 남는다 (CV-13).
+    """
+    found = rows(
+        conn,
+        "SELECT s.search_key, c.candidate_id,"
+        " (c.context_version <> st.context_version OR c.base_plan_revision <> st.plan_revision)"
+        "   AS stale,"
+        " EXISTS (SELECT 1 FROM decision d WHERE d.candidate_id = c.candidate_id"
+        "         AND d.type = 'REJECT') AS rejected,"
+        " EXISTS (SELECT 1 FROM plan p WHERE p.candidate_id = c.candidate_id) AS committed"
+        " FROM solver_job j JOIN search_spec s ON s.search_spec_id = j.search_spec_id"
+        " JOIN agent_run r ON r.run_id = j.run_id JOIN site st ON st.site_id = j.site_id"
+        " LEFT JOIN candidate c ON c.solver_result_id = j.solver_result_id"
+        " WHERE j.site_id = ? AND r.case_id = ? AND j.status IN ('RESERVED', 'REGISTERED')",
+        (site_id, case_id),
+    )
     return {
         r["search_key"]
-        for r in rows(
-            conn,
-            "SELECT s.search_key FROM solver_job j JOIN search_spec s"
-            " ON s.search_spec_id = j.search_spec_id"
-            " JOIN agent_run r ON r.run_id = j.run_id"
-            " WHERE j.site_id = ? AND r.case_id = ? AND j.status IN ('RESERVED', 'REGISTERED')",
-            (site_id, case_id),
-        )
+        for r in found
+        if not (r["candidate_id"] and r["stale"] and not r["rejected"] and not r["committed"])
     }
 
 

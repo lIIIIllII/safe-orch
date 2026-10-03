@@ -526,6 +526,30 @@ def test_t33_reject_without_constraint_recalls_and_blocks_same_assignments(seede
     assert n == 1
 
 
+def test_cv13_rejected_candidate_search_stays_tried_after_context_change(seeded):
+    """거절된 후보의 탐색은 현장 버전이 바뀌어도 다시 계산하지 않는다(같은 배정이 나온다).
+    무효가 된 후보의 탐색만 미시도로 돌아온다 (CV-13)."""
+    pack = seeded
+    run = _n1_waiting(pack)
+    assert _reject(pack, run.wait_ref, "PREFERENCE").status == "APPLIED"
+    run_until_idle(pack, model_factory=_factory(escalate()))  # 다시 부른 Run은 막힘, 메인은 이관
+    first = _steps(_last().run_id)[0]["observation"]
+    assert "L0" not in first["untried_levels"]
+    # 관계없는 변화로 현장 버전이 오른다. 거절된 후보는 무효이기도 하지만 탐색은 열리지 않는다
+    with db.write() as tx:
+        tx.execute("UPDATE site SET context_version = context_version + 1")
+    from app.store.repos.runs import tried_search_keys
+
+    with db.read() as conn:
+        keys = tried_search_keys(conn, pack.site_id, _run(run.run_id).case_id)
+        [l0] = conn.execute(
+            "SELECT s.search_key FROM solver_job j JOIN search_spec s"
+            " ON s.search_spec_id = j.search_spec_id WHERE j.run_id = ?",
+            (run.run_id,),
+        ).fetchone()
+    assert l0 in keys
+
+
 # ── T36–T39·T41·T42: 대기와 재개 ───────────────────────────────
 
 

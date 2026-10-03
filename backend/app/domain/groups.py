@@ -6,7 +6,7 @@
 from collections.abc import Mapping, Sequence
 
 from app.domain.canonical import canonical_hash
-from app.domain.models import Conflict, Frozen, Task
+from app.domain.models import Conflict, FeedbackConstraint, Frozen, Task
 
 
 class ConflictGroup(Frozen):
@@ -55,3 +55,22 @@ def conflict_groups(
             )
         )
     return out
+
+
+def movable_task_ids(
+    group: ConflictGroup,
+    unit_id: str,
+    tasks: Mapping[str, Task],
+    constraints: Sequence[FeedbackConstraint],
+) -> list[str]:
+    """그 Unit이 이 그룹에 가진 작업 가운데 확인된 제약을 반영한 뒤에도 움직일 수 있는 것.
+
+    시간 축이나 자원 축 하나라도 열려 있고 제약으로 고정되지 않았으면 움직일 수 있다.
+    """
+    frozen = {(c.task_id, axis) for c in constraints for axis in c.frozen_axes}
+    return [
+        tid
+        for tid in group.units.get(unit_id, ())
+        if (tasks[tid].movable.time and (tid, "TIME") not in frozen)
+        or (tasks[tid].movable.resource and (tid, "RESOURCE") not in frozen)
+    ]

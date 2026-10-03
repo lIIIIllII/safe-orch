@@ -23,7 +23,6 @@ from app.commands.approval import (
 )
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.messages import ReplyRequest, reply_message
-from app.commands.runs import CancelRun, cancel_run
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.consultation import change_hash, item_statuses
@@ -423,10 +422,7 @@ def _report_event(pack, source="ev1"):
 
 
 def _release_no_change(pack, hold_id):
-    """앞 Case를 닫고(Supervisor가 메인을 취소) Hold를 푼다. 해제 사건은 새 메인이 받는다."""
-    [main] = [r for r in _runs("MAIN") if r.status in ("RUNNING", "WAITING_HUMAN")]
-    out = cancel_run(pack, "supervisor", _key(), CancelRun(run_id=main.run_id))
-    assert out.status == "APPLIED"
+    """변경 없음으로 Hold를 푼다. 해제 사건은 열려 있는 같은 메인이 받는다."""
     body = HoldRelease(
         hold_id=hold_id,
         resolution="NO_CHANGE",
@@ -435,23 +431,27 @@ def _release_no_change(pack, hold_id):
     assert release_hold_command(pack, "supervisor", _key(), body).status == "APPLIED"
 
 
-def _replan_in_new_case(pack, coordination=()):
-    """해제 뒤 새 메인(새 Case)이 재계획을 부르고, 그 Run이 L0·L1을 다시 계산한다. 새 후보 ID."""
-    router = Router(replanning=[solve("L0"), solve("L1")], coordination=list(coordination))
+def _replan_after_release(pack, coordination=()):
+    """해제 뒤 같은 메인이 재계획을 다시 부른다(같은 Case의 새 Run). 신고로 무효가 된 후보의 탐색(L1)은
+    미시도로 돌아와 다시 계산되고, 후보가 없던 탐색(L0)은 해 본 탐색으로 남는다 (CV-13). 새 후보 ID."""
+    router = Router(replanning=[solve("L1")], coordination=list(coordination))
     run_until_idle(pack, model_factory=router.factory())
     assert router.left()["REPLANNING"] == 0
+    [main] = _runs("MAIN")
     first, second = _runs("REPLANNING")
-    assert second.case_id != first.case_id
-    assert [(s["result_kind"], s["guard"]["reason_code"]) for s in _steps(second.run_id)] == [
-        ("CONTINUE", None),
+    assert second.case_id == first.case_id == main.case_id
+    steps = _steps(second.run_id)
+    untried = steps[0]["observation"]["untried_levels"]
+    assert "L1" in untried and "L0" not in untried
+    assert [(s["result_kind"], s["guard"]["reason_code"]) for s in steps] == [
         ("WAIT", None),
         ("DONE", None),
     ]
     return _candidate_of(second.run_id)
 
 
-def test_accept_carries_to_same_change_in_new_case(seeded, main_on):
-    """수락한 변경이 새 Case의 후보에 그대로 있으면 처음부터 ACCEPTED다. 다시 묻지 않는다."""
+def test_accept_carries_to_same_change_in_new_candidate(seeded, main_on):
+    """수락한 변경이 새 후보에 그대로 있으면 처음부터 ACCEPTED다. 다시 묻지 않는다."""
     pack = seeded
     rp, coord = _alpha_consulting(pack)
     [cr] = _messages("CHANGE_REQUEST")
@@ -463,7 +463,7 @@ def test_accept_carries_to_same_change_in_new_case(seeded, main_on):
 
     _release_no_change(pack, _report_event(pack))
     # Coordination 응답을 주지 않는다. 협의 Run이 뜨면 스크립트 소진으로 ERROR가 된다
-    beta = _replan_in_new_case(pack)
+    beta = _replan_after_release(pack)
     assert beta != rp.wait_ref
     view = _view(pack, beta)
     assert (view.item_status, view.status) == ({"A": "COVERED", "C": "ACCEPTED"}, "COMPLETE")
@@ -492,7 +492,7 @@ def test_objection_carries_and_candidate_waits_for_supervisor(seeded, main_on):
     run_until_idle(pack, model_factory=Router(coordination=[_report("C 이견")]).factory())
 
     _release_no_change(pack, _report_event(pack))
-    beta = _replan_in_new_case(pack)
+    beta = _replan_after_release(pack)
     view = _view(pack, beta)
     assert (view.item_status["C"], view.status) == ("OBJECTED", "BLOCKED")
     assert view.answer_from["C"]["prior"] is True
@@ -516,7 +516,7 @@ def test_cancelled_and_late_answers_do_not_carry(seeded, main_on):
     assert late.status == "APPLIED" and late.result_refs["late"] is True
     _release_no_change(pack, hold_id)
 
-    beta = _replan_in_new_case(pack, [_request_c(), _wait()])
+    beta = _replan_after_release(pack, [_request_c(), _wait()])
     old, new = _messages("CHANGE_REQUEST")
     assert (old["status"], new["status"], new["candidate_id"]) == ("LATE", "OPEN", beta)
     assert old["change_hash"] == new["change_hash"]
@@ -537,7 +537,7 @@ def test_answer_does_not_carry_when_task_revision_changes(seeded, main_on):
         bump_context_version(tx, pack.site_id)
     _release_no_change(pack, _report_event(pack))
 
-    beta = _replan_in_new_case(pack, [_request_c(), _wait()])
+    beta = _replan_after_release(pack, [_request_c(), _wait()])
     old, new = _messages("CHANGE_REQUEST")
     assert old["change_hash"] != new["change_hash"]
     assert _view(pack, beta).item_status["C"] == "PENDING"

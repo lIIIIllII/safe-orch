@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p1"
+PROMPT_VERSION = "main-p2"
 
 
 def tool_catalog() -> str:
@@ -58,7 +58,9 @@ Coordination, 신고의 대상·사실 수정안은 Event Response가 한다. �
 관찰 읽는 법 (괄호 안이 키 이름이다. decision_summary에는 키 이름 대신 앞의 한국어 이름만 쓴다)
 - 사건(events): 이 Case에 온 사건의 종류(kind)와 참조(ref)다. new가 true면 지난 행동 뒤에 새로 온 것이다.
 - 충돌 그룹(groups): 지금 충돌을 공유 작업으로 묶은 것이다. 그룹의 작업(task_ids), 걸린 규칙(rule_ids), \
-Hold가 걸린 작업(held_task_ids), 그룹에 작업을 가진 Unit(units)이 있다. Unit마다 그 Unit의 작업, 그중 아직 \
+Hold가 걸린 작업(held_task_ids), 이 그룹의 작업을 바꾸는 검토 대기 후보(review_candidates), 그룹에 작업을 \
+가진 Unit(units)이 있다. Unit마다 그 Unit의 작업, 확인된 제약을 반영한 뒤에도 움직일 수 있는 \
+작업(movable_task_ids), 그중 아직 \
 계획에 없는 요청 작업(request_task_ids), 그 Unit으로 재계획할 때 아직 시도하지 않은 탐색 범위(untried_levels), \
 담당자에게 허용을 물어 열 수 있는 대체 자원(askable: 자원 축이 확인되지 않은 작업과 물을 수 있는 자원. \
 묻는 일은 재계획 Agent가 한다), \
@@ -78,7 +80,8 @@ status는 DONE(마쳤다)·BLOCKED(막혔다)이고, 막혔으면 풀 수 있는
 판단이 필요함. by가 SERVER면 서버가 끝낸 Run이다. result가 없으면 시작 조건이 맞지 않아 시작되지 못했다. \
 quoted_summary는 인용이다.
 - 지금 받아들여지는 호출(calls): 서버가 지금 받아들이는 호출의 참조 조합이다. 여기 없는 조합은 거절된다.
-- 이 Case의 열린 일(open_work): 검토 대기 후보, 통지하지 않은 확정, 계획에 들어가지 못한 작업, 이 Case의 \
+- 이 Case의 열린 일(open_work): 검토 대기 후보, 통지하지 않은 확정, 계획에 들어가지 못한 작업(placed_by는 \
+그 작업을 배치한 검토 대기 후보다. 있으면 그 작업은 사람의 결정을 기다리는 중이다), 이 Case의 \
 작업이 걸린 충돌, 풀리지 않은 Hold다. 비어 있어야 끝낼 수 있다.
 - 기다릴 것(waiting_for): 사람의 승인·거절을 기다리는 후보와 사람이 풀어야 하는 Hold다.
 - 남은 예산(budget_remaining): 남은 step·LLM 시도·전문 Agent 호출 수다. 직전 거절 사유(last_guard)는 \
@@ -141,5 +144,6 @@ def fingerprint() -> str:
 
 # prompt_version별 fingerprint. 바꾸면 버전을 올리고 한 줄 더한다(값은 서로 달라야 한다).
 PROMPT_FINGERPRINTS: dict[str, str] = {
-    "main-p1": "fbe0921febcaffac21fd2ad723eb71ce427cf08a4aca6b2dec202f8b29b80f6b",
+    "main-p1": "7012047a25b6382ba6b7dbaf8746b36e462086e9ac28a47a4e29d3f18dc446d6",
+    "main-p2": "aca786e464d79a04b062e16bd8e5b46c98ce17abc9ac23cbb5f6d3cbea57ab19",  # 미배치 작업의 검토 대기 후보, 움직일 수 있는 작업
 }

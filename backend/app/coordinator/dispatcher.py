@@ -1,4 +1,5 @@
-"""dispatch 워커. 스레드 1개, job_id 순서.
+"""dispatch 워커. 스레드 1개. 서버 계산 job(검증·협의 항목·재확인)을 먼저, 그다음 Agent job을 job_id
+순서로 처리한다 (ST-21).
 
 처리하는 kind는 RECHECK·VALIDATE·BUILD_CONSULTATION, 그리고 model_factory가 있으면 START_RUN·
 RESUME_RUN·CONTINUE_RUN이다. model_factory가 없으면 이 셋은 claim하지 않고 PENDING으로 두며 순서를

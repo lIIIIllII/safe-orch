@@ -105,8 +105,13 @@ class MainExecutor:
             group = next((g for g in data["groups"] if g["group_id"] == refs.get("group_id")), None)
             if group is None:
                 return "GROUP_NOT_FOUND"
-            if refs.get("acting_unit_id") not in [u["unit_id"] for u in group["units"]]:
+            unit = next(
+                (u for u in group["units"] if u["unit_id"] == refs.get("acting_unit_id")), None
+            )
+            if unit is None:
                 return "UNIT_NOT_IN_GROUP"  # 권한 주체는 그 그룹에 작업을 가진 Unit뿐이다
+            if not unit["movable_task_ids"]:
+                return "UNIT_HAS_NO_MOVABLE_TASK"
             return "HOLD_ACTIVE" if holds else "SAME_FACTS"
         if refs["agent"] == "COORDINATION":
             candidate = next(

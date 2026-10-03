@@ -22,7 +22,7 @@ from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "replanning-p13"
+PROMPT_VERSION = "replanning-p14"
 
 
 def tool_catalog() -> str:
@@ -167,5 +167,6 @@ PROMPT_FINGERPRINTS = {
     "replanning-p10": "6d9a8a4c3c7d8f098af76c4923a01f5f5e05075da3f19d1c86f12598c3906e68",  # 자원 조회 제외 사유에 구역·요구 조건(어느 속성인지) (CV-20)
     "replanning-p11": "33fb3d9f286ba13da7c9acd873a0d11c649f5484f0595a101f1eb8d31aa1aeae",  # 풀 초과 충돌(풀·종류·초과 시각), 작업의 수요 (CV-23)
     "replanning-p12": "6886789507ed65d76a164c3eacb484bece923f1341a3ff269af615279e9d39eb",  # 종료는 RETURN_RESULT: 막힌 결과와 길 묶음 (AG-23)
-    "replanning-p13": "0397a3a992e57300c0447b096ae45c39b1928fd9a8759865b35cc4cd5420d193",  # 종료는 검증까지: DONE, 이전 계산 Case 단위, 충돌 그룹·거절 사실, OTHER_UNIT에 그룹 (AG-25)
+    "replanning-p13": "2b44ed9d97a4c052e448f813a6286232b3d9d6a8b734a295c72568f791655687",  # 종료는 검증까지: DONE, 이전 계산 Case 단위, 충돌 그룹·거절 사실, OTHER_UNIT에 그룹 (AG-25)
+    "replanning-p14": "0397a3a992e57300c0447b096ae45c39b1928fd9a8759865b35cc4cd5420d193",  # 이전 계산은 같은 Case·같은 Unit 것만(묶음 2 ③에서 고친 문구)
 }

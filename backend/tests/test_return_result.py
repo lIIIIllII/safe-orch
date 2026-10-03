@@ -122,11 +122,16 @@ def test_needs_are_checked_against_facts(with_a):
         {"kind": "HUMAN_DECISION", "candidate_id": "cand_none"},
     ]
     replies = [
-        blocked("틀린 참조", [{"needs": bad[:4]}, {"needs": bad[4:]}]),
-        # 그 그룹에 작업을 가진 다른 Unit은 유효한 참조다
+        # UB는 이 그룹에 작업(B)이 있지만 움직일 수 있는 작업이 없다
         blocked(
-            "다른 Unit", [{"needs": [{"kind": "OTHER_UNIT", "group_id": gid, "unit_id": "UB"}]}]
+            "틀린 참조",
+            [
+                {"needs": bad[:4]},
+                {"needs": bad[4:]},
+                {"needs": [{"kind": "OTHER_UNIT", "group_id": gid, "unit_id": "UB"}]},
+            ],
         ),
+        blocked("풀 길 없음"),
     ]
     run, steps, _ = _invoke(with_a, replies)
     assert steps[0]["guard"] == {"verdict": "REJECTED", "reason_code": "NEED_INVALID"}
@@ -141,6 +146,7 @@ def test_needs_are_checked_against_facts(with_a):
         (1, 1, "TARGET_NOT_FOUND"),
         (1, 2, "ACTOR_NOT_FOUND"),
         (1, 3, "TARGET_NOT_FOUND"),
+        (2, 0, "UNIT_HAS_NO_MOVABLE_TASK"),
     ]
     # 거절은 형식 오류가 아니다. Run은 계속되고 다음 결과로 끝난다
     assert (steps[1]["result_kind"], run.status) == ("DONE", "BLOCKED")

@@ -9,7 +9,7 @@ from typing import Any
 
 from app.domain.canonical import canonical_hash
 from app.domain.eligibility import exclusion_reasons
-from app.domain.groups import ConflictGroup, conflict_groups
+from app.domain.groups import ConflictGroup, conflict_groups, movable_task_ids
 from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts, separation_links
@@ -166,8 +166,13 @@ def case_candidate_ids(conn: sqlite3.Connection, pack: LoadedPack, case_id: str)
     return list(dict.fromkeys(ids))
 
 
-def candidate_view(conn: sqlite3.Connection, pack: LoadedPack, candidate_id: str) -> dict[str, Any]:
-    """후보 하나의 검증·협의·결정·통지 상태 (서버 계산)."""
+def candidate_view(
+    conn: sqlite3.Connection,
+    pack: LoadedPack,
+    candidate_id: str,
+    facts: SnapshotContent | None = None,
+) -> dict[str, Any]:
+    """후보 하나의 검증·협의·결정·통지 상태 (서버 계산). facts를 주면 지금 기준에서 바꾸는 작업도 낸다."""
     site_id = pack.site_id
     candidate = get_candidate(conn, site_id, candidate_id)
     assert candidate is not None
@@ -189,9 +194,20 @@ def candidate_view(conn: sqlite3.Connection, pack: LoadedPack, candidate_id: str
             "unsent": sum(1 for t in targets if t["actor_id"] not in sent),
         }
     items = {} if view is None else view.item_status
+    changed: list[str] = []
+    if facts is not None:
+        base = facts.base_assignments()
+        in_plan = {a.task_id for a in facts.plan.assignments}
+        changed = sorted(
+            a.task_id
+            for a in candidate.assignments
+            if a.task_id not in in_plan or base.get(a.task_id) != a
+        )
     return {
         "candidate_id": candidate_id,
         "kind": candidate.kind,
+        # 이 후보가 지금 계획에서 바꾸거나 새로 배치하는 작업
+        "changed_task_ids": changed,
         "validation": validations[-1].status if validations else None,
         "live": live,
         "stale": state.stale,
@@ -417,6 +433,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
             key = call_key("REPLANNING", {"group_id": g.group_id, "acting_unit_id": unit})
             last = last_result(conn, site_id, key)
             unchanged = same_facts(conn, site_id, key)
+            movable = movable_task_ids(g, unit, facts.task_map(), facts.constraints)
             last_view = None
             if last is not None:
                 run = get_run(conn, last["run_id"])
@@ -434,6 +451,8 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                 {
                     "unit_id": unit,
                     "task_ids": list(task_ids),
+                    # 확인된 제약을 반영한 뒤에도 움직일 수 있는 작업 (재계획은 이것만 옮긴다)
+                    "movable_task_ids": movable,
                     "request_task_ids": [t for t in task_ids if t not in in_plan],
                     "untried_levels": untried_levels(
                         snapshot, primary_for(g, facts, unit), unit, tried
@@ -443,7 +462,8 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                     "last_result": last_view,
                 }
             )
-            if not hold_active and not unchanged:
+            # 움직일 수 있는 작업이 없는 Unit은 유효한 주체가 아니다 (AG-02)
+            if not hold_active and not unchanged and movable:
                 calls.append(
                     {"agent": "REPLANNING", "group_id": g.group_id, "acting_unit_id": unit}
                 )
@@ -458,8 +478,14 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
         )
 
     candidates = [
-        candidate_view(conn, pack, cid) for cid in case_candidate_ids(conn, pack, case_id)
+        candidate_view(conn, pack, cid, facts) for cid in case_candidate_ids(conn, pack, case_id)
     ]
+    pending = [c for c in candidates if c["review_pending"]]
+    for view in group_views:
+        # 이 그룹의 작업을 바꾸는 검토 대기 후보 (사람의 결정을 기다리는 중이다)
+        view["review_candidates"] = [
+            c["candidate_id"] for c in pending if set(c["changed_task_ids"]) & set(view["task_ids"])
+        ]
     for c in candidates:
         cid = c["candidate_id"]
         if c["validation"] == "PASS" and c["live"] and c["open_items"] and not hold_active:
@@ -497,7 +523,9 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
         if notice and notice["unsent"] and notice["plan_revision"] == site.plan_revision:
             open_work.append({"kind": "NOTICE_UNSENT", "candidate_id": c["candidate_id"]})
     for tid in sorted(t for t in case_tasks if t in ready and t not in in_plan):
-        open_work.append({"kind": "TASK_UNPLANNED", "task_id": tid})
+        placed = [c["candidate_id"] for c in pending if tid in c["changed_task_ids"]]
+        # placed_by: 이 작업을 배치한 검토 대기 후보
+        open_work.append({"kind": "TASK_UNPLANNED", "task_id": tid, "placed_by": placed})
     for g in groups:
         if set(g.task_ids) & (case_tasks & in_plan):
             open_work.append({"kind": "CONFLICT", "group_id": g.group_id})

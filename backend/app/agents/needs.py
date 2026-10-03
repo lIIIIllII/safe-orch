@@ -10,7 +10,7 @@ from typing import Any
 
 from app.domain.canonical import canonical_hash
 from app.domain.eligibility import exclusion_reasons
-from app.domain.groups import conflict_groups
+from app.domain.groups import conflict_groups, movable_task_ids
 from app.domain.models import AgentRun, Snapshot
 from app.domain.needs import FACT_TARGET, Need, Path
 from app.packs.loader import LoadedPack
@@ -42,10 +42,10 @@ class _Facts:
         self.frozen = {
             (c.task_id, axis) for c in list_constraints(conn, site_id) for axis in c.frozen_axes
         }
-        self._group_units: dict[str, set[str]] | None = None
+        self._group_units: dict[str, dict[str, bool]] | None = None
 
-    def group_units(self) -> dict[str, set[str]]:
-        """지금 충돌 그룹 → 그 그룹에 작업을 가진 Unit."""
+    def group_units(self) -> dict[str, dict[str, bool]]:
+        """지금 충돌 그룹 → {그 그룹에 작업을 가진 Unit: 움직일 수 있는 작업이 있는가}."""
         if self._group_units is None:
             content = build_snapshot_content(self.conn, self.pack.site_id, self.pack)
             snapshot = Snapshot(
@@ -54,7 +54,13 @@ class _Facts:
             facts = snapshot.facts()
             conflicts = detect_conflicts(snapshot, facts.check_assignments(), self.pack)
             groups = conflict_groups(conflicts, facts.task_map())
-            self._group_units = {g.group_id: set(g.units) for g in groups}
+            tasks = facts.task_map()
+            self._group_units = {
+                g.group_id: {
+                    u: bool(movable_task_ids(g, u, tasks, facts.constraints)) for u in g.units
+                }
+                for g in groups
+            }
         return self._group_units
 
     def declined(self, task_id: str, axis: str) -> set[str]:
@@ -94,7 +100,10 @@ def _check(f: _Facts, need: Need) -> str | None:
             return "GROUP_NOT_FOUND"
         if need.unit_id == run.acting_unit_id:
             return "SAME_UNIT"
-        return None if need.unit_id in units else "UNIT_NOT_IN_GROUP"
+        if need.unit_id not in units:
+            return "UNIT_NOT_IN_GROUP"
+        # 움직일 수 있는 작업이 없는 Unit으로는 재계획해도 바뀌는 것이 없다
+        return None if units[need.unit_id] else "UNIT_HAS_NO_MOVABLE_TASK"
     if need.kind == "FACT_CHANGE":
         target = FACT_TARGET[need.field or "WINDOW"]
         value = getattr(need, target)

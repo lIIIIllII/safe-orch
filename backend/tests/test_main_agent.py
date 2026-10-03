@@ -96,7 +96,9 @@ def test_call_agent_starts_child_and_result_wakes_main(with_a):
     )
     units = {u["unit_id"]: u for u in last["observation"]["groups"][0]["units"]}
     assert units["UA"]["last_result"]["facts_changed"] is False
-    assert [c["acting_unit_id"] for c in last["observation"]["calls"]] == ["UB"]
+    # UB는 그룹에 작업이 있지만 움직일 수 있는 작업이 없어 호출 목록에 없다
+    assert (units["UB"]["task_ids"], units["UB"]["movable_task_ids"]) == (["B"], [])
+    assert last["observation"]["calls"] == []
     with db.read() as conn:
         [notice] = conn.execute(
             "SELECT to_actor_id, type, agent_text FROM message WHERE run_id = 'main'"
@@ -111,19 +113,21 @@ def test_call_agent_checks_group_unit_and_same_facts(with_a):
     replies = [
         main_call("REPLANNING", group_id="grp_none", acting_unit_id="UA"),
         main_call("REPLANNING", group_id=gid, acting_unit_id="SITE"),
+        main_call("REPLANNING", group_id=gid, acting_unit_id="UB"),
         main_call("REPLANNING", group_id=gid, acting_unit_id="UA"),
     ]
     _main(pack, replies)
     assert _guards("main") == [
         ("CALL_AGENT", "GROUP_NOT_FOUND"),
         ("CALL_AGENT", "UNIT_NOT_IN_GROUP"),
+        ("CALL_AGENT", "UNIT_HAS_NO_MOVABLE_TASK"),
         ("CALL_AGENT", None),
     ]
     # 하위 Run이 막힌 채 끝난 뒤 아무것도 바뀌지 않았다: 같은 호출은 거절된다
     again = main_call("REPLANNING", group_id=gid, acting_unit_id="UA")
     router = Router(replanning=[blocked()], main=[again, main_escalate()])
     run_until_idle(pack, model_factory=router.factory())
-    assert _guards("main")[3:] == [("CALL_AGENT", "SAME_FACTS"), ("ESCALATE", None)]
+    assert _guards("main")[4:] == [("CALL_AGENT", "SAME_FACTS"), ("ESCALATE", None)]
     assert len(_runs("REPLANNING")) == 1
 
 
@@ -307,7 +311,9 @@ def test_close_and_escalate_need_no_open_work_and_no_unseen_event(seeded, main_o
         ("ESCALATE", None),
     ]
     first = _steps(main.run_id)[0]
-    assert first["observation"]["open_work"] == [{"kind": "TASK_UNPLANNED", "task_id": "A"}]
+    assert first["observation"]["open_work"] == [
+        {"kind": "TASK_UNPLANNED", "task_id": "A", "placed_by": []}
+    ]
     assert "CLOSE" not in [t["function"]["name"] for t in first["available_actions"]]
     assert main.last_event_seq == 3
 
