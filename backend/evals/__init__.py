@@ -1,7 +1,7 @@
 """어려운 시나리오 평가 하네스.
 
 실제 모델로 시나리오를 돌리고 DB 사실로 등급을 매긴다(Action 이름을 보지 않는다, EV-01).
-    cd backend && uv run python -m evals.run --scenario S1|S2|S3|all [--hidden] [--runs 5]
+    cd backend && uv run python -m evals.run --scenario S1|S2|S3|all [--hidden] [--runs 10]
     cd backend && uv run python -m evals.compare a.jsonl b.jsonl [--force]
 """
 

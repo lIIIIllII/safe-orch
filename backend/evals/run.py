@@ -1,6 +1,6 @@
 """시나리오 실행기.
 
-    cd backend && uv run python -m evals.run --scenario S1|S2|S3|all [--hidden] [--runs 5]
+    cd backend && uv run python -m evals.run --scenario S1|S2|S3|all [--hidden] [--runs 10]
 
 - 회차마다 임시 DB를 쓴다. 개발 DB는 건드리지 않는다.
 - 설정은 .env와 무관하게 명시 고정한다: Agent 자동 시작 두 스위치 켬, SITE_NOW = 시나리오 값.
@@ -254,7 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.run")
     parser.add_argument("--scenario", default="all")
     parser.add_argument("--hidden", action="store_true", help="숨긴 판. 콘솔에는 등급 분포만 낸다")
-    parser.add_argument("--runs", type=int, default=5)
+    parser.add_argument("--runs", type=int, default=10)  # EV-05
     args = parser.parse_args(argv)
 
     settings = get_settings()

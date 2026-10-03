@@ -73,9 +73,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             if s is None:
                 print(f"{sid} {name}: 없음")
                 continue
+            valid = s["PASS"] + s["SHORT"] + s["FAIL"]
+            rate = f"{100 * s['PASS'] / valid:.0f}%" if valid else "-"
             print(
                 f"{sid} {name}: 통과 {s['PASS']} / 미달 {s['SHORT']} / 실패 {s['FAIL']}"
-                f" (무효 {s['INVALID']}) step {s['steps_median']} 질문 {s['questions_median']}"
+                f" (무효 {s['INVALID']}) 통과율 {rate} ({s['PASS']}/{valid})"
+                f" step {s['steps_median']} 질문 {s['questions_median']}"
             )
     return 0
 

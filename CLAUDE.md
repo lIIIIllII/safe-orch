@@ -30,4 +30,4 @@ cd frontend && npm run dev
 ```
 - Agent 자동 시작 스위치: `COORDINATION_ENABLED`·`EVENT_RESPONSE_ENABLED`(기본 true). 테스트는 .env를 읽지 않고 conftest가 둘 다 끈다.
 - 현장의 지금: `SITE_NOW`(ISO 8601, 오프셋 필수). 비면 실제 시계. 테스트는 conftest가 고정한다.
-- 평가(실제 모델): `cd backend && uv run python -m evals.run --scenario S1|S2|S3|all [--hidden] [--runs 5]`, 비교는 `uv run python -m evals.compare a.jsonl b.jsonl`. 숨긴 판 파일(`evals/scenarios/*/hidden/`)은 지침을 고치는 동안 열지 않는다.
+- 평가(실제 모델): `cd backend && uv run python -m evals.run --scenario S1|S2|S3|all [--hidden] [--runs 10]`, 비교는 `uv run python -m evals.compare a.jsonl b.jsonl`. 숨긴 판 파일(`evals/scenarios/*/hidden/`)은 지침을 고치는 동안 열지 않는다.
