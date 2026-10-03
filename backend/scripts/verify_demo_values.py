@@ -1,12 +1,12 @@
-"""시연 확장 기대값(부록 A.20 D 표)과 §15 값을 다시 계산하는 근거 스크립트.
+"""시연 확장 기대값과 기본 시연값을 다시 계산하는 근거 스크립트.
 
     cd backend && uv run python -m scripts.verify_demo_values
 
 - 입력은 Pack YAML(site·plan_r0·scenario·rules)을 yaml.safe_load로 직접 읽는다.
-- 계산은 app 코드(rules·solver·validator)를 import하지 않는 독립 구현이다. CP-SAT 모델(§7 + CALENDAR)과
+- 계산은 app 코드(rules·solver·validator)를 import하지 않는 독립 구현이다. CP-SAT 모델(CALENDAR 포함)과
   전수 열거를 함께 돌려 상태·변경 수·지연·해가 같은지 대조하고, 최적해가 하나뿐인지 센다.
 - 결과는 콘솔에만 쓴다. pytest(tests/test_demo_extension.py)가 같은 값을 운영 코드로 재현한다.
-- scripts/live_run.py --request가 `load`·`expected`·`advance`로 요청별 기대값을 같은 출처에서 얻는다(A.17).
+- scripts/live_run.py --request가 `load`·`expected`·`advance`로 요청별 기대값을 같은 출처에서 얻는다.
 """
 
 import datetime as dt
@@ -40,7 +40,7 @@ class T:
     res: str | None  # 기준 자원
     mt: bool
     mr: bool
-    start: int | None = None  # Plan 배정. 없으면 신규 작업이고 기준 시작 = es (A.10)
+    start: int | None = None  # Plan 배정. 없으면 신규 작업이고 기준 시작 = es
 
 
 @dataclass
@@ -119,7 +119,7 @@ def load(pack: Path = PACK) -> tuple[World, list[T], T, list[T]]:
     ]
     nt = raw["scenario.yaml"]["new_task"]
     a = task(nt, nt["unit_id"], nt["movable"], None)
-    form_movable = {"time": True, "resource": False}  # 폼 고정값 (A.14)
+    form_movable = {"time": True, "resource": False}  # 폼 고정값
     demos = [
         task(d, unit_of[d["requester"]], form_movable, None)
         for d in raw["scenario.yaml"]["demo_requests"]
@@ -143,7 +143,7 @@ def ok_one(w: World, t: T, s: int, r: str | None) -> bool:
 
 
 def sep_violations(w: World, x: T, sx: int, y: T, sy: int) -> list[str]:
-    """두 작업이 어기는 SEPARATION rule_id 목록 (§6)."""
+    """두 작업이 어기는 SEPARATION rule_id 목록."""
     return [
         rid
         for rid, ha, hb, rels, gap in w.rules
@@ -165,7 +165,7 @@ def conflicts(w: World, tasks: list[T]) -> list[tuple[str, tuple[str, ...]]]:
     out = []
     for t in tasks:
         s, _ = base(t)
-        # 사실 수정(earliest_start 지연) 뒤 기준 위치가 시간창 밖이면 WINDOW (A.25)
+        # 사실 수정(earliest_start 지연) 뒤 기준 위치가 시간창 밖이면 WINDOW
         if s < t.es or s > t.ls or s + t.d > t.le:
             out.append(("WINDOW", (t.id,)))
         if w.cal is not None and not any(lo <= s and s + t.d <= hi for lo, hi in w.cal):
@@ -266,7 +266,7 @@ def cpsat(w: World, tasks: list[T], ax: dict) -> tuple:
     n = round(sv.objective_value)
     m, starts, changed, delays, choices = build()
     m.add(sum(changed) == n)
-    m.minimize(sum(delays))  # 2단계: 달력 분 지연 (§7)
+    m.minimize(sum(delays))  # 2단계: 달력 분 지연
     _, sv = run(m)
     sol = {
         t.id: (sv.value(starts[t.id]), next((r for r, lit in choices[t.id] if sv.value(lit)), None))
@@ -389,7 +389,7 @@ def expected(
 def expected_try(
     w: World, others: list[T], req: T, try_res: dict[str, list[str]], frozen: set[str]
 ) -> dict[str, Any]:
-    """기본안 B의 Beta 기대값: frozen 작업 고정, req 자원 축 확인 + try_res, 범위 L0 (A.21 9)."""
+    """기본안 B의 Beta 기대값: frozen 작업 고정, req 자원 축 확인 + try_res, 범위 L0."""
     fixed = [replace(t, mt=False, mr=False) if t.id in frozen else t for t in others]
     return expected(w, fixed, replace(req, mr=True), try_res, ("L0",))["L0"]
 
@@ -397,7 +397,7 @@ def expected_try(
 def expected_fact(
     w: World, world: list[T], task_id: str, new_es: int, levels: tuple[str, ...] = ("L0",)
 ) -> dict[str, dict[str, Any]]:
-    """사실 수정(작업의 earliest_start → new_es) 뒤 재계획 기대값 (Gamma·Delta, A.25).
+    """사실 수정(작업의 earliest_start → new_es) 뒤 재계획 기대값 (Gamma·Delta).
 
     acting_unit = 그 작업의 Unit, 주 충돌 = 그 작업을 포함한 첫 충돌(Hold 해제 RECHECK와 같다).
     """
@@ -430,7 +430,7 @@ def expected_fact(
 
 
 def r1_world(w: World, fixture: list[T], a: T) -> list[T]:
-    """기본안 A·B의 R1(Beta 확정) 세계: A 10:00 SITE-CR-01, C 그대로 (§15 Scene 3)."""
+    """기본안 A·B의 R1(Beta 확정) 세계: A 10:00 SITE-CR-01, C 그대로."""
     beta = expected_try(w, fixture, a, {a.id: ["SITE-CR-01"]}, {"C"})
     return advance(fixture, replace(a, mr=True), beta)
 
@@ -454,7 +454,7 @@ def main() -> None:
     w, fixture, a, demos = load()
     print(f"원점 {w.clock(0)}, Horizon {w.horizon}분, 근무 구간 {list(w.cal)}")
     print("R0 충돌:", conflicts(w, fixture))
-    print(f"\n§15 A ({a.id}):")
+    print(f"\n기본 시연값 A ({a.id}):")
     solve_request(w, fixture, a)
     print("Beta (A 자원 축 확인 + SITE-CR-01):")
     solve_request(w, fixture, replace(a, mr=True), {"A": ["SITE-CR-01"]}, ("L0",))
@@ -462,7 +462,7 @@ def main() -> None:
     frozen = [replace(t, mt=False) if t.id == "C" else t for t in fixture]
     solve_request(w, frozen, a)
 
-    print("\nD 표 (R0 기준, 요청 하나씩):")
+    print("\n시연 요청 표 (R0 기준, 요청 하나씩):")
     for d in demos:
         print(f"{d.id} {d.unit} 요청 {w.clock(d.es)} 창 {w.clock(d.es)}~{w.clock(d.ls)}")
         solve_request(w, fixture, d)
@@ -478,7 +478,7 @@ def main() -> None:
         world = apply(world, d, solve_request(w, world, d, levels=("L0",))["L0"][3])
     print("최종 충돌:", conflicts(w, sorted(world, key=lambda t: t.id)))
 
-    print("\nScene 4 사실 수정 (R1 = Beta 확정 기준, A.25):")
+    print("\nScene 4 사실 수정 (R1 = Beta 확정 기준):")
     r1 = r1_world(w, fixture, a)
     for name, new_es in (("Gamma", 60), ("Delta", 75)):
         e = next(t for t in r1 if t.id == "E")

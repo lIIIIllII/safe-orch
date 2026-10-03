@@ -1,4 +1,4 @@
-"""event·hold 기록과 조회 (설계서 §10, 부록 A.14). event는 불변, hold는 ACTIVE → RELEASED만."""
+"""event·hold 기록과 조회. event는 불변, hold는 ACTIVE → RELEASED만."""
 
 import sqlite3
 from typing import Any

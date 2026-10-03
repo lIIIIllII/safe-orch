@@ -1,4 +1,4 @@
-"""불변 객체 INSERT와 Solver 결과 등록 (부록 A.10·A.11·A.13).
+"""불변 객체 INSERT와 Solver 결과 등록.
 
 snapshot·search_spec·solver_result·candidate·validation은 트리거로 UPDATE·DELETE가 막혀 있다.
 """
@@ -86,7 +86,7 @@ def insert_candidate(tx: sqlite3.Connection, site_id: str, candidate: Candidate)
 
 
 def insert_validation(tx: sqlite3.Connection, site_id: str, validation: Validation) -> None:
-    """Validator 결과 등록 (부록 A.13). 버전은 다시 확인하지 않는다(STALE은 조회 시 계산)."""
+    """Validator 결과 등록. 버전은 다시 확인하지 않는다(STALE은 조회 시 계산)."""
     tx.execute(
         "INSERT INTO validation (validation_id, site_id, candidate_id, status, checks)"
         " VALUES (?, ?, ?, ?, ?)",
@@ -122,7 +122,7 @@ def register_solver_outcome(
     insert_solver_result(tx, facts.site_id, result)
     if candidate is not None:
         insert_candidate(tx, facts.site_id, candidate)
-        # 후속 검증은 후보를 등록한 tx에서 등록한다 (I-18, 부록 A.14)
+        # 후속 검증은 후보를 등록한 tx에서 등록한다
         register_job(
             tx,
             facts.site_id,
@@ -186,7 +186,7 @@ def get_search_spec(conn: sqlite3.Connection, search_spec_id: str) -> SearchSpec
 def find_reconfirm_candidate(
     conn: sqlite3.Connection, site_id: str, context_version: int, plan_revision: int
 ) -> Candidate | None:
-    """같은 (context_version, plan_revision)의 RECONFIRM 후보 (부록 A.15 재사용)."""
+    """같은 (context_version, plan_revision)의 RECONFIRM 후보."""
     found = rows(
         conn,
         "SELECT candidate_id FROM candidate WHERE site_id = ? AND kind = 'RECONFIRM'"

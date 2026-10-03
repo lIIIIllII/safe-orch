@@ -1,5 +1,5 @@
-// 받은 요청 (부록 A.21 7). X-Actor 본인에게 온 질문만 state.inbox로 받는다.
-// 서버 문구(동의 내용의 기준)를 먼저, 모델이 쓴 설명은 아래에 따로 구분해 보여 준다(§11.6).
+// 받은 요청. X-Actor 본인에게 온 질문만 state.inbox로 받는다.
+// 서버 문구(동의 내용의 기준)를 먼저, 모델이 쓴 설명은 아래에 따로 구분해 보여 준다.
 
 import { useState } from 'react'
 import type { InboxItem, SiteState } from '../types'
@@ -37,8 +37,8 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
   const [comment, setComment] = useState('')
   const { clock, meta } = useEnv()
   const answerable = ANSWERABLE.includes(m.type)
-  // 확인 메시지는 제안 유형으로 나눈다: 제약 초안(A.24)과 사실 수정(A.25)
-  // 제안 없는 질문은 자유 텍스트 답, 제안 없는 확인은 작업 요청 값 확인이다 (A.26)
+  // 확인 메시지는 제안 유형으로 나눈다: 제약 초안과 사실 수정
+  // 제안 없는 질문은 자유 텍스트 답, 제안 없는 확인은 작업 요청 값 확인이다
   const kind =
     m.proposal_type === 'FACT_UPDATE'
       ? 'FACT_UPDATE'
@@ -51,7 +51,7 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
   const open = m.status === 'OPEN' && answerable
   const done = m.status === 'LATE' || m.status === 'CANCELLED'
   const words = DECISION_BY_TYPE[kind] ?? DECISION
-  // 변경 요청의 이견은 사유가 필요하다(서버도 COMMENT_REQUIRED로 막는다, A.24)
+  // 변경 요청의 이견은 사유가 필요하다(서버도 COMMENT_REQUIRED로 막는다)
   const needReason = m.type === 'CHANGE_REQUEST'
   const reply = (decision: 'ACCEPT' | 'DECLINE') =>
     run(`${MESSAGE_TYPE[kind] ?? '받은 요청'} ${words[decision]}`, `/messages/${m.message_id}/reply`, {

@@ -1,7 +1,7 @@
-"""시연 확장: 3일 Horizon·근무 달력·새 충돌·요청 철회 (부록 A.20).
+"""시연 확장: 3일 Horizon·근무 달력·새 충돌·요청 철회.
 
-D 표(N1–N5)와 §15 값(L0·Alpha·Beta)을 확장 fixture에서 재현하고, 근무 분 지연, meta·scenario API,
-철회(F-2)를 확인한다. 기대값의 독립 근거는 scripts/verify_demo_values.py(전수 열거 + CP-SAT)다.
+시연 요청 표(N1–N5)와 기본 시연값(L0·Alpha·Beta)을 확장 fixture에서 재현하고, 근무 분 지연, meta·scenario API,
+철회를 확인한다. 기대값의 독립 근거는 scripts/verify_demo_values.py(전수 열거 + CP-SAT)다.
 """
 
 import uuid
@@ -53,7 +53,7 @@ FORM_FIELDS = (
     "requested_resource_id",
 )
 
-# D 표: 충돌, acting unit, L0 결과 (상태, 변경 수, 달력 지연, 근무 지연, 새 시작, 자원)
+# 시연 요청 표: 충돌, acting unit, L0 결과 (상태, 변경 수, 달력 지연, 근무 지연, 새 시작, 자원)
 EXPECTED = {
     "N1": ([("CAP-RESOURCE", ("K", "N1"))], "UA", ("OPTIMAL", 1, 60, 60, 1560, "SITE-GC-01")),
     "N2": ([("SEP-HOT-FLAM", ("N2", "P"))], "UA", ("OPTIMAL", 1, 45, 45, 1575, None)),
@@ -110,13 +110,13 @@ def test_calendar_functions():
     assert not has_work_slot(500, 1400, 1500, 30, CAL)  # 밤에만 걸친 시간창
     assert not has_work_slot(0, 0, 100, 30, ((10, 480),))
     assert work_minutes(1740, 2880, CAL) == 180
-    # N4: 10/13 14:00 → 10/14 09:00 = 달력 1140분, 근무 180분 (A.20)
+    # N4: 10/13 14:00 → 10/14 09:00 = 달력 1140분, 근무 180분
     assert (max(0, 2880 - 1740), work_delay(1740, 2880, CAL)) == (1140, 180)
     assert work_delay(2880, 1740, CAL) == 0  # 앞당김은 지연 0
     assert work_delay(1500, 1560, CAL) == 60
 
 
-# ── 확장 fixture에서 §15 값과 R0 ───────────────────────────────
+# ── 확장 fixture에서 기본 시연값과 R0 ───────────────────────────────
 
 
 def test_extended_r0_has_no_conflict(seeded):
@@ -157,7 +157,7 @@ def test_section15_values_on_extended_fixture(with_a):
 
 @pytest.mark.parametrize(("new_es", "start", "delay"), [(60, 60, 15), (75, 75, 30)])
 def test_gamma_delta_expected_values(new_es, start, delay):
-    """Scene 4 사실 수정: R1(Beta) + E earliest_start → Gamma(10:00)·Delta(10:15), 변경 1 (A.25)."""
+    """Scene 4 사실 수정: R1(Beta) + E earliest_start → Gamma(10:00)·Delta(10:15), 변경 1."""
     w, fixture, a, _ = verify.load(pack_dir("shipyard"))
     r1 = verify.r1_world(w, fixture, a)
     assert {t.id: (t.start, t.res) for t in r1 if t.id in ("A", "C")} == {
@@ -170,7 +170,7 @@ def test_gamma_delta_expected_values(new_es, start, delay):
     assert r["moved"] == {"E": [start, None]}
 
 
-# ── D 표: N1–N5 (요청 하나씩, R0 기준) ─────────────────────────
+# ── 시연 요청 표: N1–N5 (요청 하나씩, R0 기준) ─────────────────────────
 
 
 @pytest.mark.parametrize("task_id", sorted(EXPECTED))
@@ -216,7 +216,7 @@ def test_n4_without_calendar_would_be_night(seeded):
 
 
 def test_cpsat_fixed_task_outside_calendar_infeasible(with_a):
-    """고정 작업이 달력을 어기면 INFEASIBLE (Rule Engine CALENDAR와 같은 판정, A.12·A.20)."""
+    """고정 작업이 달력을 어기면 INFEASIBLE (Rule Engine CALENDAR와 같은 판정)."""
     snap = take_snapshot(with_a)
     shifted = with_facts(snap, work_intervals=((30, 480), (1440, 1920), (2880, 3360)))
     found = detect_conflicts(shifted, shifted.facts().check_assignments(), with_a)
@@ -249,7 +249,7 @@ def _approve_pending(pack, waive_tasks=()):
 
 
 def test_sequence_alpha_then_n1_to_n4(seeded):
-    """앞 요청을 확정한 상태에서도 D 표 값이 같다. 이동이 Consent 범위 안이라 WAIVE 없이 승인된다."""
+    """앞 요청을 확정한 상태에서도 시연 요청 표 값이 같다. 이동이 Consent 범위 안이라 WAIVE 없이 승인된다."""
     pack = seeded
     a = pack.new_task.model_dump(exclude={"requested", "unit_id", "owner_actor_id", "movable"})
     submit_task_request(pack, "planner_a", _key(), TaskRequestForm(**a))
@@ -309,7 +309,7 @@ def test_form_rejects_window_without_work_slot(seeded):
 
 
 def test_form_accepts_night_start_and_replans_calendar(seeded):
-    """요청 시작만 근무시간 밖이면 접수하고 CALENDAR 충돌로 재계획한다 (A.20)."""
+    """요청 시작만 근무시간 밖이면 접수하고 CALENDAR 충돌로 재계획한다."""
     form = _form(seeded, "N2", earliest_start=1380, latest_start=1620, latest_end=1680)
     assert submit_task_request(seeded, "planner_a", _key(), form).status == "APPLIED"
     snap = take_snapshot(seeded)
@@ -325,7 +325,7 @@ def test_form_accepts_night_start_and_replans_calendar(seeded):
     assert '"task_id":"N2"' in sol.replace(" ", "")
 
 
-# ── F-2: 철회 ──────────────────────────────────────────────────
+# ── 철회 ──────────────────────────────────────────────────
 
 
 def test_withdraw_unblocks_later_requests(seeded):
@@ -406,7 +406,7 @@ def test_withdraw_permissions_and_targets(seeded):
     assert withdraw("supervisor", "N5") == ("REJECTED", ("TASK_NOT_FOUND",))  # 이미 철회
 
 
-# ── 선행 작업 참조 (부록 A.22) ─────────────────────────────────
+# ── 선행 작업 참조 ─────────────────────────────────
 
 
 def test_form_rejects_withdrawn_predecessor(seeded):
@@ -565,7 +565,7 @@ def test_withdraw_api(client, seeded):
     assert res.status_code == 200 and res.json()["result_refs"]["revision"] == 2
 
 
-# ── 2차: 현장 목록·거절 시연값 (A.20 2차) ──────────────────────
+# ── 2차: 현장 목록·거절 시연값 ──────────────────────
 
 
 def test_sites_api_without_actor(client, seeded):
@@ -602,7 +602,7 @@ def test_demo_rejection_target_must_exist(pack_copy):
 
 
 def test_steps_api_reports_work_delay_without_storing(client, seeded):
-    """GET /runs/{rid}/steps의 SOLVE step에 근무 분 지연을 조회 시 붙인다. AgentStep에는 없다 (A.20)."""
+    """GET /runs/{rid}/steps의 SOLVE step에 근무 분 지연을 조회 시 붙인다. AgentStep에는 없다."""
     _submit(seeded, "N4")
     run_until_idle(seeded, model_factory=_factory(solve("L0")))
     [run] = _runs()

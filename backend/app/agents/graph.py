@@ -1,4 +1,4 @@
-"""공통 StateGraph (설계서 §11.2, 부록 A.16): observe → reserve_step → decide → gateway → finish.
+"""공통 StateGraph: observe → reserve_step → decide → gateway → finish.
 
 그래프는 DB를 직접 만지지 않는다. 읽기·쓰기는 주입된 port(RunPort)로만 하고, 도구 실행은
 port.execute(= Tool Gateway)뿐이다. store·commands를 import하지 않는다. checkpointer 없이 compile한다.
@@ -57,7 +57,7 @@ def build_graph(
     port: RunPort, model: ChatModel, spec: AgentSpec, prompt: ModuleType, system_text: str
 ) -> Any:
     """spec: AgentSpec(tool_schemas), prompt: PROMPT_VERSION·render_observation,
-    system_text: runtime이 Pack 값으로 렌더링한 System (graph는 Pack을 모른다, A.23)."""
+    system_text: runtime이 Pack 값으로 렌더링한 System (graph는 Pack을 모른다)."""
     system = SystemMessage(system_text)
 
     def observe(state: State) -> State:

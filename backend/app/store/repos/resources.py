@@ -1,4 +1,4 @@
-"""resource 조회 (부록 A.6)."""
+"""resource 조회."""
 
 import sqlite3
 

@@ -1,4 +1,4 @@
-"""SearchSpec·CP-SAT·Candidate (설계서 §7, 부록 A.11). A.11 회귀 기대값과 T10·T16·T31·T32."""
+"""SearchSpec·CP-SAT·Candidate. 회귀 기대값과 T10·T16·T31·T32."""
 
 import json
 
@@ -61,7 +61,7 @@ def _forbid_solver(monkeypatch):
     monkeypatch.setattr(cpsat, "_solve_stage", fail)
 
 
-# ── A.11 회귀 기대값 ───────────────────────────────────────────
+# ── 회귀 기대값 ───────────────────────────────────────────
 
 
 def test_l0_infeasible_no_candidate(with_a):
@@ -157,12 +157,12 @@ def test_scope_levels(with_a):
     snap = take_snapshot(with_a)
     conflict = _conflict(with_a, snap)
     ub = build_search_spec(snap, conflict, "UB", "L2")
-    assert list(ub.axes) == ["B", "D", "E", "K", "P", "W"]  # 확장 작업은 고정 (A.20)
+    assert list(ub.axes) == ["B", "D", "E", "K", "P", "W"]  # 확장 작업은 고정
     assert ub.axes["B"] == Movable(time=False, resource=False)
     assert list(build_search_spec(snap, conflict, "UB", "L0").axes) == ["B"]
     ua = build_search_spec(snap, conflict, "UA", "L2")
     assert list(ua.axes) == ["A", "C", "M", "Q"]
-    # 두 축이 모두 고정인 확장 작업은 hash에서 빠진다: L2 = L1 (A.11·A.20)
+    # 두 축이 모두 고정인 확장 작업은 hash에서 빠진다: L2 = L1
     assert ua.hash == build_search_spec(snap, conflict, "UA", "L1").hash
 
 
@@ -372,7 +372,7 @@ def test_register_stale_plan_discarded(with_a):
         register_solver_outcome(tx, snap, result, build_candidate(snap, spec, result))
 
 
-# ── 실효 탐색 키: 미시도 판정용 (A.21 "무결성 hash와 실효 탐색 키의 구분") ─────
+# ── 실효 탐색 키: 미시도 판정용 ─────
 
 
 def _key(pack, snapshot, level="L0", try_resources=None):
@@ -422,7 +422,7 @@ def test_search_key_changes_with_ready_set_and_in_scope_constraints(with_a):
     withdrawn = with_facts(snapshot, tasks=tuple(t for t in facts.tasks if t.task_id != "E"))
     assert _key(with_a, withdrawn)[0] != key
     # 제약은 axes로만 Solver 입력에 들어간다: 범위 안 작업(A)의 축을 막으면 그 범위의 키가 바뀌고,
-    # 범위 밖 작업(C)의 제약은 L0 키를 바꾸지 않는다. C가 들어 있는 L1 키는 바뀐다 (A.21)
+    # 범위 밖 작업(C)의 제약은 L0 키를 바꾸지 않는다. C가 들어 있는 L1 키는 바뀐다
     assert _key(with_a, _fix(snapshot, "A", axes=("TIME",)))[0] != key
     assert _key(with_a, _fix(snapshot, "C"))[0] == key
     assert _key(with_a, _fix(snapshot, "C"), "L1")[0] != _key(with_a, snapshot, "L1")[0]

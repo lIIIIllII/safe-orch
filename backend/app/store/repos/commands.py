@@ -1,4 +1,4 @@
-"""command_result(멱등 결과)와 audit 기록 (설계서 §5.4·§11.3-6, 부록 A.14)."""
+"""command_result(멱등 결과)와 audit 기록."""
 
 import sqlite3
 from typing import Any

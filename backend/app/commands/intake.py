@@ -1,7 +1,7 @@
-"""자연어 작업 요청 접수 → Work Intake Run (설계서 §18.2.4, 부록 A.26).
+"""자연어 작업 요청 접수 → Work Intake Run.
 
 요청 문장은 값으로 해석하지 않는다. Intake Run이 조회·질문·확인으로 TaskSpec을 만들고, 요청자가 확인한 값만
-critical field CONFIRMED가 된다(D01). 이 명령은 START_RUN(INTAKE) 등록과 Audit만 한다.
+critical field CONFIRMED가 된다. 이 명령은 START_RUN(INTAKE) 등록과 Audit만 한다.
 """
 
 import sqlite3

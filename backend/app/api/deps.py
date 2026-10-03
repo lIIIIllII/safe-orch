@@ -1,6 +1,6 @@
-"""API 공통: 데모 인증(X-Actor), Idempotency-Key, site 확인, §12 응답 (부록 A.18).
+"""API 공통: 데모 인증(X-Actor), Idempotency-Key, site 확인, 공통 응답 모양.
 
-본문은 언제나 §12 모양 {status, reason_codes, context_version, plan_revision, result_refs}이다.
+본문은 언제나 같은 모양 {status, reason_codes, context_version, plan_revision, result_refs}이다.
 HTTP: APPLIED·REPLAYED 200, NOT_AUTHORIZED만 403, *_NOT_FOUND 하나뿐이면 404, 그 밖의 거절 409,
 본문 검증 실패 422, RETRYABLE_ERROR 503(+Retry-After). REPLAYED도 저장된 사유로 같은 코드를 낸다.
 """

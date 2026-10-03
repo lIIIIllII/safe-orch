@@ -1,4 +1,4 @@
-"""Run과 도메인 연결 3b (설계서 §8·§10·§11.3(7)·§11.5, 부록 A.16). 게이트 경로 자동화."""
+"""Run과 도메인 연결. 게이트 경로 자동화."""
 
 import time
 import uuid
@@ -155,7 +155,7 @@ def test_incomplete_only_does_not_error(seeded, monkeypatch):
 
     monkeypatch.setattr(transitions, "validate", inject_incomplete)
     _submit_a(seeded)
-    # C11만 걸린 비PASS는 ERROR가 아니라 Run을 깨운다(§11.5, A.21). 재개 뒤 남은 행동은 이관뿐이다.
+    # C11만 걸린 비PASS는 ERROR가 아니라 Run을 깨운다. 재개 뒤 남은 행동은 이관뿐이다.
     run_until_idle(seeded, model_factory=_factory([*GATE_SCRIPT, escalate()]))
     [run] = _runs()
     assert (run.status, run.end_reason) == ("ESCALATED", "ESCALATE_NO_SOLUTION")

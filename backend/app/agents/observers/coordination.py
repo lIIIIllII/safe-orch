@@ -1,8 +1,8 @@
-"""Coordination Observation과 Available Actions 계산 (설계서 §18.2.2, 부록 A.24).
+"""Coordination Observation과 Available Actions 계산.
 
 읽기 전용이다. GET_CHANGE_IMPACT는 Action이 아니라 이 관찰에 서버가 넣는다(협의 항목·통지 대상).
 사람이 쓴 이견 문장은 quoted_comment(인용 데이터)로만 들어간다. 이 모듈을 import하는 곳은
-registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다 (A.23).
+registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다.
 """
 
 import sqlite3
@@ -23,7 +23,7 @@ from app.store.repos.tasks import list_current_tasks
 
 
 def changed_axes(before: Assignment, after: Assignment) -> list[str]:
-    """협의 항목에서 바뀐 축 (A.24 7: 제약 초안의 축은 이 중 하나 이상을 포함해야 한다)."""
+    """협의 항목에서 바뀐 축 (제약 초안의 축은 이 중 하나 이상을 포함해야 한다)."""
     axes = []
     if before.start != after.start:
         axes.append("TIME")
@@ -75,7 +75,7 @@ def _items(conn: sqlite3.Connection, pack: LoadedPack, run_id: str, candidate_id
 def notice_targets(
     conn: sqlite3.Connection, pack: LoadedPack, plan_revision: int
 ) -> list[dict[str, Any]]:
-    """확정 Plan과 직전 Plan을 비교한 통지 대상 (A.24 8).
+    """확정 Plan과 직전 Plan을 비교한 통지 대상.
 
     바뀐(새로 들어간) 작업의 담당자와, 새 Plan에서 SEPARATION Rule로 그 작업과 엮인 작업의 담당자.
     자원 공유는 넣지 않는다.

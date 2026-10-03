@@ -1,4 +1,4 @@
-# 데모 시나리오 입력 (설계서 §15, 부록 A.5·A.20). task로 seed하지 않는다.
+# 데모 시나리오 입력. task로 seed하지 않는다.
 # 시간은 10/12 09:00 기준 정수 분(1440분 = 하루). 화면의 시연값은 /api/dev/scenario로 여기서 읽는다.
 # 신규 작업 A: Planner A의 B구역 인양 요청.
 new_task:
@@ -18,7 +18,7 @@ new_task:
   movable: { time: true, resource: false }   # 자원 축 미확인
   requested: { start: 0, end: 30 }           # 요청 일정 09:00–09:30
 
-# 시연 확장 요청 (가정, 부록 A.20). 요청자(requester)가 Unit·담당자를 정한다. 하나씩 확정한 뒤 다음을 보낸다.
+# 시연 확장 요청 (가정). 요청자(requester)가 Unit·담당자를 정한다. 하나씩 확정한 뒤 다음을 보낸다.
 # 기대 결과(L0, 변경 수, 달력/근무 지연)는 backend/scripts/verify_demo_values.py로 다시 계산한다.
 demo_requests:
   - task_id: N1                 # CAP-RESOURCE (K) → 10/13 11:00, 변경 1, 지연 60/60
@@ -82,16 +82,16 @@ demo_requests:
     requested_resource_id: null
 
 # 지연 신고 시연 문구 (Scene 4). 대상 없음 → SITE Hold.
-# answer는 Event Response가 시각을 되물으면(ASK_REPORTER) 신고자가 답하는 문장이다(부록 A.25 S4).
+# answer는 Event Response가 시각을 되물으면(ASK_REPORTER) 신고자가 답하는 문장이다.
 demo_events:
   - { label: 도장 지연 신고, event_type: DELAY, text: "도장 준비 15분 늦어져 10시부터", target_task_id: null }
   - { label: 도장 추가 지연, event_type: DELAY, text: "도장 또 늦어진대요", target_task_id: null, answer: "도장 준비가 10시 15분부터 됩니다" }
 
-# 구조화 거절 시연값 (Scene 3 기본안 B, 부록 A.19·A.20 2차). 화면의 거절 "시연값 채우기"가 쓴다.
+# 구조화 거절 시연값 (Scene 3 기본안 B). 화면의 거절 "시연값 채우기"가 쓴다.
 demo_rejections:
   - { label: C 작업 고정, reason_code: TASK_IMMOVABLE, target_task_ids: [C], axes: [TIME, RESOURCE], comment: "작업발판 연계 공정 확정" }
 
-# 자연어 작업 요청 시연값 (Work Intake, 부록 A.26). 명확한 요청은 new_task A와 같은 값이다.
+# 자연어 작업 요청 시연값 (Work Intake). 명확한 요청은 new_task A와 같은 값이다.
 # answer는 모호한 요청에서 확인 질문을 받으면 요청자가 답하는 문장이다(live run·테스트의 사람 역할).
 demo_intakes:
   - label: 자연어 요청(명확)

@@ -1,4 +1,4 @@
-"""dispatch 워커와 Coordinator 결정론 핸들러 (설계서 §11.4·§11.5, 부록 A.15). 게이트 경로, T34."""
+"""dispatch 워커와 Coordinator 결정론 핸들러. 게이트 경로, T34."""
 
 import time
 import uuid
@@ -286,7 +286,7 @@ def test_choose_acting_cause_then_smallest_task():
     assert transitions.choose_acting(facts, [c_ab, c_e], {"task_id": "E"}) == ("UB", c_ab)
     assert transitions.choose_acting(facts, [c_e, c_ab], {}) == ("UA", c_ab)  # 가장 작은 A
 
-    # cause 작업이 충돌에 없으면(철회 뒤 RECHECK) Plan에 없는 요청 작업의 Unit이 먼저다 (A.20)
+    # cause 작업이 충돌에 없으면(철회 뒤 RECHECK) Plan에 없는 요청 작업의 Unit이 먼저다
     in_plan = facts.model_copy(
         update={
             "plan": facts.plan.model_copy(

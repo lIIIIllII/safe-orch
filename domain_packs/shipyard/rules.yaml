@@ -1,4 +1,4 @@
-# shipyard Rule (설계서 §5.3, 데모 정책 수치). min_gap은 분. display_name은 화면 표시용(부록 A.20).
+# shipyard Rule (데모 정책 수치). min_gap은 분. display_name은 화면 표시용.
 rules:
   - { rule_id: SEP-LIFT-BELOW, type: SEPARATION, display_name: 인양–하부 작업 분리,       hazard_a: LIFTING,  hazard_b: WORK_BELOW, relations: [SAME, BELOW],    min_gap: 0 }
   - { rule_id: SEP-HOT-FLAM,   type: SEPARATION, display_name: 화기–인화성 작업 분리(15분), hazard_a: HOT_WORK, hazard_b: FLAMMABLE,  relations: [SAME, ADJACENT], min_gap: 15 }

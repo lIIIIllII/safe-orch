@@ -1,4 +1,4 @@
-"""Rule Engine 충돌 탐지 (설계서 §6, 부록 A.10). T07·T08·T30과 기본 제약."""
+"""Rule Engine 충돌 탐지. T07·T08·T30과 기본 제약."""
 
 import json
 
@@ -33,7 +33,7 @@ def _retask(snapshot, task_id, **changes):
     return with_facts(snapshot, tasks=tasks)
 
 
-# ── A.10 확인 기준 ─────────────────────────────────────────────
+# ── 확인 기준 ─────────────────────────────────────────────
 
 
 def test_r0_has_no_conflict(seeded):
@@ -57,7 +57,7 @@ def test_r0_plus_a_base_is_single_sep_lift_below(with_a):
     ]
 
 
-# ── A.10 작업 revision·Snapshot ────────────────────────────────
+# ── 작업 revision·Snapshot ────────────────────────────────
 
 
 def test_add_task_inserts_revision_and_bumps_context(seeded):
@@ -214,7 +214,7 @@ def test_basic_duration_window_horizon(with_a):
     assert ("WINDOW", ("A",)) in _ids(
         detect_conflicts(snap, _replace(base, _asg("A", 61, 91, "A-CR-01")), with_a)
     )
-    # Horizon 3360 초과 (시간창은 안). CALENDAR도 따로 보고한다 (A.20)
+    # Horizon 3360 초과 (시간창은 안). CALENDAR도 따로 보고한다
     wide = _retask(snap, "E", latest_start=3350, latest_end=3400)
     asg = _replace(wide.facts().check_assignments(), _asg("E", 3340, 3370))
     found = _ids(detect_conflicts(wide, asg, with_a))
@@ -236,7 +236,7 @@ def test_basic_duration_window_horizon(with_a):
     ],
 )
 def test_calendar_one_work_interval(with_a, start, violates):
-    """작업 [start, end)는 근무 구간 하나 안 (기본 제약 CALENDAR, A.20)."""
+    """작업 [start, end)는 근무 구간 하나 안 (기본 제약 CALENDAR)."""
     snap = _retask(take_snapshot(with_a), "E", latest_start=2000, latest_end=2100)
     asg = _replace(snap.facts().check_assignments(), _asg("E", start, start + 30))
     found = _ids(detect_conflicts(snap, asg, with_a))

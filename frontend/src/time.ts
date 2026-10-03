@@ -1,4 +1,4 @@
-// Horizon 원점 기준 분 ↔ 현장 시각 변환 (§5.1, 부록 A.19·A.20 2차).
+// Horizon 원점 기준 분 ↔ 현장 시각 변환.
 // 시간대·원점·근무 구간은 모두 meta(GET /api/sites/{id}/meta)에서 받는다. Pack 값을 상수로 두지 않는다.
 
 import type { Meta } from './types'
@@ -132,7 +132,7 @@ export class Clock {
   }
 }
 
-/** 서버가 내려준 달력 분 지연과 근무 분 지연. 같으면 하나만 (A.20, 화면에서 계산하지 않는다). */
+/** 서버가 내려준 달력 분 지연과 근무 분 지연. 같으면 하나만 (화면에서 계산하지 않는다). */
 export function delayText(delay: number | null | undefined, workDelay: number | null | undefined): string {
   if (delay === null || delay === undefined) return '—'
   if (workDelay === null || workDelay === undefined || workDelay === delay) return `${delay}분`

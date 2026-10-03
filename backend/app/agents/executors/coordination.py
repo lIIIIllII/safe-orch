@@ -1,10 +1,10 @@
-"""Coordination Action 실행기 (설계서 §18.2.2, 부록 A.24).
+"""Coordination Action 실행기.
 
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 모든 Action은 tx 하나다:
 begin_step(활성·차감·STALE_OBSERVATION·재관찰·허용 판정) → 효과 → step 완료.
 변경 요청·제약 초안·통지의 서버 문구(body)는 여기서 서버 값으로 만들고, 모델 문장은 agent_text다.
-제약은 만들지 않는다. 초안(FEEDBACK_CONSTRAINT 제안)을 담당자가 확정하는 명령이 만든다(I-13).
-승인·확정·Hold 해제·Proposal 확인·미응답 수용 함수는 없다(I-01).
+제약은 만들지 않는다. 초안(FEEDBACK_CONSTRAINT 제안)을 담당자가 확정하는 명령이 만든다.
+승인·확정·Hold 해제·Proposal 확인·미응답 수용 함수는 없다.
 """
 
 import sqlite3
@@ -69,7 +69,7 @@ class CoordinationExecutor:
             return outcome
 
     def _permitted(self, obs: Observation, action: Any) -> bool:
-        """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (조합까지, A.24 7)."""
+        """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (조합까지)."""
         available = obs.available
         c = spec.choices(obs.data)
         if isinstance(action, spec.SendChangeRequest):
@@ -83,7 +83,7 @@ class CoordinationExecutor:
                 and target is not None
                 and action.task_id == target["task_id"]
                 and action.reason_code in spec.REASON_CODES
-                # 그 항목에서 바뀐 축을 하나 이상 고정해야 이견 대상인 변경을 막는다 (A.24 7)
+                # 그 항목에서 바뀐 축을 하나 이상 고정해야 이견 대상인 변경을 막는다
                 and bool(set(action.axes) & set(target["changed_axes"]))
             )
         if isinstance(action, spec.SendNotice):

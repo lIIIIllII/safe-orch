@@ -1,4 +1,4 @@
-// SAFE-ORCH 최소 UI (§13, 부록 A.19). 1초 폴링, 명령 직후 즉시 재조회.
+// SAFE-ORCH 최소 UI. 1초 폴링, 명령 직후 즉시 재조회.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchMeta, fetchScenario, fetchSites, fetchState, postCommand } from './api'
@@ -14,14 +14,14 @@ import { InputPanel } from './components/InputPanel'
 const POLL_MS = 1000
 const FAILS_BEFORE_OFFLINE = 2
 
-/** ?actor=가 있으면 그 Actor, 없으면 현장 Actor 중 첫 SUPERVISOR(없으면 첫 Actor) (A.19·A.20). */
+/** ?actor=가 있으면 그 Actor, 없으면 현장 Actor 중 첫 SUPERVISOR(없으면 첫 Actor). */
 function initialActor(site: SiteEntry): string {
   const asked = new URLSearchParams(window.location.search).get('actor')
   if (asked && site.actors.some((a) => a.actor_id === asked)) return asked
   return (site.actors.find((a) => a.roles.includes('SUPERVISOR')) ?? site.actors[0]).actor_id
 }
 
-/** 시작: GET /api/sites → meta·시연값. 화면은 Pack 값을 여기서만 받는다 (A.20 2차). */
+/** 시작: GET /api/sites → meta·시연값. 화면은 Pack 값을 여기서만 받는다. */
 export default function App() {
   const [boot, setBoot] = useState<{ env: Env; actor: string } | null>(null)
   const [bootError, setBootError] = useState<string | null>(null)
@@ -80,7 +80,7 @@ function Site({ env, firstActor }: { env: Env; firstActor: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [pinnedRun, setPinnedRun] = useState<string | null>(null)
   const [overlay, setOverlay] = useState(true)
-  // 타임라인 "크게 보기"(화면 전체 폭). ?tl=wide로 열 수 있다 (A.21 타임라인 가시성)
+  // 타임라인 "크게 보기"(화면 전체 폭). ?tl=wide로 열 수 있다
   const [wide, setWide] = useState(() => new URLSearchParams(window.location.search).get('tl') === 'wide')
   const changeWide = (on: boolean) => {
     setWide(on)
@@ -104,7 +104,7 @@ function Site({ env, firstActor }: { env: Env; firstActor: string }) {
       const s = await fetchState(siteId, actorRef.current)
       if (mine !== seq.current) return // 늦게 온 옛 응답은 버린다
       setCache((prev) => new Map([...prev, ...s.candidates.map((c) => [c.candidate_id, c] as const)]))
-      // 선택이 없을 때만 검토 대기 첫 후보를 고른다. 한 번 고른 후보는 상태가 바뀌어도 유지한다 (A.19).
+      // 선택이 없을 때만 검토 대기 첫 후보를 고른다. 한 번 고른 후보는 상태가 바뀌어도 유지한다.
       setSelectedId((cur) => cur ?? s.review_queue[0] ?? null)
       setState(s)
       setLastOk(new Date())

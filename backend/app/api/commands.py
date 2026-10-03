@@ -1,4 +1,4 @@
-"""명령 엔드포인트 (설계서 §12, 부록 A.18). commands 함수를 그대로 부르고 §12 응답으로 돌려준다.
+"""명령 엔드포인트. commands 함수를 그대로 부르고 공통 응답 모양으로 돌려준다.
 
 경로의 id는 본문에 두지 않고 API가 합쳐 명령 Body를 만든다(request_hash에 들어간다).
 """
@@ -67,7 +67,7 @@ class WithdrawBody(Body):
     comment: str = ""
 
 
-# 값 타입은 명령 계층 정의를 그대로 쓴다. 두 곳에 두면 한쪽만 바뀌어 API가 422를 낸다 (A.26 후속)
+# 값 타입은 명령 계층 정의를 그대로 쓴다. 두 곳에 두면 한쪽만 바뀌어 API가 422를 낸다
 class ReplyBody(Body):
     decision: Decision
     values: tuple[str, ...] | None = None
@@ -96,7 +96,7 @@ def post_task_request(
 def post_intake(
     site_id: str, body: IntakeRequest, pack: PackDep, actor: ActorDep, key: KeyDep
 ) -> JSONResponse:
-    """자연어 작업 요청 → Work Intake Run (§18.2.4, 부록 A.26)."""
+    """자연어 작업 요청 → Work Intake Run."""
     check_site(site_id, pack)
     return respond(submit_intake(pack, actor.actor_id, key, body))
 
@@ -105,7 +105,7 @@ def post_intake(
 def post_withdraw(
     task_id: str, body: WithdrawBody, pack: PackDep, actor: ActorDep, key: KeyDep
 ) -> JSONResponse:
-    """Plan에 없는 READY 작업(해결 못 한 요청) 철회 (부록 A.20)."""
+    """Plan에 없는 READY 작업(해결 못 한 요청) 철회."""
     req = TaskWithdraw(task_id=task_id, **body.model_dump())
     return respond(withdraw_task_request(pack, actor.actor_id, key, req))
 
@@ -159,7 +159,7 @@ def post_cancel(run_id: str, pack: PackDep, actor: ActorDep, key: KeyDep) -> JSO
 def post_reply(
     message_id: str, body: ReplyBody, pack: PackDep, actor: ActorDep, key: KeyDep
 ) -> JSONResponse:
-    """받은 질문에 답한다. 제안이 붙은 메시지면 ACCEPT = 확인, DECLINE = 폐기 (§9.4, A.21 2)."""
+    """받은 질문에 답한다. 제안이 붙은 메시지면 ACCEPT = 확인, DECLINE = 폐기."""
     req = ReplyRequest(message_id=message_id, **body.model_dump())
     return respond(reply_message(pack, actor.actor_id, key, req))
 

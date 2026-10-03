@@ -14,13 +14,13 @@ from app.store.repos.site import bump_context_version
 from app.store.repos.snapshots import create_snapshot
 from app.store.repos.tasks import insert_task_revision
 
-# 테스트는 저장소 루트의 .env를 읽지 않는다. 개발자 .env가 테스트 결과를 바꾸지 못하게 한다 (A.28).
+# 테스트는 저장소 루트의 .env를 읽지 않는다. 개발자 .env가 테스트 결과를 바꾸지 못하게 한다.
 Settings.model_config["env_file"] = None
 
-# 테스트 기준 설정 (A.28). 환경변수가 기본값보다 우선하므로, 셸에 어떤 값이 있어도 여기 값으로 고정한다.
+# 테스트 기준 설정. 환경변수가 기본값보다 우선하므로, 셸에 어떤 값이 있어도 여기 값으로 고정한다.
 # DB_PATH는 테스트마다 다르므로 temp_db가 정한다. 다른 값이 필요한 테스트는 fixture에서 바꾼다.
 TEST_ENV = {
-    # 실제 API를 부르지 않는다 (A.17)
+    # 실제 API를 부르지 않는다
     "OPENAI_API_KEY": "",
     "OPENAI_MODEL": "",
     "OPENAI_TEMPERATURE": "",
@@ -30,7 +30,7 @@ TEST_ENV = {
     "PACK": "shipyard",
     "DISPATCH_WORKER": "false",  # 테스트는 run_until_idle로 직접 돌린다
     "LANGSMITH_TRACING": "false",
-    # Agent 자동 시작은 끈다. 켜는 테스트는 coordination_on·event_response_on을 쓴다 (A.24·A.25·A.28)
+    # Agent 자동 시작은 끈다. 켜는 테스트는 coordination_on·event_response_on을 쓴다
     "COORDINATION_ENABLED": "false",
     "EVENT_RESPONSE_ENABLED": "false",
 }
@@ -38,7 +38,7 @@ TEST_ENV = {
 
 @pytest.fixture(autouse=True)
 def test_env(monkeypatch):
-    """테스트 기준 설정을 한 곳에서 정한다 (A.28)."""
+    """테스트 기준 설정을 한 곳에서 정한다."""
     for name, value in TEST_ENV.items():
         monkeypatch.setenv(name, value)
     get_settings.cache_clear()
@@ -46,7 +46,7 @@ def test_env(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_real_llm(monkeypatch):
-    """테스트는 실제 API를 부르지 않는다 (부록 A.17).
+    """테스트는 실제 API를 부르지 않는다.
 
     OpenAI 설정은 test_env가 비운다. 여기서는 실제 네트워크 전송 계층만 막는다.
     TestClient는 자체 transport를 쓰므로 막히지 않는다.
@@ -111,7 +111,7 @@ def use_db_path(monkeypatch):
 
 
 def make_task(pack, *, revision=1, source_ref="scenario:new_task", **overrides):
-    """scenario의 신규 작업 A를 기본값으로 Task를 만든다. fields는 CONFIRMED (부록 A.10)."""
+    """scenario의 신규 작업 A를 기본값으로 Task를 만든다. fields는 CONFIRMED."""
     data = pack.new_task.model_dump(exclude={"requested"})
     data.update(overrides)
     critical = pack.work_types[data["work_type"]].critical_fields
@@ -132,7 +132,7 @@ def add_task(pack, task):
 
 
 def add_run(pack, run_id="run_test", **changes):
-    """테스트용 Replanning Run (RUNNING). 3b 전에는 START_RUN 핸들러 대신 이것으로 만든다."""
+    """테스트용 Replanning Run (RUNNING). START_RUN 핸들러를 거치지 않고 직접 만든다."""
     data = {
         "run_id": run_id,
         "agent_type": "REPLANNING",
@@ -171,7 +171,7 @@ def with_a(seeded):
 
 @pytest.fixture
 def coordination_on(monkeypatch):
-    """COORDINATION_ENABLED를 켠다(기본안 A, 부록 A.24). 테스트 기준값은 꺼짐(test_env)."""
+    """COORDINATION_ENABLED를 켠다(기본안 A). 테스트 기준값은 꺼짐(test_env)."""
     from app.config import get_settings
 
     monkeypatch.setenv("COORDINATION_ENABLED", "true")
@@ -183,7 +183,7 @@ def coordination_on(monkeypatch):
 
 @pytest.fixture
 def event_response_on(monkeypatch):
-    """EVENT_RESPONSE_ENABLED를 켠다(부록 A.25). 테스트 기준값은 꺼짐(test_env)."""
+    """EVENT_RESPONSE_ENABLED를 켠다. 테스트 기준값은 꺼짐(test_env)."""
     from app.config import get_settings
 
     monkeypatch.setenv("EVENT_RESPONSE_ENABLED", "true")

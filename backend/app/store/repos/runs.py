@@ -1,4 +1,4 @@
-"""agent_run·agent_step·solver_job 기록과 조회 (설계서 §5.1·§11.2–§11.4, 부록 A.16).
+"""agent_run·agent_step·solver_job 기록과 조회.
 
 상태 전이는 조건부 UPDATE로 한다. 종료 Run 부활·카운터 감소·완료 step 변경은 트리거도 막는다.
 """
@@ -10,7 +10,7 @@ from app.domain.models import AgentRun
 from app.store.repos._rows import dumps, loads, rows
 
 ACTIVE = ("RUNNING", "WAITING_HUMAN")
-# 열린 Case를 이루는 agent_type (A.16·A.23). Coordination의 Case 관계는 그 Agent를 붙일 때 정한다.
+# 열린 Case를 이루는 agent_type. Coordination의 Case 관계는 그 Agent를 붙일 때 정한다.
 CASE_AGENT_TYPES = ("REPLANNING",)
 
 
@@ -54,7 +54,7 @@ def reserve_step(
     """Run이 RUNNING이면 새 step_no를 발급해 RESERVED step을 만들고 step·LLM 시도를 1씩 차감한다.
 
     observed = (context_version, plan_revision, wake_seq). 관찰한 wake_seq를 handled_wake_seq로
-    기록한다(§11.3(3)). RUNNING이 아니면 None.
+    기록한다. RUNNING이 아니면 None.
     """
     row = tx.execute(
         "UPDATE agent_run SET last_step_no = last_step_no + 1, steps_used = steps_used + 1,"
@@ -178,7 +178,7 @@ def charge(tx: sqlite3.Connection, run_id: str, **amounts: float) -> None:
 def enter_wait(
     tx: sqlite3.Connection, run_id: str, wait_kind: str, wait_ref: str, observed_wake_seq: int
 ) -> bool:
-    """대기 진입 재확인(I-19): 관찰 이후 새 변화(wake_seq)가 없을 때만 RUNNING → WAITING_HUMAN,
+    """대기 진입 재확인: 관찰 이후 새 변화(wake_seq)가 없을 때만 RUNNING → WAITING_HUMAN,
     wait_generation += 1. 변화가 있으면 False(호출한 쪽이 NEW_CHANGE_BEFORE_WAIT로 다시 관찰)."""
     cur = tx.execute(
         "UPDATE agent_run SET status = 'WAITING_HUMAN', wait_kind = ?, wait_ref = ?,"
@@ -234,7 +234,7 @@ def finish_solver_job(
 
 
 def tried_search_keys(conn: sqlite3.Connection, site_id: str) -> set[str]:
-    """site에서 이미 시도한 실효 탐색 키 (RESERVED·REGISTERED, 부록 A.16·A.21)."""
+    """site에서 이미 시도한 실효 탐색 키 (RESERVED·REGISTERED)."""
     return {
         r["search_key"]
         for r in rows(
@@ -267,7 +267,7 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
                 "step_no": r["step_no"],
                 "job_status": r["job_status"],
                 "scope_level": r["scope_level"],
-                "try_resources": loads(r["resource_alternatives"]),  # TRY 시도 (A.21)
+                "try_resources": loads(r["resource_alternatives"]),  # TRY 시도
                 "search_key": r["search_key"],
                 "stage1": None
                 if s1 is None
@@ -280,7 +280,7 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
 
 
 def run_for_solver_result(conn: sqlite3.Connection, solver_result_id: str) -> str | None:
-    """후보 → Run 연결: candidate.solver_result_id → solver_job (부록 A.16)."""
+    """후보 → Run 연결: candidate.solver_result_id → solver_job."""
     row = conn.execute(
         "SELECT run_id FROM solver_job WHERE solver_result_id = ?", (solver_result_id,)
     ).fetchone()
@@ -288,7 +288,7 @@ def run_for_solver_result(conn: sqlite3.Connection, solver_result_id: str) -> st
 
 
 def has_open_case(conn: sqlite3.Connection, site_id: str) -> bool:
-    """열린 Case = CASE_AGENT_TYPES Run이 RUNNING 또는 WAITING_HUMAN (부록 A.16·A.23)."""
+    """열린 Case = CASE_AGENT_TYPES Run이 RUNNING 또는 WAITING_HUMAN."""
     marks = ", ".join("?" for _ in CASE_AGENT_TYPES)
     return bool(
         conn.execute(

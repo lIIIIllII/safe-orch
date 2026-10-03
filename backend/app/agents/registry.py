@@ -1,4 +1,4 @@
-"""agent_type별 등록부 (설계서 §11.1·§18.2.1, 부록 A.23).
+"""agent_type별 등록부.
 
 agent_type마다 AgentSpec·prompt·Observation 계산(observer)·Action 실행기(executor)·exec_contract_version을
 묶는다. 이 모듈을 import하는 곳은 runtime(과 테스트)뿐이고, observers·executors를 import하는 곳은 이
@@ -29,27 +29,27 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=replanning_prompt,
         observer=replanning_observer,
         executor=ReplanningExecutor,
-        exec_contract_version="replanning-d5",  # 기록만 (A.16·A.21)
+        exec_contract_version="replanning-d5",  # 기록만
     ),
     coordination_spec.AGENT_TYPE: AgentBinding(
         spec=coordination_spec.SPEC,
         prompt=coordination_prompt,
         observer=coordination_observer,
         executor=CoordinationExecutor,
-        exec_contract_version="coordination-a24",  # 기록만 (A.24)
+        exec_contract_version="coordination-a24",  # 기록만
     ),
     event_response_spec.AGENT_TYPE: AgentBinding(
         spec=event_response_spec.SPEC,
         prompt=event_response_prompt,
         observer=event_response_observer,
         executor=EventResponseExecutor,
-        exec_contract_version="event-response-a25",  # 기록만 (A.25)
+        exec_contract_version="event-response-a25",  # 기록만
     ),
     intake_spec.AGENT_TYPE: AgentBinding(
         spec=intake_spec.SPEC,
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-a26",  # 기록만 (A.26)
+        exec_contract_version="intake-a26",  # 기록만
     ),
 }

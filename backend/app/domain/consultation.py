@@ -1,4 +1,4 @@
-"""Consultation 계산 (설계서 §9.3, 부록 A.14). DB를 읽지 않는 순수 함수다.
+"""Consultation 계산. DB를 읽지 않는 순수 함수다.
 
 item은 후보 snapshot의 사실과 Consent로 만들고, 상태는 저장하지 않고 조회할 때 계산한다.
 """
@@ -76,7 +76,7 @@ def item_statuses(
     waived_task_ids: Iterable[str],
     answers: Mapping[str, ItemStatus] | None = None,
 ) -> dict[str, ItemStatus]:
-    """item의 실효 상태. WAIVE decision이 덮으면 WAIVED, 그다음 담당자 답(A.24), 아니면 base_status.
+    """item의 실효 상태. WAIVE decision이 덮으면 WAIVED, 그다음 담당자 답, 아니면 base_status.
 
     answers: change_hash → ACCEPTED·OBJECTED·OBJECTION_DRAFT_PENDING (변경 요청의 답과 제약 초안).
     """
@@ -89,7 +89,7 @@ def item_statuses(
 
 
 def items_status(statuses: Iterable[str]) -> ConsultationStatus:
-    """item만 본 상태 (§9.3 표). 승인 8단계는 이 값으로 판정한다."""
+    """item만 본 상태. 승인 8단계는 이 값으로 판정한다."""
     found = set(statuses)
     if found & BLOCKING:
         return "BLOCKED"
@@ -101,7 +101,7 @@ def items_status(statuses: Iterable[str]) -> ConsultationStatus:
 def consultation_status(
     statuses: Iterable[str], *, committed: bool, stale: bool, rejected: bool
 ) -> ConsultationStatus:
-    """COMMITTED → COMPLETE, STALE·REJECTED → CANCELLED, 그다음 item 상태 (부록 A.14)."""
+    """COMMITTED → COMPLETE, STALE·REJECTED → CANCELLED, 그다음 item 상태."""
     if committed:
         return "COMPLETE"
     if stale or rejected:

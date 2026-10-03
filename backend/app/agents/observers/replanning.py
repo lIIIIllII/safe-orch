@@ -1,9 +1,9 @@
-"""Replanning Observation과 Available Actions 계산 (설계서 §11.2 observe·§11.7, 부록 A.16·A.23).
+"""Replanning Observation과 Available Actions 계산.
 
 읽기 전용이다. Snapshot은 메모리에서만 만들고(hash만 계산) 저장은 Solver 예약 tx에서 한다.
 observe 노드와 Gateway 예약 tx가 같은 함수로 계산한다(Gateway는 최신 tx 안에서 다시 계산).
 agent_type 공통 부분(Observation, budget_remaining)은 app.agents.observe에 있다. 이 모듈을 import하는
-곳은 registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다 (A.23).
+곳은 registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다.
 """
 
 import sqlite3
@@ -38,7 +38,7 @@ class Observation(common.Observation):
 def primary_conflict(
     facts: SnapshotContent, conflicts: list[Conflict], run: AgentRun
 ) -> Conflict | None:
-    """input_ref.conflict와 같은 충돌, 없으면 acting_unit 작업을 포함한 첫 충돌 (A.15·A.16)."""
+    """input_ref.conflict와 같은 충돌, 없으면 acting_unit 작업을 포함한 첫 충돌."""
     ref = run.input_ref.get("conflict") or {}
     for c in conflicts:
         if c.rule_id == ref.get("rule_id") and list(c.task_ids) == list(ref.get("task_ids", [])):
@@ -56,7 +56,7 @@ def current_snapshot(conn: sqlite3.Connection, pack: LoadedPack) -> Snapshot:
 
 
 def level_keys(snapshot: Snapshot, primary: Conflict, acting_unit_id: str) -> dict[str, str]:
-    """level별 실효 탐색 키(A.21). 만들 수 없는 level(NO_ACTING_TASKS 등)은 뺀다."""
+    """level별 실효 탐색 키. 만들 수 없는 level(NO_ACTING_TASKS 등)은 뺀다."""
     out = {}
     for level in spec.LEVELS:
         try:
@@ -67,14 +67,14 @@ def level_keys(snapshot: Snapshot, primary: Conflict, acting_unit_id: str) -> di
 
 
 def resources_hash(facts: SnapshotContent) -> str:
-    """자원 사실의 hash. 자원 조회 결과는 이 값이 같은 동안 유효하다 (A.21 5)."""
+    """자원 사실의 hash. 자원 조회 결과는 이 값이 같은 동안 유효하다."""
     return canonical_hash([r.model_dump(mode="json") for r in facts.resources])
 
 
 def assignable_resources(facts: SnapshotContent, task: Task, acting_unit_id: str) -> dict[str, Any]:
-    """LIST_ASSIGNABLE_RESOURCES 결과. A.11 TRY 필터와 같은 기준(유형·allowed_unit_ids·가용 구간).
+    """LIST_ASSIGNABLE_RESOURCES 결과. TRY 필터와 같은 기준(유형·allowed_unit_ids·가용 구간).
 
-    유형이 다른 자원은 대상이 아니므로 목록에 넣지 않는다(excluded는 같은 유형만, A.21 2단계 기록).
+    유형이 다른 자원은 대상이 아니므로 목록에 넣지 않는다(excluded는 같은 유형만).
     """
     current = facts.base_assignments()[task.task_id].resource_id
     assignable, excluded = [], []
@@ -134,7 +134,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     facts = snapshot.facts()
     conflicts = detect_conflicts(snapshot, facts.check_assignments(), pack)
     primary = primary_conflict(facts, conflicts, run)
-    # 미시도 판정은 실효 탐색 키(Solver 입력)로 한다. 무결성 hash가 아니다 (A.21)
+    # 미시도 판정은 실효 탐색 키(Solver 입력)로 한다. 무결성 hash가 아니다
     tried = tried_search_keys(conn, pack.site_id)
     keys = level_keys(snapshot, primary, run.acting_unit_id) if primary else {}
     untried = [lv for lv, k in keys.items() if k not in tried]
@@ -185,7 +185,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     last_guard = (
         steps[-1]["guard"] if steps and steps[-1]["guard"]["verdict"] == "REJECTED" else None
     )
-    # 유효한 자원 조회 결과 + 아직 시도하지 않은 대체 자원 (A.21 5). resources_hash는 모델에 보이지 않는다.
+    # 유효한 자원 조회 결과 + 아직 시도하지 않은 대체 자원. resources_hash는 모델에 보이지 않는다.
     listings = []
     for tid, r in sorted(valid_listings(steps, facts).items()):
         alternatives = [
@@ -223,18 +223,18 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "constraints": [c.model_dump(mode="json") for c in facts.constraints],
         "consents": [c.model_dump(mode="json") for c in facts.consents if c.task_id in acting_ids],
         "untried_levels": untried,
-        # search_key는 내부 계산(시도 여부)에만 쓰고 모델에는 보이지 않는다 (A.17·A.21)
+        # search_key는 내부 계산(시도 여부)에만 쓰고 모델에는 보이지 않는다
         "attempts": [{k: v for k, v in a.items() if k != "search_key"} for a in attempts],
         "latest_validation": latest_validation,
-        # 이 Case 후보에 대한 Supervisor 거절. comment는 인용 데이터다 (§9.2, A.17·A.21)
+        # 이 Case 후보에 대한 Supervisor 거절. comment는 인용 데이터다
         "rejections": list_case_rejections(conn, run.case_id),
         "assignable_resources": listings,
-        # 이 Case가 담당자에게 보낸 질문과 답. comment는 인용 데이터다 (A.17·A.21)
+        # 이 Case가 담당자에게 보낸 질문과 답. comment는 인용 데이터다
         "human_replies": list_case_replies(conn, run.case_id),
         "last_guard": last_guard,
         "recent_steps": recent,
         "budget_remaining": budget_remaining(run, spec.SPEC),
-        "work_intervals": [list(iv) for iv in facts.work_intervals],  # 근무 달력 (A.20)
+        "work_intervals": [list(iv) for iv in facts.work_intervals],  # 근무 달력
     }
     return Observation(
         run=run,

@@ -1,4 +1,4 @@
-"""seed와 조회 (부록 A.6). 조회값이 부록 A.5 표·A.8 fields와 같은지 확인한다."""
+"""seed와 조회. 조회값이 Pack 값·fields 모양과 같은지 확인한다."""
 
 import json
 
@@ -116,7 +116,7 @@ EXPECTED_TASKS = {
           (False, False)),
     "E": ("UB", "planner_b", "PAINTING", ("FLAMMABLE",), "D2", 30, 45, 120, 150, None, None,
           (True, False)),
-    # 시연 확장 (부록 A.20): 모두 고정
+    # 시연 확장: 모두 고정
     "K": ("UB", "planner_b", "LIFTING", ("LIFTING",), "F", 120, 1440, 1440, 1560, "GANTRY",
           "SITE-GC-01", (False, False)),
     "M": ("UA", "foreman_a2", "WORK_BELOW", ("WORK_BELOW",), "H", 90, 2910, 2910, 3000, None,

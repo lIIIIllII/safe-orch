@@ -1,7 +1,7 @@
-"""Independent Validator (설계서 §8, 부록 A.13).
+"""Independent Validator.
 
 Snapshot·SearchSpec을 데이터로 읽어 후보의 전체 계획을 검사한다. DB를 읽지 않는 순수 함수이고,
-어떤 후보가 들어와도 예외를 내지 않는다. app.solver를 import하지 않는다(I-11).
+어떤 후보가 들어와도 예외를 내지 않는다. app.solver를 import하지 않는다.
 """
 
 from collections import Counter
@@ -29,12 +29,12 @@ BASIC_TO_CHECK = {
     "DURATION": "C03",
     "WINDOW": "C04",
     "PRECEDENCE": "C05",
-    "PREDECESSOR_MISSING": "C05",  # 선행 작업 누락 (부록 A.22)
+    "PREDECESSOR_MISSING": "C05",  # 선행 작업 누락
     "RESOURCE_MISSING": "C07",
     "RESOURCE_TYPE": "C07",
     "RESOURCE_AUTH": "C08",
     "AVAILABILITY": "C09",
-    "CALENDAR": "C04",  # 근무 달력 (부록 A.20)
+    "CALENDAR": "C04",  # 근무 달력
 }
 RULE_TYPE_TO_CHECK = {"CAPACITY": "C09", "SEPARATION": "C10"}
 NOT_MOVABLE = Movable(time=False, resource=False)
@@ -123,7 +123,7 @@ def _c06(
             out.append(("C06", (tid,), "RESOURCE_AXIS_NOT_ALLOWED"))
         if ax.resource and a.resource_id not in {ref.resource_id, *alternatives.get(tid, ())}:
             out.append(("C06", (tid,), "RESOURCE_NOT_IN_SPEC"))
-    # 확인된 제약은 search_spec과 관계없이 따로 확인한다 (I-10)
+    # 확인된 제약은 search_spec과 관계없이 따로 확인한다
     for c in facts.constraints:
         a = usable.get(c.task_id)
         if a is None:
@@ -141,7 +141,7 @@ def _c06(
 
 
 def _field_values(t: Task) -> dict[str, Any]:
-    """task 컬럼 값을 A.8 fields 모양으로."""
+    """task 컬럼 값을 fields 모양으로."""
     return {
         "zone_id": t.zone_id,
         "duration": t.duration,

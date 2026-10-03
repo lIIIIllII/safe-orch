@@ -1,4 +1,4 @@
-"""Agent 실행 계층 3a (설계서 §11.2·§11.4·§11.6·§11.7, 부록 A.16). 스크립트 LLM. T43·T48·T49·T51."""
+"""Agent 실행 계층. 스크립트 LLM. T43·T48·T49·T51."""
 
 import json
 import sqlite3
@@ -101,7 +101,7 @@ def test_same_effective_spec_is_not_retried_site_wide(with_a):
     _run(with_a, [solve("L0"), solve("L1")])
     # 같은 사실 위의 새 Run: L0·L1·L2 모두 같은 실효 SearchSpec을 이미 시도했다
     run, steps, model = _run(with_a, [solve("L2"), escalate()], run_id="run_2")
-    # 계산 Action은 없다. 자원 조회(A·C)는 Solver를 부르지 않으므로 남는다 (A.21 5)
+    # 계산 Action은 없다. 자원 조회(A·C)는 Solver를 부르지 않으므로 남는다
     assert model.tool_names(0) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
     assert _guards(steps)[0] == ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE")
     assert run.status == "ESCALATED" and run.solver_calls_used == 0
@@ -160,7 +160,7 @@ def test_malformed_twice_escalates(with_a, bad):
 
 
 def test_malformed_count_restarts_after_other_result(with_a):
-    """바로 앞 COMPLETED step만 본다. 사이에 ACTION_NOT_AVAILABLE이 있으면 다시 센다 (A.22)."""
+    """바로 앞 COMPLETED step만 본다. 사이에 ACTION_NOT_AVAILABLE이 있으면 다시 센다."""
     bad = AIMessage(content="L1로 하겠습니다")
     run, steps, _ = _run(with_a, [solve("L0"), bad, solve("L0"), bad, escalate()])
     assert _guards(steps) == [
@@ -310,11 +310,11 @@ def test_t51_run_step_triggers(with_a, sql, match):
 def test_t51_error_run_can_continue_but_terminal_cannot(with_a):
     run, _, _ = _run(with_a, [])
     assert run.status == "ERROR"
-    with db.write() as tx:  # §12 continue: ERROR → RUNNING은 허용
+    with db.write() as tx:  # continue: ERROR → RUNNING은 허용
         tx.execute("UPDATE agent_run SET status = 'RUNNING', end_reason = NULL")
 
 
-# ── agent_type 등록부 (부록 A.23) ──────────────────────────────
+# ── agent_type 등록부 ──────────────────────────────
 
 
 def test_registry_binds_replanning_spec_prompt_observer_executor():
@@ -350,7 +350,7 @@ def test_unregistered_agent_type_ends_run_as_error_without_graph(with_a):
 
 
 def test_agent_auto_start_is_on_by_default(monkeypatch):
-    """운영 기본값 (A.28): Coordination·Event Response 자동 시작은 켜짐이고 설정은 끄는 스위치다.
+    """운영 기본값: Coordination·Event Response 자동 시작은 켜짐이고 설정은 끄는 스위치다.
 
     테스트는 .env를 읽지 않고 conftest가 둘 다 끈다. 환경변수를 지우면 코드 기본값이 보인다.
     """

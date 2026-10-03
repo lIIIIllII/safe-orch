@@ -1,4 +1,4 @@
-"""로컬 DB 초기화 (부록 A.3). backend에서 실행한다.
+"""로컬 DB 초기화. backend에서 실행한다.
 
     uv run python -m scripts.reset_db [--pack shipyard]
 

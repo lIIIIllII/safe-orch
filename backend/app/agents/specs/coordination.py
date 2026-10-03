@@ -1,9 +1,9 @@
-"""Coordination AgentSpec (설계서 §18.2.1·§18.2.2, 부록 A.24). 순수 데이터: Goal, Action 스키마, Budget.
+"""Coordination AgentSpec. 순수 데이터: Goal, Action 스키마, Budget.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
 phase CONSULT(후보의 협의): SEND_CHANGE_REQUEST, WAIT_FOR_REPLIES, DRAFT_CONSTRAINT.
 phase NOTICE(확정 뒤 통지): SEND_NOTICE. 두 phase 모두 REPORT_TO_SUPERVISOR, ESCALATE.
-협의 완료는 서버가 계산하고, 이견은 담당자가 확인한 뒤에만 제약이 된다(I-13).
+협의 완료는 서버가 계산하고, 이견은 담당자가 확인한 뒤에만 제약이 된다.
 """
 
 from typing import Any, ClassVar, Literal
@@ -18,8 +18,8 @@ GOAL = (
     "알린다. 협의 완료를 선언하지 않고, 이견을 담당자 확인 없이 제약으로 만들지 않는다."
 )
 
-MAX_STEPS = 12  # §18.2.1 표
-MAX_LLM_ATTEMPTS = 24  # step × 2 (Replanning과 같은 규칙, A.24)
+MAX_STEPS = 12
+MAX_LLM_ATTEMPTS = 24  # step × 2 (Replanning과 같은 규칙)
 RECURSION_LIMIT = MAX_STEPS * 5 + 10
 SUMMARY_MAX = 200
 TEXT_MAX = 300  # 모델이 쓰는 설명(agent_text) 길이
@@ -122,11 +122,11 @@ FLOW = {
     "REPORT_TO_SUPERVISOR": "DONE",
     "ESCALATE": "DONE",
 }
-REASON_CODES = ("TASK_IMMOVABLE",)  # 제약을 만드는 사유(§9.2와 같음)
+REASON_CODES = ("TASK_IMMOVABLE",)  # 제약을 만드는 사유
 
 
 def choices(obs: dict[str, Any]) -> dict[str, Any]:
-    """Action별 허용 값. Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다 (A.24 1·7).
+    """Action별 허용 값. Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다.
 
     REQUEST: 후보가 살아 있고 PENDING이며 이 Run의 변경 요청이 없는 항목.
     DRAFT: 이견(DECLINE + 사유)으로 답한 이 Run의 변경 요청 중 확인 대기 초안이 없는 것

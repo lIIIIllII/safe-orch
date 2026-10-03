@@ -1,9 +1,9 @@
-"""Replanning AgentSpec (설계서 §11.7, 부록 A.16). 순수 데이터: Goal, Action 스키마, Budget, 사용 조건.
+"""Replanning AgentSpec. 순수 데이터: Goal, Action 스키마, Budget, 사용 조건.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터(untried_levels 등)만 보고 계산한다.
 Action: SOLVE_WITH_SCOPE, LIST_ASSIGNABLE_RESOURCES, TRY_ALTERNATIVE_RESOURCE, ASK_TASK_OWNER,
-ESCALATE_NO_SOLUTION (A.21 5). ASK는 계산으로 시도할 범위가 없을 때만 연다(A.21 0-2, 서버 정책).
-모듈 이름(GOAL, ACTIONS, tool_schemas 등)은 그대로 두고, 그 값으로 SPEC(AgentSpec)을 만든다 (A.23).
+ESCALATE_NO_SOLUTION. ASK는 계산으로 시도할 범위가 없을 때만 연다(서버 정책).
+모듈 이름(GOAL, ACTIONS, tool_schemas 등)은 그대로 두고, 그 값으로 SPEC(AgentSpec)을 만든다.
 """
 
 from typing import Any, ClassVar, Literal
@@ -19,7 +19,7 @@ GOAL = (
 )
 
 MAX_STEPS = 15
-MAX_LLM_ATTEMPTS = 30  # step × 2 (전송 재시도 1회 계상, 블루프린트에 없는 값)
+MAX_LLM_ATTEMPTS = 30  # step × 2 (전송 재시도 1회 계상)
 MAX_HUMAN_ROUNDS = 2
 MAX_SOLVER_CALLS = 6
 RECURSION_LIMIT = MAX_STEPS * 5 + 10
@@ -32,7 +32,7 @@ class Action(BaseModel):
     """모든 Action의 공통 인자. decision_summary는 저장할 때 200자로 자른다."""
 
     model_config = ConfigDict(extra="forbid")
-    # 열리는 조건 한 줄. prompt의 "도구 전체와 열리는 조건" 절이 이것으로 만든다 (A.21 p7).
+    # 열리는 조건 한 줄. prompt의 "도구 전체와 열리는 조건" 절이 이것으로 만든다.
     # 실제 실행 가능 여부는 available_actions가 정한다(이 문장은 안내일 뿐이다).
     OPENS: ClassVar[str] = ""
 
@@ -122,7 +122,7 @@ FLOW = {
 
 
 def choices(obs: dict[str, Any]) -> dict[str, Any]:
-    """작업별 허용 값 (A.21 5). Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다.
+    """작업별 허용 값. Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다.
 
     LIST: 주 충돌의 L0 작업(acting) 중 필요 자원이 있고 RESOURCE 축이 제약으로 막히지 않았으며 같은
     자원 사실에서 아직 조회하지 않은 것. TRY 범위(주 충돌 L0 + 대체 자원)와 맞춘다.
@@ -190,7 +190,7 @@ def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "task_id": sorted(c["TRY"]),
             "resource_id": _union(c["TRY"]),
         }
-    # 사람에게는 계산으로 할 수 있는 탐색을 먼저 한 뒤에만 묻는다 (A.21 0-2)
+    # 사람에게는 계산으로 할 수 있는 탐색을 먼저 한 뒤에만 묻는다
     if c["ASK"] and not obs["untried_levels"] and budget["human_rounds"] > 0:
         out["ASK_TASK_OWNER"] = {
             "task_id": sorted(c["ASK"]),

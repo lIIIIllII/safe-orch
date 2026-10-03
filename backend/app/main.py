@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
     db.init_db()
     pack = load_pack(pack_dir(get_settings().pack))
     with db.read() as conn:
-        ensure_pack_matches(conn, pack)  # 다르면 기동 거절, 자동 reset 없음 (부록 A.4)
+        ensure_pack_matches(conn, pack)  # 다르면 기동 거절, 자동 reset 없음
     app.state.pack = pack
     app.state.worker = None
     settings = get_settings()
@@ -53,7 +53,7 @@ def api_error(request: Request, exc: ApiError) -> JSONResponse:
 
 @app.exception_handler(RequestValidationError)
 def invalid_body(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """본문 검증 실패(모르는 필드·형식)도 §12 모양으로. 명령 함수는 부르지 않는다 (A.18)."""
+    """본문 검증 실패(모르는 필드·형식)도 공통 응답 모양으로. 명령 함수는 부르지 않는다."""
     pack = getattr(request.app.state, "pack", None)
     detail = jsonable_encoder(exc.errors())
     return JSONResponse(envelope("REJECTED", ["INVALID_BODY"], pack, detail), status_code=422)

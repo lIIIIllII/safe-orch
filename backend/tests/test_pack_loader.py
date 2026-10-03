@@ -1,4 +1,4 @@
-"""Pack 로더 (설계서 §5.3, 부록 A.4). T29·T30과 pack_hash, 기동 시 확인."""
+"""Pack 로더. T29·T30과 pack_hash, 기동 시 확인."""
 
 import pytest
 import yaml
@@ -217,7 +217,7 @@ def test_t30_below_forward_only(pack_copy):
 
 
 def test_scenario_requested_start_must_equal_earliest_start(pack_copy):
-    """신규 작업의 기준 배정 = (earliest_start, 요청 자원) (부록 A.10)."""
+    """신규 작업의 기준 배정 = (earliest_start, 요청 자원)."""
     _edit(pack_copy, "scenario.yaml", lambda d: d["new_task"]["requested"].update(start=10, end=40))
     assert "requested.start 10 != earliest_start 0" in _reasons(pack_copy)
 
@@ -249,7 +249,7 @@ def test_available_intervals_disjoint_sorted_accepted(pack_copy):
     assert load_pack(pack_copy).resources[0].available_intervals == ((0, 60), (61, 180))
 
 
-# ── 근무 달력·표시 정보·시연값 (부록 A.20) ─────────────────────
+# ── 근무 달력·표시 정보·시연값 ─────────────────────
 
 
 def test_calendar_timezone_and_display_names_loaded(pack):
@@ -347,7 +347,7 @@ def test_demo_event_target_must_exist(pack_copy):
     assert "undefined task 'X9'" in _reasons(pack_copy)
 
 
-# ── 판정 기준 정리 (부록 A.22) ─────────────────────────────────
+# ── 판정 기준 정리 ─────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -421,7 +421,7 @@ def test_demo_request_predecessors_key_not_accepted(pack_copy):
     assert "scenario.yaml.demo_requests[0].predecessors: Extra inputs" in _reasons(pack_copy)
 
 
-# ── prompt 현장 문구 (부록 A.23) ───────────────────────────────
+# ── prompt 현장 문구 ───────────────────────────────
 
 
 def test_site_description_loaded(pack):
@@ -461,7 +461,7 @@ def test_horizon_start_must_be_iso_with_offset(pack_copy, value):
     assert "horizon_start_utc must be an ISO time with offset" in _reasons(pack_copy)
 
 
-# ── 자연어 요청 시연값 (부록 A.26) ─────────────────────────────
+# ── 자연어 요청 시연값 ─────────────────────────────
 
 
 def test_demo_intakes_loaded(pack):

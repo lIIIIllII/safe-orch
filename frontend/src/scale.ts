@@ -1,4 +1,4 @@
-// 타임라인 위치 계산 (부록 A.20 2차, A.21 "타임라인 가시성"). 분 → x(px). 화면 폭에 맞추지 않고 분당 픽셀로
+// 타임라인 위치 계산. 분 → x(px). 화면 폭에 맞추지 않고 분당 픽셀로
 // 그리며 넘치면 가로 스크롤한다. "근무시간 맞춤"만 패널 폭에서 분당 픽셀을 거꾸로 계산한다.
 // 하루 보기: 그날 근무 구간 앞뒤 VIEW_MARGIN_MIN을 함께 보여 준다(앞뒤는 비근무 표시). 맞춤이면 근무 구간만.
 // 전체 보기: 근무 구간을 잇고 근무일 사이 밤은 NIGHT_STRIP_PX 폭 띠로 접는다.
@@ -9,7 +9,7 @@ export const VIEW_MARGIN_MIN = 60
 export const NIGHT_STRIP_PX = 24
 const MIN_BAR_PX = 3
 const EDGE_MARKER_PX = 14
-/** 하루 보기 분당 픽셀 단계와 기본값(30분 = 90px), 전체 보기 기본값 (A.21 타임라인 가시성) */
+/** 하루 보기 분당 픽셀 단계와 기본값(30분 = 90px), 전체 보기 기본값 */
 export const DAY_ZOOMS = [2, 3, 4, 6] as const
 export const DAY_ZOOM_DEFAULT = 3
 export const ALL_ZOOM_DEFAULT = 1

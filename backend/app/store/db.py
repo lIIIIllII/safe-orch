@@ -1,4 +1,4 @@
-"""SQLite 연결과 트랜잭션 (설계서 §5.4).
+"""SQLite 연결과 트랜잭션.
 
 - 연결은 스레드별. isolation_level=None으로 자동 트랜잭션을 끄고 명시적으로 연다.
 - 모든 쓰기는 write() 안에서만. BEGIN IMMEDIATE가 site lock 역할을 한다.
@@ -84,7 +84,7 @@ def read() -> Iterator[sqlite3.Connection]:
 
 @contextmanager
 def read_tx() -> Iterator[sqlite3.Connection]:
-    """단일 읽기 트랜잭션(BEGIN ~ COMMIT). 여러 조회가 같은 시점을 본다 (§12 state, 부록 A.18)."""
+    """단일 읽기 트랜잭션(BEGIN ~ COMMIT). 여러 조회가 같은 시점을 본다."""
     conn = connect()
     if conn.in_transaction:
         raise NestedTransactionError("read_tx() called inside an open transaction")
@@ -118,11 +118,11 @@ def schema_statements() -> list[str]:
 
 
 def rebuild_schema(tx: sqlite3.Connection) -> None:
-    """write() 안에서 모든 테이블을 지우고 schema.sql을 다시 적용한다 (/dev/reset, 부록 A.18).
+    """write() 안에서 모든 테이블을 지우고 schema.sql을 다시 적용한다 (/dev/reset).
 
     파일을 지우지 않으므로 다른 스레드가 연결을 열어 두어도(Windows 파일 잠금) 된다.
     DROP TABLE의 암묵적 삭제는 트리거를 실행하지 않는다. FK는 커밋 때까지 미룬다.
-    executescript는 열린 tx를 먼저 커밋하므로 쓰지 않는다(A.3).
+    executescript는 열린 tx를 먼저 커밋하므로 쓰지 않는다.
     """
     tx.execute("PRAGMA defer_foreign_keys = ON")
     names = [
@@ -140,7 +140,7 @@ def rebuild_schema(tx: sqlite3.Connection) -> None:
 
 
 def init_db() -> None:
-    """빈 DB면 schema.sql을 한 트랜잭션으로 적용하고, 아니면 schema_version만 확인한다 (부록 A.3).
+    """빈 DB면 schema.sql을 한 트랜잭션으로 적용하고, 아니면 schema_version만 확인한다.
 
     버전이 다르면 아무것도 쓰지 않고 SchemaVersionMismatchError. 자동 초기화하지 않는다.
     executescript는 열린 트랜잭션을 먼저 COMMIT하므로 write() 안에서 부르지 않는다.

@@ -1,4 +1,4 @@
-"""scripts.reset_db (부록 A.3). 테스트는 임시 DB 파일만 쓴다."""
+"""scripts.reset_db. 테스트는 임시 DB 파일만 쓴다."""
 
 from app.store import db
 from scripts import reset_db

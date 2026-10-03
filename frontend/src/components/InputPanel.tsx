@@ -1,4 +1,4 @@
-// 입력: 작업 요청 폼, 지연 신고, 받은 요청(Inbox), 요청·대기열·Hold 목록 (§13, 부록 A.14·A.19·A.21).
+// 입력: 작업 요청 폼, 지연 신고, 받은 요청(Inbox), 요청·대기열·Hold 목록.
 // 클라이언트는 형식(시각·숫자 변환)만 확인하고 업무 규칙은 서버 판정을 보여 준다.
 
 import { useState } from 'react'
@@ -95,7 +95,7 @@ function emptyForm(firstDay: string): FormState {
   }
 }
 
-/** 작업 요청 폼. 시각은 근무일 select + HH:MM, 옆에 "= N분" (A.20 2차). 근무시간 밖은 막지 않고 안내만 한다. */
+/** 작업 요청 폼. 시각은 근무일 select + HH:MM, 옆에 "= N분". 근무시간 밖은 막지 않고 안내만 한다. */
 function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
   const { siteId, meta, clock, scenario } = useEnv()
   const firstDay = clock.workDays[0]?.key ?? ''
@@ -299,7 +299,7 @@ function TaskRequestForm({ state, actorId, roles, busy, run }: Props) {
   )
 }
 
-/** Plan 밖 READY 작업(해결 전 요청)·대기열(QUEUED)과 철회 (A.20 F-2, A.21 7).
+/** Plan 밖 READY 작업(해결 전 요청)·대기열(QUEUED)과 철회.
  * 작업 담당자나 SUPERVISOR만 버튼이 켜진다. 대기열은 접수 순서(state.task_queue)로 "대기 n번째". */
 function RequestList({ state, actorId, roles, busy, run }: Props) {
   const { meta, clock } = useEnv()
@@ -344,7 +344,7 @@ function RequestList({ state, actorId, roles, busy, run }: Props) {
 }
 
 function IntakeForm({ actorId, roles, busy, run }: Props) {
-  // 자연어 작업 요청 → Work Intake Agent (A.26). 값은 Agent가 묻고 요청자가 확인해야 확정된다.
+  // 자연어 작업 요청 → Work Intake Agent. 값은 Agent가 묻고 요청자가 확인해야 확정된다.
   const { siteId, scenario } = useEnv()
   const [taskId, setTaskId] = useState('')
   const [text, setText] = useState('')
@@ -362,7 +362,7 @@ function IntakeForm({ actorId, roles, busy, run }: Props) {
         <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} />
       </label>
       <div className="row span2">
-        {/* 시연 문장은 scenario(DEMO_MODE)에서만 받는다 (A.26) */}
+        {/* 시연 문장은 scenario(DEMO_MODE)에서만 받는다 */}
         {scenario?.intake_requests?.map((x) => (
           <button
             key={x.label}
@@ -435,7 +435,7 @@ function EventForm({ state, roles, busy, run }: Props) {
         <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} />
       </label>
       <div className="row span2">
-        {/* 신고 문구는 scenario(DEMO_MODE)에서만 받는다 (A.20 2차) */}
+        {/* 신고 문구는 scenario(DEMO_MODE)에서만 받는다 */}
         {scenario?.event_reports.map((e) => (
           <button
             key={e.label}

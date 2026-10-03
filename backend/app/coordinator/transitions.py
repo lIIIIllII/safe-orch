@@ -1,4 +1,4 @@
-"""Coordinator 핸들러 (설계서 §11.5, 부록 A.15·A.16). RECHECK·VALIDATE·BUILD_CONSULTATION·START_RUN.
+"""Coordinator 핸들러. RECHECK·VALIDATE·BUILD_CONSULTATION·START_RUN.
 
 핸들러는 job 1건을 처리하고, 효과와 job DONE을 같은 write 트랜잭션에서 기록한다. 같은 job을
 두 번 처리해도 효과는 1회다. app.solver를 import하지 않는다(Solver는 Replanning Run이 부른다).
@@ -43,10 +43,10 @@ Job = dict[str, Any]
 def choose_acting(
     facts: SnapshotContent, conflicts: list[Conflict], cause: dict[str, Any]
 ) -> tuple[str, Conflict]:
-    """acting_unit과 주 충돌 (부록 A.15).
+    """acting_unit과 주 충돌.
 
     cause 작업이 충돌에 있으면 그 Unit, 아니면 충돌 작업 중 Plan에 없는 요청 작업(task_id가 가장
-    작은 것)의 Unit, 그것도 없으면 충돌 작업 중 task_id가 가장 작은 작업의 Unit (A.20 보충: 철회 뒤
+    작은 것)의 Unit, 그것도 없으면 충돌 작업 중 task_id가 가장 작은 작업의 Unit (철회 뒤
     RECHECK처럼 cause 작업이 충돌에 없을 때 남은 요청의 요청자가 재계획한다).
     주 충돌 = detect_conflicts 순서에서 acting_unit 작업을 포함한 첫 충돌.
     """
@@ -65,7 +65,7 @@ def _acting_actor(
     tx: sqlite3.Connection, site_id: str, unit: str, cause: dict[str, Any]
 ) -> str | None:
     if cause.get("kind") in ("FORM", "QUEUE", "INTAKE"):
-        return cause.get("actor_id")  # 요청자 (대기열에서 올라온 요청도 요청자가 재계획한다, A.21)
+        return cause.get("actor_id")  # 요청자 (대기열에서 올라온 요청도 요청자가 재계획한다)
     planners = [
         a.actor_id
         for a in list_actors(tx, site_id)
@@ -75,7 +75,7 @@ def _acting_actor(
 
 
 def _reconfirm_candidate(snapshot_id: str, snapshot_hash: str, facts: SnapshotContent) -> Candidate:
-    """배정 = snapshot.base_assignments() (부록 A.14)."""
+    """배정 = snapshot.base_assignments()."""
     assignments = tuple(facts.base_assignments().values())
     return Candidate(
         candidate_id=new_id("cand"),
@@ -107,8 +107,8 @@ def _register_validate(tx: sqlite3.Connection, site_id: str, candidate_id: str) 
 
 def recheck(pack: LoadedPack, job: Job) -> None:
     """ACTIVE Hold 없음 ∧ 열린 Case 없음 ∧ (Plan이 현재 Context보다 뒤처짐 ∨ Plan 밖 READY 작업
-    있음)일 때만: 충돌이면 START_RUN 등록, 없으면 RECONFIRM 후보 + VALIDATE. 한 write 트랜잭션
-    (부록 A.15·A.16). START_RUN 키에 plan을 넣는다(확정은 context를 바꾸지 않는다, A.21 4)."""
+    있음)일 때만: 충돌이면 START_RUN 등록, 없으면 RECONFIRM 후보 + VALIDATE. 한 write 트랜잭션.
+    START_RUN 키에 plan을 넣는다(확정은 context를 바꾸지 않는다)."""
     site_id = pack.site_id
     cause = job["payload"].get("cause") or {}
     with db.write() as tx:
@@ -157,9 +157,9 @@ def recheck(pack: LoadedPack, job: Job) -> None:
 
 
 def validate_candidate(pack: LoadedPack, job: Job) -> None:
-    """Validator는 트랜잭션 밖에서 돌리고, 등록·후속 job·DONE은 한 write 트랜잭션 (부록 A.15).
+    """Validator는 트랜잭션 밖에서 돌리고, 등록·후속 job·DONE은 한 write 트랜잭션.
 
-    이미 validation이 있는 후보는 다시 검증하지 않는다. STALE 후보도 검증한다(A.13).
+    이미 validation이 있는 후보는 다시 검증하지 않는다. STALE 후보도 검증한다.
     """
     site_id = pack.site_id
     candidate_id = job["payload"]["candidate_id"]
@@ -183,8 +183,8 @@ def validate_candidate(pack: LoadedPack, job: Job) -> None:
         if not stored and validation is not None:
             insert_validation(tx, site_id, validation)
             stored = [validation]
-        # Solver 후보가 C01–C10 FAIL이면 모델·검증 불일치로 Run ERROR (§8, A.13·A.16).
-        # C11만 걸린 INCOMPLETE(비PASS)는 Run을 깨운다 (§11.5, A.21 3).
+        # Solver 후보가 C01–C10 FAIL이면 모델·검증 불일치로 Run ERROR.
+        # C11만 걸린 INCOMPLETE(비PASS)는 Run을 깨운다.
         candidate = get_candidate(tx, site_id, candidate_id)
         if (
             candidate is not None
@@ -210,7 +210,7 @@ def validate_candidate(pack: LoadedPack, job: Job) -> None:
 
 def build_consultation_job(pack: LoadedPack, job: Job) -> None:
     """Consultation 생성. 설정이 켜졌고 Run이 만든 후보에 동의 대기(PENDING) 항목이 있으면 같은 tx에서
-    Coordination 협의 Run을 등록한다(기본안 A, A.24 2). 꺼져 있으면 검토 대기(기본안 B)."""
+    Coordination 협의 Run을 등록한다(기본안 A). 꺼져 있으면 검토 대기(기본안 B)."""
     candidate_id = job["payload"]["candidate_id"]
     with db.write() as tx:
         build_consultation(tx, pack.site_id, candidate_id)
@@ -233,17 +233,17 @@ def _register_consult(tx: sqlite3.Connection, pack: LoadedPack, candidate_id: st
 
 
 def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, Any]) -> bool:
-    """START_RUN 처리 시점 재확인 (§11.5, A.16·A.24 2). agent_type별로 다르다."""
+    """START_RUN 처리 시점 재확인. agent_type별로 다르다."""
     site = get_site(tx, pack.site_id)
     assert site is not None
     if payload["agent_type"] == "INTAKE":
-        # 요청한 task_id가 아직 없을 때만 (A.26 1). 열린 Case·Hold와 무관하다(폼과 같다).
+        # 요청한 task_id가 아직 없을 때만. 열린 Case·Hold와 무관하다(폼과 같다).
         return not tx.execute(
             "SELECT 1 FROM task WHERE site_id = ? AND task_id = ?",
             (pack.site_id, payload.get("task_id")),
         ).fetchone()
     if payload["agent_type"] == "EVENT_RESPONSE":
-        # 그 Event의 Hold가 아직 걸려 있을 때만 (A.25 1). 열린 Case와 무관하다.
+        # 그 Event의 Hold가 아직 걸려 있을 때만. 열린 Case와 무관하다.
         hold = get_hold(tx, pack.site_id, payload.get("hold_id") or "")
         return hold is not None and hold["status"] == "ACTIVE"
     if payload["agent_type"] != "COORDINATION":
@@ -263,7 +263,7 @@ def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, 
 
 
 def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -> str | None:
-    """처리 시점에 Hold·열린 Case·(context, plan)을 다시 확인하고 맞으면 Run을 만든다 (A.16).
+    """처리 시점에 Hold·열린 Case·(context, plan)을 다시 확인하고 맞으면 Run을 만든다.
 
     Run 생성·job.run_id·DONE은 tx 하나. 그래프는 커밋 후 tx 밖에서 부른다. 만든 run_id를 반환한다.
     """
@@ -281,7 +281,7 @@ def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -
                 AgentRun(
                     run_id=run_id,
                     agent_type=payload["agent_type"],
-                    # Coordination은 후보 Run의 Case를 잇는다 (A.24 3)
+                    # Coordination은 후보 Run의 Case를 잇는다
                     case_id=payload.get("case_id") or new_id("case"),
                     acting_actor_id=payload.get("acting_actor_id"),
                     acting_unit_id=payload["acting_unit_id"],
@@ -307,7 +307,7 @@ def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -
 def resume_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -> bool:
     """RESUME_RUN: `WAITING_HUMAN ∧ wait_generation 일치` 조건부 claim과 job DONE을 tx 하나에서 한다.
 
-    0행이면 무효(이미 재개됨·세대 불일치·종료됨, §11.3(3)·I-17). 1행이면 tx 밖에서 같은 run_id로
+    0행이면 무효(이미 재개됨·세대 불일치·종료됨). 1행이면 tx 밖에서 같은 run_id로
     그래프를 observe부터 새로 호출한다. 변화는 wake_seq로 보존된다.
     """
     run_id, generation = job["run_id"], job["wait_generation"]

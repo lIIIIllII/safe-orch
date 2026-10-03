@@ -1,4 +1,4 @@
-"""그래프와 Gateway가 주고받는 값 (설계서 §11.2, 부록 A.16). store를 import하지 않는다."""
+"""그래프와 Gateway가 주고받는 값. store를 import하지 않는다."""
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -10,7 +10,7 @@ GatewayKind = Literal["CONTINUE", "WAIT", "DONE", "REJECTED", "INACTIVE"]
 
 @dataclass(frozen=True)
 class StepMeta:
-    """step마다 decide가 채운다. error_kind가 있으면 모델 응답이 없다(LLM_ERROR·LLM_CONFIG, A.17)."""
+    """step마다 decide가 채운다. error_kind가 있으면 모델 응답이 없다(LLM_ERROR·LLM_CONFIG)."""
 
     model_id: str
     prompt_version: str
@@ -21,7 +21,7 @@ class StepMeta:
 
 @dataclass(frozen=True)
 class GatewayResult:
-    """그래프 edge는 kind로만 분기한다(§11.1 경계 규칙 1). DONE이면 end_status로 Run을 끝낸다."""
+    """그래프 edge는 kind로만 분기한다. DONE이면 end_status로 Run을 끝낸다."""
 
     kind: GatewayKind
     reason: str | None = None
@@ -31,7 +31,7 @@ class GatewayResult:
 
 @dataclass(frozen=True)
 class AgentSpec:
-    """agent_type별 순수 데이터 (부록 A.23). graph는 이것만 받는다. store를 모른다.
+    """agent_type별 순수 데이터. graph는 이것만 받는다. store를 모른다.
 
     budget: 카운터 이름(steps·llm_attempts·human_rounds·solver_calls) → 한도.
     """
@@ -48,7 +48,7 @@ class AgentSpec:
 
 @dataclass(frozen=True)
 class AgentBinding:
-    """agent_type 하나의 묶음 (부록 A.23). registry가 만들고 runtime이 고른다.
+    """agent_type 하나의 묶음. registry가 만들고 runtime이 고른다.
 
     observer: build_observation(conn, pack, run_id)을 가진 모듈. executor: ToolGateway가 만들고
     ToolGateway.execute 안에서만 부르는 Action 실행기 클래스. ToolGateway는 registry를 import하지 않고

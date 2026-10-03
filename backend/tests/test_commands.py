@@ -1,4 +1,4 @@
-"""Command Service·Consultation (설계서 §9·§10, 부록 A.14). 게이트 경로, 기본안 B, T01·T11–T15·T18–T23·T35·T45·T51."""
+"""Command Service·Consultation. 게이트 경로, 기본안 B, T01·T11–T15·T18–T23·T35·T45·T51."""
 
 import sqlite3
 import threading
@@ -171,7 +171,7 @@ def alpha_waived(alpha):
     return alpha
 
 
-# ── 게이트 경로 (우선순위 문서 "두 개의 경로") ───────────────────
+# ── 게이트 경로 ───────────────────
 
 
 def test_gate_path(seeded):
@@ -195,7 +195,7 @@ def test_gate_path(seeded):
     assert v.status == "PASS"
     assert {i.task_id: i.base_status for i in items} == {"A": "COVERED", "C": "PENDING"}
     assert _view(pack, alpha).status == "OPEN"
-    assert _queue(pack) == [alpha.candidate_id]  # OPEN도 검토 대기 (A.14)
+    assert _queue(pack) == [alpha.candidate_id]  # OPEN도 검토 대기
 
     blocked = _approve(pack, alpha, v)
     assert (blocked.status, blocked.reason_codes) == ("REJECTED", ("CONSULTATION_INCOMPLETE",))
@@ -399,7 +399,7 @@ def test_hold_release_no_change_and_fact_not_confirmed(seeded):
     hold_id = _event(seeded).result_refs["hold_id"]
     ctx = _site(seeded).context_version
     assert _release(seeded, hold_id, expected=ctx - 1).reason_codes == ("STALE_CONTEXT",)
-    # 사실 수정이 확정되지 않았으면 FACT_CONFIRMED 해제는 불가 (A.25 4)
+    # 사실 수정이 확정되지 않았으면 FACT_CONFIRMED 해제는 불가
     assert _release(seeded, hold_id, "FACT_CONFIRMED").reason_codes == ("FACT_NOT_CONFIRMED",)
     assert _release(seeded, "hold_nope").reason_codes == ("HOLD_NOT_FOUND",)
     out = _release(seeded, hold_id)
@@ -558,7 +558,7 @@ def test_t35_event_during_consultation_cancels(alpha):
     assert _waive(pack, cand).reason_codes == ("STALE_CONTEXT",)
 
 
-# ── 거절이면 도메인 변경 없음 (SAVEPOINT, 부록 A.14) ──────────
+# ── 거절이면 도메인 변경 없음 (SAVEPOINT) ──────────
 
 
 def test_rejecting_handler_writes_are_rolled_back(seeded):

@@ -1,8 +1,8 @@
-"""Event 접수·즉시 Hold와 Hold 해제 (설계서 §10, 부록 A.14).
+"""Event 접수·즉시 Hold와 Hold 해제.
 
-접수는 Event 저장 + context +1 + Hold 생성 + Audit를 한 트랜잭션에서 한다(I-05).
-설정 EVENT_RESPONSE_ENABLED가 켜졌고 지연 신고(DELAY)면 같은 tx에서 Event Response START_RUN을 등록한다
-(A.25). Hold는 Agent와 무관하게 이미 걸려 있다. 해제는 NO_CHANGE와 FACT_CONFIRMED(그 Event의 사실 수정이
+접수는 Event 저장 + context +1 + Hold 생성 + Audit를 한 트랜잭션에서 한다.
+설정 EVENT_RESPONSE_ENABLED가 켜졌고 지연 신고(DELAY)면 같은 tx에서 Event Response START_RUN을 등록한다.
+Hold는 Agent와 무관하게 이미 걸려 있다. 해제는 NO_CHANGE와 FACT_CONFIRMED(그 Event의 사실 수정이
 확정되었을 때)다.
 """
 
@@ -43,7 +43,7 @@ class EventReport(Body):
     target_task_id: str | None = None
 
 
-# Hold 해제 사유. API 본문(api/commands.ReleaseBody)도 이 정의를 쓴다 (A.26 후속)
+# Hold 해제 사유. API 본문(api/commands.ReleaseBody)도 이 정의를 쓴다
 Resolution = Literal["FACT_CONFIRMED", "NO_CHANGE"]
 
 
@@ -107,11 +107,11 @@ def _receive(tx: sqlite3.Connection, ctx: CommandContext, body: EventReport) -> 
         body.target_task_id if task_scoped else None,
         context_version,
     )
-    # 열린 Case의 Run을 STALE로 (§10, §11.5). 실행 중인 그래프는 다음 RUNNING 확인에서 멈춘다.
-    # 보낸 요청은 CANCELLED, Case가 닫히면 대기열 1건이 READY로 올라간다(RECHECK는 Hold로 건너뜀, A.21).
+    # 열린 Case의 Run을 STALE로. 실행 중인 그래프는 다음 RUNNING 확인에서 멈춘다.
+    # 보낸 요청은 CANCELLED, Case가 닫히면 대기열 1건이 READY로 올라간다(RECHECK는 Hold로 건너뜀).
     # 응답은 재전송 때와 같아야 하므로 run_id는 넣지 않는다(end_reason EVENT:<event_id>로 찾는다).
     stale_active_runs(tx, ctx.pack, f"EVENT:{event_id}")
-    # 지연 신고면 Event Response가 대상 작업·사실 수정안을 찾는다. 다른 유형은 Hold만 (A.25 1)
+    # 지연 신고면 Event Response가 대상 작업·사실 수정안을 찾는다. 다른 유형은 Hold만
     if get_settings().event_response_enabled and body.event_type == "DELAY":
         register_event_response(tx, ctx.pack, event_id, hold_id)
     r.refs = {"event_id": event_id, "hold_id": hold_id, "event_context_version": context_version}
@@ -137,7 +137,7 @@ def _release(tx: sqlite3.Connection, ctx: CommandContext, body: HoldRelease) -> 
     if hold["status"] != "ACTIVE":
         r.reject("HOLD_NOT_ACTIVE")
     facts = list_fact_updates(tx, site_id, event_id=hold["event_id"])
-    # FACT_CONFIRMED는 그 Event의 사실 수정이 확정되었을 때만 (§18.2.3, A.25 4)
+    # FACT_CONFIRMED는 그 Event의 사실 수정이 확정되었을 때만
     if body.resolution == "FACT_CONFIRMED" and not any(p["status"] == "CONFIRMED" for p in facts):
         r.reject("FACT_NOT_CONFIRMED")
     if body.expected_context_version != ctx.site.context_version:
@@ -146,7 +146,7 @@ def _release(tx: sqlite3.Connection, ctx: CommandContext, body: HoldRelease) -> 
         return r
 
     if body.resolution == "NO_CHANGE":
-        # 변경 없음: 대기 중 사실 수정안은 폐기, 그 Event의 Event Response Run은 끝낸다 (A.25 4)
+        # 변경 없음: 대기 중 사실 수정안은 폐기, 그 Event의 Event Response Run은 끝낸다
         for p in facts:
             if p["status"] == "PENDING":
                 decide_proposal(

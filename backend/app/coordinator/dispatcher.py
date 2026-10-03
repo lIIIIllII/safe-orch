@@ -1,7 +1,7 @@
-"""dispatch 워커 (설계서 §3.2·§11.4, 부록 A.15·A.16). 스레드 1개, job_id 순서.
+"""dispatch 워커. 스레드 1개, job_id 순서.
 
 처리하는 kind는 RECHECK·VALIDATE·BUILD_CONSULTATION, 그리고 model_factory가 있으면 START_RUN·
-RESUME_RUN이다(A.21). CONTINUE_RUN(과 model_factory가 없을 때의 START_RUN·RESUME_RUN)은 claim하지
+RESUME_RUN이다. CONTINUE_RUN(과 model_factory가 없을 때의 START_RUN·RESUME_RUN)은 claim하지
 않고 PENDING으로 두며 순서를 막지 않는다.
 실패하면 롤백하고 attempts < 3이면 PENDING, 3이면 FAILED. 재시작 복구는 CLAIMED → PENDING만 한다.
 """
@@ -87,7 +87,7 @@ class DispatchWorker:
         return self._thread.is_alive()
 
     def quiesce(self, timeout: float) -> bool:
-        """처리 중인 job이 끝나길 timeout까지 기다린 뒤 새 job을 막고 멈춤을 예약한다 (A.18).
+        """처리 중인 job이 끝나길 timeout까지 기다린 뒤 새 job을 막고 멈춤을 예약한다.
 
         True면 호출한 쪽이 release_and_join()을 불러야 한다. False면 아무것도 바꾸지 않았다.
         """

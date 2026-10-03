@@ -1,13 +1,13 @@
-# shipyard Domain Pack (설계서 §5.3). work_type → hazard_tags, critical_fields.
-# hazard_tags는 서버가 work_type에서 도출한다(I-14). 작업 입력으로 받지 않는다.
-# display_name은 화면 표시용이다(부록 A.20). 화면은 Pack 값을 하드코딩하지 않는다.
+# shipyard Domain Pack. work_type → hazard_tags, critical_fields.
+# hazard_tags는 서버가 work_type에서 도출한다. 작업 입력으로 받지 않는다.
+# display_name은 화면 표시용이다. 화면은 Pack 값을 하드코딩하지 않는다.
 work_types:
   LIFTING:    { display_name: 인양,      hazard_tags: [LIFTING],    critical_fields: [zone_id, duration, window, resource] }
   WORK_BELOW: { display_name: 하부 작업, hazard_tags: [WORK_BELOW], critical_fields: [zone_id, duration, window] }
   HOT_WORK:   { display_name: 화기,      hazard_tags: [HOT_WORK],   critical_fields: [zone_id, duration, window] }
   PAINTING:   { display_name: 도장,      hazard_tags: [FLAMMABLE],  critical_fields: [zone_id, duration, window] }
 
-# 자원 유형 표시 이름 (부록 A.26 intake-p2). site.yaml 자원의 resource_type은 여기 있어야 한다.
+# 자원 유형 표시 이름. site.yaml 자원의 resource_type은 여기 있어야 한다.
 # 작업 접수 Agent가 요청 문장의 자원 표현을 코드로 잇는 근거로 쓴다(Observation 데이터).
 resource_types:
   CRANE:  { display_name: 크레인 }

@@ -1,9 +1,9 @@
-"""Work Intake prompt (설계서 §11.2 decide·§18.2.4, 부록 A.26).
+"""Work Intake prompt.
 
 System = 역할·Goal / 규칙 / 도구 전체와 열리는 조건 / 관찰 읽는 법 / 출력 규칙. 다른 Agent와 같은 방식이다:
-현장 문구는 render_system(pack)이 Pack에서 넣고(A.23), fingerprint는 렌더링 전 템플릿 기준이다.
+현장 문구는 render_system(pack)이 Pack에서 넣고, fingerprint는 렌더링 전 템플릿 기준이다.
 구역·작업 유형 같은 Pack 값은 System에 넣지 않고 Observation으로 준다. 같은 조건 조회의 결과가 같다는 사실을
-처음부터 적는다(A.25 p2). 질문·확인의 순서를 지시하는 문장은 두지 않는다.
+처음부터 적는다. 질문·확인의 순서를 지시하는 문장은 두지 않는다.
 System·도구 description·Observation 필드가 바뀌면 PROMPT_VERSION을 올리고 PROMPT_FINGERPRINTS에 더한다.
 """
 
@@ -92,7 +92,7 @@ OBSERVATION_KEYS = (
 
 
 def render_system(pack: LoadedPack) -> str:
-    """Goal과 Pack의 현장 문구로 System을 렌더링한다 (A.23·A.26)."""
+    """Goal과 Pack의 현장 문구로 System을 렌더링한다."""
     return SYSTEM.format(
         goal=spec.GOAL, site_description=pack.site_description, origin_time=origin_time(pack)
     )
@@ -121,6 +121,6 @@ def fingerprint() -> str:
 # prompt_version별 fingerprint. 바꾸면 버전을 올리고 한 줄 더한다(값은 서로 달라야 한다).
 PROMPT_FINGERPRINTS = {
     "intake-p1": "95a9073706ea385c75f36c873aa2f6e5b2ceaa862cc4b055a249d51344725675",
-    "intake-p2": "fcfca39ebb9411cefaea0362c474a14c0a86414ddf61d8f04c3d1d4ba75a1062",  # 자원 유형 코드·표시 이름, 코드 인자 실행 시 enum, 확인 의미 사실 설명 (A.26)
-    "intake-p3": "057c1ac721076deac49fc6b8854256119f800f2a55920e30811c723f56cbfe1e",  # 마지막 라운드는 값 확인용(ASK 열리는 조건), 질문 문장 노출 (A.27)
+    "intake-p2": "fcfca39ebb9411cefaea0362c474a14c0a86414ddf61d8f04c3d1d4ba75a1062",  # 자원 유형 코드·표시 이름, 코드 인자 실행 시 enum, 확인 의미 사실 설명
+    "intake-p3": "057c1ac721076deac49fc6b8854256119f800f2a55920e30811c723f56cbfe1e",  # 마지막 라운드는 값 확인용(ASK 열리는 조건), 질문 문장 노출
 }

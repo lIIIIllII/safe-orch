@@ -1,4 +1,4 @@
-"""Coordination Agent — 기본안 A 최소 경로 (설계서 §18.2.2, 부록 A.24).
+"""Coordination Agent — 기본안 A 최소 경로.
 
 스크립트 모델(Router)로 Replanning·Coordination Run을 함께 돌린다. 설정 COORDINATION_ENABLED를 켠
 테스트만 Coordination이 시작한다(기본값 꺼짐 = 기본안 B, 기존 테스트·골든 그대로).
@@ -249,7 +249,7 @@ def test_plan_a_full_e2e(seeded, coordination_on):
         "TRY_ALTERNATIVE_RESOURCE",
     ]
     assert (rp.steps_used, rp.solver_calls_used, rp.human_rounds_used) == (5, 3, 1)
-    # Replanning 관찰에는 같은 Case의 Coordination 메시지가 섞이지 않는다 (A.24 3)
+    # Replanning 관찰에는 같은 Case의 Coordination 메시지가 섞이지 않는다
     replies = steps[4]["observation"]["human_replies"]
     assert [r["message_id"] for r in replies] == [question["message_id"]]
     assert steps[2]["observation"]["rejections"] == []  # 제약은 거절이 아니라 확인에서 왔다
@@ -349,7 +349,7 @@ def test_supervisor_reject_during_consultation_runs_plan_b(seeded, coordination_
     assert _runs("REPLANNING")[0].status == "SUCCEEDED"
 
 
-# ── 이견이 작업 고정 요구가 아닐 때 (D10 Agent 판단 근거) ─────────
+# ── 이견이 작업 고정 요구가 아닐 때 (Agent 판단 근거) ─────────
 
 
 def test_objection_without_fix_request_is_reported_not_drafted(seeded, coordination_on):
@@ -378,7 +378,7 @@ def test_objection_without_fix_request_is_reported_not_drafted(seeded, coordinat
 
 
 def test_draft_constraint_server_checks(seeded, coordination_on):
-    """바뀐 축(C는 TIME)이 없는 축, 다른 사유 코드, 다른 작업은 ACTION_NOT_AVAILABLE이다 (A.24 7)."""
+    """바뀐 축(C는 TIME)이 없는 축, 다른 사유 코드, 다른 작업은 ACTION_NOT_AVAILABLE이다."""
     pack = seeded
     _, coord = _alpha_consulting(pack)
     cr = _objected(pack)
@@ -474,11 +474,11 @@ def test_coordination_prompt_fingerprint_and_keys(seeded, coordination_on):
     assert tuple(sorted(obs)) == prompt.OBSERVATION_KEYS
     system = prompt.render_system(seeded)
     assert seeded.site_description in system and "첫날 09:00" in system
-    assert "이견이면" not in system  # 초안을 지시하지 않는다 (A.24)
+    assert "이견이면" not in system  # 초안을 지시하지 않는다
 
 
 def test_state_shows_item_request_and_inbox_types(seeded, coordination_on):
-    """state: 검토 패널 항목의 변경 요청·인용된 이견·초안 축, Inbox의 후보·초안 축 (A.24 화면)."""
+    """state: 검토 패널 항목의 변경 요청·인용된 이견·초안 축, Inbox의 후보·초안 축."""
 
     pack = seeded
     rp, _ = _alpha_consulting(pack)

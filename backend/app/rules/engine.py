@@ -1,4 +1,4 @@
-"""Safety Rule Engine: 충돌 탐지 (설계서 §6, 부록 A.10).
+"""Safety Rule Engine: 충돌 탐지.
 
 Rule 위반과 기본 제약 위반을 모두 보고한다. 충돌이 없는 것은 PASS가 아니다(PASS는 Validator).
 Solver와 코드를 나눈다: app.solver를 import하지 않는다. Rule 데이터는 Pack에서 읽는다.
@@ -53,8 +53,8 @@ BASIC_RULE_IDS = frozenset(
 def _basic(facts: SnapshotContent, pairs: list[tuple[Task, Assignment]]) -> list[Conflict]:
     """기본 제약: duration, 시간창·Horizon, 근무 달력, 선후행, 필요 자원, 유형, 권한, 가용 구간.
 
-    CALENDAR는 WINDOW와 따로 판정한다(Horizon 밖이면 둘 다 보고, 부록 A.20).
-    선행 작업이 검사 대상 배정에 없으면 건너뛰지 않고 PREDECESSOR_MISSING이다(fail-closed, 부록 A.22).
+    CALENDAR는 WINDOW와 따로 판정한다(Horizon 밖이면 둘 다 보고).
+    선행 작업이 검사 대상 배정에 없으면 건너뛰지 않고 PREDECESSOR_MISSING이다(fail-closed).
     """
     out: list[Conflict] = []
     resources = facts.resource_map()
@@ -133,7 +133,7 @@ def _separation(
 
 
 def separation_links(pack: LoadedPack, x: Task, y: Task) -> list[str]:
-    """두 작업을 잇는 SEPARATION Rule ID (hazard 쌍 ∧ 구역 관계 ∈ relations, 어느 방향이든, A.24·A.25)."""
+    """두 작업을 잇는 SEPARATION Rule ID (hazard 쌍 ∧ 구역 관계 ∈ relations, 어느 방향이든)."""
     out = []
     for rule in pack.rules:
         if rule.type != "SEPARATION":

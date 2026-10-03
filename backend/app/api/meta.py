@@ -1,4 +1,4 @@
-"""현장 목록 GET /sites와 Pack 표시 정보 GET /sites/{id}/meta (부록 A.20).
+"""현장 목록 GET /sites와 Pack 표시 정보 GET /sites/{id}/meta.
 
 화면이 Pack 값(작업 유형·Rule 이름, 시간대, 근무 달력, 구역, 자원)을 하드코딩하지 않도록 내려준다.
 Pack은 기동 시 한 번 읽고 바뀌지 않으므로 DB를 읽지 않는다.
@@ -15,9 +15,9 @@ router = APIRouter()
 
 @router.get("/sites")
 def get_sites(pack: PackDep) -> dict[str, Any]:
-    """현장 목록. 화면이 site_id·첫 Actor를 정하는 입구라 health처럼 X-Actor 없이 읽는다 (A.20 2차).
+    """현장 목록. 화면이 site_id·첫 Actor를 정하는 입구라 health처럼 X-Actor 없이 읽는다.
 
-    Actor 목록은 데모 인증(X-Actor 선택)에 쓰는 공개 정보다. 현장은 1개(§5.4)다.
+    Actor 목록은 데모 인증(X-Actor 선택)에 쓰는 공개 정보다. 현장은 1개다.
     """
     return {
         "sites": [
@@ -39,7 +39,7 @@ def get_meta(site_id: str, pack: PackDep, actor: ActorDep) -> dict[str, Any]:
     return {
         "pack": pack.name,
         "pack_hash": pack.pack_hash,
-        "resource_types": dict(pack.resource_types),  # 코드 → 표시 이름 (A.26)
+        "resource_types": dict(pack.resource_types),  # 코드 → 표시 이름
         "work_types": {
             wt_id: {
                 "display_name": wt.display_name,

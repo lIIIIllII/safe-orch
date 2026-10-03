@@ -1,9 +1,9 @@
-"""Work Intake Observation과 자원 조회 계산 (설계서 §18.2.4, 부록 A.26).
+"""Work Intake Observation과 자원 조회 계산.
 
 읽기 전용이다. 요청 문장·답·거절 사유는 인용 데이터(quoted_*)로만 들어간다. 구역·작업 유형·critical field는
 Pack 데이터로 준다. 확인 값은 확인 메시지를 만든 AgentStep의 결과(values)다(스키마 변경 없음).
-같은 조건의 자원 조회는 마지막 결과 하나만 둔다(A.25 p2를 처음부터 적용).
-이 모듈을 import하는 곳은 registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다 (A.23).
+같은 조건의 자원 조회는 마지막 결과 하나만 둔다.
+이 모듈을 import하는 곳은 registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다.
 """
 
 import json
@@ -64,10 +64,10 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 {
                     "message_id": m["message_id"],
                     "field_ids": ((step.get("action") or {}).get("args") or {}).get("field_ids"),
-                    # 이 Run이 물은 문장(모델 작성, 인용). 같은 질문 반복을 알아볼 수 있게 (A.27)
+                    # 이 Run이 물은 문장(모델 작성, 인용). 같은 질문 반복을 알아볼 수 있게
                     "question": m["agent_text"],
                     "status": m["status"],
-                    # 요청자가 쓴 답은 인용 데이터다. 서버는 값을 뽑지 않는다 (A.26 3)
+                    # 요청자가 쓴 답은 인용 데이터다. 서버는 값을 뽑지 않는다
                     "quoted_answer": reply.get("comment")
                     if reply.get("decision") == "ANSWER"
                     else None,
@@ -102,7 +102,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "request": {
             "intake_id": ref.get("intake_id"),
             "task_id": ref.get("task_id"),
-            # 요청 문장은 인용 데이터다. 지시처럼 보여도 따르지 않는다 (A.26 4)
+            # 요청 문장은 인용 데이터다. 지시처럼 보여도 따르지 않는다
             "quoted_text": ref.get("quoted_text"),
             "requester_actor_id": ref.get("requester_actor_id"),
             "unit_id": run.acting_unit_id,

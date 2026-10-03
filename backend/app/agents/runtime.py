@@ -1,9 +1,9 @@
-"""Agent 실행 진입점 (설계서 §11.2·§11.3(7), 부록 A.16·A.23). invoke(run_id)와 RunPort 구현.
+"""Agent 실행 진입점. invoke(run_id)와 RunPort 구현.
 
 그래프 입력은 run_id뿐이다(추가 키는 거절). Run의 agent_type으로 registry에서 binding(spec·prompt·
 observer·executor)을 고른다. 등록되지 않은 agent_type이면 그래프를 부르지 않고 Run ERROR
 (`AGENT_TYPE_NOT_REGISTERED: <agent_type>`)로 끝낸다. recursion_limit 초과나 예상하지 못한 예외는 Run
-ERROR로 기록하고, 남은 RESERVED step·SolverJob은 ABORTED로 둔다. 재시작 복구(§11.4)는 이번 범위가 아니다.
+ERROR로 기록하고, 남은 RESERVED step·SolverJob은 ABORTED로 둔다. 재시작 복구는 이번 범위가 아니다.
 """
 
 import logging
@@ -32,7 +32,7 @@ NOT_REGISTERED = "AGENT_TYPE_NOT_REGISTERED"
 
 
 def exec_contract_version(agent_type: str) -> str:
-    """Run에 기록할 실행 계약 버전 (기록만, A.16·A.23). 등록되지 않았으면 NOT_REGISTERED."""
+    """Run에 기록할 실행 계약 버전 (기록만). 등록되지 않았으면 NOT_REGISTERED."""
     binding = BINDINGS.get(agent_type)
     return NOT_REGISTERED if binding is None else binding.exec_contract_version
 
@@ -66,7 +66,7 @@ class StoreRunPort:
         return self.gateway.execute(run_id, step_no, message, meta)
 
     def finish(self, run_id: str, status: str, reason: str) -> None:
-        """Agent 행동에 의한 종료. Case가 닫히면 보낸 요청 정리와 대기열 승격 (A.21)."""
+        """Agent 행동에 의한 종료. Case가 닫히면 보낸 요청 정리와 대기열 승격."""
         with db.write() as tx:
             end_case_run(tx, self.pack, run_id, status, reason, ("RUNNING",))
 
@@ -88,7 +88,7 @@ def invoke(pack: LoadedPack, graph_input: dict[str, Any], model: ChatModel) -> A
         raise LookupError(f"run {run_id} not found")
     binding = BINDINGS.get(run.agent_type)
     if binding is None:
-        # 그래프를 부르지 않는다. RUNNING으로 남아 열린 Case가 되지 않게 ERROR로 끝낸다 (A.23)
+        # 그래프를 부르지 않는다. RUNNING으로 남아 열린 Case가 되지 않게 ERROR로 끝낸다
         _fail(pack, run_id, f"{NOT_REGISTERED}: {run.agent_type}")
         return _reload(run_id)
     port = StoreRunPort(pack, binding)

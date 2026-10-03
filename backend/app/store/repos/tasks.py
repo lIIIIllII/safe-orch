@@ -1,4 +1,4 @@
-"""task 조회 (부록 A.6). 현재 revision = MAX(revision). hazard_tags는 Pack에서 도출한다."""
+"""task 조회. 현재 revision = MAX(revision). hazard_tags는 Pack에서 도출한다."""
 
 import sqlite3
 
@@ -28,10 +28,10 @@ def list_current_tasks(conn: sqlite3.Connection, site_id: str, pack: LoadedPack)
 
 
 def insert_task_revision(tx: sqlite3.Connection, site_id: str, task: Task) -> None:
-    """작업 추가·변경 = 새 revision INSERT (부록 A.10). revision은 현재 + 1이어야 한다.
+    """작업 추가·변경 = 새 revision INSERT. revision은 현재 + 1이어야 한다.
 
     context_version 증가(bump_context_version)는 호출하는 명령이 같은 tx에서 한다.
-    hazard_tags는 저장하지 않는다(I-14).
+    hazard_tags는 저장하지 않는다.
     """
     current = tx.execute(
         "SELECT MAX(revision) FROM task WHERE site_id = ? AND task_id = ?", (site_id, task.task_id)

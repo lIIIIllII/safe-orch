@@ -1,4 +1,4 @@
-"""대기와 재개·거절 후 재탐색·대기열·담당자 확인 (설계서 §9.2·§9.4·§11.3·§11.5, 부록 A.21).
+"""대기와 재개·거절 후 재탐색·대기열·담당자 확인.
 
 1단계: T33·T36–T39·T41·T42, 대기열(QUEUED). 2단계: 기본안 B E2E, T02·T17·T23–T26·T38(답변)·T40,
 LIST·TRY·ASK 사용 조건, Consent 복사, N5 ASK 미노출, state inbox.
@@ -208,7 +208,7 @@ def test_plan_b_reject_with_constraint_wakes_and_resumes(seeded):
 
 
 def _ask_waiting(pack):
-    """기본안 B 앞부분: Alpha 거절(C 고정) → 재개 → LIST(A) → ASK(A, RESOURCE, [SITE-CR-01]) (§15 Scene 3-2)."""
+    """기본안 B 앞부분: Alpha 거절(C 고정) → 재개 → LIST(A) → ASK(A, RESOURCE, [SITE-CR-01])."""
     run = _alpha_waiting(pack)
     _reject_demo(pack, run.wait_ref)
     run_until_idle(
@@ -265,7 +265,7 @@ def _enum(step, name, arg):
 
 
 def test_plan_b_full_e2e(seeded):
-    """기본안 B 전체: 거절 → 재개 → L0 → LIST → ASK → 수락 → 재개 → TRY → Beta → 승인 R1 (A.21 9 기준)."""
+    """기본안 B 전체: 거절 → 재개 → L0 → LIST → ASK → 수락 → 재개 → TRY → Beta → 승인 R1."""
     pack = seeded
     waiting = _ask_waiting(pack)
     run_id = waiting.run_id
@@ -281,7 +281,7 @@ def test_plan_b_full_e2e(seeded):
         "resources_hash": s_list["tool_result"]["resources_hash"],
     }
     # LIST 전에는 TRY·ASK가 없고, LIST 뒤(자원 축 미확인·미시도 범위 없음)에는 ASK가 열린다.
-    # LIST 대상은 주 충돌 L0 작업 중 RESOURCE가 막히지 않은 A뿐이다(C는 제약 고정, Q는 무관, A.21 p7).
+    # LIST 대상은 주 충돌 L0 작업 중 RESOURCE가 막히지 않은 A뿐이다(C는 제약 고정, Q는 무관).
     assert _names(s_list) == ["LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
     assert _enum(s_list, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A"]
     assert _names(s_ask) == ["ASK_TASK_OWNER", "ESCALATE_NO_SOLUTION"]
@@ -371,7 +371,7 @@ def test_plan_b_full_e2e(seeded):
 
 
 def test_accept_does_not_reopen_tried_levels(seeded):
-    """MOVABILITY 수락은 context·Consent·revision만 바꾼다. 실효 탐색 키가 같아 L0는 미시도가 아니다 (A.21)."""
+    """MOVABILITY 수락은 context·Consent·revision만 바꾼다. 실효 탐색 키가 같아 L0는 미시도가 아니다."""
     pack = seeded
     waiting = _ask_waiting(pack)
     ctx = _site(pack).context_version
@@ -450,7 +450,7 @@ def test_t33_reject_without_constraint_wakes_and_blocks_same_assignments(seeded)
 
 
 def test_t33_second_plain_rejection_escalates(seeded, monkeypatch):
-    """제약 없는 거절이 Case의 2번째면 깨우지 않고 이관 (§9.2·T33, A.21 0-3)."""
+    """제약 없는 거절이 Case의 2번째면 깨우지 않고 이관 (T33)."""
     pack = seeded
     run = _n1_waiting(pack)
     _reject(pack, run.wait_ref, "PREFERENCE")
@@ -587,7 +587,7 @@ def test_t42_event_while_waiting_stales_and_resume_is_void(seeded):
     assert {j["status"] for j in _jobs(pack, "RESUME_RUN")} == {"DONE"}
 
 
-# ── 대기열 (A.21 0-1) ──────────────────────────────────────────
+# ── 대기열 ──────────────────────────────────────────
 
 
 def test_form_during_open_case_is_queued_then_promoted_on_commit(seeded):
@@ -689,7 +689,7 @@ def test_queue_order_and_withdraw_queued(seeded):
 
 
 def test_withdraw_other_request_wakes_open_case(seeded):
-    """Case 밖의 Plan 밖 요청을 철회하면 열린 Run을 깨운다(고정 충돌이 사라짐, A.21 3)."""
+    """Case 밖의 Plan 밖 요청을 철회하면 열린 Run을 깨운다(고정 충돌이 사라짐)."""
     pack = seeded
     # 충돌 없는 요청 N1(11:00 시작) → RECONFIRM 후보만 생기고 Run은 없다
     assert _submit(pack, "N1", earliest_start=1560).status == "APPLIED"
@@ -710,7 +710,7 @@ def test_withdraw_case_request_stales_case(seeded):
     assert (ended.status, ended.end_reason) == ("STALE", "WITHDRAW:A")
 
 
-# ── 2단계: 답변·확인 명령 (§9.4, A.21 2) ────────────────────────
+# ── 2단계: 답변·확인 명령 ────────────────────────
 
 
 def test_t23_movability_consent_covers_only_allowed_resource_and_time_range(seeded):
@@ -843,7 +843,7 @@ def test_decline_discards_and_wakes_without_context_change(seeded):
         "ANSWERED",
         1,
     )
-    # 거절당한 질문은 다시 보내지 않는다: SITE-CR-01을 거절했으므로 ASK 미노출 → 이관 (A.21 3단계)
+    # 거절당한 질문은 다시 보내지 않는다: SITE-CR-01을 거절했으므로 ASK 미노출 → 이관
     run_until_idle(
         pack, model_factory=_factory(_ask_a(), escalate("담당자가 대체 자원을 거절했다"))
     )
@@ -910,7 +910,7 @@ def test_t02_injected_comment_cannot_trigger_approval(seeded):
     assert _run(waiting.run_id).status == "ESCALATED"
 
 
-# ── 2단계: LIST·TRY·ASK 사용 조건 (A.21 0-2·5) ─────────────────
+# ── 2단계: LIST·TRY·ASK 사용 조건 ─────────────────
 
 
 def test_ask_needs_tried_levels_and_list_and_open_axis(seeded):
@@ -954,7 +954,7 @@ def test_ask_conditions_rounds_fixed_axis_and_values(seeded):
         ),
     )
     steps = _steps(run.run_id)
-    # C는 RESOURCE 축이 제약으로 고정돼 자원 조회 대상이 아니다 (A.21 p7)
+    # C는 RESOURCE 축이 제약으로 고정돼 자원 조회 대상이 아니다
     assert steps[3]["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
     s_ask_c, s_ask_bad = steps[4], steps[5]
     ask = next(
@@ -1009,7 +1009,7 @@ def test_n5_never_exposes_ask(seeded):
     assert (run.status, run.human_rounds_used) == ("ESCALATED", 0)
 
 
-# ── 대기열 순서 (A.21 0-1) ─────────────────────────────────────
+# ── 대기열 순서 ─────────────────────────────────────
 
 
 def test_form_waits_behind_queue_while_reconfirm_pending(seeded):
@@ -1038,7 +1038,7 @@ def test_form_waits_behind_queue_while_reconfirm_pending(seeded):
     assert (_task(pack, "N2").lifecycle, _task(pack, "N4").lifecycle) == ("READY", "QUEUED")
 
 
-# ── state inbox (A.21 7) ───────────────────────────────────────
+# ── state inbox ───────────────────────────────────────
 
 
 def test_state_inbox_separates_server_text_and_agent_text(seeded):
@@ -1081,7 +1081,7 @@ def test_reply_api_route(seeded):
         assert res.status_code == 404
 
 
-# ── state: 화면용 값 (A.21 7) ──────────────────────────────────
+# ── state: 화면용 값 ──────────────────────────────────
 
 
 def test_state_shows_rejection_resume_count_and_queue(seeded):

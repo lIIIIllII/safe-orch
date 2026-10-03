@@ -1,4 +1,4 @@
-// API 응답 타입 (부록 A.18·A.20). 서버가 dict를 돌려주므로 직접 쓴다 (부록 A.19).
+// API 응답 타입. 서버가 dict를 돌려주므로 직접 쓴다.
 
 export type Role = 'UNIT_PLANNER' | 'REPORTER' | 'SUPERVISOR'
 
@@ -100,7 +100,7 @@ export interface ConsultationItem {
   change_hash: string
   base_status: string
   item_status: string
-  /** 마지막 변경 요청과 담당자 답 (Coordination, A.24). quoted_comment는 담당자가 쓴 인용이다. */
+  /** 마지막 변경 요청과 담당자 답 (Coordination). quoted_comment는 담당자가 쓴 인용이다. */
   request: {
     message_id: string
     to_actor_id: string
@@ -111,7 +111,7 @@ export interface ConsultationItem {
   } | null
 }
 
-/** 거절된 후보의 거절 사유와 그 거절로 생긴 제약 (A.21 7). */
+/** 거절된 후보의 거절 사유와 그 거절로 생긴 제약. */
 export interface RejectionView {
   decision_id: string
   actor_id: string
@@ -132,7 +132,7 @@ export interface CandidateView {
   base_plan_revision: number
   display_status: 'COMMITTED' | 'REJECTED' | 'STALE' | 'OPEN'
   assignments: Assignment[]
-  /** delay = 달력 분(§7), work_delay = 근무 분. 서버가 조회 시 계산한다 (A.20). */
+  /** delay = 달력 분, work_delay = 근무 분. 서버가 조회 시 계산한다. */
   changes: {
     task_id: string
     before: Assignment
@@ -160,7 +160,7 @@ export interface HoldView {
   text: string
   reporter_actor_id: string
   target_task_id: string | null
-  /** 이 Event의 사실 수정안 (A.25) */
+  /** 이 Event의 사실 수정안 */
   fact_updates: {
     proposal_id: string
     task_id: string
@@ -192,7 +192,7 @@ export interface RunSummary {
   wait_kind: string | null
   wait_ref: string | null
   wait_generation: number
-  /** 대기 뒤 다시 실행된 횟수 (A.21 7, 서버가 조회 시 계산) */
+  /** 대기 뒤 다시 실행된 횟수 (서버가 조회 시 계산) */
   resume_count: number
   last_step_no: number
   current_step_status: string | null
@@ -212,13 +212,13 @@ export interface SiteState {
   conflicts: Conflict[]
   candidates: CandidateView[]
   review_queue: string[]
-  /** 대기열(QUEUED) 접수 순서 (A.21 0-1) */
+  /** 대기열(QUEUED) 접수 순서 */
   task_queue: string[]
   holds: HoldView[]
   events: EventView[]
   runs: RunSummary[]
   dispatch: { pending: number; failed: number }
-  /** X-Actor 본인에게 온 질문 (A.21 7) */
+  /** X-Actor 본인에게 온 질문 */
   inbox: InboxItem[]
 }
 
@@ -241,13 +241,13 @@ export interface InboxItem {
   task_id: string | null
   axis: string | null
   allowed_values: string[]
-  /** 변경 요청이 묶인 후보 (CHANGE_REQUEST, A.24) */
+  /** 변경 요청이 묶인 후보 (CHANGE_REQUEST) */
   candidate_id: string | null
-  /** 제약 초안의 고정 축 (CONFIRMATION + FEEDBACK_CONSTRAINT, A.24) */
+  /** 제약 초안의 고정 축 (CONFIRMATION + FEEDBACK_CONSTRAINT) */
   axes: string[]
-  /** 사실 수정안 (CONFIRMATION + FACT_UPDATE, A.25). 값은 Horizon 원점 기준 분 */
+  /** 사실 수정안 (CONFIRMATION + FACT_UPDATE). 값은 Horizon 원점 기준 분 */
   fact: { field: string; old_value: number; new_value: number } | null
-  /** 작업 요청 값 확인 (제안 없는 CONFIRMATION, Work Intake, A.26). 시간은 분 */
+  /** 작업 요청 값 확인 (제안 없는 CONFIRMATION, Work Intake). 시간은 분 */
   values: IntakeValues | null
 }
 
@@ -285,7 +285,7 @@ export interface AgentStep {
   created_at: string | null
 }
 
-/** §12 명령 응답. HTTP 코드와 네트워크 실패를 함께 담는다. */
+/** 명령 응답. HTTP 코드와 네트워크 실패를 함께 담는다. */
 export interface CommandResponse {
   status: 'APPLIED' | 'REPLAYED' | 'REJECTED' | 'RETRYABLE_ERROR' | 'NETWORK_ERROR'
   reason_codes: string[]
@@ -302,14 +302,14 @@ export interface CommandOutcome {
   response: CommandResponse
 }
 
-/** GET /api/sites (A.20 2차). X-Actor 없이 읽는 입구. */
+/** GET /api/sites. X-Actor 없이 읽는 입구. */
 export interface SiteEntry {
   site_id: string
   pack: string
   actors: { actor_id: string; name: string; roles: Role[] }[]
 }
 
-/** GET /api/sites/{id}/meta (A.20). 화면은 Pack 값을 여기서만 받는다. */
+/** GET /api/sites/{id}/meta. 화면은 Pack 값을 여기서만 받는다. */
 export interface Meta {
   pack: string
   pack_hash: string
@@ -337,7 +337,7 @@ export interface TaskForm {
   requested_resource_id: string | null
 }
 
-/** GET /api/dev/scenario (DEMO_MODE, A.20). */
+/** GET /api/dev/scenario (DEMO_MODE). */
 export interface Scenario {
   pack: string
   task_requests: { label: string; requester: string; form: TaskForm }[]
@@ -349,6 +349,6 @@ export interface Scenario {
     label: string
     body: { reason_code: string; target_task_ids: string[]; axes: string[]; comment: string }
   }[]
-  /** 자연어 작업 요청 시연값 (A.26) */
+  /** 자연어 작업 요청 시연값 */
   intake_requests?: { label: string; requester: string; body: { task_id: string; text: string }; answer: string }[]
 }

@@ -1,8 +1,8 @@
-"""Event Response prompt (설계서 §11.2 decide·§18.2.3, 부록 A.25).
+"""Event Response prompt.
 
 System = 역할·Goal / 규칙 / 도구 전체와 열리는 조건 / 관찰 읽는 법 / 출력 규칙. Replanning·Coordination과 같은
-방식이다: 현장 문구는 render_system(pack)이 Pack에서 넣고(A.23), fingerprint는 렌더링 전 템플릿 기준이다.
-작업 유형 표시 이름 같은 Pack 값은 System에 넣지 않고 Observation(work_types)으로 준다(A.25).
+방식이다: 현장 문구는 render_system(pack)이 Pack에서 넣고, fingerprint는 렌더링 전 템플릿 기준이다.
+작업 유형 표시 이름 같은 Pack 값은 System에 넣지 않고 Observation(work_types)으로 준다.
 "되묻지 말라"·특정 작업을 고르라는 지시는 두지 않는다.
 System·도구 description·Observation 필드가 바뀌면 PROMPT_VERSION을 올리고 PROMPT_FINGERPRINTS에 더한다.
 """
@@ -92,7 +92,7 @@ OBSERVATION_KEYS = (
 
 
 def render_system(pack: LoadedPack) -> str:
-    """Goal과 Pack의 현장 문구로 System을 렌더링한다 (A.23·A.25)."""
+    """Goal과 Pack의 현장 문구로 System을 렌더링한다."""
     return SYSTEM.format(
         goal=spec.GOAL, site_description=pack.site_description, origin_time=origin_time(pack)
     )
@@ -121,8 +121,8 @@ def fingerprint() -> str:
 # prompt_version별 fingerprint. 바꾸면 버전을 올리고 한 줄 더한다(값은 서로 달라야 한다).
 PROMPT_FINGERPRINTS = {
     "event-response-p1": "c6380d9812ce55b41c79236af188272c3f902cd1e2bd52335941863e0f4a6c38",
-    "event-response-p2": "6a8e75b88172a52abaa66793f2d1dbaae62d6a56c8683c0be1d4c948a09b7259",  # 같은 조건 조회는 같은 결과, lookups에 모두 있음(사실 설명, A.25 S2 뒤)
-    "event-response-p3": "67c93218658b928bfe0c31ce80874eb8b1e91177c1192e0d7aaf1553b16f8529",  # ASK_REPORTER와 신고자 답(reporter_replies) (A.25 S4)
-    "event-response-p4": "43842c8b5c1304b33874fae5c1d74ce241097029989f2b24036983a6cdb55053",  # 조회 뒤 질문(ASK_REPORTER 열리는 조건) (A.27)
-    "event-response-p5": "c08d380cc1ecd55316f0ad387152b04c0bea832d6e7dce78668c176b3c9911e6",  # 조회 start_slack·분석 delay_minutes, 이관 조건 문구를 Replanning p7과 맞춤 (A.27)
+    "event-response-p2": "6a8e75b88172a52abaa66793f2d1dbaae62d6a56c8683c0be1d4c948a09b7259",  # 같은 조건 조회는 같은 결과, lookups에 모두 있음(사실 설명)
+    "event-response-p3": "67c93218658b928bfe0c31ce80874eb8b1e91177c1192e0d7aaf1553b16f8529",  # ASK_REPORTER와 신고자 답(reporter_replies)
+    "event-response-p4": "43842c8b5c1304b33874fae5c1d74ce241097029989f2b24036983a6cdb55053",  # 조회 뒤 질문(ASK_REPORTER 열리는 조건)
+    "event-response-p5": "c08d380cc1ecd55316f0ad387152b04c0bea832d6e7dce78668c176b3c9911e6",  # 조회 start_slack·분석 delay_minutes, 이관 조건 문구를 Replanning p7과 맞춤
 }

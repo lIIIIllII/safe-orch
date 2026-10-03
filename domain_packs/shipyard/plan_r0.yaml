@@ -1,6 +1,6 @@
-# 기존 작업과 Plan R0 (설계서 §15, 부록 A.5·A.20). 시간은 10/12 09:00 기준 정수 분(1440분 = 하루).
+# 기존 작업과 Plan R0. 시간은 10/12 09:00 기준 정수 분(1440분 = 하루).
 # 로더가 revision 1, lifecycle READY, critical field CONFIRMED(source_ref "fixture:plan_r0")로 만든다.
-# 가정: §15에 없는 latest_end는 latest_start + duration.
+# 가정: latest_end는 latest_start + duration.
 # E의 "D 종료 후 15분"은 SEP-HOT-FLAM(gap 15)으로만 표현한다. predecessors는 모두 빈 배열.
 tasks:
   - task_id: B                  # B구역 하부 작업, 고정
@@ -59,7 +59,7 @@ tasks:
     predecessors: []
     movable: { time: true, resource: false }
 
-  # ── 시연 확장 작업 (가정, 부록 A.20) ──
+  # ── 시연 확장 작업 (가정) ──
   # 기존 구역·자원과 엮이지 않는다. 모두 고정(F, F)이라 UA·UB의 SearchSpec hash(L2 포함)를 바꾸지 않는다.
   - task_id: K                  # F 안벽 골리앗 인양 (N1 장비 이중 배정 상대)
     unit_id: UB

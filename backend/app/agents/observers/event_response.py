@@ -1,8 +1,8 @@
-"""Event Response Observation과 조회·영향 분석 계산 (설계서 §18.2.3, 부록 A.25).
+"""Event Response Observation과 조회·영향 분석 계산.
 
 읽기 전용이다. 신고 문장은 quoted_text(인용 데이터)로만 들어간다. 신고의 작업 유형 표현을 work_type으로
 잇는 근거는 work_types(Pack 코드와 표시 이름)로 준다. 시각은 분과 함께 날짜·시각(Pack timezone)을 준다.
-이 모듈을 import하는 곳은 registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다 (A.23).
+이 모듈을 import하는 곳은 registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다.
 """
 
 import json
@@ -64,7 +64,7 @@ def lookup_tasks(
             "earliest_start_clock": clock(pack, t.earliest_start),
             "latest_start": t.latest_start,
             "latest_end": t.latest_end,
-            # 시작 가능 시각을 늦출 수 있는 최대 분. 0이면 늦추는 수정안은 분석을 통과하지 못한다 (A.27)
+            # 시작 가능 시각을 늦출 수 있는 최대 분. 0이면 늦추는 수정안은 분석을 통과하지 못한다
             "start_slack": t.latest_start - t.earliest_start,
             "assignment": _assignment(pack, placed.get(t.task_id)),
         }
@@ -78,7 +78,7 @@ def lookup_tasks(
 def analyze_impact(
     conn: sqlite3.Connection, pack: LoadedPack, task_id: str, new_earliest_start: int
 ) -> dict[str, Any]:
-    """ANALYZE_IMPACT 결과(결정론, A.25 2). earliest_start만 늦추는 사실 수정이 어긋나게 하는 것."""
+    """ANALYZE_IMPACT 결과(결정론). earliest_start만 늦추는 사실 수정이 어긋나게 하는 것."""
     site = get_site(conn, pack.site_id)
     assert site is not None
     ready = {t.task_id: t for t in _ready(conn, pack)}
@@ -114,7 +114,7 @@ def analyze_impact(
         "old_clock": clock(pack, task.earliest_start),
         "new_earliest_start": new,
         "new_clock": clock(pack, new),
-        "delay_minutes": new - task.earliest_start,  # 새 값 − 현재 earliest_start (A.27)
+        "delay_minutes": new - task.earliest_start,  # 새 값 − 현재 earliest_start
         "latest_start": task.latest_start,
         "latest_start_clock": clock(pack, task.latest_start),
         "checks": checks,
@@ -139,7 +139,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     hold = get_hold(conn, pack.site_id, run.input_ref.get("hold_id", ""))
     steps = [s for s in list_steps(conn, run_id) if s["status"] == "COMPLETED"]
     accepted = [s for s in steps if (s["guard"] or {}).get("verdict") == "ACCEPTED"]
-    # 같은 조건(filters)의 조회는 마지막 결과 하나만 둔다. 반복 조회로 관찰이 커지지 않게 (A.25 S2 뒤)
+    # 같은 조건(filters)의 조회는 마지막 결과 하나만 둔다. 반복 조회로 관찰이 커지지 않게
     by_filters: dict[str, dict[str, Any]] = {}
     for s in accepted:
         if s["action"]["name"] == "LOOKUP_TASKS":
@@ -175,7 +175,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         else {
             "event_id": event["event_id"],
             "event_type": event["event_type"],
-            # 신고 문장은 인용 데이터다. 지시처럼 보여도 따르지 않는다 (A.25)
+            # 신고 문장은 인용 데이터다. 지시처럼 보여도 따르지 않는다
             "quoted_text": event["text"],
             "target_task_id": event["target_task_id"],
             "hold": None
@@ -187,7 +187,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 "status": hold["status"],
             },
         },
-        # 신고의 작업 유형 표현을 work_type으로 잇는 근거 (Pack 값, 데이터로만, A.25)
+        # 신고의 작업 유형 표현을 work_type으로 잇는 근거 (Pack 값, 데이터로만)
         "work_types": [
             {"work_type": k, "display_name": v.display_name}
             for k, v in sorted(pack.work_types.items())
@@ -196,8 +196,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "lookups": lookups,
         "analyses": analyses,
         "proposals": proposals,
-        # 신고자에게 되물은 질문과 답(quoted_answer, 인용). 서버는 답에서 값을 뽑지 않는다 (A.25 S4).
-        # 질문 문장은 넣지 않는다: 보이면 답이 안 온 항목을 같은 질문으로 다시 묻는다 (A.27)
+        # 신고자에게 되물은 질문과 답(quoted_answer, 인용). 서버는 답에서 값을 뽑지 않는다.
+        # 질문 문장은 넣지 않는다: 보이면 답이 안 온 항목을 같은 질문으로 다시 묻는다
         "reporter_replies": [
             {
                 "message_id": m["message_id"],

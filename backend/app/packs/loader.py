@@ -1,4 +1,4 @@
-"""Domain Pack 로더 (설계서 §5.3, 부록 A.4).
+"""Domain Pack 로더.
 
 기동 시 한 번 읽는다. 위반은 모아서 PackError(사유 목록)로 거절한다.
 의존 방향: app.domain ← app.packs ← app.store.repos (app.store를 import하지 않는다).
@@ -37,7 +37,7 @@ PACK_FILES = ("pack.yaml", "rules.yaml", "site.yaml", "plan_r0.yaml", "scenario.
 EVALUATORS = {"SEPARATION", "CAPACITY"}
 RULE_RELATIONS = {"SAME", "ADJACENT", "BELOW"}
 FIXTURE_SOURCE_REF = "fixture:plan_r0"
-SITE_DESCRIPTION_MAX = 100  # 부록 A.23
+SITE_DESCRIPTION_MAX = 100
 
 
 class PackError(Exception):
@@ -52,7 +52,7 @@ class NewTaskRequest(Frozen):
     """scenario.yaml의 신규 작업 요청. task로 seed하지 않는다."""
 
     task_id: str
-    # 시연값 이름 (부록 A.20). 폼 본문이 아니므로 model_dump에서 뺀다(작업 값으로 쓰는 곳이 있다).
+    # 시연값 이름. 폼 본문이 아니므로 model_dump에서 뺀다(작업 값으로 쓰는 곳이 있다).
     label: str = Field(min_length=1, exclude=True)
     unit_id: str
     owner_actor_id: str
@@ -70,7 +70,7 @@ class NewTaskRequest(Frozen):
 
 
 class DemoRequest(Frozen):
-    """scenario.yaml의 시연 요청 (부록 A.20). 작업 요청 폼 본문 + 요청자. task로 seed하지 않는다."""
+    """scenario.yaml의 시연 요청. 작업 요청 폼 본문 + 요청자. task로 seed하지 않는다."""
 
     task_id: str
     label: str = Field(min_length=1)
@@ -86,17 +86,17 @@ class DemoRequest(Frozen):
 
 
 class DemoEvent(Frozen):
-    """scenario.yaml의 지연 신고 시연 문구 (부록 A.20)."""
+    """scenario.yaml의 지연 신고 시연 문구."""
 
     label: str = Field(min_length=1)
     event_type: Literal["DELAY", "OTHER"]
     text: str = Field(min_length=1)
     target_task_id: str | None = None
-    answer: str = ""  # 되묻기(ASK_REPORTER)에 신고자가 답하는 문장(사람 역할, A.25 S4)
+    answer: str = ""  # 되묻기(ASK_REPORTER)에 신고자가 답하는 문장(사람 역할)
 
 
 class DemoRejection(Frozen):
-    """scenario.yaml의 구조화 거절 시연값 (부록 A.20 2차). 사유 코드는 명령이 검사한다."""
+    """scenario.yaml의 구조화 거절 시연값. 사유 코드는 명령이 검사한다."""
 
     label: str = Field(min_length=1)
     reason_code: str = Field(min_length=1)
@@ -106,7 +106,7 @@ class DemoRejection(Frozen):
 
 
 class DemoIntake(Frozen):
-    """scenario.yaml의 자연어 작업 요청 시연값 (Work Intake, 부록 A.26)."""
+    """scenario.yaml의 자연어 작업 요청 시연값 (Work Intake)."""
 
     label: str = Field(min_length=1)
     requester: str
@@ -119,14 +119,14 @@ class LoadedPack(Frozen):
     name: str
     pack_hash: str
     work_types: dict[str, WorkType]
-    resource_types: dict[str, str] = Field(default_factory=dict)  # 코드 → 표시 이름 (A.26)
+    resource_types: dict[str, str] = Field(default_factory=dict)  # 코드 → 표시 이름
     rules: tuple[Rule, ...]
     site_id: str
-    site_description: str  # Replanning System prompt의 현장 설명 (부록 A.23)
-    timezone: str  # IANA (부록 A.20)
+    site_description: str  # Replanning System prompt의 현장 설명
+    timezone: str  # IANA
     horizon_start_utc: str
     horizon_minutes: int
-    work_intervals: tuple[tuple[int, int], ...]  # 근무 달력 (부록 A.20)
+    work_intervals: tuple[tuple[int, int], ...]  # 근무 달력
     units: tuple[WorkUnit, ...]
     actors: tuple[Actor, ...]
     zones: tuple[Zone, ...]
@@ -218,7 +218,7 @@ def _model(cls: type, data: Any, where: str, reasons: list[str]) -> Any:
 def _check_intervals(
     where: str, intervals: Any, horizon: Any, reasons: list[str]
 ) -> tuple[tuple[int, int], ...]:
-    """0 ≤ lo < hi ≤ horizon, 시작 순, 겹치거나 맞닿지 않음 (부록 A.4·A.20).
+    """0 ≤ lo < hi ≤ horizon, 시작 순, 겹치거나 맞닿지 않음.
 
     판정은 "구간 하나에 포함"으로 하므로 구간 모양을 강제해 합집합 판정과 같게 한다.
     """
@@ -254,7 +254,7 @@ def _duplicates(where: str, ids: list[Any], reasons: list[str]) -> None:
 def confirmed_fields(
     task: dict[str, Any], critical: tuple[str, ...], source_ref: str
 ) -> dict[str, FieldRecord]:
-    """critical field별 CONFIRMED 확인 기록 (부록 A.8). 값이 없는 필드는 키를 두지 않는다."""
+    """critical field별 CONFIRMED 확인 기록. 값이 없는 필드는 키를 두지 않는다."""
     values: dict[str, Any] = {
         "zone_id": task.get("zone_id"),
         "duration": task.get("duration"),
@@ -287,7 +287,7 @@ def _demo_requests(
     work_intervals: tuple[tuple[int, int], ...],
     reasons: list[str],
 ) -> list[DemoRequest]:
-    """시연 요청을 폼 검사와 같은 기준으로 확인한다. 요청 일정은 근무 구간 안이어야 한다 (A.20)."""
+    """시연 요청을 폼 검사와 같은 기준으로 확인한다. 요청 일정은 근무 구간 안이어야 한다."""
     actors_by_id = {a.actor_id: a for a in actors}
     resources_by_id = {r.resource_id: r for r in resources}
     out: list[DemoRequest] = []
@@ -342,7 +342,7 @@ def _check_predecessors(
     plan_tasks: dict[str, Task],
     reasons: list[str],
 ) -> None:
-    """선행 작업은 plan_r0 작업만(기동 때 seed되는 것), 자기 참조 금지, min_lag ≥ 0 (부록 A.22)."""
+    """선행 작업은 plan_r0 작업만(기동 때 seed되는 것), 자기 참조 금지, min_lag ≥ 0."""
     for p in predecessors:
         if p.task_id == task_id:
             reasons.append(f"{where}: predecessor refers to itself {task_id!r}")
@@ -353,7 +353,7 @@ def _check_predecessors(
 
 
 def _check_cycles(tasks: list[Task], reasons: list[str]) -> None:
-    """plan_r0 작업끼리의 선후행 순환을 거절한다 (부록 A.22). 자기 참조는 따로 보고한다."""
+    """plan_r0 작업끼리의 선후행 순환을 거절한다. 자기 참조는 따로 보고한다."""
     ids = {t.task_id for t in tasks}
     edges = {
         t.task_id: sorted({p.task_id for p in t.predecessors if p.task_id in ids} - {t.task_id})
@@ -400,7 +400,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             work_types[wt_id] = wt
     tags = {t for wt in work_types.values() for t in wt.hazard_tags}
 
-    # resource_types: 코드 → 표시 이름 (A.26 intake-p2). 자원의 resource_type은 여기 있어야 한다.
+    # resource_types: 코드 → 표시 이름. 자원의 resource_type은 여기 있어야 한다.
     resource_types: dict[str, str] = {}
     for rt_id, spec in _as_dict(
         pack_doc.get("resource_types"), "pack.yaml.resource_types", reasons
@@ -434,7 +434,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         if rule:
             rules.append(rule)
     # CP-SAT는 Pack과 관계없이 모든 자원에 NoOverlap을 건다. Rule Engine·Validator 기준을 맞추려고
-    # CAPACITY Rule을 정확히 1개 요구한다 (부록 A.22).
+    # CAPACITY Rule을 정확히 1개 요구한다.
     n_capacity = sum(1 for r in rule_items if isinstance(r, dict) and r.get("type") == "CAPACITY")
     if n_capacity != 1:
         reasons.append(f"rules.yaml.rules: exactly one CAPACITY rule required, got {n_capacity}")
@@ -501,7 +501,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
                 relations.append(ZoneRelation(zone_a=a, zone_b=b, relation=kind))
     _duplicates("site.yaml.zone_relations", [(r.zone_a, r.zone_b) for r in relations], reasons)
 
-    # timezone·근무 달력 (부록 A.20)
+    # timezone·근무 달력
     timezone = site_doc.get("timezone")
     if not isinstance(timezone, str) or not timezone:
         reasons.append("site.yaml: timezone missing (IANA name, e.g. Asia/Seoul)")
@@ -510,7 +510,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             ZoneInfo(timezone)
         except (ZoneInfoNotFoundError, ValueError):
             reasons.append(f"site.yaml: unknown timezone {timezone!r}")
-    # prompt 현장 설명 (부록 A.23). System을 str.format으로 렌더링하므로 중괄호를 막는다.
+    # prompt 현장 설명. System을 str.format으로 렌더링하므로 중괄호를 막는다.
     site_description = site_doc.get("site_description")
     if not isinstance(site_description, str) or not site_description.strip():
         reasons.append("site.yaml: site_description missing (one line, <= 100 chars)")
@@ -524,7 +524,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             f"site.yaml: site_description must be one line, <= {SITE_DESCRIPTION_MAX} chars,"
             " without braces"
         )
-    # 원점 시각은 horizon_start_utc + timezone으로 계산한다 (부록 A.23)
+    # 원점 시각은 horizon_start_utc + timezone으로 계산한다
     start_utc = site_doc.get("horizon_start_utc")
     try:
         if datetime.fromisoformat(str(start_utc)).tzinfo is None:
@@ -562,7 +562,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         for u in (r.owner_unit_id, *r.allowed_unit_ids):
             if u not in unit_ids:
                 reasons.append(f"site.yaml.resources {r.resource_id}: undefined unit {u!r}")
-    # 가용 구간: 0 ≤ lo < hi ≤ horizon, 시작 순, 겹치거나 맞닿지 않음 (부록 A.4).
+    # 가용 구간: 0 ≤ lo < hi ≤ horizon, 시작 순, 겹치거나 맞닿지 않음.
     # Rule Engine은 한 구간 포함, CP-SAT은 합집합으로 판정하므로 두 판정이 같도록 강제한다.
     for r in resources:
         where = f"site.yaml.resources {r.resource_id}: available_intervals"
@@ -582,7 +582,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         if rid is not None and rid not in resource_ids:
             reasons.append(f"{where}: undefined resource {rid!r}")
 
-    # plan_r0 tasks: hazard_tags 입력은 버리고 work_type에서 도출 (I-14)
+    # plan_r0 tasks: hazard_tags 입력은 버리고 work_type에서 도출
     tasks: list[Task] = []
     task_items = _as_list(plan_doc.get("tasks"), "plan_r0.yaml.tasks", reasons)
     for i, t in enumerate(task_items):
@@ -647,7 +647,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
         if isinstance(nt.get("requested"), dict):
             nt["requested"] = {"task_id": nt.get("task_id"), **nt["requested"]}
         new_task = _model(NewTaskRequest, nt, "scenario.yaml.new_task", reasons)
-        # 신규 작업의 기준 배정 = (earliest_start, requested_resource_id) (부록 A.10)
+        # 신규 작업의 기준 배정 = (earliest_start, requested_resource_id)
         if new_task and new_task.requested.start != new_task.earliest_start:
             reasons.append(
                 f"scenario.yaml.new_task: requested.start {new_task.requested.start}"
@@ -666,7 +666,7 @@ def _build(name: str, pack_hash: str, raw: dict[str, Any]) -> LoadedPack:
             if not fits_work_interval(req.start, req.end, work_intervals):
                 reasons.append("scenario.yaml.new_task: requested outside work_intervals")
 
-    # 시연 요청·신고 문구 (부록 A.20)
+    # 시연 요청·신고 문구
     demo_requests = _demo_requests(
         scen_doc, work_types, actors, zone_ids, resources, horizon, work_intervals, reasons
     )

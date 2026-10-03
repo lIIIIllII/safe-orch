@@ -1,4 +1,4 @@
-"""Observation의 agent_type 공통 부분 (설계서 §11.2 observe, 부록 A.16·A.23).
+"""Observation의 agent_type 공통 부분.
 
 store를 import하지 않는다. agent_type별 관찰 계산은 observers/<agent_type>.py에 있다.
 """

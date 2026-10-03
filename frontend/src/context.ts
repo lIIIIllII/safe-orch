@@ -1,4 +1,4 @@
-// 화면 공통 환경: site_id, Pack 표시 정보(meta), 현장 시계, 시연값 (부록 A.20 2차).
+// 화면 공통 환경: site_id, Pack 표시 정보(meta), 현장 시계, 시연값.
 // 화면 코드는 Pack 값을 상수로 두지 않고 여기서만 읽는다.
 
 import { createContext, useContext } from 'react'

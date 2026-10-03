@@ -1,4 +1,4 @@
-"""Pack → 초기 데이터 seed (부록 A.6). write() 안에서 tx를 받아 호출한다."""
+"""Pack → 초기 데이터 seed. write() 안에서 tx를 받아 호출한다."""
 
 import sqlite3
 

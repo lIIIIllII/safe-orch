@@ -1,4 +1,4 @@
-"""Independent Validator (설계서 §8, 부록 A.13). Scene 5와 T03–T07·T09·T29·T31."""
+"""Independent Validator. Scene 5와 T03–T07·T09·T29·T31."""
 
 import ast
 import inspect
@@ -198,7 +198,7 @@ def test_t05_window_c04(alpha):
 
 
 def test_calendar_c04(seeded):
-    """근무 구간 하나에 들어가지 않는 배정은 C04 CALENDAR (부록 A.20). 시간창 안이어도 FAIL."""
+    """근무 구간 하나에 들어가지 않는 배정은 C04 CALENDAR. 시간창 안이어도 FAIL."""
     snap = with_facts(take_snapshot(seeded), work_intervals=((30, 480), (1440, 1920), (2880, 3360)))
     v = validate(snap, _reconfirm(snap), None, seeded)
     assert v.status == "FAIL"
@@ -212,7 +212,7 @@ def test_t05_precedence_c05(seeded):
 
 
 def test_predecessor_missing_c05(seeded):
-    """선행 작업이 검사 대상 배정에 없으면 건너뛰지 않는다 (fail-closed, 부록 A.22)."""
+    """선행 작업이 검사 대상 배정에 없으면 건너뛰지 않는다 (fail-closed)."""
     snap = _retask(take_snapshot(seeded), "E", predecessors=(Predecessor(task_id="X9"),))
     found = detect_conflicts(snap, snap.facts().check_assignments(), seeded)
     assert [(c.rule_id, c.task_ids) for c in found] == [("PREDECESSOR_MISSING", ("E",))]
@@ -222,7 +222,7 @@ def test_predecessor_missing_c05(seeded):
 
 
 def test_predecessor_dropped_from_candidate_c02_and_c05(seeded):
-    """후보에서 선행 작업이 빠지면 C02 TASK_MISSING과 함께 C05 PREDECESSOR_MISSING이다 (A.22)."""
+    """후보에서 선행 작업이 빠지면 C02 TASK_MISSING과 함께 C05 PREDECESSOR_MISSING이다."""
     snap = _retask(take_snapshot(seeded), "E", predecessors=(Predecessor(task_id="D"),))
     base = snap.facts().base_assignments()
     cand = _reconfirm(snap, tuple(a for tid, a in sorted(base.items()) if tid != "D"))
@@ -231,7 +231,7 @@ def test_predecessor_dropped_from_candidate_c02_and_c05(seeded):
 
 
 def test_cpsat_predecessor_missing_infeasible(with_a):
-    """선행 작업이 Snapshot에 없는 작업이 있으면 해를 내지 않는다(Validator C05와 같은 기준, A.22).
+    """선행 작업이 Snapshot에 없는 작업이 있으면 해를 내지 않는다(Validator C05와 같은 기준).
 
     평소 L1은 OPTIMAL(Alpha)이다. 범위 밖 작업(E, UB)의 누락도 모델 전체를 INFEASIBLE로 만든다.
     """

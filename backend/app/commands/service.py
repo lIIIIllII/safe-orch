@@ -1,4 +1,4 @@
-"""Command Service 공통 실행 (설계서 §9.4·§11.3-6·§12, 부록 A.14).
+"""Command Service 공통 실행.
 
 한 명령 = write() 트랜잭션 1개: 멱등 키 확인 → 권한·버전 검사와 도메인 변경(handler) →
 Audit(APPLIED만) → CommandResult. 잠금 timeout은 저장하지 않고 RETRYABLE_ERROR로 응답한다.

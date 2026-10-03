@@ -1,4 +1,4 @@
-"""plan 조회 (부록 A.6). 현재 plan = site.plan_revision의 plan."""
+"""plan 조회. 현재 plan = site.plan_revision의 plan."""
 
 import sqlite3
 

@@ -1,11 +1,11 @@
-"""Replanning Action 실행기 (설계서 §11.2·§11.4·§11.7, 부록 A.16·A.21·A.23).
+"""Replanning Action 실행기.
 
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 공통 판정(MALFORMED·LLM 오류·
 STALE_OBSERVATION·연속 2회·step 완료 기록)은 ToolGateway에 있고, 이 클래스는 그 도우미를 받아 쓴다.
 SOLVE_WITH_SCOPE·TRY_ALTERNATIVE_RESOURCE는 예약 tx → tx 밖 Solver → 등록 tx, 나머지는 tx 하나다.
-ASK_TASK_OWNER는 MOVABILITY 제안과 질문 메시지를 만들고 대기한다(A.21 5).
-관찰 계산은 binding.observer로 쓴다(observers를 import하지 않는다, A.23).
-승인·확정·Hold 해제·Proposal 확인·Validation 등록 함수는 없다(I-01).
+ASK_TASK_OWNER는 MOVABILITY 제안과 질문 메시지를 만들고 대기한다.
+관찰 계산은 binding.observer로 쓴다(observers를 import하지 않는다).
+승인·확정·Hold 해제·Proposal 확인·Validation 등록 함수는 없다.
 """
 
 import sqlite3
@@ -119,7 +119,7 @@ class ReplanningExecutor:
         action: spec.AskTaskOwner,
         task: Task,
     ) -> GatewayResult:
-        """MOVABILITY 제안 → 질문 메시지(수신자 = 작업 담당자) → 사람 라운드 차감 → 대기 (A.21 5).
+        """MOVABILITY 제안 → 질문 메시지(수신자 = 작업 담당자) → 사람 라운드 차감 → 대기.
 
         동의 효과는 구조화 값(axis·allowed_values)으로만 정해진다. 모델의 question은 agent_text로만 둔다.
         """
@@ -156,7 +156,7 @@ class ReplanningExecutor:
             context_version=site.context_version,
         )
         charge(tx, run_id, human_rounds=1)
-        # 관찰 이후 새 변화(wake)가 왔으면 질문은 열어 둔 채 다시 관찰한다 (I-19)
+        # 관찰 이후 새 변화(wake)가 왔으면 질문은 열어 둔 채 다시 관찰한다
         outcome = self.wait_or_continue(tx, run_id, step_no, "MESSAGE", message_id)
         self._complete(
             tx,
@@ -199,7 +199,7 @@ class ReplanningExecutor:
             return GatewayResult("DONE", None, "ESCALATED", "ESCALATE_NO_SOLUTION")
 
     def _solve(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
-        """SOLVE_WITH_SCOPE(level)와 TRY_ALTERNATIVE_RESOURCE(주 충돌 L0 + 대체 자원 1개, A.21 5)."""
+        """SOLVE_WITH_SCOPE(level)와 TRY_ALTERNATIVE_RESOURCE(주 충돌 L0 + 대체 자원 1개)."""
         action = parsed.action
         try_resources: dict[str, list[str]] | None = None
         if isinstance(action, spec.TryAlternativeResource):
@@ -248,7 +248,7 @@ class ReplanningExecutor:
                 tx, site_id, candidate.context_version, candidate.assignments
             )
             if duplicate:
-                # 같은 Context에서 거절된 배정을 다시 제안하지 않는다(§9.2, T33). 결과는 남기고 후보는 없다.
+                # 같은 Context에서 거절된 배정을 다시 제안하지 않는다(T33). 결과는 남기고 후보는 없다.
                 candidate = None
                 tool_result = {**tool_result, "candidate_id": None}
             try:
@@ -291,7 +291,7 @@ class ReplanningExecutor:
             if result.stage1.get("status") == "MODEL_INVALID":
                 outcome = GatewayResult("DONE", "MODEL_INVALID", "ERROR", "MODEL_INVALID")
             elif candidate is not None:
-                # 관찰 이후 새 변화(wake)가 왔으면 대기하지 않고 다시 관찰한다 (§11.3(1)·I-19, T36)
+                # 관찰 이후 새 변화(wake)가 왔으면 대기하지 않고 다시 관찰한다 (T36)
                 outcome = self.wait_or_continue(
                     tx, run_id, step_no, "CANDIDATE_OUTCOME", candidate.candidate_id
                 )
@@ -332,7 +332,7 @@ def _solver_summary(
 
 
 def movability_text(pack: LoadedPack, task: Task, values: list[str]) -> str:
-    """질문의 서버 문구(동의 내용의 기준, A.21 5). Pack 표시 이름으로 서버가 만든다."""
+    """질문의 서버 문구(동의 내용의 기준). Pack 표시 이름으로 서버가 만든다."""
     name = pack.work_types[task.work_type].display_name
     return (
         f"{task.task_id}({name}) 작업에 {', '.join(values)}도 쓸 수 있게 허용하시겠습니까? "
@@ -342,7 +342,7 @@ def movability_text(pack: LoadedPack, task: Task, values: list[str]) -> str:
 
 
 def assignments_hash(assignments: Any) -> str:
-    """task_id순 배정의 canonical hash (§9.2 assignments_hash)."""
+    """task_id순 배정의 canonical hash."""
     return canonical_hash(
         [a.model_dump(mode="json") for a in sorted(assignments, key=lambda a: a.task_id)]
     )

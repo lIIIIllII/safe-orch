@@ -1,4 +1,4 @@
-"""Event Response Agent — 최소 경로 (설계서 §18.2.3, 부록 A.25).
+"""Event Response Agent — 최소 경로.
 
 R1(기본안 B로 확정) → 지연 신고 → 즉시 SITE Hold → ER(LOOKUP → ANALYZE → PROPOSE) → Supervisor 사실 수정 확인
 → FACT_CONFIRMED 해제 → 재검사 → Replanning(UB) → Gamma(E 10:00) → R2. 스크립트 모델(Router)로 돌린다.
@@ -432,12 +432,12 @@ def test_event_response_prompt_fingerprint_keys_and_no_pack_values(seeded, event
     _, er = _to_proposal(seeded)
     assert tuple(sorted(_steps(er.run_id)[0]["observation"])) == prompt.OBSERVATION_KEYS
     for value in ("도장", "PAINTING", "D2", "YARD-01", "09:00"):
-        assert value not in prompt.SYSTEM  # 템플릿에는 Pack 값이 없다 (A.23·A.25)
+        assert value not in prompt.SYSTEM  # 템플릿에는 Pack 값이 없다
     assert "첫날 09:00" in prompt.render_system(seeded)
 
 
 def test_state_shows_fact_update_in_inbox_and_hold(seeded, event_response_on):
-    """state: Supervisor 받은 요청의 사실 수정(fact), Hold의 사실 수정안 목록 (A.25 화면)."""
+    """state: Supervisor 받은 요청의 사실 수정(fact), Hold의 사실 수정안 목록."""
 
     pack = seeded
     refs, _ = _to_proposal(pack)
@@ -455,7 +455,7 @@ def test_state_shows_fact_update_in_inbox_and_hold(seeded, event_response_on):
 
 
 def test_same_lookup_keeps_last_result_only(seeded, event_response_on):
-    """같은 조건의 조회를 반복해도 관찰 lookups에는 조건마다 마지막 결과 하나만 남는다 (A.25 S2 뒤)."""
+    """같은 조건의 조회를 반복해도 관찰 lookups에는 조건마다 마지막 결과 하나만 남는다."""
     zone = call("LOOKUP_TASKS", "구역으로 조회", zone_id="D2")
     replies = [_lookup(), _lookup(), zone, _lookup(), _analyze(), _propose()]
     _, er = _to_proposal(seeded, replies)
@@ -468,7 +468,7 @@ def test_same_lookup_keeps_last_result_only(seeded, event_response_on):
 
 
 def test_withdraw_of_other_request_does_not_wake_event_response(seeded, event_response_on):
-    """수정안 확인을 기다리는 ER Run은 다른 요청의 철회로 깨어나지 않는다 (A.25 이후 결함, A.26 6)."""
+    """수정안 확인을 기다리는 ER Run은 다른 요청의 철회로 깨어나지 않는다."""
 
     pack = seeded
     _, er = _to_proposal(pack)
@@ -489,7 +489,7 @@ def test_withdraw_of_other_request_does_not_wake_event_response(seeded, event_re
 
 
 def test_ambiguous_report_asks_reporter_then_proposes(seeded, event_response_on):
-    """시각이 없는 신고 → ASK_REPORTER → 신고자 자유 텍스트 답(ANSWER) → 분석 → 수정안 (A.25 S4)."""
+    """시각이 없는 신고 → ASK_REPORTER → 신고자 자유 텍스트 답(ANSWER) → 분석 → 수정안."""
     pack = seeded
     vague = pack.demo_events[1]
     _r1(pack)
@@ -546,7 +546,7 @@ def test_ask_reporter_closed_while_question_open_or_proposal_pending(seeded, eve
 
 
 def test_ask_reporter_opens_only_after_lookup(seeded, event_response_on):
-    """① 사람에게 묻는 시점 (A.27): 이 Run에서 LOOKUP_TASKS를 하기 전에는 ASK_REPORTER가 닫혀 있다.
+    """① 사람에게 묻는 시점: 이 Run에서 LOOKUP_TASKS를 하기 전에는 ASK_REPORTER가 닫혀 있다.
 
     조회 결과가 0건이어도 조회는 한 것이라 열린다(대상을 조회로 알 수 없을 때 묻는 것은 허용).
     """
@@ -577,7 +577,7 @@ def test_ask_reporter_opens_only_after_lookup(seeded, event_response_on):
 
 
 def test_lookup_start_slack_and_analysis_delay_minutes(seeded, event_response_on):
-    """조회 결과의 start_slack(= latest_start − earliest_start)과 분석의 delay_minutes (A.27).
+    """조회 결과의 start_slack(= latest_start − earliest_start)과 분석의 delay_minutes.
 
     도장 작업 중 P·W는 시작이 고정(slack 0)이라 늦추는 수정안을 낼 수 없고, E만 75분 늦출 수 있다.
     """

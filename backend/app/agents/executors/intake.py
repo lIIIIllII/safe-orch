@@ -1,10 +1,10 @@
-"""Work Intake Action 실행기 (설계서 §18.2.4, 부록 A.26).
+"""Work Intake Action 실행기.
 
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 모든 Action은 tx 하나다:
 begin_step(활성·차감·STALE_OBSERVATION·재관찰·허용 판정) → 효과 → step 완료.
 값 검증과 작업 생성은 폼과 같은 함수(validate_task_request·create_requested_task)를 쓴다.
-확인 값은 확인 메시지를 만든 이 step의 결과(values)에 묶인다. 완료는 그 값과 같을 때만 된다(D01).
-승인·확정·Hold 해제·Proposal 확인 함수는 없다(I-01).
+확인 값은 확인 메시지를 만든 이 step의 결과(values)에 묶인다. 완료는 그 값과 같을 때만 된다.
+승인·확정·Hold 해제·Proposal 확인 함수는 없다.
 """
 
 import sqlite3
@@ -125,7 +125,7 @@ class IntakeExecutor:
         obs: Observation,
         action: spec.AskClarification,
     ) -> GatewayResult:
-        """확인 질문(제안 없는 QUESTION) → 요청자. 답은 자유 텍스트(ANSWER)로 온다 (A.26 3)."""
+        """확인 질문(제안 없는 QUESTION) → 요청자. 답은 자유 텍스트(ANSWER)로 온다."""
         site = get_site(tx, self.pack.site_id)
         assert site is not None
         request = obs.data["request"]
@@ -205,7 +205,7 @@ class IntakeExecutor:
         obs: Observation,
         action: spec.CompleteTaskspec,
     ) -> GatewayResult:
-        """확인 값과 같으면 폼과 같은 함수로 작업을 만든다(source_ref message:<mid>) (A.26 2)."""
+        """확인 값과 같으면 폼과 같은 함수로 작업을 만든다(source_ref message:<mid>)."""
         last = obs.data["confirmations"][-1]
         submitted = action.values.model_dump()
         if submitted != last["values"]:
@@ -231,7 +231,7 @@ class IntakeExecutor:
 
 
 def values_check_text(pack: LoadedPack, task_id: str, v: dict[str, Any]) -> str:
-    """값 확인 요청의 서버 문구: 값을 날짜·시각과 분으로, 확인의 효과(동의)를 함께 (A.26 2)."""
+    """값 확인 요청의 서버 문구: 값을 날짜·시각과 분으로, 확인의 효과(동의)를 함께."""
 
     def at(m: int) -> str:
         return f"{local_clock(pack.horizon_start_utc, pack.timezone, m)}({m}분)"

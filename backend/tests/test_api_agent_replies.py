@@ -1,4 +1,4 @@
-"""A.24–A.28에서 더한 사람 응답을 API 경로(TestClient)로 한 번씩 부른다 (A.26 후속).
+"""Agent가 보낸 요청에 대한 사람 응답을 API 경로(TestClient)로 한 번씩 부른다.
 
 명령 함수 테스트는 API 본문 모델을 지나지 않는다. 그래서 API 본문이 명령 계층과 다르면(예: ReplyBody에
 ANSWER가 없음) 화면에서만 422가 났다. 여기서는 화면이 보내는 본문 그대로 HTTP로 부른다.
@@ -107,7 +107,7 @@ def test_answer_on_proposal_question_is_rejected_via_api(seeded, client):
     assert _reasons(res) == (409, ["INVALID_DECISION"])
 
 
-# ── Coordination: 변경 요청 답, 제약 초안 확정·폐기 (A.24) ─────
+# ── Coordination: 변경 요청 답, 제약 초안 확정·폐기 ─────
 
 
 def test_change_request_accept_via_api(seeded, client, coordination_on):
@@ -155,7 +155,7 @@ def test_draft_constraint_discard_via_api(seeded, client, coordination_on):
     assert _rows("proposal", "FEEDBACK_CONSTRAINT")[0]["status"] == "DISCARDED"
 
 
-# ── Event Response: 사실 수정 확인·폐기, FACT_CONFIRMED 해제 (A.25) ─
+# ── Event Response: 사실 수정 확인·폐기, FACT_CONFIRMED 해제 ─
 
 
 def _release(client, hold_id, resolution):

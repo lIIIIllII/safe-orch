@@ -1,4 +1,4 @@
-"""site·구역 관계 조회 (부록 A.6). conn을 인자로 받고 트랜잭션을 열지 않는다."""
+"""site·구역 관계 조회. conn을 인자로 받고 트랜잭션을 열지 않는다."""
 
 import sqlite3
 
@@ -40,7 +40,7 @@ def list_zone_relations(conn: sqlite3.Connection, site_id: str) -> list[ZoneRela
 
 
 def bump_context_version(tx: sqlite3.Connection, site_id: str) -> int:
-    """context_version += 1 (§5.2). 새 값을 반환한다. write() 안에서만 호출한다."""
+    """context_version += 1. 새 값을 반환한다. write() 안에서만 호출한다."""
     row = tx.execute(
         "UPDATE site SET context_version = context_version + 1 WHERE site_id = ?"
         " RETURNING context_version",
@@ -52,7 +52,7 @@ def bump_context_version(tx: sqlite3.Connection, site_id: str) -> int:
 
 
 def bump_plan_revision(tx: sqlite3.Connection, site_id: str) -> int:
-    """plan_revision += 1 (§5.2, 확정 성공 시에만). 새 값을 반환한다."""
+    """plan_revision += 1 (확정 성공 시에만). 새 값을 반환한다."""
     row = tx.execute(
         "UPDATE site SET plan_revision = plan_revision + 1 WHERE site_id = ?"
         " RETURNING plan_revision",

@@ -1,4 +1,4 @@
-"""소스 import 경계 검사 (설계서 §11.2, §14)."""
+"""소스 import 경계 검사."""
 
 import ast
 from pathlib import Path
@@ -65,7 +65,7 @@ def test_agent_graph_and_specs_do_not_import_store_or_commands():
 
 
 def test_domain_imports_no_app_modules():
-    """의존 방향 app.domain ← app.packs ← app.store.repos (부록 A.1)."""
+    """의존 방향 app.domain ← app.packs ← app.store.repos."""
     files = _py_files(APP / "domain")
     bad = []
     for f in files:
@@ -90,19 +90,19 @@ def test_domain_and_packs_scanner_detects_violation():
 
 
 def test_solver_does_not_import_rules_or_validator():
-    """제약 생성(solver)과 검사(rules·validator) 코드를 나눈다 (부록 A.11)."""
+    """제약 생성(solver)과 검사(rules·validator) 코드를 나눈다."""
     files = _py_files(APP / "solver")
     assert files and _violations(files, ["app.rules", "app.validator"]) == []
 
 
 def test_agent_specs_do_not_import_solver():
-    """Solver는 Tool Gateway로만 부른다. AgentSpec은 순수 데이터다 (부록 A.16)."""
+    """Solver는 Tool Gateway로만 부른다. AgentSpec은 순수 데이터다."""
     files = _py_files(APP / "agents" / "specs")
     assert files and _violations(files, ["app.solver"]) == []
 
 
 def test_agent_graph_does_not_import_agent_store_modules():
-    """graph.py는 port로만 DB에 닿는다. store를 쓰는 agents 모듈도 import하지 않는다 (부록 A.16)."""
+    """graph.py는 port로만 DB에 닿는다. store를 쓰는 agents 모듈도 import하지 않는다."""
     files = [APP / "agents" / "graph.py"]
     forbidden = [
         "app.agents.runtime",
@@ -115,7 +115,7 @@ def test_agent_graph_does_not_import_agent_store_modules():
     assert _violations(files, forbidden) == []
 
 
-# ── agent_type 등록 구조 (부록 A.23) ───────────────────────────
+# ── agent_type 등록 구조 ───────────────────────────
 
 
 AGENTS = APP / "agents"
@@ -148,7 +148,7 @@ def test_only_runtime_imports_registry():
 
 
 def test_tool_gateway_does_not_import_registry_or_agent_modules():
-    """ToolGateway는 runtime이 넘긴 binding을 쓴다 (부록 A.23)."""
+    """ToolGateway는 runtime이 넘긴 binding을 쓴다."""
     forbidden = ["app.agents.registry", "app.agents.observers", "app.agents.executors"]
     assert _violations([AGENTS / "tool_gateway.py"], forbidden) == []
 
@@ -168,7 +168,7 @@ def _attribute_sites(attr: str) -> set[tuple[str, str]]:
 
 
 def test_executor_is_called_only_inside_tool_gateway_execute():
-    """실행기는 ToolGateway가 만들고(__init__) execute 안에서만 부른다. 도구 실행 경로는 하나다 (§11.2)."""
+    """실행기는 ToolGateway가 만들고(__init__) execute 안에서만 부른다. 도구 실행 경로는 하나다."""
     assert _attribute_sites("executor") == {
         ("agents/tool_gateway.py", "__init__"),
         ("agents/tool_gateway.py", "execute"),
@@ -176,7 +176,7 @@ def test_executor_is_called_only_inside_tool_gateway_execute():
 
 
 def test_gateway_and_executors_have_no_authority_functions():
-    """승인·확정·Hold 해제·Proposal 확인·미응답 수용 함수가 코드상 없다 (I-01, §3.2)."""
+    """승인·확정·Hold 해제·Proposal 확인·미응답 수용 함수가 코드상 없다."""
     words = ("approve", "commit", "release", "confirm", "waive")
     bad = []
     for f in _py_files(AGENTS / "tool_gateway.py", AGENTS / "executors"):
@@ -194,7 +194,7 @@ def test_commands_do_not_import_agents():
 
 
 def test_coordinator_imports_only_agents_runtime():
-    """Coordinator는 Run 호출에 agents.runtime만 쓴다 (부록 A.15·A.16)."""
+    """Coordinator는 Run 호출에 agents.runtime만 쓴다."""
     bad = []
     for f in _py_files(APP / "coordinator"):
         mods = _imports(f, ast.parse(f.read_text(encoding="utf-8")))
@@ -208,7 +208,7 @@ def test_coordinator_imports_only_agents_runtime():
 
 
 def test_coordinator_does_not_import_solver():
-    """Solver는 Replanning Run이 부른다. Coordinator는 결정론 단계만 한다 (부록 A.15)."""
+    """Solver는 Replanning Run이 부른다. Coordinator는 결정론 단계만 한다."""
     files = _py_files(APP / "coordinator")
     assert files and _violations(files, ["app.solver"]) == []
 

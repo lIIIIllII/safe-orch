@@ -1,4 +1,4 @@
-"""불변 객체의 내용 hash (설계서 §5.2, 부록 A.11·A.13). solver와 validator가 같이 쓴다."""
+"""불변 객체의 내용 hash. solver와 validator가 같이 쓴다."""
 
 from collections.abc import Mapping, Sequence
 
@@ -32,7 +32,7 @@ def search_key(
     resource_alternatives: Mapping[str, Sequence[str]],
     time_limit_s: int,
 ) -> str:
-    """실효 탐색 키: "같은 실효 SearchSpec 미시도"(§11.7, A.11) 판정용. Solver 입력만 넣는다 (A.21).
+    """실효 탐색 키: "같은 실효 SearchSpec 미시도" 판정용. Solver 입력만 넣는다.
 
     무결성 hash(search_spec_hash)와 다르다. snapshot_hash 대신 Solver가 읽는 사실만 넣으므로
     context_version·plan_revision 번호, Consent, fields, revision 번호, Hold가 바뀌어도 같다.

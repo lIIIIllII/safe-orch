@@ -1,4 +1,4 @@
-"""decision·feedback_constraint 기록과 조회 (설계서 §5.1·§9.2, 부록 A.14). 둘 다 불변이다."""
+"""decision·feedback_constraint 기록과 조회. 둘 다 불변이다."""
 
 import sqlite3
 from typing import Any
@@ -93,7 +93,7 @@ def list_constraints(conn: sqlite3.Connection, site_id: str) -> list[FeedbackCon
 def rejected_candidate_ids(
     conn: sqlite3.Connection, site_id: str, context_version: int
 ) -> list[str]:
-    """그 Context에서 만들어진 후보 중 거절된 것 (같은 assignments 재제안 Guard, §9.2)."""
+    """그 Context에서 만들어진 후보 중 거절된 것 (같은 assignments 재제안 Guard)."""
     return [
         r["candidate_id"]
         for r in rows(
@@ -107,7 +107,7 @@ def rejected_candidate_ids(
 
 
 def list_case_rejections(conn: sqlite3.Connection, case_id: str) -> list[dict[str, Any]]:
-    """이 Case의 후보에 대한 거절 (Observation rejections, §9.2·A.21). 자유 텍스트는 인용 필드로."""
+    """이 Case의 후보에 대한 거절 (Observation rejections). 자유 텍스트는 인용 필드로."""
     found = rows(
         conn,
         "SELECT d.candidate_id, d.reason_code, d.target_task_ids, d.axes, d.comment"

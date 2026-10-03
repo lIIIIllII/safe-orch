@@ -1,5 +1,5 @@
-// 코드 → 한국어 문구 (부록 A.19). 화면은 문구와 원래 코드를 함께 보여 주고, 표에 없는 코드는 코드만 보여 준다.
-// Pack과 무관한 공통 코드(reason_code, 상태값, 기본 제약 id)만 둔다. 작업 유형·Pack Rule 이름은 meta에서 받는다 (A.20).
+// 코드 → 한국어 문구. 화면은 문구와 원래 코드를 함께 보여 주고, 표에 없는 코드는 코드만 보여 준다.
+// Pack과 무관한 공통 코드(reason_code, 상태값, 기본 제약 id)만 둔다. 작업 유형·Pack Rule 이름은 meta에서 받는다.
 
 export const REASON: Record<string, string> = {
   // 응답 status
@@ -8,7 +8,7 @@ export const REASON: Record<string, string> = {
   REJECTED: '거절됨',
   RETRYABLE_ERROR: '잠시 후 재시도 필요(잠금 대기 초과)',
   NETWORK_ERROR: '서버 응답 없음',
-  // 승인 (A.14 검사 순서)
+  // 승인
   NOT_AUTHORIZED: '현재 Actor에게 권한 없음',
   CANDIDATE_NOT_FOUND: '후보 없음',
   CANDIDATE_REJECTED: '이미 거절된 후보',
@@ -26,7 +26,7 @@ export const REASON: Record<string, string> = {
   INVALID_REASON_CODE: '거절 사유 코드 오류',
   TARGET_REQUIRED: '작업 고정 거절은 대상 작업과 축 필요',
   TASK_NOT_FOUND: '대상 작업 없음',
-  // 요청 철회 (A.20)
+  // 요청 철회
   TASK_IN_PLAN: '확정 계획에 있는 작업은 철회 불가',
   TASK_HAS_SUCCESSORS: '이 작업을 선행으로 둔 요청이 있음(후속 요청을 먼저 철회)',
   // Event·Hold
@@ -35,7 +35,7 @@ export const REASON: Record<string, string> = {
   HOLD_NOT_ACTIVE: '이미 해제된 Hold',
   RESOLUTION_NOT_SUPPORTED: '지원하지 않는 해제 사유',
   FACT_NOT_CONFIRMED: '이 신고의 사실 수정이 아직 확정되지 않음',
-  // Work Intake (A.26)
+  // Work Intake
   INVALID_DECISION: '이 메시지에 쓸 수 없는 답(질문은 답변, 확인은 확인·거절)',
   TASK_ID_IN_INTAKE: '같은 작업 ID로 진행 중인 자연어 요청 있음',
   TASKSPEC_INVALID: '작업 요청 값이 검증을 통과하지 못함',
@@ -50,7 +50,7 @@ export const REASON: Record<string, string> = {
   INVALID_WINDOW: '시간창 모순',
   WINDOW_OUTSIDE_WORK_HOURS: '시간창 안에 근무시간 시작 자리가 없음',
   PREDECESSOR_NOT_FOUND: '선행 작업 없음',
-  // 답변·확인 (A.21 2)
+  // 답변·확인
   MESSAGE_NOT_FOUND: '메시지 없음',
   PROPOSAL_NOT_FOUND: '제안 없음',
   ALREADY_ANSWERED: '이미 다른 결정으로 답함',
@@ -192,7 +192,7 @@ export const CANDIDATE_KIND: Record<string, string> = {
   RECONFIRM: '재확정',
 }
 
-/** Validation 대표 상태 배지 (§13). PASS 문구는 "정의된 규칙 검사 통과". */
+/** Validation 대표 상태 배지. PASS 문구는 "정의된 규칙 검사 통과". */
 export const VALIDATION_BADGE: Record<string, { icon: string; text: string; cls: string }> = {
   PASS: { icon: '✓', text: '정의된 규칙 검사 통과', cls: 'pass' },
   FAIL: { icon: '✕', text: '규칙 위반', cls: 'fail' },
@@ -338,7 +338,7 @@ export const DECISION: Record<string, string> = {
   ANSWER: '답변',
 }
 
-/** 받은 요청 유형 (A.21·A.24) */
+/** 받은 요청 유형 */
 export const MESSAGE_TYPE: Record<string, string> = {
   QUESTION: '담당자 확인 질문',
   CHANGE_REQUEST: '변경 요청',
@@ -349,7 +349,7 @@ export const MESSAGE_TYPE: Record<string, string> = {
   NOTICE: '확정 통지',
 }
 
-/** 유형별 답 버튼·답 표시 문구 (A.24). 변경 요청의 DECLINE은 이견, 제약 초안의 ACCEPT는 확정이다. */
+/** 유형별 답 버튼·답 표시 문구. 변경 요청의 DECLINE은 이견, 제약 초안의 ACCEPT는 확정이다. */
 export const DECISION_BY_TYPE: Record<string, Record<string, string>> = {
   CHANGE_REQUEST: { ACCEPT: '수락', DECLINE: '이견' },
   CONFIRMATION: { ACCEPT: '확정', DECLINE: '폐기' },
@@ -357,7 +357,7 @@ export const DECISION_BY_TYPE: Record<string, Record<string, string>> = {
   TASKSPEC: { ACCEPT: '확인', DECLINE: '거절' },
 }
 
-/** 사실 수정 필드 (A.25) */
+/** 사실 수정 필드 */
 export const FACT_FIELD: Record<string, string> = {
   earliest_start: '시작 가능 시각',
 }
@@ -367,7 +367,7 @@ export const AXIS: Record<string, string> = {
   RESOURCE: '자원',
 }
 
-/** 자원 조회 제외 사유 (A.21 5) */
+/** 자원 조회 제외 사유 */
 export const EXCLUDE_REASON: Record<string, string> = {
   NOT_ALLOWED: '이 Unit 사용 권한 없음',
   NO_AVAILABILITY: '가용 구간 없음',

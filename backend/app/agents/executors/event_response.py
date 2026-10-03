@@ -1,9 +1,9 @@
-"""Event Response Action 실행기 (설계서 §18.2.3, 부록 A.25).
+"""Event Response Action 실행기.
 
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 모든 Action은 tx 하나다:
 begin_step(활성·차감·STALE_OBSERVATION·재관찰·허용 판정) → 효과 → step 완료.
-사실 수정은 제안(FACT_UPDATE)까지만 만든다. 효력은 Supervisor 확인 명령이 만든다(I-01·I-13).
-조회·영향 분석 계산은 binding.observer로 쓴다(observers를 import하지 않는다, A.23).
+사실 수정은 제안(FACT_UPDATE)까지만 만든다. 효력은 Supervisor 확인 명령이 만든다.
+조회·영향 분석 계산은 binding.observer로 쓴다(observers를 import하지 않는다).
 Hold 해제·승인·확정·Proposal 확인 함수는 없다.
 """
 
@@ -66,7 +66,7 @@ class EventResponseExecutor:
             return self._done(tx, run_id, step_no, meta, parsed, outcome, {"reason": action.reason})
 
     def _permitted(self, obs: Observation, action: Any) -> bool:
-        """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (A.25 2)."""
+        """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가."""
         available = obs.available
         c = spec.choices(obs.data)
         if isinstance(action, spec.LookupTasks):
@@ -116,7 +116,7 @@ class EventResponseExecutor:
         obs: Observation,
         action: spec.AskReporter,
     ) -> GatewayResult:
-        """신고자에게 되묻기(제안 없는 QUESTION). 답은 자유 텍스트(ANSWER)로 오고 이 Run을 깨운다 (A.25 S4)."""
+        """신고자에게 되묻기(제안 없는 QUESTION). 답은 자유 텍스트(ANSWER)로 오고 이 Run을 깨운다."""
         site = get_site(tx, self.pack.site_id)
         assert site is not None
         event = obs.data["event"]
@@ -155,7 +155,7 @@ class EventResponseExecutor:
         obs: Observation,
         action: spec.ProposeFactUpdate,
     ) -> GatewayResult:
-        """FACT_UPDATE 제안 + Supervisor 확인 메시지 → 대기 (A.25 3). 확인자는 actor_id가 가장 작은 SUPERVISOR."""
+        """FACT_UPDATE 제안 + Supervisor 확인 메시지 → 대기. 확인자는 actor_id가 가장 작은 SUPERVISOR."""
         site = get_site(tx, self.pack.site_id)
         supervisor = supervisor_actor(tx, self.pack)
         assert site is not None and supervisor is not None
@@ -213,7 +213,7 @@ class EventResponseExecutor:
 
 
 def fact_update_text(pack: LoadedPack, task: Any, payload: dict[str, Any], quoted: str) -> str:
-    """사실 수정 확인의 서버 문구: 옛 값·새 값을 분과 함께 날짜·시각으로 (A.25 3)."""
+    """사실 수정 확인의 서버 문구: 옛 값·새 값을 분과 함께 날짜·시각으로."""
     old, new = payload["old_value"], payload["new_value"]
 
     def at(m: int) -> str:

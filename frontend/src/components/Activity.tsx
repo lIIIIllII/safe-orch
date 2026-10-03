@@ -1,5 +1,5 @@
-// Activity (§13, 부록 A.19). Run 목록 + AgentStep 카드.
-// 모델 문장(Decision Summary)과 서버 결과(Tool 결과·Guard)를 블록으로 나눈다(§11.6).
+// Activity. Run 목록 + AgentStep 카드.
+// 모델 문장(Decision Summary)과 서버 결과(Tool 결과·Guard)를 블록으로 나눈다.
 
 import { useEffect, useState } from 'react'
 import { fetchSteps } from '../api'
@@ -128,7 +128,7 @@ function RunRow({
 function Steps({ run, actorId, refreshKey }: { run: RunSummary; actorId: string; refreshKey: number }) {
   const [steps, setSteps] = useState<AgentStep[]>([])
   const [error, setError] = useState<string | null>(null)
-  // 선택한 Run의 step 번호·상태가 바뀔 때만 다시 가져온다 (부록 A.19)
+  // 선택한 Run의 step 번호·상태가 바뀔 때만 다시 가져온다
   const fetchKey = `${run.run_id}:${run.last_step_no}:${run.current_step_status}:${run.status}:${refreshKey}`
   useEffect(() => {
     let alive = true
@@ -185,7 +185,7 @@ function isRecord(x: unknown): x is Record<string, unknown> {
 
 type Rid = { resource_id: string; reason?: string }
 
-/** 자원 조회 결과: 배정 가능 자원과 제외 자원·이유 (A.21 5·7). */
+/** 자원 조회 결과: 배정 가능 자원과 제외 자원·이유. */
 function ListResult({ tr }: { tr: Record<string, unknown> }) {
   const assignable = (tr.assignable as Rid[]) ?? []
   const excluded = (tr.excluded as Rid[]) ?? []
@@ -228,7 +228,7 @@ function ListResult({ tr }: { tr: Record<string, unknown> }) {
   )
 }
 
-/** 담당자 확인 요청: 메시지와 서버 문구. 모델의 question은 모델 블록으로 따로 둔다 (A.21 5·7). */
+/** 담당자 확인 요청: 메시지와 서버 문구. 모델의 question은 모델 블록으로 따로 둔다. */
 function AskResult({ tr, args }: { tr: Record<string, unknown>; args: Record<string, unknown> }) {
   const values = Array.isArray(args.allowed_values) ? (args.allowed_values as string[]) : []
   return (
@@ -257,7 +257,7 @@ function StepCard({ s }: { s: AgentStep }) {
   const level = typeof args.level === 'string' ? args.level : null
   const tr = s.tool_result ?? {}
   const stage1 = tr.stage1 as { status?: string; changed?: number } | undefined
-  // work_delay는 steps API가 조회 시 붙인다(저장하지 않음, A.20). 표기는 검토 패널과 같다.
+  // work_delay는 steps API가 조회 시 붙인다(저장하지 않음). 표기는 검토 패널과 같다.
   const stage2 = tr.stage2 as { status?: string; delay?: number; work_delay?: number | null } | null | undefined
   const summary = s.decision_summary ? splitSummary(s.decision_summary) : null
   const rest = Object.fromEntries(
@@ -273,7 +273,7 @@ function StepCard({ s }: { s: AgentStep }) {
           'minimal_change',
           'delay_optimality_unconfirmed',
           'candidate_id',
-          // LIST·ASK·TRY는 아래 전용 블록으로 보여 준다 (A.21 7)
+          // LIST·ASK·TRY는 아래 전용 블록으로 보여 준다
           'task_id',
           'required_type',
           'current',

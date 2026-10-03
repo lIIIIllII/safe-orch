@@ -1,6 +1,6 @@
-"""Domain 엔티티 (설계서 §5.1 중 부록 A.2 범위).
+"""Domain 엔티티.
 
-app 내부 모듈을 import하지 않는다(부록 A.1). 시간은 Horizon 원점 기준 정수 분, 점유는 [start, end).
+app 내부 모듈을 import하지 않는다. 시간은 Horizon 원점 기준 정수 분, 점유는 [start, end).
 조회 결과는 매번 새 객체로 만든다. 모델은 frozen이다.
 """
 
@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 Role = Literal["UNIT_PLANNER", "REPORTER", "SUPERVISOR"]
 Relation = Literal["SAME", "ADJACENT", "BELOW"]
 StoredRelation = Literal["ADJACENT", "BELOW"]
-Lifecycle = Literal["DRAFT", "NEEDS_INFO", "READY", "QUEUED"]  # QUEUED: 열린 Case 중 접수 (A.21)
+Lifecycle = Literal["DRAFT", "NEEDS_INFO", "READY", "QUEUED"]  # QUEUED: 열린 Case 중 접수
 FieldStatus = Literal["PROPOSED", "CONFIRMED"]
 CandidateKind = Literal["REPLAN", "RECONFIRM"]
 ValidationStatus = Literal["PASS", "FAIL", "INCOMPLETE"]
@@ -28,7 +28,7 @@ class Frozen(BaseModel):
 
 class WorkType(Frozen):
     work_type: str
-    display_name: str = Field(min_length=1)  # 화면 표시용 (부록 A.20)
+    display_name: str = Field(min_length=1)  # 화면 표시용
     hazard_tags: tuple[str, ...] = Field(min_length=1)
     critical_fields: tuple[str, ...]
 
@@ -36,7 +36,7 @@ class WorkType(Frozen):
 class Rule(Frozen):
     rule_id: str
     type: Literal["SEPARATION", "CAPACITY"]
-    display_name: str = Field(min_length=1)  # 화면 표시용 (부록 A.20)
+    display_name: str = Field(min_length=1)  # 화면 표시용
     hazard_a: str | None = None
     hazard_b: str | None = None
     relations: tuple[Relation, ...] = ()
@@ -104,7 +104,7 @@ class Movable(Frozen):
 
 
 class FieldRecord(Frozen):
-    """critical field 하나의 확인 기록 (부록 A.8)."""
+    """critical field 하나의 확인 기록."""
 
     value: Any
     status: FieldStatus
@@ -117,7 +117,7 @@ class Task(Frozen):
     unit_id: str
     owner_actor_id: str
     work_type: str
-    hazard_tags: tuple[str, ...]  # 서버가 Pack에서 도출 (I-14)
+    hazard_tags: tuple[str, ...]  # 서버가 Pack에서 도출
     zone_id: str
     duration: int = Field(gt=0)
     earliest_start: int
@@ -163,7 +163,7 @@ class Plan(Frozen):
 
 
 class FeedbackConstraint(Frozen):
-    """확인된 작업·축 고정 (§5.1, §9.2, 부록 A.14). task revision에 묶지 않는다(I-10)."""
+    """확인된 작업·축 고정. task revision에 묶지 않는다."""
 
     constraint_id: str
     task_id: str
@@ -173,7 +173,7 @@ class FeedbackConstraint(Frozen):
 
 
 class HoldRef(Frozen):
-    """Snapshot에 넣는 ACTIVE Hold (§10, 부록 A.14)."""
+    """Snapshot에 넣는 ACTIVE Hold."""
 
     hold_id: str
     scope: Literal["TASK", "SITE"]
@@ -181,7 +181,7 @@ class HoldRef(Frozen):
 
 
 class Consent(Frozen):
-    """작업 담당자의 이동 동의 (§5.1, §9.3). scope는 TIME {start_min, start_max},
+    """작업 담당자의 이동 동의. scope는 TIME {start_min, start_max},
     RESOURCE {resource_ids}. 해당 task revision에만 적용한다."""
 
     consent_id: str
@@ -202,7 +202,7 @@ class Consent(Frozen):
 
 
 class ConsultationItem(Frozen):
-    """기준 대비 바뀐 작업 1개 (§9.3). base_status만 저장하고 WAIVED 등은 조회 시 붙인다."""
+    """기준 대비 바뀐 작업 1개. base_status만 저장하고 WAIVED 등은 조회 시 붙인다."""
 
     task_id: str
     task_revision: int = Field(ge=1)
@@ -214,7 +214,7 @@ class ConsultationItem(Frozen):
 
 
 class Conflict(Frozen):
-    """충돌 탐지 결과 (§6, 부록 A.10). interval은 관련 작업 점유를 모두 덮는 [start, end)."""
+    """충돌 탐지 결과. interval은 관련 작업 점유를 모두 덮는 [start, end)."""
 
     rule_id: str
     task_ids: tuple[str, ...]  # 정렬
@@ -229,12 +229,12 @@ class PlanRef(Frozen):
 
 
 class SnapshotContent(Frozen):
-    """Snapshot.content의 구조 (부록 A.10). tasks는 현재 revision 중 READY만."""
+    """Snapshot.content의 구조. tasks는 현재 revision 중 READY만."""
 
     site_id: str
     pack_hash: str
     horizon_minutes: int = Field(gt=0)
-    work_intervals: tuple[tuple[int, int], ...] = Field(min_length=1)  # 근무 달력 (A.20)
+    work_intervals: tuple[tuple[int, int], ...] = Field(min_length=1)  # 근무 달력
     context_version: int = Field(ge=0)
     plan_revision: int = Field(ge=0)
     tasks: tuple[Task, ...]
@@ -253,7 +253,7 @@ class SnapshotContent(Frozen):
         return {r.resource_id: r for r in self.resources}
 
     def rel(self, zone_a: str, zone_b: str) -> Relation | None:
-        """저장된 방향 그대로. 같은 zone이면 SAME, 선언이 없으면 None (§5.3)."""
+        """저장된 방향 그대로. 같은 zone이면 SAME, 선언이 없으면 None."""
         if zone_a == zone_b:
             return "SAME"
         for r in self.zone_relations:
@@ -300,7 +300,7 @@ class SearchSpec(Frozen):
     axes: dict[str, Movable]
     resource_alternatives: dict[str, tuple[str, ...]]
     time_limit_s: int = Field(gt=0)
-    # 실효 탐색 키(미시도 판정용, Solver 입력만). 무결성 hash와 다르다 (A.21)
+    # 실효 탐색 키(미시도 판정용, Solver 입력만). 무결성 hash와 다르다
     search_key: str
 
 
@@ -311,7 +311,7 @@ class SolverResult(Frozen):
     stage2: dict[str, Any] | None
     chosen_stage: Literal[1, 2] | None
 
-    # 표시용 판정은 저장하지 않고 status에서 계산한다 (부록 A.11)
+    # 표시용 판정은 저장하지 않고 status에서 계산한다
     @property
     def solution(self) -> list[dict[str, Any]] | None:
         if self.chosen_stage == 1:
@@ -359,7 +359,7 @@ class Validation(Frozen):
     checks: tuple[ValidationCheck, ...]
 
 
-# ── Agent 실행 상태 (§5.1·§11, 부록 A.16) ──────────────────────
+# ── Agent 실행 상태 ──────────────────────
 
 RunStatus = Literal[
     "RUNNING",

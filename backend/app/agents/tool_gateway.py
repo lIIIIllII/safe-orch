@@ -1,11 +1,11 @@
-"""Tool Gateway (설계서 §11.1·§11.2·§11.4, 부록 A.16·A.23). Agent의 유일한 도구 실행 경로.
+"""Tool Gateway. Agent의 유일한 도구 실행 경로.
 
 agent_type 공통 판정을 한다: tool_call 개수·이름·스키마(MALFORMED), LLM 오류(LLM_ERROR·LLM_CONFIG),
 MALFORMED·LLM_ERROR 연속 2회 이관, step 완료·Budget·CommandResult(키 run_id:step_no) 기록.
 Action 효과는 runtime이 넘긴 binding의 실행기(binding.executor)가 맡고, 실행기는 execute 안에서만
 부른다. 실행기는 STALE_OBSERVATION·ACTION_NOT_AVAILABLE 판정에 이 클래스의 도우미를 쓴다.
-registry·observers·executors를 import하지 않는다(A.23).
-승인·확정·Hold 해제·Proposal 확인·Validation 등록 함수는 없다(I-01).
+registry·observers·executors를 import하지 않는다.
+승인·확정·Hold 해제·Proposal 확인·Validation 등록 함수는 없다.
 """
 
 import sqlite3
@@ -34,7 +34,7 @@ from app.store.repos.site import get_site
 
 ACCEPTED = "ACCEPTED"
 REJECTED = "REJECTED"
-# 연속 2회면 이관하는 실패: 형식 오류와 전송 실패 (§11.2, Test Case API 오류, A.17)
+# 연속 2회면 이관하는 실패: 형식 오류와 전송 실패 (Test Case API 오류)
 RETRY_ONCE = {"MALFORMED", "LLM_ERROR"}
 
 
@@ -67,7 +67,7 @@ class _Parsed:
 
 
 def _parse(message: AIMessage, spec: AgentSpec) -> _Parsed:
-    """tool_call 1개, 아는 이름, 스키마 일치가 아니면 MALFORMED (§11.2)."""
+    """tool_call 1개, 아는 이름, 스키마 일치가 아니면 MALFORMED."""
     calls = list(message.tool_calls)
     raw = {"tool_calls": calls, "invalid_tool_calls": list(message.invalid_tool_calls)}
     if message.invalid_tool_calls or len(calls) != 1:
@@ -186,7 +186,7 @@ class ToolGateway:
         return GatewayResult("REJECTED", reason)
 
     def _stale_observation(self, tx: sqlite3.Connection, run_id: str, step_no: int) -> bool:
-        """site의 (context, plan)이 step의 관찰 버전과 다르면 True. 모든 Action에 같은 규칙 (A.16)."""
+        """site의 (context, plan)이 step의 관찰 버전과 다르면 True. 모든 Action에 같은 규칙."""
         step = get_step(tx, run_id, step_no)
         site = get_site(tx, self.pack.site_id)
         assert step is not None and site is not None
@@ -195,7 +195,7 @@ class ToolGateway:
             step["observed_plan_revision"],
         )
 
-    # ── 실행기 공통 틀 (A.24 S0) ────────────────────────────
+    # ── 실행기 공통 틀 ────────────────────────────
 
     def begin_step(
         self,
@@ -226,7 +226,7 @@ class ToolGateway:
     def wait_or_continue(
         self, tx: sqlite3.Connection, run_id: str, step_no: int, wait_kind: str, wait_ref: str
     ) -> GatewayResult:
-        """대기 진입 재확인(§11.3(1)·I-19): 관찰 이후 wake가 없으면 WAIT, 있으면 다시 관찰한다."""
+        """대기 진입 재확인: 관찰 이후 wake가 없으면 WAIT, 있으면 다시 관찰한다."""
         step = get_step(tx, run_id, step_no)
         assert step is not None
         if enter_wait(tx, run_id, wait_kind, wait_ref, step["observed_wake_seq"]):
@@ -250,7 +250,7 @@ class ToolGateway:
         return self.executor.run(run_id, step_no, meta, parsed)
 
     def _llm_failure(self, run_id: str, step_no: int, meta: StepMeta) -> GatewayResult:
-        """모델 응답 없음. LLM_ERROR(전송 2회 실패)는 다시 관찰, LLM_CONFIG는 Run ERROR (A.17)."""
+        """모델 응답 없음. LLM_ERROR(전송 2회 실패)는 다시 관찰, LLM_CONFIG는 Run ERROR."""
         parsed = _Parsed(None, None, {"error": meta.error}, meta.error)
         reason = meta.error_kind or "LLM_ERROR"
         with db.write() as tx:

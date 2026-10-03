@@ -1,4 +1,4 @@
-"""proposal·message 기록과 조회 (설계서 §5.1·§9.4, 부록 A.21).
+"""proposal·message 기록과 조회.
 
 제안을 먼저 만들고 메시지가 proposal_id로 가리킨다. 상태 전이는 트리거가 막는다(PENDING에서 한 번,
 OPEN → ANSWERED·CANCELLED, CANCELLED → LATE). Run 종료 시 정리는 cases.cancel_requests가 한다.
@@ -59,7 +59,7 @@ def insert_message(
     candidate_id: str | None = None,
     change_hash: str | None = None,
 ) -> None:
-    """candidate_id·change_hash는 변경 요청(CHANGE_REQUEST)을 후보의 그 변경에 묶는다 (A.24)."""
+    """candidate_id·change_hash는 변경 요청(CHANGE_REQUEST)을 후보의 그 변경에 묶는다."""
     tx.execute(
         "INSERT INTO message (message_id, site_id, run_id, step_no, to_actor_id, type,"
         " proposal_id, body, agent_text, created_context_version, candidate_id, change_hash)"
@@ -165,12 +165,12 @@ def _joined(r: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_case_replies(conn: sqlite3.Connection, case_id: str) -> list[dict[str, Any]]:
-    """이 Case의 Run이 보낸 질문과 답 (Observation human_replies). comment는 인용 필드로만 (A.17·A.21)."""
+    """이 Case의 Run이 보낸 질문과 답 (Observation human_replies). comment는 인용 필드로만."""
     out = []
     for r in rows(
         conn,
         _JOINED + " JOIN agent_run r ON r.run_id = m.run_id"
-        # 같은 Case의 Coordination 메시지는 넣지 않는다(ASK 조건과 관찰에 섞이지 않게, A.24)
+        # 같은 Case의 Coordination 메시지는 넣지 않는다(ASK 조건과 관찰에 섞이지 않게)
         " WHERE r.case_id = ? AND r.agent_type = 'REPLANNING' ORDER BY m.rowid",
         (case_id,),
     ):
@@ -199,7 +199,7 @@ def _step_values(conn: sqlite3.Connection, r: dict[str, Any]) -> dict[str, Any] 
 
 
 def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[dict[str, Any]]:
-    """X-Actor 본인에게 온 메시지 (§12 "본인", A.21 7). 서버 문구(body)와 모델 문구(agent_text)를 나눈다."""
+    """X-Actor 본인에게 온 메시지. 서버 문구(body)와 모델 문구(agent_text)를 나눈다."""
     out = []
     for r in rows(
         conn,
@@ -214,13 +214,13 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
                 "task_id": r.pop("target_task_id"),
                 "axis": payload.get("axis"),
                 "allowed_values": payload.get("allowed_values", []),
-                # 제약 초안(FEEDBACK_CONSTRAINT)의 고정 축 (A.24)
+                # 제약 초안(FEEDBACK_CONSTRAINT)의 고정 축
                 "axes": payload.get("axes", []),
-                # 사실 수정(FACT_UPDATE)의 필드·옛 값·새 값 (A.25)
+                # 사실 수정(FACT_UPDATE)의 필드·옛 값·새 값
                 "fact": None
                 if "field" not in payload
                 else {k: payload[k] for k in ("field", "old_value", "new_value")},
-                # 작업 요청 값 확인(제안 없는 CONFIRMATION): 그 메시지를 만든 AgentStep의 values (A.26)
+                # 작업 요청 값 확인(제안 없는 CONFIRMATION): 그 메시지를 만든 AgentStep의 values
                 "values": _step_values(conn, r)
                 if r["type"] == "CONFIRMATION" and r["proposal_id"] is None
                 else None,
@@ -229,7 +229,7 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
     return out
 
 
-# ── Coordination (부록 A.24) ───────────────────────────────────
+# ── Coordination ───────────────────────────────────
 
 
 def list_change_requests(
@@ -260,7 +260,7 @@ def list_change_requests(
 
 
 def change_answers(requests: list[dict[str, Any]]) -> dict[str, str]:
-    """change_hash → 담당자 답에 따른 item 상태 (A.24 4). 늦은 답(LATE)은 세지 않는다.
+    """change_hash → 담당자 답에 따른 item 상태. 늦은 답(LATE)은 세지 않는다.
 
     ACCEPT → ACCEPTED, DECLINE(이견) → OBJECTED, 그 이견의 제약 초안이 PENDING이면
     OBJECTION_DRAFT_PENDING. 같은 변경에 답이 여럿이면 마지막 것.
@@ -298,7 +298,7 @@ def list_fact_updates(
     event_id: str | None = None,
     run_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """FACT_UPDATE 제안 (Event 또는 Run 기준, A.25). payload에 event_id·old_value·new_value가 있다."""
+    """FACT_UPDATE 제안 (Event 또는 Run 기준). payload에 event_id·old_value·new_value가 있다."""
     sql = "SELECT * FROM proposal WHERE site_id = ? AND type = 'FACT_UPDATE'"
     params: list[Any] = [site_id]
     if event_id is not None:

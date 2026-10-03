@@ -1,4 +1,4 @@
-"""consultation 기록과 후보·협의 상태 조회 (설계서 §8·§9.3, 부록 A.14).
+"""consultation 기록과 후보·협의 상태 조회.
 
 후보 상태(STALE·REJECTED·COMMITTED)와 Consultation 상태는 저장하지 않고 여기서 계산한다.
 """
@@ -109,7 +109,7 @@ def consultation_view(
 
 
 def list_review_queue(conn: sqlite3.Connection, site_id: str) -> list[str]:
-    """검토 대기 = PASS ∧ Consultation 있음 ∧ STALE·REJECTED·COMMITTED 아님 (OPEN 포함, 부록 A.14)."""
+    """검토 대기 = PASS ∧ Consultation 있음 ∧ STALE·REJECTED·COMMITTED 아님 (OPEN 포함)."""
     out = []
     for r in rows(
         conn,

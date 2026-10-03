@@ -1,4 +1,4 @@
-"""SearchSpec 생성 (설계서 §7, 부록 A.11). 서버가 만들고 불변이다.
+"""SearchSpec 생성. 서버가 만들고 불변이다.
 
 app.rules·app.validator를 import하지 않는다.
 """

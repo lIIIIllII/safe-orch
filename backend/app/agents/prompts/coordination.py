@@ -1,8 +1,8 @@
-"""Coordination prompt (설계서 §11.2 decide·§18.2.2, 부록 A.24).
+"""Coordination prompt.
 
 System = 역할·Goal / 규칙 / 도구 전체와 열리는 조건 / 관찰 읽는 법 / 출력 규칙. Replanning과 같은 방식이다:
-현장 문구는 render_system(pack)이 Pack에서 넣고(A.23), fingerprint는 렌더링 전 템플릿 기준이다.
-"이견이면 초안을 만든다"는 지시는 두지 않는다. 이견이 작업 고정 요구가 아니면 보고·이관을 고를 수 있다(A.24).
+현장 문구는 render_system(pack)이 Pack에서 넣고, fingerprint는 렌더링 전 템플릿 기준이다.
+"이견이면 초안을 만든다"는 지시는 두지 않는다. 이견이 작업 고정 요구가 아니면 보고·이관을 고를 수 있다.
 System·도구 description·Observation 필드가 바뀌면 PROMPT_VERSION을 올리고 PROMPT_FINGERPRINTS에 더한다.
 """
 
@@ -84,7 +84,7 @@ OBSERVATION_KEYS = (
 
 
 def render_system(pack: LoadedPack) -> str:
-    """Goal과 Pack의 현장 문구로 System을 렌더링한다 (A.23·A.24)."""
+    """Goal과 Pack의 현장 문구로 System을 렌더링한다."""
     return SYSTEM.format(
         goal=spec.GOAL, site_description=pack.site_description, origin_time=origin_time(pack)
     )

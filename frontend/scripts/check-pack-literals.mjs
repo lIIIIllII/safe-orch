@@ -1,4 +1,4 @@
-// 화면은 Pack을 모른다 (부록 A.20 2차): frontend/src의 따옴표 문자열에 Pack ID가 나오면 실패한다.
+// 화면은 Pack을 모른다: frontend/src의 따옴표 문자열에 Pack ID가 나오면 실패한다.
 // domain_packs/*/ YAML에서 zone·resource·task·work_type·rule_id·site_id·timezone ID를 읽는다.
 // 한두 글자 ID는 오탐이 많아 길이 3 이상만 검사한다. npm 라이브러리 없이 필요한 키만 정규식으로 읽는다.
 //   node scripts/check-pack-literals.mjs   (npm run lint에 포함)
@@ -95,7 +95,7 @@ for (const file of walk(srcDir)) {
 }
 
 if (found.length) {
-  console.error('화면 코드에 Pack 값이 있다 (meta·scenario·state에서 받아야 한다, 부록 A.20):')
+  console.error('화면 코드에 Pack 값이 있다 (meta·scenario·state에서 받아야 한다):')
   for (const f of found) console.error(`  ${f}`)
   process.exit(1)
 }

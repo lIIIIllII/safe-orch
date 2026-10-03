@@ -1,4 +1,4 @@
-"""consent 기록과 조회 (설계서 §5.1·§9.3, 부록 A.14). 불변이며 task revision에 묶인다."""
+"""consent 기록과 조회. 불변이며 task revision에 묶인다."""
 
 import sqlite3
 
@@ -27,7 +27,7 @@ def insert_consent(
 
 
 def list_current_consents(conn: sqlite3.Connection, site_id: str) -> list[Consent]:
-    """각 작업의 현재 revision에 대한 Consent (§9.3-2)."""
+    """각 작업의 현재 revision에 대한 Consent."""
     return [
         Consent(
             consent_id=r["consent_id"],

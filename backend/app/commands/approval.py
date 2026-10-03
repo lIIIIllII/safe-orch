@@ -1,4 +1,4 @@
-"""ApproveAndCommit·WAIVE·구조화 거절 (설계서 §9.1–§9.3, 부록 A.14).
+"""ApproveAndCommit·WAIVE·구조화 거절.
 
 NOT_AUTHORIZED와 CANDIDATE_NOT_FOUND는 단독으로 반환하고, 나머지 사유는 해당하는 것을 모두 반환한다.
 STALE은 STALE_PLAN·STALE_CONTEXT로만 보고한다(승인 8단계는 item만 본 상태로 판정).
@@ -94,7 +94,7 @@ def _load(
     return candidate
 
 
-# ── ApproveAndCommit (§9.1) ────────────────────────────────────
+# ── ApproveAndCommit ────────────────────────────────────
 
 
 def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) -> Result:
@@ -149,8 +149,8 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
         ctx.actor_id,
         site.context_version,
     )
-    # 후보를 만든 Replanning Run을 SUCCEEDED로 (§11.3(7), A.16). RECONFIRM 후보에는 Run이 없다.
-    # Case가 닫히면 대기열 1건을 올리고, 확정 뒤 남은 요청을 위해 RECHECK(plan 키)를 등록한다 (A.21).
+    # 후보를 만든 Replanning Run을 SUCCEEDED로. RECONFIRM 후보에는 Run이 없다.
+    # Case가 닫히면 대기열 1건을 올리고, 확정 뒤 남은 요청을 위해 RECHECK(plan 키)를 등록한다.
     run_id = None
     if candidate.solver_result_id is not None:
         run_id = run_for_solver_result(tx, candidate.solver_result_id)
@@ -160,7 +160,7 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
             run_id = None
     if run_id is None:
         close_case(tx, ctx.pack)
-    # 이 후보의 협의 Run도 끝내고, 설정이 켜졌으면 확정 통지 Run을 등록한다 (A.24 2)
+    # 이 후보의 협의 Run도 끝내고, 설정이 켜졌으면 확정 통지 Run을 등록한다
     end_candidate_runs(
         tx, ctx.pack, candidate.candidate_id, "SUCCEEDED", f"COMMITTED:{plan_revision}"
     )
@@ -195,7 +195,7 @@ def approve_and_commit(
     return run_command(pack, "APPROVE_AND_COMMIT", actor_id, idempotency_key, body, _approve)
 
 
-# ── WAIVE (§9.3-4) ─────────────────────────────────────────────
+# ── WAIVE ─────────────────────────────────────────────
 
 
 def _waive(tx: sqlite3.Connection, ctx: CommandContext, body: WaiveRequest) -> Result:
@@ -243,7 +243,7 @@ def waive(
     return run_command(pack, "WAIVE", actor_id, idempotency_key, body, _waive)
 
 
-# ── 구조화 거절 (§9.2) ─────────────────────────────────────────
+# ── 구조화 거절 ─────────────────────────────────────────
 
 
 def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) -> Result:
@@ -299,11 +299,11 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
             constraint_ids.append(fc.constraint_id)
     r.refs = {"decision_id": decision_id, "constraint_ids": constraint_ids}
     r.audit_reason = body.reason_code
-    # 후보가 거절되었으므로 그 후보의 협의 Run을 끝낸다(보낸 요청 정리) (A.24 2)
+    # 후보가 거절되었으므로 그 후보의 협의 Run을 끝낸다(보낸 요청 정리)
     end_candidate_runs(
         tx, ctx.pack, candidate.candidate_id, "STALE", f"REJECTED:{candidate.candidate_id}"
     )
-    # 후보를 만든 Replanning Run에 거절을 알린다 (§9.2·§11.3 표·§11.5, A.21 3).
+    # 후보를 만든 Replanning Run에 거절을 알린다.
     # 제약 있는 거절은 wake, 제약 없는 거절은 Case의 2번째면 이관(T33), 아니면 wake.
     run_id = (
         run_for_solver_result(tx, candidate.solver_result_id)
@@ -320,7 +320,7 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
     return r
 
 
-MAX_PLAIN_REJECTIONS = 2  # Case당 제약 없는 거절이 2번째면 이관 (§9.2·T33, A.21 0-3)
+MAX_PLAIN_REJECTIONS = 2  # Case당 제약 없는 거절이 2번째면 이관 (T33)
 
 
 def _no_constraint_rejections(tx: sqlite3.Connection, case_id: str) -> int:

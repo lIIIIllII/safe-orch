@@ -1,8 +1,8 @@
-"""Event Response AgentSpec (설계서 §18.2.1·§18.2.3, 부록 A.25). 순수 데이터: Goal, Action 스키마, Budget.
+"""Event Response AgentSpec. 순수 데이터: Goal, Action 스키마, Budget.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
-Action: LOOKUP_TASKS, ANALYZE_IMPACT, PROPOSE_FACT_UPDATE, ASK_REPORTER(S4), ESCALATE.
-Hold 해제·사실 직접 적용은 할 수 없다. 사실 수정은 Supervisor가 확인해야 효력이 생긴다(I-01·I-13).
+Action: LOOKUP_TASKS, ANALYZE_IMPACT, PROPOSE_FACT_UPDATE, ASK_REPORTER, ESCALATE.
+Hold 해제·사실 직접 적용은 할 수 없다. 사실 수정은 Supervisor가 확인해야 효력이 생긴다.
 """
 
 from typing import Any, ClassVar
@@ -17,9 +17,9 @@ GOAL = (
     "Hold를 해제하거나 사실을 직접 바꾸지 않는다."
 )
 
-MAX_STEPS = 10  # §18.2.1 표
-MAX_LLM_ATTEMPTS = 20  # step × 2 (Replanning과 같은 규칙, A.25)
-MAX_HUMAN_ROUNDS = 2  # ASK_REPORTER(S4)용
+MAX_STEPS = 10
+MAX_LLM_ATTEMPTS = 20  # step × 2 (Replanning과 같은 규칙)
+MAX_HUMAN_ROUNDS = 2  # ASK_REPORTER용
 RECURSION_LIMIT = MAX_STEPS * 5 + 10
 SUMMARY_MAX = 200
 TEXT_MAX = 300
@@ -88,7 +88,7 @@ class AskReporter(Action):
 class Escalate(Action):
     """조회·분석·신고자 확인으로 열 수 있는 대안이 남아 있지 않거나 신고가 시작 지연이 아닐 때만 사유와 함께 이관한다."""
 
-    # Replanning p7과 같은 조건 문구 (A.21 p7 수정, A.27)
+    # Replanning p7과 같은 조건 문구
     OPENS = "언제나 열려 있다. 단 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
 
     reason: str = Field(min_length=1, description="이관 사유")
@@ -111,7 +111,7 @@ FLOW = {
 
 
 def choices(obs: dict[str, Any]) -> dict[str, Any]:
-    """Action별 허용 값 (A.25 2). Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다.
+    """Action별 허용 값. Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다.
 
     LOOKUP: 확인 대기 제안 없음. ANALYZE: 조회한 작업. PROPOSE: 지금 Context에서 통과한 분석의
     (작업, 값) 중 이 Run에서 폐기되지 않은 것.
@@ -130,13 +130,13 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
                 values.append(a["new_earliest_start"])
     asking = any(q["status"] == "OPEN" for q in obs["reporter_replies"])
     rounds = obs["budget_remaining"].get("human_rounds", 0) > 0
-    # 조회로 알 수 있는 것(대상 작업)은 먼저 조회한다. 결과가 0건이어도 조회는 한 것이다 (A.27)
+    # 조회로 알 수 있는 것(대상 작업)은 먼저 조회한다. 결과가 0건이어도 조회는 한 것이다
     looked_up = bool(obs["lookups"])
     return {
         "LOOKUP": not pending,
         "ANALYZE": [] if pending else looked,
         "PROPOSE": {} if pending else propose,
-        # 신고자 되묻기: 조회 뒤, 답을 기다리는 질문·확인 대기 수정안이 없고 사람 라운드가 남을 때 (A.25 S4·A.27)
+        # 신고자 되묻기: 조회 뒤, 답을 기다리는 질문·확인 대기 수정안이 없고 사람 라운드가 남을 때
         "ASK": looked_up and rounds and not pending and not asking,
     }
 

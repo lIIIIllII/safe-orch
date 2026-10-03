@@ -1,4 +1,4 @@
-"""근무 달력 계산 (부록 A.20). app 내부 모듈을 import하지 않는 순수 함수다.
+"""근무 달력 계산. app 내부 모듈을 import하지 않는 순수 함수다.
 
 근무 구간은 Horizon 원점 기준 정수 분 [lo, hi)의 목록이고, 로더가 정렬·비겹침·비맞닿음을 보장한다.
 작업 [start, end)는 근무 구간 하나 안에 있어야 한다(기본 제약 CALENDAR).
@@ -43,7 +43,7 @@ def work_minutes(start: int, end: int, work_intervals: Intervals) -> int:
 def work_delay(base_start: int, start: int, work_intervals: Intervals) -> int:
     """근무 분 지연: 기준 시작에서 새 시작까지의 근무 분(늦어질 때만). 저장하지 않고 조회 시 계산한다.
 
-    달력 분 지연(§7 목적함수)은 max(0, start − base_start)다.
+    달력 분 지연은 max(0, start − base_start)다.
     """
     return work_minutes(base_start, start, work_intervals) if start > base_start else 0
 
@@ -52,7 +52,7 @@ WEEKDAYS = "월화수목금토일"
 
 
 def local_clock(horizon_start_utc: str, timezone: str, minute: int) -> str:
-    """Horizon 원점 기준 분 → 현장 시각 "MM/DD(요일) HH:MM" (A.25: 분 변환 실수를 알아보게)."""
+    """Horizon 원점 기준 분 → 현장 시각 "MM/DD(요일) HH:MM" (분 변환 실수를 알아보게)."""
     origin = datetime.fromisoformat(horizon_start_utc).astimezone(ZoneInfo(timezone))
     t = origin + timedelta(minutes=minute)
     return f"{t:%m/%d}({WEEKDAYS[t.weekday()]}) {t:%H:%M}"

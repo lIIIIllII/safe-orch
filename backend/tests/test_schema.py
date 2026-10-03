@@ -1,4 +1,4 @@
-"""schema v5 제약·불변 트리거(부록 A.2, T51)와 init_db(부록 A.3)."""
+"""schema v5 제약·불변 트리거(T51)와 init_db."""
 
 import json
 import sqlite3
@@ -40,7 +40,7 @@ def _insert_chain(tx: sqlite3.Connection, site_id: str) -> None:
     tx.execute("INSERT INTO validation VALUES ('val1', ?, 'cand1', 'PASS', '[]')", (site_id,))
 
 
-# ── A.3 init_db ────────────────────────────────────────────────
+# ── init_db ────────────────────────────────────────────────
 
 
 def test_init_db_creates_v5_tables(temp_db):
@@ -121,7 +121,7 @@ def test_init_db_failure_leaves_zero_tables(tmp_path, use_db_path, monkeypatch):
         assert _tables(conn) == set()
 
 
-# ── A.2 제약 ───────────────────────────────────────────────────
+# ── 제약 ───────────────────────────────────────────────────
 
 
 def test_resource_capacity_must_be_1(seeded):

@@ -1,4 +1,4 @@
-"""스크립트 LLM (설계서 §16 "decide의 모델을 스크립트 응답으로", 부록 A.16).
+"""스크립트 LLM.
 
 llm.ChatModel 프로토콜(bind_tools + invoke)을 따른다. 응답은 AIMessage 또는 AIMessage를 돌려주는
 함수(호출 순간의 부수 효과를 주입할 때)다. 응답이 모자라면 예외를 내고, 그 Run은 ERROR가 된다.
@@ -55,10 +55,10 @@ class ScriptedChatModel:
 
 
 class Router:
-    """agent_type별 응답 큐 (부록 A.24). 한 model_factory로 Replanning·Coordination Run을 함께 돌린다.
+    """agent_type별 응답 큐. 한 model_factory로 Replanning·Coordination Run을 함께 돌린다.
 
     모델은 bind된 도구 이름으로 어느 Agent인지 안다: REPORT_TO_SUPERVISOR는 Coordination에만,
-    ESCALATE(그 밖)는 Event Response에만 있다(Replanning은 ESCALATE_NO_SOLUTION, A.25).
+    ESCALATE(그 밖)는 Event Response에만 있다(Replanning은 ESCALATE_NO_SOLUTION).
     """
 
     def __init__(

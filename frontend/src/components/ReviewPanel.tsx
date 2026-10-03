@@ -1,4 +1,4 @@
-// 검토 패널 (§13, 부록 A.19). 서버 계산 결과만 보여 준다(모델 문장 없음, §11.6).
+// 검토 패널. 서버 계산 결과만 보여 준다(모델 문장 없음).
 // 승인 버튼은 권한만 보고 켠다. STALE·Hold여도 막지 않고 서버의 거절 사유를 보여 준다.
 
 import { useState } from 'react'
@@ -298,7 +298,7 @@ function CandidateDetail({
                   task_ids: waiveIds,
                   comment: waiveComment,
                 })
-                // 수용된 항목을 다시 보내 ITEM_NOT_WAIVABLE이 나지 않게 선택을 비운다 (A.20 2차)
+                // 수용된 항목을 다시 보내 ITEM_NOT_WAIVABLE이 나지 않게 선택을 비운다
                 if (r && (r.status === 'APPLIED' || r.status === 'REPLAYED')) setWaiveIds([])
               }}
             >
@@ -373,7 +373,7 @@ function CandidateDetail({
           </label>
         </div>
         <div className="row">
-          {/* 시연값은 scenario(DEMO_MODE)에서만 받는다 (A.20 2차) */}
+          {/* 시연값은 scenario(DEMO_MODE)에서만 받는다 */}
           {scenario?.rejections.map((x) => (
             <button
               key={x.label}

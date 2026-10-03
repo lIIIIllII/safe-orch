@@ -1,4 +1,4 @@
-"""FastAPI API (설계서 §9.5·§12·§13, 부록 A.18). TestClient와 스크립트 모델."""
+"""FastAPI API. TestClient와 스크립트 모델."""
 
 import sqlite3
 import uuid
@@ -301,7 +301,7 @@ def test_cancel_waiting_run(client, seeded):
 
 def test_cancel_aborts_reserved_step(client, with_a):
     add_run(with_a, "run_dead", input_ref={})
-    with db.write() as tx:  # 그래프 실행 중 프로세스가 죽어 RESERVED로 남은 step (A.16 한계)
+    with db.write() as tx:  # 그래프 실행 중 프로세스가 죽어 RESERVED로 남은 step
         reserve_step(tx, "run_dead", (1, 0, 0), "goal", {}, [])
     res = client.post("/api/runs/run_dead/cancel", headers=_h())
     assert res.status_code == 200

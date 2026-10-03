@@ -1,4 +1,4 @@
-"""CP-SAT 2단계 최적화 (설계서 §7, 부록 A.11).
+"""CP-SAT 2단계 최적화.
 
 트랜잭션 밖에서 돈다. 모든 READY 작업을 넣고 SearchSpec이 허용하지 않은 작업·축은 기준값 상수다.
 1단계 min Σ changed_t, 1단계가 OPTIMAL이면 그 값을 고정하고 2단계 min Σ max(0, s_t − base_t).
@@ -51,7 +51,7 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
         m.add(s + d <= t.latest_end)
         m.add(s + d <= horizon)
         # 근무 달력: 시작은 근무 구간 하나 안에 끝나는 값만. 상수(고정 작업)에도 걸어 위반이면
-        # INFEASIBLE이다(Rule Engine CALENDAR·Validator C04와 같은 판정, 부록 A.20).
+        # INFEASIBLE이다(Rule Engine CALENDAR·Validator C04와 같은 판정).
         m.add_linear_expression_in_domain(
             s, Domain.from_intervals(start_domain(d, facts.work_intervals))
         )
@@ -128,7 +128,7 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
                 m.add(sy + y.duration + rule.min_gap <= sx).only_enforce_if(~before)
 
     # 선후행. 선행 작업이 Snapshot에 없으면 해를 내지 않는다(INFEASIBLE). Rule Engine
-    # PREDECESSOR_MISSING·Validator C05와 같은 기준 (부록 A.22).
+    # PREDECESSOR_MISSING·Validator C05와 같은 기준.
     for t in tasks:
         for p in t.predecessors:
             if p.task_id in b.starts:

@@ -1,5 +1,5 @@
-// API 호출 (부록 A.18·A.19). X-Actor는 Actor 전환 값, Idempotency-Key는 사용자 조작마다 새로 만든다.
-// 503과 응답을 받지 못한 네트워크 오류는 같은 키로 재시도한다(§12).
+// API 호출. X-Actor는 Actor 전환 값, Idempotency-Key는 사용자 조작마다 새로 만든다.
+// 503과 응답을 받지 못한 네트워크 오류는 같은 키로 재시도한다.
 
 import type { AgentStep, CommandResponse, Meta, Scenario, SiteEntry, SiteState } from './types'
 
@@ -27,7 +27,7 @@ async function getJson<T>(path: string, actor: string | null): Promise<T> {
   return (await res.json()) as T
 }
 
-/** 현장 목록과 Actor (A.20 2차). X-Actor 없이 읽는다. site_id는 여기서 받는다. */
+/** 현장 목록과 Actor. X-Actor 없이 읽는다. site_id는 여기서 받는다. */
 export async function fetchSites(): Promise<SiteEntry[]> {
   return (await getJson<{ sites: SiteEntry[] }>('/sites', null)).sites
 }

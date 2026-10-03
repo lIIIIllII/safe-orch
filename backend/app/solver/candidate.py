@@ -1,4 +1,4 @@
-"""Solver 결과 → Candidate (설계서 §5.2, 부록 A.11)."""
+"""Solver 결과 → Candidate."""
 
 from app.domain.hashes import candidate_hash
 from app.domain.ids import new_id

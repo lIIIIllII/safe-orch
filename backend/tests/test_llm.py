@@ -1,4 +1,4 @@
-"""실제 모델 연결 (설계서 §11.2·§11.6, 부록 A.17). 실제 API는 부르지 않는다."""
+"""실제 모델 연결. 실제 API는 부르지 않는다."""
 
 import json
 import os
@@ -160,7 +160,7 @@ def test_llm_error_on_two_consecutive_steps_escalates(with_a):
 
 
 def test_llm_error_then_malformed_escalates(with_a):
-    """LLM_ERROR와 MALFORMED는 합산한다. 끝난 사유는 마지막 사유 (A.17·A.22)."""
+    """LLM_ERROR와 MALFORMED는 합산한다. 끝난 사유는 마지막 사유."""
     run, steps = _invoke(with_a, [_raise(_conn_error)] * 2 + [AIMessage(content="L1")])
     assert [(s["result_kind"], s["guard"]["reason_code"]) for s in steps] == [
         ("REJECTED", "LLM_ERROR"),
@@ -232,7 +232,7 @@ def test_system_prompt_does_not_order_l0_first(pack):
     assert "L0부터" not in prompt.render_system(pack)
 
 
-# ── 현장 문구의 Pack화 (부록 A.23) ─────────────────────────────
+# ── 현장 문구의 Pack화 ─────────────────────────────
 
 
 def test_shipyard_rendered_system_equals_p7(pack):
@@ -262,7 +262,7 @@ def _found(values: list[str], text: str) -> list[str]:
 
 
 def test_prompt_template_has_no_pack_values(pack):
-    """렌더링 전 템플릿·Goal·머리말·전체 도구 스키마에 Pack 값이 없다 (§18.2.6, A.23)."""
+    """렌더링 전 템플릿·Goal·머리말·전체 도구 스키마에 Pack 값이 없다."""
     tools = prompt.spec.tool_schemas(
         {
             name: {"level": list(prompt.spec.LEVELS)} if name == "SOLVE_WITH_SCOPE" else {}
@@ -413,7 +413,7 @@ def _plan_b_script(*after_reply):
 
 
 def test_live_run_path_b_with_scripted_model(monkeypatch):
-    """--path B: 거절 → 재개 → LIST → ASK → 스크립트가 수락 → TRY → Beta → 승인 R1 (A.21 9)."""
+    """--path B: 거절 → 재개 → LIST → ASK → 스크립트가 수락 → TRY → Beta → 승인 R1."""
     try_ = call("TRY_ALTERNATIVE_RESOURCE", "대체 자원", task_id="A", resource_id="SITE-CR-01")
     monkeypatch.setattr(live_run, "openai_model", _plan_b_script(try_))
     settings = Settings(openai_api_key="sk-test", openai_model="m")
@@ -431,7 +431,7 @@ def test_live_run_path_b_with_scripted_model(monkeypatch):
 
 
 def test_live_run_path_b_fixes_agent_flags_regardless_of_env(monkeypatch):
-    """경로가 Agent 설정을 명시한다 (A.28): 환경변수가 둘 다 켜져 있어도 --path B는 둘 다 끈 채로 잰다."""
+    """경로가 Agent 설정을 명시한다: 환경변수가 둘 다 켜져 있어도 --path B는 둘 다 끈 채로 잰다."""
     monkeypatch.setenv("COORDINATION_ENABLED", "true")
     monkeypatch.setenv("EVENT_RESPONSE_ENABLED", "true")
     try_ = call("TRY_ALTERNATIVE_RESOURCE", "대체 자원", task_id="A", resource_id="SITE-CR-01")
@@ -446,7 +446,7 @@ def test_live_run_path_b_fixes_agent_flags_regardless_of_env(monkeypatch):
 
 
 def test_live_run_path_b_coord_with_scripted_model(monkeypatch):
-    """--path B --coord (A.28): Alpha 협의 Run이 변경 요청 → Supervisor 거절로 STALE → Beta → R1 → 통지."""
+    """--path B --coord: Alpha 협의 Run이 변경 요청 → Supervisor 거절로 STALE → Beta → R1 → 통지."""
 
     def report():
         args = {"decision_summary": "보고", "summary": "통지 완료"}
@@ -546,7 +546,7 @@ def test_live_run_path_needs_request_a(capsys):
 
 
 def test_system_lists_every_action_with_open_condition(pack):
-    """System의 "도구 전체와 열리는 조건" 절은 spec에서 생성한다. Pack 값은 넣지 않는다 (A.21 p7)."""
+    """System의 "도구 전체와 열리는 조건" 절은 spec에서 생성한다. Pack 값은 넣지 않는다."""
     catalog = prompt.tool_catalog()
     system = prompt.render_system(pack)
     assert catalog in system
@@ -559,7 +559,7 @@ def test_system_lists_every_action_with_open_condition(pack):
 
 
 def test_live_run_path_coord_with_scripted_model(monkeypatch):
-    """--path coord(기본안 A, A.24): 변경 요청 → 스크립트 이견 → 초안 → 스크립트 확정 → 재개 → Beta → R1 → 통지."""
+    """--path coord(기본안 A): 변경 요청 → 스크립트 이견 → 초안 → 스크립트 확정 → 재개 → Beta → R1 → 통지."""
 
     def draft():
         with db.read() as conn:
@@ -629,7 +629,7 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
 
 
 def test_live_run_path_event_with_scripted_model(monkeypatch):
-    """--path event --coord(A.25): R1 스크립트 준비 → 신고 → ER 조회·분석·제안 → 확인·해제 → Gamma → 협의 → R2 → 통지."""
+    """--path event --coord: R1 스크립트 준비 → 신고 → ER 조회·분석·제안 → 확인·해제 → Gamma → 협의 → R2 → 통지."""
 
     def report(text):
         args = {"decision_summary": "보고", "summary": text}
@@ -686,7 +686,7 @@ INTAKE_VALUES = {
 
 @pytest.mark.parametrize("ambiguous", [False, True], ids=["clear", "ambiguous"])
 def test_live_run_path_intake_with_scripted_model(monkeypatch, ambiguous):
-    """--path intake [--ambiguous] (A.26): 질문(모호) → 값 확인 → 완료 → Replanning Alpha."""
+    """--path intake [--ambiguous]: 질문(모호) → 값 확인 → 완료 → Replanning Alpha."""
     ask = call(
         "ASK_CLARIFICATION", "질문", field_ids=["zone_id", "resource"], question="구역·자원?"
     )
@@ -707,7 +707,7 @@ def test_live_run_path_intake_with_scripted_model(monkeypatch, ambiguous):
 
 
 def test_live_run_path_event_ambiguous_with_scripted_model(monkeypatch):
-    """--path event --ambiguous (A.25 S4·A.27): 모호 신고 → 조회 → ASK_REPORTER → 답 → E 10:15 수정안 → Gamma(지연 30) → R2."""
+    """--path event --ambiguous: 모호 신고 → 조회 → ASK_REPORTER → 답 → E 10:15 수정안 → Gamma(지연 30) → R2."""
     router = Router(
         replanning=[solve("L0")],
         event_response=[
@@ -732,7 +732,7 @@ def test_live_run_path_event_ambiguous_with_scripted_model(monkeypatch):
 
 
 def test_live_run_human_answer_repeats_after_first():
-    """사람 역할 답 (A.27): 첫 질문은 scenario 답, 두 번째부터는 앞의 답이 전부라는 답."""
+    """사람 역할 답: 첫 질문은 scenario 답, 두 번째부터는 앞의 답이 전부라는 답."""
     assert live_run._human_answer(0, "B구역입니다.", "원문") == ("FIRST", "B구역입니다.")
     assert live_run._human_answer(1, "B구역입니다.", "원문") == (
         "REPEAT",

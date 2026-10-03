@@ -1,4 +1,4 @@
-"""모델 호출 (설계서 §11.1·§11.2, 부록 A.16·A.17).
+"""모델 호출.
 
 그래프는 ChatModel 프로토콜(bind_tools + invoke)만 안다. 운영 모델은 ChatOpenAI이고, 테스트는 같은
 프로토콜의 스크립트 모델을 주입한다. 운영 코드에 테스트용 분기는 없다.
@@ -15,9 +15,9 @@ from langchain_core.messages import AIMessage, BaseMessage
 from app.config import Settings
 
 TIMEOUT_S = 30
-TRANSPORT_RETRIES = 1  # §11.2 전송 재시도 1회 (시도 2회로 계상)
+TRANSPORT_RETRIES = 1  # 전송 재시도 1회 (시도 2회로 계상, AG-17)
 
-# 다시 시도할 전송 오류와, 다시 시도하지 않는 설정 오류 (A.17)
+# 다시 시도할 전송 오류와, 다시 시도하지 않는 설정 오류
 RETRYABLE = (openai.APIConnectionError, openai.RateLimitError, openai.InternalServerError)
 CONFIG_ERRORS = (
     openai.AuthenticationError,
@@ -39,7 +39,7 @@ ModelFactory = Callable[[], ChatModel]
 
 
 def bind(model: ChatModel, tools: Sequence[dict[str, Any]]) -> Runnable:
-    """도구 호출을 강제하고 병렬 호출을 끈다 (§11.2)."""
+    """도구 호출을 강제하고 병렬 호출을 끈다."""
     return model.bind_tools(tools, tool_choice="any", parallel_tool_calls=False)
 
 
@@ -51,7 +51,7 @@ def model_id(model: Any, message: AIMessage | None = None) -> str:
 
 
 def model_settings(settings: Settings) -> dict[str, Any]:
-    """ChatOpenAI에 넘기는 설정(키 제외). 비어 있는 선택 값은 넘기지 않는다 (A.17)."""
+    """ChatOpenAI에 넘기는 설정(키 제외). 비어 있는 선택 값은 넘기지 않는다."""
     out: dict[str, Any] = {
         "model": settings.openai_model,
         "timeout": TIMEOUT_S,
@@ -97,7 +97,7 @@ def invoke_with_retry(runnable: Runnable, messages: Sequence[BaseMessage]) -> LL
         except CONFIG_ERRORS as e:
             return LLMCall(None, attempts, "LLM_CONFIG", type(e).__name__)
         except RETRYABLE as e:
-            # 크레딧 부족은 기다려도 풀리지 않는 설정 문제다 (A.18에서 A.17 보완)
+            # 크레딧 부족은 기다려도 풀리지 않는 설정 문제다
             if getattr(e, "code", None) == "insufficient_quota":
                 return LLMCall(None, attempts, "LLM_CONFIG", "insufficient_quota")
             if attempts > TRANSPORT_RETRIES:

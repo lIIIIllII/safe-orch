@@ -1,11 +1,11 @@
-"""Replanning prompt (설계서 §11.2 decide, 부록 A.16·A.17).
+"""Replanning prompt.
 
 System = 역할·Goal / 규칙 / 도구 전체와 열리는 조건 / 관찰 읽는 법 / 출력 규칙. Action 설명은 도구 스키마의
-description으로 준다. 다만 "도구 전체와 열리는 조건" 절은 지금 열리지 않은 도구까지 보여 주려고 spec에서 생성한다
-(A.17 "System에서 반복하지 않음"의 예외, A.21 p7). 실제 실행 가능 여부는 Available Actions가 정한다.
+description으로 준다. 다만 "도구 전체와 열리는 조건" 절은 지금 열리지 않은 도구까지 보여 주려고 spec에서 생성한다.
+실제 실행 가능 여부는 Available Actions가 정한다.
 "L0부터 하라"는 지시는 두지 않는다(시연 안정성: Available Actions·prompt로 L0를 강제하지 않는다).
 System·도구 description·Observation 필드가 바뀌면 PROMPT_VERSION을 올리고 PROMPT_FINGERPRINTS에 더한다.
-현장 문구(현장 설명, Horizon 원점 시각)는 Pack에서 받아 render_system(pack)이 넣는다(A.23). SYSTEM은
+현장 문구(현장 설명, Horizon 원점 시각)는 Pack에서 받아 render_system(pack)이 넣는다. SYSTEM은
 렌더링 전 템플릿이고 fingerprint는 템플릿 기준이다(Pack에 독립).
 """
 
@@ -78,13 +78,13 @@ Goal: {goal}
 
 
 def origin_time(pack: LoadedPack) -> str:
-    """Horizon 원점의 현장 시각 HH:MM (horizon_start_utc + timezone, A.23)."""
+    """Horizon 원점의 현장 시각 HH:MM (horizon_start_utc + timezone)."""
     start = datetime.fromisoformat(pack.horizon_start_utc).astimezone(ZoneInfo(pack.timezone))
     return start.strftime("%H:%M")
 
 
 def render_system(pack: LoadedPack) -> str:
-    """Goal과 Pack의 현장 문구로 System을 렌더링한다 (A.23). shipyard에서는 p7 System과 같다."""
+    """Goal과 Pack의 현장 문구로 System을 렌더링한다. shipyard에서는 p7 System과 같다."""
     return SYSTEM.format(
         goal=spec.GOAL, site_description=pack.site_description, origin_time=origin_time(pack)
     )
@@ -121,7 +121,7 @@ def render_observation(data: dict[str, Any]) -> HumanMessage:
 
 
 def fingerprint() -> str:
-    """System + Goal + 머리말 + 전체 도구 스키마 + Observation 키의 hash (A.17)."""
+    """System + Goal + 머리말 + 전체 도구 스키마 + Observation 키의 hash."""
     tools = spec.tool_schemas(
         {
             name: {"level": list(spec.LEVELS)} if name == "SOLVE_WITH_SCOPE" else {}
@@ -142,12 +142,12 @@ def fingerprint() -> str:
 # prompt_version별 fingerprint. 바꾸면 버전을 올리고 한 줄 더한다(값은 서로 달라야 한다).
 PROMPT_FINGERPRINTS = {
     "replanning-p2": "e4541995ea602bac1810516c9a5419ea3b9001b9eac48409e6ea4d3bc06d1d4c",
-    "replanning-p3": "6f8bde98a4296d79da777cacf0b43be5aa09fc468c5701c71d5594090f0e8e3c",  # 근무 달력 (A.20)
-    "replanning-p4": "abfc8dbc2d6210e8a045f0f635f6aeac85bb853ad5c7e03688c19a1ba888780f",  # 거절 관찰 rejections (A.21)
-    "replanning-p5": "fe193f9cdffbe7f134584ef743079ca10e3b7a782d4c5e09f22bf5377860deba",  # 자원 조회·담당자 질문, 한국어 키 이름 (A.21 2단계)
-    "replanning-p6": "2f5287a66d4bc0121e747150e2dc7708a8898f7869a3074d81c96bd228286ba8",  # 질문·답 Case 단위, 거절 값 재질문 금지 (A.21 3단계)
-    "replanning-p7": "4edbced2fb04c952ff9f9166d35982c11a3dd9619701415ed65388deb75a2f21",  # 도구 전체와 열리는 조건, 이관 조건, LIST는 주 충돌 L0 (A.21)
-    "replanning-p8": "24532cde46a7022647e44f07f57c1bdb279472596c1517f85e4b3ffb7c321ff9",  # 현장 설명·원점 시각을 Pack에서 (A.23). shipyard 렌더링은 p7과 같다
+    "replanning-p3": "6f8bde98a4296d79da777cacf0b43be5aa09fc468c5701c71d5594090f0e8e3c",  # 근무 달력
+    "replanning-p4": "abfc8dbc2d6210e8a045f0f635f6aeac85bb853ad5c7e03688c19a1ba888780f",  # 거절 관찰 rejections
+    "replanning-p5": "fe193f9cdffbe7f134584ef743079ca10e3b7a782d4c5e09f22bf5377860deba",  # 자원 조회·담당자 질문, 한국어 키 이름
+    "replanning-p6": "2f5287a66d4bc0121e747150e2dc7708a8898f7869a3074d81c96bd228286ba8",  # 질문·답 Case 단위, 거절 값 재질문 금지
+    "replanning-p7": "4edbced2fb04c952ff9f9166d35982c11a3dd9619701415ed65388deb75a2f21",  # 도구 전체와 열리는 조건, 이관 조건, LIST는 주 충돌 L0
+    "replanning-p8": "24532cde46a7022647e44f07f57c1bdb279472596c1517f85e4b3ffb7c321ff9",  # 현장 설명·원점 시각을 Pack에서. shipyard 렌더링은 p7과 같다
 }
-# p7 System(렌더링 결과)의 hash. shipyard에서 render_system 결과가 이것과 같아야 한다 (A.23)
+# p7 System(렌더링 결과)의 hash. shipyard에서 render_system 결과가 이것과 같아야 한다
 P7_RENDERED_SYSTEM_HASH = "b635ba75e65d3c0aa9f3f6d4f928affb70f23c1a46382fb9bab7eb805d822c1c"

@@ -1,10 +1,10 @@
-"""Case 수명: wake·재개 claim·Case 종료와 대기열 (설계서 §11.3·§11.5, 부록 A.21).
+"""Case 수명: wake·재개 claim·Case 종료와 대기열.
 
 - wake_run: 영향받는 Run의 wake_seq += 1, 대기 중이면 RESUME_RUN 등록(Run당 PENDING 1개).
-- claim_resume: `WAITING_HUMAN ∧ wait_generation 일치` 조건부 claim (I-17).
+- claim_resume: `WAITING_HUMAN ∧ wait_generation 일치` 조건부 claim.
 - end_case_run: Run 종료 + 보낸 요청 정리(메시지 CANCELLED·제안 STALE) + 열린 Case가 없어지면 대기열 1건 승격.
-- promote_queued: 가장 먼저 접수된 QUEUED 작업을 새 revision READY로(Consent 복사, A.14 C1),
-  context +1, RECHECK 등록. 열린 Case 중 폼은 QUEUED로 저장된다(A.21 0-1).
+- promote_queued: 가장 먼저 접수된 QUEUED 작업을 새 revision READY로(Consent 복사),
+  context +1, RECHECK 등록. 열린 Case 중 폼은 QUEUED로 저장된다.
 모든 함수는 호출한 쪽의 tx 안에서 돈다(트랜잭션 중첩 없음).
 """
 
@@ -23,7 +23,7 @@ from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
 
 def recheck_key(context_version: int, plan_revision: int) -> str:
-    """RECHECK dedupe 키. 승인은 context를 바꾸지 않으므로 plan을 함께 넣는다 (A.21 4)."""
+    """RECHECK dedupe 키. 승인은 context를 바꾸지 않으므로 plan을 함께 넣는다."""
     return f"RECHECK:ctx{context_version}:plan{plan_revision}"
 
 
@@ -45,7 +45,7 @@ def register_recheck(tx: sqlite3.Connection, site_id: str, cause: dict[str, Any]
 def wake_run(tx: sqlite3.Connection, site_id: str, run_id: str) -> bool:
     """wake_seq += 1. 대기 중이면 RESUME_RUN(run_id, wait_generation)을 등록한다.
 
-    RUNNING이면 작업을 만들지 않는다. 늘어난 wake_seq를 대기 진입 재확인이 잡는다(I-19).
+    RUNNING이면 작업을 만들지 않는다. 늘어난 wake_seq를 대기 진입 재확인이 잡는다.
     종료된 Run이면 아무것도 하지 않고 False.
     """
     row = tx.execute(
@@ -70,7 +70,7 @@ def wake_run(tx: sqlite3.Connection, site_id: str, run_id: str) -> bool:
 
 
 def claim_resume(tx: sqlite3.Connection, run_id: str, wait_generation: int) -> bool:
-    """대기 중이고 세대가 같을 때만 RUNNING으로. 0행이면 무효(이미 재개됨 또는 오래된 세대, §11.3(3))."""
+    """대기 중이고 세대가 같을 때만 RUNNING으로. 0행이면 무효(이미 재개됨 또는 오래된 세대)."""
     row = tx.execute(
         "UPDATE agent_run SET status = 'RUNNING', wait_kind = NULL, wait_ref = NULL"
         " WHERE run_id = ? AND status = 'WAITING_HUMAN' AND wait_generation = ?"
@@ -86,7 +86,7 @@ def claim_resume(tx: sqlite3.Connection, run_id: str, wait_generation: int) -> b
 def cancel_requests(tx: sqlite3.Connection, run_id: str) -> None:
     """Run이 끝나면 보낸 요청은 효력을 잃는다: 메시지 OPEN → CANCELLED, 제안 PENDING → STALE.
 
-    통지(NOTICE)는 답을 받는 요청이 아니므로 OPEN으로 남긴다 (A.24).
+    통지(NOTICE)는 답을 받는 요청이 아니므로 OPEN으로 남긴다.
     """
     tx.execute(
         "UPDATE message SET status = 'CANCELLED'"
@@ -129,7 +129,7 @@ def end_case_run(
 def end_candidate_runs(
     tx: sqlite3.Connection, pack: LoadedPack, candidate_id: str, status: str, end_reason: str
 ) -> list[str]:
-    """후보에 걸린 열린 협의 Run(COORDINATION, phase CONSULT)을 끝낸다 (A.24 2). 끝낸 run_id."""
+    """후보에 걸린 열린 협의 Run(COORDINATION, phase CONSULT)을 끝낸다. 끝낸 run_id."""
     ids = [
         r[0]
         for r in tx.execute(
@@ -154,7 +154,7 @@ def supervisor_actor(conn: sqlite3.Connection, pack: LoadedPack) -> Any:
 def register_event_response(
     tx: sqlite3.Connection, pack: LoadedPack, event_id: str, hold_id: str
 ) -> bool:
-    """Event Response START_RUN (A.25 1). Event 접수 tx 안에서 부른다(I-18). Event마다 새 Case."""
+    """Event Response START_RUN. Event 접수 tx 안에서 부른다. Event마다 새 Case."""
     supervisor = supervisor_actor(tx, pack)
     if supervisor is None:
         return False
@@ -179,7 +179,7 @@ def register_coordination(
     case_id: str,
     **extra: Any,
 ) -> bool:
-    """Coordination START_RUN 등록 (A.24 2). 원인 tx 안에서 부른다(I-18).
+    """Coordination START_RUN 등록. 원인 tx 안에서 부른다.
 
     phase CONSULT(협의)·NOTICE(통지). Case는 후보 Run의 case_id를 잇고, acting_unit은 SUPERVISOR의 Unit이다
     (Pack ID를 코드에 두지 않는다). acting_actor는 없다.
@@ -200,10 +200,10 @@ def register_coordination(
 
 
 def stale_active_runs(tx: sqlite3.Connection, pack: LoadedPack, end_reason: str) -> list[str]:
-    """열린 Run을 STALE로(Event 접수, §10). 마지막 Run이 닫힐 때 대기열 1건을 올린다.
+    """열린 Run을 STALE로(Event 접수). 마지막 Run이 닫힐 때 대기열 1건을 올린다.
 
     Work Intake Run은 뺀다: 폼이 Hold 중에도 접수되듯 Intake의 값은 아직 사실이 아니고, 완료할 때
-    검증을 다시 한다 (A.26 5).
+    검증을 다시 한다.
     """
     ids = [
         r[0]
@@ -245,7 +245,7 @@ def copy_consents(
     context_version: int,
     axes: tuple[str, ...] = ("TIME", "RESOURCE"),
 ) -> list[str]:
-    """값이 바뀌지 않은 축의 Consent를 새 revision으로 복사한다(같은 source_ref, A.14 C1)."""
+    """값이 바뀌지 않은 축의 Consent를 새 revision으로 복사한다(같은 source_ref)."""
     out = []
     for r in rows(
         tx,

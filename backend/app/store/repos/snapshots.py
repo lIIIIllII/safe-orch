@@ -1,4 +1,4 @@
-"""Snapshot 생성·저장 (부록 A.10). content는 canonical JSON, snapshot_hash = canonical_hash(content)."""
+"""Snapshot 생성·저장. content는 canonical JSON, snapshot_hash = canonical_hash(content)."""
 
 import sqlite3
 from typing import Any
@@ -35,7 +35,7 @@ def build_snapshot_content(
         site_id=site.site_id,
         pack_hash=site.pack_hash,
         horizon_minutes=site.horizon_minutes,
-        work_intervals=pack.work_intervals,  # Pack에서 (pack_hash로 고정, 부록 A.20)
+        work_intervals=pack.work_intervals,  # Pack에서 (pack_hash로 고정)
         context_version=site.context_version,
         plan_revision=site.plan_revision,
         tasks=tuple(t for t in list_current_tasks(conn, site_id, pack) if t.lifecycle == "READY"),

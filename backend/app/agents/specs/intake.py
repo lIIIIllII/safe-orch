@@ -1,8 +1,8 @@
-"""Work Intake AgentSpec (설계서 §18.2.1·§18.2.4, 부록 A.26). 순수 데이터: Goal, Action 스키마, Budget.
+"""Work Intake AgentSpec. 순수 데이터: Goal, Action 스키마, Budget.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
 Action(최소 경로): LOOKUP_RESOURCE, ASK_CLARIFICATION, REQUEST_CONFIRMATION, COMPLETE_TASKSPEC, ESCALATE.
-모델이 추출·조회한 값은 PROPOSED이고, 요청자가 확인한 값만 CONFIRMED가 된다(D01). 위험 태그는 받지 않는다(I-14).
+모델이 추출·조회한 값은 PROPOSED이고, 요청자가 확인한 값만 CONFIRMED가 된다. 위험 태그는 받지 않는다.
 """
 
 from typing import Any, ClassVar, Literal
@@ -17,9 +17,9 @@ GOAL = (
     "추정한 값을 확인된 값으로 다루지 않는다."
 )
 
-MAX_STEPS = 12  # §18.2.1 표
-MAX_LLM_ATTEMPTS = 24  # step × 2 (Replanning과 같은 규칙, A.26)
-MAX_HUMAN_ROUNDS = 3  # §18.2.1 표. 확인 질문과 값 확인 요청을 모두 센다
+MAX_STEPS = 12
+MAX_LLM_ATTEMPTS = 24  # step × 2 (Replanning과 같은 규칙)
+MAX_HUMAN_ROUNDS = 3  # 확인 질문과 값 확인 요청을 모두 센다
 RECURSION_LIMIT = MAX_STEPS * 5 + 10
 SUMMARY_MAX = 200
 TEXT_MAX = 300
@@ -116,7 +116,7 @@ FLOW = {
 
 
 def choices(obs: dict[str, Any]) -> dict[str, Any]:
-    """Action별 열림 (A.26 2·A.27). 답을 기다리는 메시지가 있으면 묻거나 확인을 요청하지 않는다."""
+    """Action별 열림. 답을 기다리는 메시지가 있으면 묻거나 확인을 요청하지 않는다."""
     waiting = any(q["status"] == "OPEN" for q in obs["questions"]) or any(
         c["status"] == "OPEN" for c in obs["confirmations"]
     )
@@ -124,7 +124,7 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
     rounds = left > 0
     last = obs["confirmations"][-1] if obs["confirmations"] else None
     return {
-        # 마지막 사람 라운드는 값 확인 요청(REQUEST_CONFIRMATION)용으로 남긴다 (A.27)
+        # 마지막 사람 라운드는 값 확인 요청(REQUEST_CONFIRMATION)용으로 남긴다
         "ASK": left >= 2 and not waiting,
         "REQUEST": rounds and not waiting,
         "COMPLETE": not waiting
@@ -135,7 +135,7 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
 
 
 def code_values(obs: dict[str, Any]) -> dict[str, list[str]]:
-    """코드 값을 받는 인자의 허용 값(관찰의 Pack 데이터, A.26 intake-p2). 정적 스키마에는 넣지 않는다."""
+    """코드 값을 받는 인자의 허용 값(관찰의 Pack 데이터). 정적 스키마에는 넣지 않는다."""
     types = obs["resource_types"]
     return {
         "work_type": [w["work_type"] for w in obs["work_types"]],

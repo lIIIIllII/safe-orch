@@ -1,4 +1,4 @@
-"""작업 요청 폼 (우선순위 문서 구현 범위 D3, 부록 A.14).
+"""작업 요청 폼.
 
 critical field를 CONFIRMED(source_ref form:<form_id>)로 기록하고 Consent(시작 범위, 요청 자원)를
 만든다. Agent(Work Intake)를 대신하는 결정론 입력이며 값을 추정하지 않는다.
@@ -43,13 +43,13 @@ class TaskRequestForm(Body):
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
     predecessors: tuple[PredecessorInput, ...] = ()
-    hazard_tags: tuple[str, ...] = Field(default=(), exclude=True)  # 받으면 버린다 (I-14, A.4)
+    hazard_tags: tuple[str, ...] = Field(default=(), exclude=True)  # 받으면 버린다
 
 
 def validate_task_request(
     tx: sqlite3.Connection, pack: LoadedPack, site: Site, actor: Actor, form: TaskRequestForm
 ) -> list[str]:
-    """폼 검증 (§9.6, A.14·A.20·A.22). 폼과 Work Intake가 같이 쓴다(A.26). 사유를 검사 순서대로 모은다."""
+    """폼 검증. 폼과 Work Intake가 같이 쓴다. 사유를 검사 순서대로 모은다."""
     r = Result()
     site_id = site.site_id
     if tx.execute(
@@ -74,7 +74,7 @@ def validate_task_request(
     elif not has_work_slot(
         es, form.latest_start, form.latest_end, form.duration, pack.work_intervals
     ):
-        # 시간창 어디에도 근무 구간 하나에 들어가는 시작이 없다. 받아도 이관으로 끝날 뿐이다 (A.20).
+        # 시간창 어디에도 근무 구간 하나에 들어가는 시작이 없다. 받아도 이관으로 끝날 뿐이다.
         # 요청 시작만 근무시간 밖이면 접수하고 CALENDAR 충돌로 재계획한다.
         r.reject("WINDOW_OUTSIDE_WORK_HOURS")
     if (
@@ -94,7 +94,7 @@ def validate_task_request(
                 r.reject("RESOURCE_TYPE_MISMATCH")
             if actor.unit_id not in res.allowed_unit_ids:
                 r.reject("RESOURCE_NOT_AUTHORIZED")
-    # 선행 작업은 현재 READY·QUEUED 작업만. 철회된 작업(NEEDS_INFO)은 없는 것으로 본다 (A.22).
+    # 선행 작업은 현재 READY·QUEUED 작업만. 철회된 작업(NEEDS_INFO)은 없는 것으로 본다.
     current = {
         t.task_id
         for t in list_current_tasks(tx, site_id, pack)
@@ -114,7 +114,7 @@ def create_requested_task(
     source_ref: str,
     cause_kind: str = "FORM",
 ) -> dict[str, Any]:
-    """검증을 통과한 요청으로 작업을 만든다 (§9.6, A.14·A.21). 폼과 Work Intake가 같이 쓴다(A.26).
+    """검증을 통과한 요청으로 작업을 만든다. 폼과 Work Intake가 같이 쓴다.
 
     critical field CONFIRMED(source_ref), Consent(시작 범위, 요청 자원), movable {time, not resource},
     대기열 판단, Context +1, RECHECK. source_ref만 다르면 같은 작업이 된다.
@@ -134,7 +134,7 @@ def create_requested_task(
     )
     # 열린 Replanning Case 중이거나 먼저 접수된 대기 요청이 있으면 대기열(QUEUED): Snapshot·충돌
     # 검사에 들어가지 않으므로 context를 올리지 않고 RECHECK도 없다. Case가 끝날 때 접수 순서로
-    # READY가 된다. RECONFIRM 승인 대기 중에도 대기 요청을 앞지르지 않는다 (A.21 0-1).
+    # READY가 된다. RECONFIRM 승인 대기 중에도 대기 요청을 앞지르지 않는다.
     queued = has_open_case(tx, site_id) or bool(queued_task_ids(tx, site_id))
     if queued:
         task = task.model_copy(update={"lifecycle": "QUEUED"})
@@ -204,7 +204,7 @@ def submit_task_request(
     return run_command(pack, COMMAND, actor_id, idempotency_key, form, _handle)
 
 
-# ── 요청 철회 (부록 A.20) ──────────────────────────────────────
+# ── 요청 철회 ──────────────────────────────────────
 
 WITHDRAW_COMMAND = "WITHDRAW_TASK_REQUEST"
 
@@ -219,7 +219,7 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
 
     READY를 남겨 두면 기준 위치에 고정 상수로 남아 이후 모든 Solver 호출이 INFEASIBLE이 된다.
     - READY: 새 revision(NEEDS_INFO) + context +1 + RECHECK. 이 작업을 다루는 열린 Run은 STALE(그 Case가
-      끝나 대기열이 올라감), 다른 열린 Run은 wake(고정 충돌이 사라져 다시 풀 수 있다, A.21 3).
+      끝나 대기열이 올라감), 다른 열린 Run은 wake(고정 충돌이 사라져 다시 풀 수 있다).
     - QUEUED: 사실에 들어간 적이 없으므로 새 revision(NEEDS_INFO)만. context·RECHECK·Run 영향 없음.
     """
     r = Result()
@@ -238,7 +238,7 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
     if plan is not None and any(a.task_id == task.task_id for a in plan.assignments):
         r.reject("TASK_IN_PLAN")
         return r
-    # 이 작업을 선행으로 가진 READY·QUEUED 작업이 있으면 후속 요청을 먼저 철회해야 한다 (A.22).
+    # 이 작업을 선행으로 가진 READY·QUEUED 작업이 있으면 후속 요청을 먼저 철회해야 한다.
     if any(p.task_id == task.task_id for t in active for p in t.predecessors):
         r.reject("TASK_HAS_SUCCESSORS")
         return r
@@ -253,10 +253,10 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
     bump_context_version(tx, site_id)
     for run in list_active_runs(tx, site_id):
         if run.agent_type == "COORDINATION":
-            # Context가 올라 협의 중인 후보가 무효다 (A.24 9)
+            # Context가 올라 협의 중인 후보가 무효다
             end_case_run(tx, ctx.pack, run.run_id, "STALE", f"WITHDRAW:{task.task_id}")
         elif run.agent_type != "REPLANNING":
-            # 다른 작업의 철회는 Event Response·Intake Run의 판단 근거가 아니다(깨우지 않는다, A.26 6)
+            # 다른 작업의 철회는 Event Response·Intake Run의 판단 근거가 아니다(깨우지 않는다)
             continue
         elif task.task_id in (run.input_ref.get("conflict") or {}).get("task_ids", []):
             end_case_run(tx, ctx.pack, run.run_id, "STALE", f"WITHDRAW:{task.task_id}")

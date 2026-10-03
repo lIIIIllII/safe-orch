@@ -1,10 +1,10 @@
-"""메시지 답변·제안 확인/폐기 (설계서 §9.4·§12, I-13, 부록 A.21 2).
+"""메시지 답변·제안 확인/폐기.
 
 reply(ACCEPT|DECLINE)와 proposals/{pid}/confirm·discard는 같은 처리(_answer)를 쓴다. 제안이 붙은
-메시지면 ACCEPT = 확인, DECLINE = 폐기다. 검사 순서(단독 반환 규칙은 A.14):
+메시지면 ACCEPT = 확인, DECLINE = 폐기다. 검사 순서(각 단계에서 걸리면 그 사유 하나로 끝난다):
 ① *_NOT_FOUND ② NOT_AUTHORIZED ③ 메시지 CANCELLED·제안 STALE → LATE(기록만, 도메인 변화·wake 없음)
 ④ 이미 답함: 같은 결정 REPLAYED, 다른 결정 ALREADY_ANSWERED ⑤ STALE_PROPOSAL ⑥ INVALID_VALUES.
-comment는 Observation에 quoted_comment로만 들어간다(A.17).
+comment는 Observation에 quoted_comment로만 들어간다.
 """
 
 import sqlite3
@@ -31,7 +31,7 @@ from app.store.repos.runs import run_for_solver_result
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
-# ANSWER: 자유 텍스트 답 (A.26 3). API 본문(api/commands.ReplyBody)도 이 정의를 쓴다 (A.26 후속)
+# ANSWER: 자유 텍스트 답. API 본문(api/commands.ReplyBody)도 이 정의를 쓴다
 Decision = Literal["ACCEPT", "DECLINE", "ANSWER"]
 
 
@@ -68,7 +68,7 @@ def _answer(
 ) -> Result:
     """③–⑥ 검사와 효과. ①·②는 호출한 쪽이 한다."""
     r = Result()
-    # 자유 텍스트 질문(제안 없는 QUESTION)에는 ANSWER만, 다른 메시지에는 ANSWER 불가 (A.26 3)
+    # 자유 텍스트 질문(제안 없는 QUESTION)에는 ANSWER만, 다른 메시지에는 ANSWER 불가
     free_text = message["type"] == "QUESTION" and proposal is None
     if free_text != (decision == "ANSWER"):
         r.reject("INVALID_DECISION")
@@ -125,7 +125,7 @@ def _answer(
             r.reject("STALE_PROPOSAL")
             return r
         if proposal["type"] == "FACT_UPDATE" and decision == "ACCEPT":
-            # 사실 수정: 현재 값 == old_value이고 그 Event의 Hold가 아직 걸려 있어야 한다 (A.25 3)
+            # 사실 수정: 현재 값 == old_value이고 그 Event의 Hold가 아직 걸려 있어야 한다
             payload = proposal["payload"]
             if getattr(task, payload["field"]) != payload["old_value"]:
                 r.reject("STALE_PROPOSAL")
@@ -144,7 +144,7 @@ def _answer(
             r.reject("INVALID_VALUES")
             return r
 
-    # 변경 요청의 이견(DECLINE)에는 사유가 필요하다. 제약 초안의 근거가 된다 (A.24 5)
+    # 변경 요청의 이견(DECLINE)에는 사유가 필요하다. 제약 초안의 근거가 된다
     if message["type"] == "CHANGE_REQUEST" and decision == "DECLINE" and not comment.strip():
         r.reject("COMMENT_REQUIRED")
         return r
@@ -188,7 +188,7 @@ def _answer(
         context_version,
     )
     if fact is not None:
-        # 사실 수정 확정: Event Response Run은 할 일을 마쳤다(도메인 사실에 의한 종료, A.25 3)
+        # 사실 수정 확정: Event Response Run은 할 일을 마쳤다(도메인 사실에 의한 종료)
         assert proposal is not None
         end_case_run(
             tx,
@@ -198,7 +198,7 @@ def _answer(
             f"FACT_CONFIRMED:{proposal['proposal_id']}",
         )
     if constraint is not None:
-        # 제약 확정: 후보가 무효가 되므로 협의 Run을 끝내고 후보의 Replanning Run을 깨운다 (A.24 5·6)
+        # 제약 확정: 후보가 무효가 되므로 협의 Run을 끝내고 후보의 Replanning Run을 깨운다
         assert proposal is not None
         candidate_id = proposal["payload"]["candidate_id"]
         end_candidate_runs(
@@ -213,7 +213,7 @@ def _answer(
         if replanning is not None:
             wake_run(tx, site_id, replanning)
         refs["replanning_run_id"] = replanning
-    # 메시지를 만든 Run을 깨운다 (§11.3 표, A.21 3). 이미 끝났으면 아무것도 하지 않는다.
+    # 메시지를 만든 Run을 깨운다. 이미 끝났으면 아무것도 하지 않는다.
     woke = wake_run(tx, site_id, message["run_id"])
     r.refs = {**refs, "run_id": message["run_id"], "woke": woke}
     r.audit_reason = decision
@@ -223,11 +223,11 @@ def _answer(
 def _confirm_fact_update(
     tx: sqlite3.Connection, ctx: CommandContext, task: Any, proposal: dict[str, Any]
 ) -> dict[str, Any]:
-    """사실 수정 확정 (§18.2.3, A.25 3). 새 task revision(earliest_start = 새 값) → Context +1.
+    """사실 수정 확정. 새 task revision(earliest_start = 새 값) → Context +1.
 
-    시간창이 바뀌었으므로 TIME Consent는 복사하지 않고 RESOURCE만 복사한다(A.14 C1).
+    시간창이 바뀌었으므로 TIME Consent는 복사하지 않고 RESOURCE만 복사한다.
     critical field window의 확인 값도 새 값으로 바꾼다(출처 proposal:<id>, Supervisor 확인. 바꾸지 않으면
-    Validator C11이 CONFIRMED_VALUE_MISMATCH로 막는다, A.8·A.25).
+    Validator C11이 CONFIRMED_VALUE_MISMATCH로 막는다).
     """
     payload = proposal["payload"]
     revision = task.revision + 1
@@ -258,7 +258,7 @@ def _confirm_fact_update(
 def _confirm_constraint(
     tx: sqlite3.Connection, ctx: CommandContext, proposal: dict[str, Any]
 ) -> dict[str, Any]:
-    """제약 초안 확정 (§18.2.2, A.24 5). 이견을 낸 담당자가 확인했을 때만 제약이 생긴다(I-13).
+    """제약 초안 확정. 이견을 낸 담당자가 확인했을 때만 제약이 생긴다.
 
     FeedbackConstraint(frozen_axes = 초안 축, source PROPOSAL) → context +1. 효과는 Supervisor
     구조화 거절(source DECISION)과 같다: 후보 STALE, Replanning 재탐색에서 Hard 제약.
@@ -282,10 +282,10 @@ def _confirm_movability(
     message_id: str,
     values: list[str],
 ) -> dict[str, Any]:
-    """MOVABILITY 확인 (§9.4, A.21 2). 한 tx:
+    """MOVABILITY 확인. 한 tx:
 
     새 task revision(movable.resource = true, 나머지 그대로) → 기존 Consent를 같은 source_ref로 복사
-    (A.14 C1) + RESOURCE Consent [values](source_ref message:<mid>) → context +1.
+    + RESOURCE Consent [values](source_ref message:<mid>) → context +1.
     """
     site_id = ctx.site_id
     revision = task.revision + 1
@@ -337,7 +337,7 @@ def reply_message(
     return run_command(pack, "REPLY_MESSAGE", actor_id, idempotency_key, body, _reply)
 
 
-# ── proposals/{pid}/confirm·discard (§12) ──────────────────────
+# ── proposals/{pid}/confirm·discard ──────────────────────
 
 
 def _proposal_handler(decision: str):

@@ -1,4 +1,4 @@
-"""실제 모델로 시연 요청을 돌린다 (설계서 §16 Agent 평가, 우선순위 문서 시연 안정성, 부록 A.17).
+"""실제 모델로 시연 요청을 돌린다.
 
     cd backend && uv run python -m scripts.live_run [--runs 1] [--request A|N1,N2,...] [--raw]
     cd backend && uv run python -m scripts.live_run --path B|B-decline [--runs 1] [--raw]
@@ -12,36 +12,36 @@
 - 결과: 콘솔 요약 + data/live_runs/<UTC시각>.jsonl (gitignore). --raw일 때만 prompt·응답 원문을 넣는다.
 - 성공 = PASS 후보 도달 ∧ 금지 Action(ACTION_NOT_AVAILABLE) 0 ∧ Budget 안. 기대값이 모든 범위 INFEASIBLE인
   요청(N5)은 "후보 없음 ∧ ESCALATE_NO_SOLUTION으로 종료"가 성공이다. 기대 결과와 같은지는 matches_expected로 따로 남긴다.
-- --path B(기본안 B, 부록 A.21 9): 요청 A만. 스크립트가 사람 역할을 한다: Alpha PASS 뒤 Supervisor로
+- --path B(기본안 B): 요청 A만. 스크립트가 사람 역할을 한다: Alpha PASS 뒤 Supervisor로
   demo_rejections[0] 거절 → OPEN 메시지가 생기면 그 수신자로 ACCEPT(comment "live run 자동 수락")
   → Beta PASS ∧ 협의 완료면 승인(WAIVE 없음). 성공 = Beta PASS ∧ Consultation COMPLETE ∧ 확정 R1 ∧ Run SUCCEEDED
   ∧ 금지 Action 0 ∧ Budget 안(사람 라운드 ≤ 2) ∧ ASK가 LIST 결과의 대체 자원을 담음 ∧ 수락 전 TRY 없음.
-- --path B --coord(A.28): Coordination을 켠 기본안 B(운영 기본값의 기본안 B 흐름). Alpha PASS 뒤 협의 Run이
+- --path B --coord: Coordination을 켠 기본안 B(운영 기본값의 기본안 B 흐름). Alpha PASS 뒤 협의 Run이
   C 담당자에게 변경 요청을 보내지만 스크립트는 답하지 않고 Supervisor가 거절한다. 성공 = 기본안 B 성공 기준 ∧ 협의 Run
   STALE(REJECTED:) ∧ 확정 뒤 통지 대상 전원 통지.
-- Agent 자동 시작 설정(COORDINATION_ENABLED·EVENT_RESPONSE_ENABLED)은 경로가 명시한다(.env·기본값과 무관, A.28):
+- Agent 자동 시작 설정(COORDINATION_ENABLED·EVENT_RESPONSE_ENABLED)은 경로가 명시한다(.env·기본값과 무관):
   A·B·B-decline·intake = 둘 다 끔, coord = Coordination만, B --coord = Coordination만, event = Event Response
   (--coord면 Coordination도). 기록 agent_flags에 남긴다.
 - --path B-decline: 같은 흐름에서 ACCEPT 대신 DECLINE(comment "live run 자동 거절"). 성공 = Alpha PASS ∧ ASK
   1회 ∧ DECLINE 적용 ∧ 거절 뒤 ASK·TRY 없음 ∧ Run ESCALATED ∧ 금지 Action 0 ∧ Budget 안.
-- --path coord(기본안 A, 부록 A.24): COORDINATION_ENABLED를 켠 임시 DB에서 요청 A만. 스크립트가 사람 역할을
+- --path coord(기본안 A): COORDINATION_ENABLED를 켠 임시 DB에서 요청 A만. 스크립트가 사람 역할을
   한다: 변경 요청에는 이견(demo_rejections[0].comment), 제약 초안에는 확정, 담당자 질문에는 수락, 동의가 끝난
   PASS 후보는 승인. 성공 = Alpha PASS ∧ C 담당자에게 C 변경 요청 ∧ DRAFT_CONSTRAINT(TASK_IMMOVABLE, C, 바뀐 축
   포함) ∧ 제약 source PROPOSAL ∧ Beta PASS ∧ R1 ∧ Replanning SUCCEEDED ∧ 통지 대상 전원에게 NOTICE ∧ 통지 Run
   SUCCEEDED ∧ 모든 Run에서 금지 Action·MALFORMED 0 ∧ Budget 안.
-- --path event(Scene 4 최소 경로, 부록 A.25) [--coord]: R1(기본안 B, Beta 확정)까지는 스크립트 응답으로 준비하고
+- --path event(Scene 4 최소 경로) [--coord]: R1(기본안 B, Beta 확정)까지는 스크립트 응답으로 준비하고
   (LLM 없음), EVENT_RESPONSE_ENABLED를 켠 뒤 Reporter가 demo_events[0]을 신고한다. 사람 역할: Supervisor가 사실
   수정안을 확정하고 FACT_CONFIRMED로 해제, (--coord면 COORDINATION_ENABLED를 켜고 변경 요청에 담당자 수락, 아니면
   Supervisor WAIVE) → 승인. 성공 = PROPOSE(E, 60) ∧ 제안 CONFIRMED ∧ Hold FACT_CONFIRMED ∧ Gamma PASS(E 60,
   변경 1, 지연 15) ∧ R2 ∧ ER Run SUCCEEDED ∧ (--coord면 통지 대상 전원 통지) ∧ 신고 뒤 Run에서 금지 Action·
   MALFORMED 0 ∧ Budget 안. --ambiguous면 demo_events[1]을 신고하고, 신고자 질문에 ANSWER로 답한다.
-- --path intake [--ambiguous] (Work Intake, 부록 A.26): 요청 A를 demo_intakes[0](명확) 또는 [1](모호) 문장으로
+- --path intake [--ambiguous] (Work Intake): 요청 A를 demo_intakes[0](명확) 또는 [1](모호) 문장으로
   자연어 요청한다. 사람 역할(요청자): 확인 질문에는 scenario의 answer 문장으로 ANSWER, 값 확인 요청에는 확인.
   완료 뒤 Replanning을 실제 모델로 Alpha 후보까지. 성공 = Intake SUCCEEDED ∧ 작업 값 = new_task ∧ fields 모두
   CONFIRMED·source message: ∧ Consent(TIME 시작 범위, RESOURCE 요청 자원, source message:) ∧ Alpha PASS·기대값(L1)
   일치 ∧ 금지 Action·MALFORMED 0 ∧ Budget 안 (∧ --ambiguous면 확인 질문 1회 이상). 명확한 요청의 질문 횟수는
   기록만 한다(성공 기준 아님).
-- 자유 텍스트 답(신고자·요청자, A.27): 첫 질문에는 scenario 답 문장, 두 번째 질문부터는 "앞에서 답한 것이
+- 자유 텍스트 답(신고자·요청자): 첫 질문에는 scenario 답 문장, 두 번째 질문부터는 "앞에서 답한 것이
   전부입니다: <답>. 나머지는 처음 문장 그대로입니다: <원문>". 질문별 답 종류(FIRST·REPEAT)를 answer_kinds와
   events[].answer_kind에 남긴다. 성공 기준은 바꾸지 않는다.
 """
@@ -153,7 +153,7 @@ class _RecordingModel:
 
 
 def _human_answer(asked: int, first: str, original: str) -> tuple[str, str]:
-    """사람 역할의 자유 텍스트 답 (A.27). (답 종류, 답 문장).
+    """사람 역할의 자유 텍스트 답. (답 종류, 답 문장).
 
     첫 질문에는 시나리오 답(FIRST), 두 번째 질문부터는 더 아는 것이 없다는 답(REPEAT)을 보낸다.
     """
@@ -170,7 +170,7 @@ def _key() -> str:
 
 
 def _flag_env(coordination: bool, event_response: bool) -> dict[str, str]:
-    """Agent 자동 시작 설정을 경로가 명시한다. .env·기본값과 무관하게 같은 조건으로 잰다 (A.28)."""
+    """Agent 자동 시작 설정을 경로가 명시한다. .env·기본값과 무관하게 같은 조건으로 잰다."""
     return {
         "COORDINATION_ENABLED": "true" if coordination else "false",
         "EVENT_RESPONSE_ENABLED": "true" if event_response else "false",
@@ -329,7 +329,7 @@ def run_once(
     return records
 
 
-# ── 기본안 B (부록 A.21 9) ─────────────────────────────────────
+# ── 기본안 B ─────────────────────────────────────
 
 
 def _pass_validation(conn: Any, site_id: str, cid: str | None) -> Any:
@@ -348,7 +348,7 @@ def run_path_b(
 ) -> dict:
     """임시 DB에서 요청 A로 기본안 B(또는 B-decline)를 끝까지 돌린다. 기록 1개.
 
-    coord면 Coordination을 켠다(운영 기본값의 기본안 B, A.28).
+    coord면 Coordination을 켠다(운영 기본값의 기본안 B).
     """
     tmp = tempfile.TemporaryDirectory(prefix="live_run_")
     old_env = _set_env({"DB_PATH": str(Path(tmp.name) / "live.db"), **_flag_env(coord, False)})
@@ -469,7 +469,7 @@ def _path_b(
                 )
                 committed = {"status": out.status, "reason_codes": list(out.reason_codes)}
                 if coord:
-                    run_until_idle(pack, model_factory=factory)  # 통지 Run (A.28)
+                    run_until_idle(pack, model_factory=factory)  # 통지 Run
 
     with db.read() as conn:
         run = get_run(conn, run_id)
@@ -551,7 +551,7 @@ def _path_b(
                 "within_budget", "ask_uses_listed_alternative", "no_try_before_accept")  # fmt: skip
         success = all(criteria[k] for k in keys)
     if coord:
-        # Coordination을 켠 기본안 B (A.28): Alpha 협의 Run은 거절로 STALE, 확정 뒤 통지 대상 전원 통지
+        # Coordination을 켠 기본안 B: Alpha 협의 Run은 거절로 STALE, 확정 뒤 통지 대상 전원 통지
         coords = [r for r in runs if r.agent_type == "COORDINATION"]
         consults = [r for r in coords if r.input_ref.get("phase") == "CONSULT"]
         notice_run = next((r for r in coords if r.input_ref.get("phase") == "NOTICE"), None)
@@ -582,7 +582,7 @@ def _path_b(
         )
     success = success and criteria["forbidden_actions"] == 0
 
-    # matches_expected: Alpha = verify의 L1, Beta = 거절 고정 + L0 + try (A.21 9)
+    # matches_expected: Alpha = verify의 L1, Beta = 거절 고정 + L0 + try
     world_model, world, task_a, _ = verify.load(pack_dir(pack_name))
     exp_alpha = verify.expected(world_model, world, task_a).get("L1")
     try_res = {task_a.id: sorted(set(asked))} if asked else {}
@@ -644,7 +644,7 @@ def _path_b(
     )
 
 
-# ── 기본안 A: Coordination (부록 A.24) ─────────────────────────
+# ── 기본안 A: Coordination ─────────────────────────
 
 
 def run_path_coord(index: int, settings: Settings, pack_name: str, raw: bool) -> dict:
@@ -857,7 +857,7 @@ def _path_coord(record: dict[str, Any], settings: Settings, pack: Any, raw: bool
     )
 
 
-# ── Scene 4 최소 경로: Event Response (부록 A.25) ───────────────
+# ── Scene 4 최소 경로: Event Response ───────────────
 
 
 class _Script:
@@ -956,7 +956,7 @@ def run_path_event(
         "path": "event-ambiguous" if ambiguous else "event",
         "coord": coord,
         "ambiguous": ambiguous,
-        # 신고부터 잰 구간의 설정. R1 준비(스크립트)는 둘 다 끈다 (A.28)
+        # 신고부터 잰 구간의 설정. R1 준비(스크립트)는 둘 다 끈다
         "agent_flags": {"coordination": coord, "event_response": True},
     }
     t0 = time.perf_counter()
@@ -1000,7 +1000,7 @@ def _path_event(
     with db.read() as conn:
         before = {r[0] for r in conn.execute("SELECT run_id FROM agent_run")}
         last_step = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM agent_step").fetchone()[0]
-    # 모호 신고(시각 없음)는 demo_events[1], 되물으면 신고자가 answer로 답한다 (A.25 S4)
+    # 모호 신고(시각 없음)는 demo_events[1], 되물으면 신고자가 answer로 답한다
     report = pack.demo_events[1 if ambiguous else 0]
     expected_new = 75 if ambiguous else 60  # 10:15 / 10:00 (verify_demo_values Delta·Gamma)
     expected_delay = 30 if ambiguous else 15
@@ -1012,7 +1012,7 @@ def _path_event(
     )
     hold_id = out.result_refs["hold_id"]
     events: list[dict[str, Any]] = [{"report": report.text, "status": out.status}]
-    answer_kinds: list[str] = []  # 질문별로 보낸 답 종류 (A.27)
+    answer_kinds: list[str] = []  # 질문별로 보낸 답 종류
     committed = gamma = None
     released = None
     for _ in range(MAX_HUMAN_TURNS * 2):
@@ -1039,7 +1039,7 @@ def _path_event(
         if opened:
             m = opened[0]
             # 신고자 되묻기(제안 없는 질문)에는 ANSWER: 첫 질문은 scenario 답 문장, 두 번째부터는
-            # "앞에서 답한 것이 전부" (A.27). 나머지는 수락
+            # "앞에서 답한 것이 전부". 나머지는 수락
             kind = None
             if m["type"] == "QUESTION":
                 first = report.answer or f"신고 문장 그대로입니다: {report.text}"
@@ -1210,7 +1210,7 @@ def _path_event(
         success_criteria=criteria,
         step_count=len(steps),
         propose_args=proposes,
-        # ER 조회 조건(모두)과 ER step 수 — 같은 조건 반복을 센다 (A.25 S2 뒤)
+        # ER 조회 조건(모두)과 ER step 수 — 같은 조건 반복을 센다
         lookup_args=[
             s["action"]["args"] for s in steps if (s["action"] or {}).get("name") == "LOOKUP_TASKS"
         ],
@@ -1240,7 +1240,7 @@ def _path_event(
     )
 
 
-# ── Work Intake (부록 A.26) ───────────────────────────────────
+# ── Work Intake ───────────────────────────────────
 
 
 def run_path_intake(
@@ -1290,7 +1290,7 @@ def _path_intake(
     demo = pack.demo_intakes[1 if ambiguous else 0]
     # 명확한 요청에 질문이 오면 요청 문장 그대로 답한다(값은 문장에 다 있다)
     answer = demo.answer or f"요청 문장에 적은 대로입니다: {demo.text}"
-    answer_kinds: list[str] = []  # 질문별로 보낸 답 종류 (A.27)
+    answer_kinds: list[str] = []  # 질문별로 보낸 답 종류
     out = submit_intake(
         pack, demo.requester, _key(), IntakeRequest(task_id=demo.task_id, text=demo.text)
     )
@@ -1304,7 +1304,7 @@ def _path_intake(
         m = opened[0]
         kind = None
         if m["type"] == "QUESTION":
-            # 첫 질문은 scenario 답, 두 번째부터는 "앞에서 답한 것이 전부" (A.27)
+            # 첫 질문은 scenario 답, 두 번째부터는 "앞에서 답한 것이 전부"
             kind, comment = _human_answer(len(answer_kinds), answer, demo.text)
             answer_kinds.append(kind)
             decision = "ANSWER"
@@ -1412,7 +1412,7 @@ def _path_intake(
         intake_actions=names,
         asks=asks,
         answer_kinds=answer_kinds,
-        # 값 확인 요청이 막힌 사유(TASKSPEC_INVALID의 폼 사유 코드) (A.26 intake-p2)
+        # 값 확인 요청이 막힌 사유(TASKSPEC_INVALID의 폼 사유 코드)
         request_rejections=[
             (s["tool_result"] or {}).get("reason_codes")
             for s in steps
@@ -1613,10 +1613,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--coord",
         action="store_true",
-        help="--path event·B에서 Coordination도 켠다(A.25·A.28)",
+        help="--path event·B에서 Coordination도 켠다",
     )
     parser.add_argument(
-        "--ambiguous", action="store_true", help="--path intake에서 모호한 요청을 쓴다(A.26)"
+        "--ambiguous", action="store_true", help="--path intake에서 모호한 요청을 쓴다"
     )
     parser.add_argument(
         "--path",

@@ -1,6 +1,6 @@
-"""dispatch_job 등록과 처리 상태 (설계서 §5.1·§11.4·§11.5, 부록 A.14·A.15).
+"""dispatch_job 등록과 처리 상태.
 
-원인 도메인 트랜잭션 안에서 등록한다(I-18). 같은 dedupe_key는 한 번만 들어간다.
+원인 도메인 트랜잭션 안에서 등록한다. 같은 dedupe_key는 한 번만 들어간다.
 """
 
 import sqlite3
@@ -82,7 +82,7 @@ def mark_failed_attempt(tx: sqlite3.Connection, job_id: int, error: str, max_att
 
 
 def requeue_claimed(tx: sqlite3.Connection, site_id: str) -> int:
-    """기동 시 CLAIMED로 남은 작업을 PENDING으로 되돌린다(§11.4 복구 표 1행). 핸들러는 멱등이다."""
+    """기동 시 CLAIMED로 남은 작업을 PENDING으로 되돌린다. 핸들러는 멱등이다."""
     cur = tx.execute(
         "UPDATE dispatch_job SET status = 'PENDING' WHERE site_id = ? AND status = 'CLAIMED'",
         (site_id,),

@@ -1,4 +1,4 @@
-"""상태 조회 GET /sites/{id}/state와 Run 조회 (설계서 §9.5·§12·§13, 부록 A.18).
+"""상태 조회 GET /sites/{id}/state와 Run 조회.
 
 화면이 1초 폴링으로 쓴다. 단일 읽기 트랜잭션(db.read_tx)에서 계산하고 아무것도 쓰지 않는다.
 """
@@ -40,7 +40,7 @@ RECENT_EVENTS = 10
 RECENT_RUNS = 10
 
 
-# ── Gate (§9.5) ────────────────────────────────────────────────
+# ── Gate ────────────────────────────────────────────────
 
 
 def gate(
@@ -71,7 +71,7 @@ def gate(
 def _work_delay_sum(
     solution: list[dict[str, Any]] | None, base: dict[str, Assignment], intervals: Any
 ) -> int | None:
-    """해의 근무 분 지연 합 (부록 A.20). 저장하지 않고 조회 시 계산한다."""
+    """해의 근무 분 지연 합. 저장하지 않고 조회 시 계산한다."""
     if solution is None:
         return None
     return sum(
@@ -84,7 +84,7 @@ def _work_delay_sum(
 def _solver(
     conn: sqlite3.Connection, solver_result_id: str | None, facts: SnapshotContent | None
 ) -> dict[str, Any] | None:
-    """stage2.delay는 §7 목적함수 값(달력 분), work_delay는 같은 해의 근무 분 지연(A.20)."""
+    """stage2.delay는 목적함수 값(달력 분), work_delay는 같은 해의 근무 분 지연."""
     if solver_result_id is None:
         return None
     found = rows(
@@ -135,7 +135,7 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
     facts = snapshot.facts() if snapshot else None
     base = facts.base_assignments() if facts else {}
     intervals = facts.work_intervals if facts else ()
-    # delay = 달력 분(§7), work_delay = 근무 분. 조회 시 계산하고 저장하지 않는다 (부록 A.20).
+    # delay = 달력 분, work_delay = 근무 분. 조회 시 계산하고 저장하지 않는다.
     changes = [
         {
             "task_id": a.task_id,
@@ -155,14 +155,14 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         validation = {
             "validation_id": v.validation_id,
             "status": v.status,
-            # 대표 상태: STALE > INCOMPLETE > FAIL > PASS (§8). 확정된 후보는 STALE로 보지 않는다.
+            # 대표 상태: STALE > INCOMPLETE > FAIL > PASS. 확정된 후보는 STALE로 보지 않는다.
             "display_status": "STALE" if state.stale and not state.committed else v.status,
             "checks": [c.model_dump(mode="json") for c in v.checks],
         }
     view = consultation_view(conn, site_id, candidate_id)
     consultation = None
     if view is not None:
-        # 항목별 마지막 변경 요청과 담당자 답(이견 문장은 인용으로만, A.24)
+        # 항목별 마지막 변경 요청과 담당자 답(이견 문장은 인용으로만)
         requests = {r["change_hash"]: r for r in list_change_requests(conn, site_id, candidate_id)}
         consultation = {
             "status": view.status,
@@ -194,7 +194,7 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
 
 
 def _rejection(conn: sqlite3.Connection, site_id: str, candidate_id: str) -> dict[str, Any] | None:
-    """거절된 후보의 거절 사유와 그 거절로 생긴 제약 (§9.2, A.21 7). 거절이 없으면 None."""
+    """거절된 후보의 거절 사유와 그 거절로 생긴 제약. 거절이 없으면 None."""
     found = list_decisions(conn, site_id, candidate_id, "REJECT")
     if not found:
         return None
@@ -221,7 +221,7 @@ def _rejection(conn: sqlite3.Connection, site_id: str, candidate_id: str) -> dic
 
 
 def step_work_delays(conn: sqlite3.Connection, run_id: str) -> dict[int, int | None]:
-    """Solver step별 2단계 해의 근무 분 지연 (부록 A.20). 조회 시 계산하고 AgentStep에는 저장하지 않는다.
+    """Solver step별 2단계 해의 근무 분 지연. 조회 시 계산하고 AgentStep에는 저장하지 않는다.
 
     solver_job → solver_result(2단계 해) + search_spec → snapshot(기준 배정·근무 구간). 검토 패널과 같은 계산.
     """
@@ -253,7 +253,7 @@ def run_summary(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
     last = conn.execute(
         "SELECT status FROM agent_step WHERE run_id = ? ORDER BY step_no DESC LIMIT 1", (run_id,)
     ).fetchone()
-    # 재개 횟수 = 대기(WAIT)에 들어간 step 중 뒤에 step이 이어진 것 (A.21 7, 조회 시 계산)
+    # 재개 횟수 = 대기(WAIT)에 들어간 step 중 뒤에 step이 이어진 것 (조회 시 계산)
     resumes = conn.execute(
         "SELECT COUNT(*) FROM agent_step WHERE run_id = ? AND result_kind = 'WAIT'"
         " AND step_no < (SELECT MAX(step_no) FROM agent_step WHERE run_id = ?)",
@@ -361,9 +361,9 @@ def build_state(
         "conflicts": [c.model_dump(mode="json") for c in conflicts],
         "candidates": [candidate_view(conn, site_id, cid) for cid in ids],
         "review_queue": queue,
-        # 대기열(QUEUED) 접수 순서 (A.21 0-1·7)
+        # 대기열(QUEUED) 접수 순서
         "task_queue": queued_task_ids(conn, site_id),
-        # Hold마다 그 Event의 사실 수정안 (FACT_CONFIRMED 해제 판단, A.25)
+        # Hold마다 그 Event의 사실 수정안 (FACT_CONFIRMED 해제 판단)
         "holds": [
             {
                 **h,
@@ -384,7 +384,7 @@ def build_state(
         "events": events,
         "runs": [run_summary(conn, rid) for rid in run_ids],
         "dispatch": {"pending": jobs.get("PENDING", 0), "failed": jobs.get("FAILED", 0)},
-        # X-Actor 본인에게 온 질문 (§12 "본인", A.21 7). body = 서버 문구, agent_text = 모델 작성
+        # X-Actor 본인에게 온 질문. body = 서버 문구, agent_text = 모델 작성
         "inbox": [] if actor_id is None else list_inbox(conn, site_id, actor_id),
     }
 
@@ -420,7 +420,7 @@ def get_run_steps(run_id: str, actor: ActorDep) -> list[dict[str, Any]]:
             raise ApiError(404, "RUN_NOT_FOUND")
         steps = list_steps(conn, run_id)
         delays = step_work_delays(conn, run_id)
-    # SOLVE step의 tool_result.stage2에 근무 분 지연을 붙인다(응답에만, A.20)
+    # SOLVE step의 tool_result.stage2에 근무 분 지연을 붙인다(응답에만)
     for s in steps:
         stage2 = (s["tool_result"] or {}).get("stage2")
         if isinstance(stage2, dict):
@@ -429,7 +429,7 @@ def get_run_steps(run_id: str, actor: ActorDep) -> list[dict[str, Any]]:
 
 
 def _request_view(r: dict[str, Any] | None) -> dict[str, Any] | None:
-    """검토 패널용 변경 요청 요약 (A.24). comment는 담당자가 쓴 인용이다."""
+    """검토 패널용 변경 요청 요약. comment는 담당자가 쓴 인용이다."""
     if r is None:
         return None
     reply = r["reply"] or {}

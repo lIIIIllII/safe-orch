@@ -1,4 +1,4 @@
-"""공용 직렬화 (부록 A.1). pack_hash와 candidate_hash(§5.2)가 같은 함수를 쓴다."""
+"""공용 직렬화. pack_hash와 candidate_hash가 같은 함수를 쓴다."""
 
 import hashlib
 import json
