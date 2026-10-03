@@ -35,6 +35,7 @@ class EventResponseExecutor:
         self._reject = gateway._reject
         self.begin_step = gateway.begin_step
         self.wait_or_continue = gateway.wait_or_continue
+        self.return_result = gateway.return_result
 
     def run(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
         action = parsed.action
@@ -67,9 +68,15 @@ class EventResponseExecutor:
                 return self._propose(tx, run_id, step_no, meta, parsed, obs, action, new_value)
             if isinstance(action, spec.AskReporter):
                 return self._ask_reporter(tx, run_id, step_no, meta, parsed, obs, action)
-            assert isinstance(action, spec.Escalate)
-            outcome = GatewayResult("DONE", None, "ESCALATED", "ESCALATE")
-            return self._done(tx, run_id, step_no, meta, parsed, outcome, {"reason": action.reason})
+            assert isinstance(action, spec.ReturnResult)
+            # 서버가 채우는 내용: 이 Run이 낸 수정안과 Hold
+            produced = {
+                "proposals": [
+                    {k: p[k] for k in ("proposal_id", "status")} for p in obs.data["proposals"]
+                ],
+                "hold": (obs.data["event"] or {}).get("hold"),
+            }
+            return self.return_result(tx, run_id, step_no, meta, parsed, produced)
 
     def _minute(self, action: Any) -> int | None:
         """도구가 받은 새 시각(현장 날짜·시각 문자열)을 분으로 바꾼다. 바꿀 수 없으면 None (AG-21)."""
@@ -104,7 +111,9 @@ class EventResponseExecutor:
             )
         if isinstance(action, spec.AskReporter):
             return "ASK_REPORTER" in available
-        return isinstance(action, spec.Escalate)
+        return isinstance(action, spec.ReturnResult) and action.status in available.get(
+            "RETURN_RESULT", {}
+        ).get("status", [])
 
     def _done(
         self,

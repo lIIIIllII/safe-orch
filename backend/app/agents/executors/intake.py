@@ -44,6 +44,7 @@ class IntakeExecutor:
         self._complete = gateway._complete
         self.begin_step = gateway.begin_step
         self.wait_or_continue = gateway.wait_or_continue
+        self.return_result = gateway.return_result
 
     def run(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
         action = parsed.action
@@ -73,9 +74,8 @@ class IntakeExecutor:
                 return self._request_values_check(tx, run_id, step_no, meta, parsed, obs, action)
             if isinstance(action, spec.CompleteTaskspec):
                 return self._complete_spec(tx, run_id, step_no, meta, parsed, obs, action)
-            assert isinstance(action, spec.Escalate)
-            outcome = GatewayResult("DONE", None, "ESCALATED", "ESCALATE")
-            return self._done(tx, run_id, step_no, meta, parsed, outcome, {"reason": action.reason})
+            assert isinstance(action, spec.ReturnResult)
+            return self._blocked(tx, run_id, step_no, meta, parsed, obs, action)
 
     def _permitted(self, obs: Observation, action: Any) -> bool:
         available = obs.available
@@ -84,9 +84,48 @@ class IntakeExecutor:
             spec.AskClarification: "ASK_CLARIFICATION",
             spec.RequestConfirmation: "REQUEST_CONFIRMATION",
             spec.CompleteTaskspec: "COMPLETE_TASKSPEC",
-            spec.Escalate: "ESCALATE",
+            spec.ReturnResult: "RETURN_RESULT",
         }
+        if isinstance(action, spec.ReturnResult):
+            return action.status in available.get("RETURN_RESULT", {}).get("status", [])
         return names.get(type(action)) in available
+
+    def _blocked(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        obs: Observation,
+        action: spec.ReturnResult,
+    ) -> GatewayResult:
+        """접수 미완 (AG-06). 요청자에게 서버 문구 통지(NOTICE, 사유 코드)를 남기고 Run을 BLOCKED로 끝낸다.
+
+        Supervisor 이관도 메인 연결도 없다. 사유 코드는 서버가 관찰 사실에서 만든다.
+        """
+        site = get_site(tx, self.pack.site_id)
+        assert site is not None
+        request = obs.data["request"]
+        codes = blocked_reason_codes(obs.data)
+        body = blocked_text(request["task_id"], codes)
+        produced: dict[str, Any] = {"task_id": request["task_id"], "reason_codes": codes}
+        outcome = self.return_result(tx, run_id, step_no, meta, parsed, produced)
+        if outcome.kind == "DONE":
+            insert_message(
+                tx,
+                self.pack.site_id,
+                new_id("msg"),
+                run_id=run_id,
+                step_no=step_no,
+                to_actor_id=request["requester_actor_id"],
+                type_="NOTICE",
+                proposal_id=None,
+                body=body,
+                agent_text=action.summary,
+                context_version=site.context_version,
+            )
+        return outcome
 
     def _done(
         self,
@@ -284,6 +323,30 @@ class IntakeExecutor:
         return self._done(
             tx, run_id, step_no, meta, parsed, outcome, refs, {"task_id": form.task_id}
         )
+
+
+def blocked_reason_codes(data: dict[str, Any]) -> list[str]:
+    """접수 미완의 사유 코드(서버가 관찰 사실에서 만든다): 마지막 검증 실패 사유, 요청자의 값 확인 거절,
+    사람 확인 라운드 소진. 해당하는 것이 없으면 NOT_COMPLETED."""
+    codes: list[str] = []
+    check = data["last_check"] or {}
+    codes += (check.get("detail") or {}).get("reason_codes") or (
+        [check["reason_code"]] if check else []
+    )
+    confirmations = data["confirmations"]
+    if confirmations and confirmations[-1]["decision"] == "DECLINE":
+        codes.append("REQUESTER_DECLINED")
+    if data["human_rounds"]["remaining"] <= 0 and not data["can_complete"]:
+        codes.append("HUMAN_ROUNDS_EXHAUSTED")
+    return list(dict.fromkeys(codes)) or ["NOT_COMPLETED"]
+
+
+def blocked_text(task_id: str, codes: list[str]) -> str:
+    """접수 미완 통지의 서버 문구."""
+    return (
+        f"작업 요청 {task_id} 접수가 완료되지 않았습니다(사유: {', '.join(codes)}). "
+        "작업은 만들어지지 않았습니다. 값을 확인해 다시 요청해 주세요."
+    )
 
 
 def requirement_text(pack: LoadedPack, req: dict[str, Any]) -> str:

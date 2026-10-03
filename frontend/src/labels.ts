@@ -104,6 +104,10 @@ export const REASON: Record<string, string> = {
   REJECTED_TWICE: '제약 없는 거절 2회로 이관',
   REPORT_TO_SUPERVISOR: 'Supervisor에게 보고하고 종료',
   ESCALATE: '이관',
+  RETURN_DONE: '결과를 돌려주고 종료',
+  RETURN_BLOCKED: '막힌 결과를 돌려주고 종료',
+  NEED_INVALID: '결과의 필요한 것이 가리키는 대상이 없음',
+  RESTART: '재기동으로 중단',
   // Validator check 사유
   CANDIDATE_HASH_MISMATCH: '후보 hash 불일치',
   SNAPSHOT_REF_MISMATCH: 'Snapshot 참조 불일치',
@@ -277,6 +281,7 @@ export const RUN_STATUS: Record<string, string> = {
   WAITING_HUMAN: '사람 대기',
   SUCCEEDED: '성공',
   ESCALATED: '이관',
+  BLOCKED: '막힘',
   BUDGET_EXHAUSTED: 'Budget 소진',
   STALE: 'STALE',
   CANCELLED: '취소',
@@ -305,7 +310,7 @@ export const RESULT_KIND: Record<string, string> = {
 
 export const ACTION_NAME: Record<string, string> = {
   SOLVE_WITH_SCOPE: '탐색 범위 지정 Solver 실행',
-  ESCALATE_NO_SOLUTION: '해 없음 이관',
+  RETURN_RESULT: '결과 돌려주기',
   LIST_ASSIGNABLE_RESOURCES: '사용 가능 자원 조회',
   TRY_ALTERNATIVE_RESOURCE: '대체 자원 시도',
   ASK_TASK_OWNER: '작업 담당자에게 확인 요청',

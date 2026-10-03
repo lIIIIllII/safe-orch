@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
 from app.agents import skills
+from app.agents.needs import NEED_INVALID, invalid_needs
 from app.agents.observe import Observation, budget_remaining
 from app.agents.types import AgentBinding, AgentSpec, GatewayResult, StepMeta
 from app.domain.canonical import canonical_hash
@@ -38,6 +39,22 @@ ACCEPTED = "ACCEPTED"
 REJECTED = "REJECTED"
 # 연속 2회면 이관하는 실패: 형식 오류와 전송 실패 (Test Case API 오류)
 RETRY_ONCE = {"MALFORMED", "LLM_ERROR"}
+
+
+def temp_parentless_end(agent_type: str, status: str) -> tuple[str, str] | None:
+    """임시 연결: 부모 없는 전문 Agent Run의 결과를 옛 종료(Run 상태, 종료 사유)로 옮긴다.
+
+    메인이 결과를 받기 전까지만 쓴다. Intake는 메인 밖 입구라 여기 없다 (AG-06).
+    """
+    return {
+        ("REPLANNING", "BLOCKED"): ("ESCALATED", "ESCALATE_NO_SOLUTION"),
+        ("COORDINATION", "DONE"): ("SUCCEEDED", "REPORT_TO_SUPERVISOR"),
+        ("COORDINATION", "BLOCKED"): ("ESCALATED", "ESCALATE"),
+        ("EVENT_RESPONSE", "BLOCKED"): ("ESCALATED", "ESCALATE"),
+    }.get((agent_type, status))
+
+
+RESULT_END = {"DONE": ("SUCCEEDED", "RETURN_DONE"), "BLOCKED": ("BLOCKED", "RETURN_BLOCKED")}
 
 
 class _Parsed:
@@ -248,6 +265,60 @@ class ToolGateway:
         if enter_wait(tx, run_id, wait_kind, wait_ref, step["observed_wake_seq"]):
             return GatewayResult("WAIT")
         return GatewayResult("CONTINUE", "NEW_CHANGE_BEFORE_WAIT")
+
+    def return_result(
+        self,
+        tx: sqlite3.Connection,
+        run_id: str,
+        step_no: int,
+        meta: StepMeta,
+        parsed: _Parsed,
+        produced: dict[str, Any],
+    ) -> GatewayResult:
+        """RETURN_RESULT 공통 (AG-06·AG-23): needs 서버 검증 → step 완료와 Run 종료(같은 tx).
+
+        모델이 쓰는 것은 status·summary·paths뿐이다. produced는 서버가 채운 내용이고, 결과 전체는
+        이 step의 tool_result에 남는다.
+        """
+        run = get_run(tx, run_id)
+        action = parsed.action
+        assert run is not None and action is not None
+        invalid = invalid_needs(tx, self.pack, run, action.paths)
+        if invalid:
+            self._complete(
+                tx,
+                run_id,
+                step_no,
+                meta,
+                parsed,
+                verdict=REJECTED,
+                reason=NEED_INVALID,
+                result_kind="REJECTED",
+                tool_result={"invalid_needs": invalid},
+            )
+            return GatewayResult("REJECTED", NEED_INVALID)
+        end = RESULT_END[action.status]
+        if run.parent_run_id is None:
+            end = temp_parentless_end(run.agent_type, action.status) or end
+        outcome = GatewayResult("DONE", None, *end)
+        self._complete(
+            tx,
+            run_id,
+            step_no,
+            meta,
+            parsed,
+            verdict=ACCEPTED,
+            reason=None,
+            result_kind="DONE",
+            tool_result={
+                "status": action.status,
+                "summary": action.summary,
+                "paths": [p.model_dump(exclude_defaults=True) for p in action.paths],
+                **produced,
+            },
+            end=outcome,
+        )
+        return outcome
 
     # ── 실행 ────────────────────────────────────────────────
 

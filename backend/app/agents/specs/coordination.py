@@ -2,7 +2,7 @@
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
 phase CONSULT(후보의 협의): SEND_CHANGE_REQUEST, WAIT_FOR_REPLIES, DRAFT_CONSTRAINT.
-phase NOTICE(확정 뒤 통지): SEND_NOTICE. 두 phase 모두 REPORT_TO_SUPERVISOR, ESCALATE.
+phase NOTICE(확정 뒤 통지): SEND_NOTICE. 두 phase 모두 RETURN_RESULT.
 협의 완료는 서버가 계산하고, 이견은 담당자가 확인한 뒤에만 제약이 된다.
 """
 
@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents import skills
 from app.agents.types import AgentSpec
+from app.domain.needs import ResultFields
 
 AGENT_TYPE = "COORDINATION"
 GOAL = (
@@ -94,20 +95,12 @@ class SendNotice(Action):
     )
 
 
-class ReportToSupervisor(Action):
-    """Supervisor에게 협의·통지 결과를 요약해 남기고 Run을 끝낸다. 상태는 바꾸지 않는다."""
+class ReturnResult(Action, ResultFields):
+    """협의·통지 결과를 돌려주고 Run을 끝낸다. 협의·후보의 상태는 바꾸지 않는다. 맡은 일을 마쳤으면
+    DONE, 해결할 수 없는 상황(응답 불가, 해석할 수 없는 이견, 작업 고정 요구가 아닌 이견 등)이면
+    BLOCKED로 돌려주고 필요한 것을 길에 적는다."""
 
     OPENS = "언제나 열려 있다"
-
-    summary: str = Field(min_length=1, max_length=TEXT_MAX, description="Supervisor가 읽을 요약")
-
-
-class Escalate(Action):
-    """해결할 수 없는 상황(응답 불가, 해석할 수 없는 이견 등)을 사유와 함께 이관하고 Run을 끝낸다."""
-
-    OPENS = "언제나 열려 있다"
-
-    reason: str = Field(min_length=1, description="이관 사유")
 
 
 ACTIONS: dict[str, type[Action]] = {
@@ -115,16 +108,14 @@ ACTIONS: dict[str, type[Action]] = {
     "WAIT_FOR_REPLIES": WaitForReplies,
     "DRAFT_CONSTRAINT": DraftConstraint,
     "SEND_NOTICE": SendNotice,
-    "REPORT_TO_SUPERVISOR": ReportToSupervisor,
-    "ESCALATE": Escalate,
+    "RETURN_RESULT": ReturnResult,
 }
 FLOW = {
     "SEND_CHANGE_REQUEST": "CONTINUE",
     "WAIT_FOR_REPLIES": "WAIT",
     "DRAFT_CONSTRAINT": "CONTINUE",
     "SEND_NOTICE": "CONTINUE",
-    "REPORT_TO_SUPERVISOR": "DONE",
-    "ESCALATE": "DONE",
+    "RETURN_RESULT": "DONE",
 }
 REASON_CODES = ("TASK_IMMOVABLE",)  # 제약을 만드는 사유
 
@@ -206,8 +197,7 @@ def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "actor_id": sorted(c["NOTICE"]),
             "task_ids": sorted({t for ts in c["NOTICE"].values() for t in ts}),
         }
-    out["REPORT_TO_SUPERVISOR"] = {}
-    out["ESCALATE"] = {}
+    out["RETURN_RESULT"] = {}
     return out
 
 

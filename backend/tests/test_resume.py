@@ -203,8 +203,8 @@ def test_plan_b_reject_with_constraint_wakes_and_resumes(seeded):
     ]
     assert [c["task_id"] for c in obs["constraints"]] == ["C"]
     assert obs["untried_levels"] == []
-    assert _names(s3) == ["LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER", "ESCALATE_NO_SOLUTION"]
-    assert s3["action"]["name"] == "ESCALATE_NO_SOLUTION"
+    assert _names(s3) == ["LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER", "RETURN_RESULT"]
+    assert s3["action"]["name"] == "RETURN_RESULT"
 
 
 def _ask_waiting(pack):
@@ -282,9 +282,9 @@ def test_plan_b_full_e2e(seeded):
     }
     # ASK는 조회와 무관하게 열려 있다(순서는 지침). LIST 대상은 자원이 필요하고 RESOURCE가 막히지 않은
     # acting 작업이다(C는 제약 고정이라 빠진다. 주 충돌 밖 작업도 조회할 수 있다).
-    assert _names(s_list) == ["LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER", "ESCALATE_NO_SOLUTION"]
+    assert _names(s_list) == ["LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER", "RETURN_RESULT"]
     assert _enum(s_list, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A", "Q"]
-    assert _names(s_ask) == ["LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER", "ESCALATE_NO_SOLUTION"]
+    assert _names(s_ask) == ["LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER", "RETURN_RESULT"]
     assert s_ask["observation"]["untried_levels"] == []
     assert waiting.human_rounds_used == 1
 
@@ -335,7 +335,7 @@ def test_plan_b_full_e2e(seeded):
     assert _names(s_try) == [
         "LIST_ASSIGNABLE_RESOURCES",
         "TRY_ALTERNATIVE_RESOURCE",
-        "ESCALATE_NO_SOLUTION",
+        "RETURN_RESULT",
     ]
     assert s_try["observation"]["untried_levels"] == []
     obs = s_try["observation"]
@@ -388,10 +388,10 @@ def test_accept_does_not_reopen_tried_levels(seeded):
     assert _names(s_l0) == [
         "LIST_ASSIGNABLE_RESOURCES",
         "TRY_ALTERNATIVE_RESOURCE",
-        "ESCALATE_NO_SOLUTION",
+        "RETURN_RESULT",
     ]
     assert s_l0["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
-    assert s_end["action"]["name"] == "ESCALATE_NO_SOLUTION"
+    assert s_end["action"]["name"] == "RETURN_RESULT"
     assert _run(waiting.run_id).solver_calls_used == 2  # Alpha까지의 L0·L1만
 
 
@@ -451,7 +451,7 @@ def test_t33_reject_without_constraint_wakes_and_blocks_same_assignments(seeded)
     assert s2["observation"]["rejections"][0]["quoted_comment"] == "오후가 좋다"
     assert s2["guard"] == {"verdict": "REJECTED", "reason_code": "DUPLICATE_REJECTED"}
     assert (s2["result_kind"], s2["tool_result"]["candidate_id"]) == ("CONTINUE", None)
-    assert s3["action"]["name"] == "ESCALATE_NO_SOLUTION"
+    assert s3["action"]["name"] == "RETURN_RESULT"
     with db.read() as conn:
         n = conn.execute("SELECT COUNT(*) FROM candidate").fetchone()[0]
     assert n == 1
@@ -932,7 +932,7 @@ def test_server_does_not_order_list_try_ask(seeded):
         "SOLVE_WITH_SCOPE",
         "LIST_ASSIGNABLE_RESOURCES",
         "ASK_TASK_OWNER",
-        "ESCALATE_NO_SOLUTION",
+        "RETURN_RESULT",
     ]
     assert s_try["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"  # 자원 축 미확인
     assert s_ask["observation"]["untried_levels"] == ["L0", "L1", "L2"]

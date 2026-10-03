@@ -216,6 +216,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "questions_left": max(0, rounds - 1),
         },
     }
+    # 완료 가능: 완료 도구의 유효성과 같은 조건이다. 사람 확인 라운드를 쓰지 않는다
+    data["can_complete"] = bool(spec.choices(data)["COMPLETE"])
     data["open_skills"] = spec.open_skills(data)
     return Observation(
         run=run,

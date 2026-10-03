@@ -51,13 +51,14 @@ class ReplanningExecutor:
         self._complete = gateway._complete
         self.begin_step = gateway.begin_step
         self.wait_or_continue = gateway.wait_or_continue
+        self.return_result = gateway.return_result
 
     def run(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
         if parsed.name in ("SOLVE_WITH_SCOPE", "TRY_ALTERNATIVE_RESOURCE"):
             return self._solve(run_id, step_no, meta, parsed)
         if parsed.name in ("LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER"):
             return self._single_tx(run_id, step_no, meta, parsed)
-        return self._escalate(run_id, step_no, meta, parsed)
+        return self._return(run_id, step_no, meta, parsed)
 
     def _permitted(self, obs: Observation, action: spec.Action) -> bool | str:
         """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (작업별 조합까지).
@@ -83,6 +84,8 @@ class ReplanningExecutor:
                 return "RESOURCE_NOT_ELIGIBLE"
             asks = set(c["ASK"].get(action.task_id, []))
             return "ASK_TASK_OWNER" in available and set(action.allowed_values) <= asks
+        if isinstance(action, spec.ReturnResult):
+            return action.status in available.get("RETURN_RESULT", {}).get("status", [])
         return False
 
     def _single_tx(
@@ -187,28 +190,24 @@ class ReplanningExecutor:
         )
         return outcome
 
-    def _escalate(
-        self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed
-    ) -> GatewayResult:
+    def _return(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
+        action = parsed.action
+        assert isinstance(action, spec.ReturnResult)
         with db.write() as tx:
-            rejected, _ = self.begin_step(tx, run_id, step_no, meta, parsed)
+            rejected, obs = self.begin_step(
+                tx, run_id, step_no, meta, parsed, lambda o: self._permitted(o, action)
+            )
             if rejected is not None:
                 return rejected
-            assert isinstance(parsed.action, spec.EscalateNoSolution)
-            outcome = GatewayResult("DONE", None, "ESCALATED", "ESCALATE_NO_SOLUTION")
-            self._complete(
-                tx,
-                run_id,
-                step_no,
-                meta,
-                parsed,
-                verdict=ACCEPTED,
-                reason=None,
-                result_kind="DONE",
-                tool_result={"reason": parsed.action.reason},
-                end=outcome,
-            )
-            return outcome
+            assert obs is not None
+            # 서버가 채우는 내용: 이 Run이 등록한 후보와 마지막 검증
+            produced = {
+                "candidate_ids": [
+                    a["candidate_id"] for a in obs.data["attempts"] if a["candidate_id"]
+                ],
+                "latest_validation": obs.data["latest_validation"],
+            }
+            return self.return_result(tx, run_id, step_no, meta, parsed, produced)
 
     def _solve(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
         """SOLVE_WITH_SCOPE(level)와 TRY_ALTERNATIVE_RESOURCE(주 충돌 L0 + 대체 자원 1개)."""

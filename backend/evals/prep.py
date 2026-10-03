@@ -59,6 +59,7 @@ CONSULTING: dict[tuple[str, str], Callable[[str], dict[str, list[AIMessage]]]] =
     ("replanning-d5", "coordination-a24"): _consulting_v1,
     ("replanning-c2", "coordination-c2"): _consulting_v2,
     ("replanning-c2", "coordination-c3"): _consulting_v2,  # 스킬 상대별 분할(CONSULT는 그대로)
+    ("replanning-c3", "coordination-c4"): _consulting_v2,  # 종료 도구만 RETURN_RESULT로 바뀜
 }
 
 

@@ -1,0 +1,150 @@
+"""결과에 담긴 needs의 서버 검증 (AG-23). 참조가 가리키는 대상이 지금 사실에 있는지만 본다.
+
+모양(종류별 참조)은 app.domain.needs가 검사한다. 여기서는 DB 사실과 대조한다: 작업·자원·풀·Unit·사람·
+신고·후보·메시지가 있는지, 축이 제약으로 고정되지 않았는지, 자원 값이 적격이고 담당자가 거절한 값이
+아닌지, Unit이 지금 충돌에 작업을 가졌는지, 물은 상대가 그 Run의 상대인지. 순서는 보지 않는다.
+"""
+
+import sqlite3
+from typing import Any
+
+from app.domain.canonical import canonical_hash
+from app.domain.eligibility import exclusion_reasons
+from app.domain.models import AgentRun, Snapshot
+from app.domain.needs import FACT_TARGET, Need, Path
+from app.packs.loader import LoadedPack
+from app.rules.engine import detect_conflicts
+from app.store.repos.decisions import list_constraints
+from app.store.repos.events import get_event
+from app.store.repos.messages import get_message, list_case_replies
+from app.store.repos.records import get_candidate
+from app.store.repos.resources import list_pools, list_resources
+from app.store.repos.site import list_actors
+from app.store.repos.snapshots import build_snapshot_content
+from app.store.repos.tasks import list_current_tasks
+
+NEED_INVALID = "NEED_INVALID"
+
+
+class _Facts:
+    """검증에 쓰는 현재 사실. 필요한 것만 한 번씩 읽는다."""
+
+    def __init__(self, conn: sqlite3.Connection, pack: LoadedPack, run: AgentRun):
+        self.conn, self.pack, self.run = conn, pack, run
+        site_id = pack.site_id
+        self.tasks = {
+            t.task_id: t for t in list_current_tasks(conn, site_id, pack) if t.lifecycle == "READY"
+        }
+        self.resources = {r.resource_id: r for r in list_resources(conn, site_id)}
+        self.pools = {p.pool_id for p in list_pools(conn, site_id)}
+        self.actors = {a.actor_id for a in list_actors(conn, site_id)}
+        self.frozen = {
+            (c.task_id, axis) for c in list_constraints(conn, site_id) for axis in c.frozen_axes
+        }
+        self._conflict_units: set[str] | None = None
+
+    def conflict_units(self) -> set[str]:
+        """지금 충돌에 작업을 가진 Unit."""
+        if self._conflict_units is None:
+            content = build_snapshot_content(self.conn, self.pack.site_id, self.pack)
+            snapshot = Snapshot(
+                snapshot_id="needs", snapshot_hash=canonical_hash(content), content=content
+            )
+            facts = snapshot.facts()
+            tasks = facts.task_map()
+            conflicts = detect_conflicts(snapshot, facts.check_assignments(), self.pack)
+            self._conflict_units = {
+                tasks[t].unit_id for c in conflicts for t in c.task_ids if t in tasks
+            }
+        return self._conflict_units
+
+    def declined(self, task_id: str, axis: str) -> set[str]:
+        """이 Case에서 그 작업·축에 담당자가 거절한 값."""
+        return {
+            v
+            for h in list_case_replies(self.conn, self.run.case_id)
+            if (h["task_id"], h["axis"], h["decision"]) == (task_id, axis, "DECLINE")
+            for v in h["allowed_values"]
+        }
+
+    def has_task(self, task_id: str) -> bool:
+        """현재 계산 대상 작업, 또는 이 Intake Run이 접수 중인 작업."""
+        own = self.run.agent_type == "INTAKE" and task_id == self.run.input_ref.get("task_id")
+        return task_id in self.tasks or own
+
+
+def _check(f: _Facts, need: Need) -> str | None:
+    """need 하나의 거절 사유. 없으면 None."""
+    run = f.run
+    if need.kind == "OWNER_CONSENT":
+        task = f.tasks.get(need.task_id or "")
+        if task is None:
+            return "TASK_NOT_FOUND"
+        if (task.task_id, need.axis) in f.frozen:
+            return "AXIS_FROZEN"
+        for rid in need.values:
+            resource = f.resources.get(rid)
+            if resource is None or exclusion_reasons(task, resource, task.unit_id):
+                return "RESOURCE_NOT_ELIGIBLE"
+        if set(need.values) & f.declined(task.task_id, "RESOURCE"):
+            return "VALUE_DECLINED"
+        return None
+    if need.kind == "OTHER_UNIT":
+        if need.unit_id == run.acting_unit_id:
+            return "SAME_UNIT"
+        return None if need.unit_id in f.conflict_units() else "UNIT_NOT_IN_CONFLICT"
+    if need.kind == "FACT_CHANGE":
+        target = FACT_TARGET[need.field or "WINDOW"]
+        value = getattr(need, target)
+        found = {
+            "task_id": f.has_task(value),
+            "resource_id": value in f.resources,
+            "pool_id": value in f.pools,
+        }[target]
+        return None if found else "TARGET_NOT_FOUND"
+    if need.kind == "HUMAN_INFO":
+        if need.actor_id not in f.actors:
+            return "ACTOR_NOT_FOUND"
+        # 물은 상대는 그 Run의 상대다: Intake는 요청자, Event Response는 신고자
+        if run.agent_type == "INTAKE":
+            ref = run.input_ref
+            ok = (need.actor_id, need.task_id) == (
+                ref.get("requester_actor_id"),
+                ref.get("task_id"),
+            )
+            return None if ok else "ACTOR_MISMATCH"
+        if need.event_id is not None:
+            event = get_event(f.conn, f.pack.site_id, need.event_id)
+            if event is None:
+                return "TARGET_NOT_FOUND"
+            mismatch = run.agent_type == "EVENT_RESPONSE" and (
+                need.event_id != run.input_ref.get("event_id")
+                or need.actor_id != event["reporter_actor_id"]
+            )
+            return "ACTOR_MISMATCH" if mismatch else None
+        return None if f.has_task(need.task_id or "") else "TASK_NOT_FOUND"
+    # HUMAN_DECISION
+    site_id = f.pack.site_id
+    if need.candidate_id is not None:
+        found = get_candidate(f.conn, site_id, need.candidate_id) is not None
+    elif need.event_id is not None:
+        found = get_event(f.conn, site_id, need.event_id) is not None
+    else:
+        found = get_message(f.conn, site_id, need.message_id or "") is not None
+    return None if found else "TARGET_NOT_FOUND"
+
+
+def invalid_needs(
+    conn: sqlite3.Connection, pack: LoadedPack, run: AgentRun, paths: list[Path]
+) -> list[dict[str, Any]]:
+    """서버 검증에 걸린 need 목록 [{path, need, kind, reason}]. 비면 모두 유효하다."""
+    if not paths:
+        return []
+    facts = _Facts(conn, pack, run)
+    out = []
+    for i, path in enumerate(paths):
+        for j, need in enumerate(path.needs):
+            reason = _check(facts, need)
+            if reason is not None:
+                out.append({"path": i, "need": j, "kind": need.kind, "reason": reason})
+    return out

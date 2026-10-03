@@ -7,7 +7,7 @@
 import uuid
 
 from langchain_core.messages import AIMessage
-from scripted import Router, call, solve
+from scripted import Router, blocked, call, solve
 
 from app.agents.observers.coordination import _items
 from app.agents.prompts import coordination as prompt
@@ -115,11 +115,11 @@ def _request_c():
 
 
 def _report(text, summary="이유: 정리해 보고한다/다음: 종료"):
-    """REPORT_TO_SUPERVISOR의 인자 이름이 summary라 call()을 쓰지 않는다."""
-    args = {"decision_summary": summary, "skill": "WRAP_UP", "summary": text}
+    """RETURN_RESULT(DONE). 인자 이름이 summary라 call()을 쓰지 않는다."""
+    args = {"decision_summary": summary, "skill": "WRAP_UP", "status": "DONE", "summary": text}
     return AIMessage(
         content="",
-        tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": uuid.uuid4().hex}],
+        tool_calls=[{"name": "RETURN_RESULT", "args": args, "id": uuid.uuid4().hex}],
     )
 
 
@@ -369,7 +369,10 @@ def test_objection_without_fix_request_is_reported_not_drafted(seeded, coordinat
     assert (done.status, done.end_reason) == ("SUCCEEDED", "REPORT_TO_SUPERVISOR")
     s = _steps(coord.run_id)[-1]
     assert "DRAFT_CONSTRAINT" in [t["function"]["name"] for t in s["available_actions"]]
-    assert s["action"]["name"] == "REPORT_TO_SUPERVISOR"
+    assert s["action"]["name"] == "RETURN_RESULT"
+    # 모델은 요약만 쓰고 협의 상태는 서버가 채운다
+    result = s["tool_result"]
+    assert (result["status"], result["phase"], result["open_items"]) == ("DONE", "CONSULT", ["C"])
     with db.read() as conn:
         assert list_constraints(conn, pack.site_id) == []
     view = _view(pack, rp.wait_ref)
@@ -529,7 +532,7 @@ def test_draft_constraint_server_checks(seeded, coordination_on):
             _draft(mid, axes=("RESOURCE",)),
             _draft(mid, reason_code="PREFERENCE"),
             _draft(mid, task_id="A"),
-            call("ESCALATE", "이유: 초안을 만들 수 없다/다음: 이관", reason="검사 확인"),
+            blocked("검사 확인"),
         ]
     )
     run_until_idle(pack, model_factory=router.factory())
@@ -568,7 +571,7 @@ def test_draft_discard_returns_to_objected_and_wakes(seeded, coordination_on):
 
 
 def escalate_coord():
-    return call("ESCALATE", "이유: 확인이 거절되었다/다음: 이관", reason="담당자가 초안을 폐기")
+    return blocked("담당자가 초안을 폐기")
 
 
 def test_coordination_off_keeps_review_queue(seeded):

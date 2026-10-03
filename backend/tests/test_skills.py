@@ -87,17 +87,17 @@ def test_available_is_open_skill_tools_with_valid_arguments():
         "SOLVE_WITH_SCOPE": {"level": ["L1"]},
         "LIST_ASSIGNABLE_RESOURCES": {"task_id": ["A"]},
         "ASK_TASK_OWNER": {"task_id": ["A"]},
-        "ESCALATE_NO_SOLUTION": {},
+        "RETURN_RESULT": {},
     }
     facts = {"has_conflict": True, "has_rejection": True, "has_unconfirmed_axis": False}
     out = skills.available(replanning.SKILLS, facts, valid)
     # 유효한 인자 값이 없는 도구(TRY)와 열리지 않은 스킬의 도구(ASK)는 빠진다
-    assert list(out) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES", "ESCALATE_NO_SOLUTION"]
+    assert list(out) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]
     assert out["SOLVE_WITH_SCOPE"] == {
         "level": ["L1"],
         "skill": ["BUILD_CANDIDATE", "APPLY_REJECTION"],
     }
-    assert out["ESCALATE_NO_SOLUTION"] == {"skill": ["WRAP_UP"]}
+    assert out["RETURN_RESULT"] == {"skill": ["WRAP_UP"]}
 
 
 def test_replanning_skill_facts(with_a):

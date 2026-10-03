@@ -378,7 +378,9 @@ def metrics(conn: sqlite3.Connection, pack: LoadedPack) -> dict[str, Any]:
     exhausted = []
     for r in runs:
         limit = BINDINGS[r["agent_type"]].spec.budget.get("human_rounds")
-        if r["status"] == "ESCALATED" and limit is not None and r["human_rounds_used"] >= limit:
+        # 막혀서 끝난 Run: 이관(ESCALATED) 또는 Intake의 접수 미완(BLOCKED)
+        ended = r["status"] in ("ESCALATED", "BLOCKED")
+        if ended and limit is not None and r["human_rounds_used"] >= limit:
             exhausted.append(r["agent_type"])
     return {
         "questions_by_actor": dict(Counter(m["to_actor_id"] for m in messages)),

@@ -364,7 +364,7 @@ def test_live_run_requests_in_sequence(monkeypatch):
 
 
 def test_live_run_no_solution_request_succeeds_by_escalation(monkeypatch):
-    """--request N5: 모든 범위 INFEASIBLE이 기대값이므로 후보 없음 + ESCALATE_NO_SOLUTION 종료가 성공."""
+    """--request N5: 모든 범위 INFEASIBLE이 기대값이므로 후보 없음 + 막힌 결과(RETURN_RESULT) 종료가 성공."""
     monkeypatch.setattr(
         live_run, "openai_model", _scripted_each_run(solve("L0"), solve("L2"), escalate())
     )
@@ -446,9 +446,14 @@ def test_live_run_path_b_coord_with_scripted_model(monkeypatch):
     """--path B --coord: Alpha 협의 Run이 변경 요청 → Supervisor 거절로 STALE → Beta → R1 → 통지."""
 
     def report():
-        args = {"decision_summary": "보고", "skill": "WRAP_UP", "summary": "통지 완료"}
+        args = {
+            "decision_summary": "보고",
+            "skill": "WRAP_UP",
+            "status": "DONE",
+            "summary": "통지 완료",
+        }
         return AIMessage(
-            content="", tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": "r"}]
+            content="", tool_calls=[{"name": "RETURN_RESULT", "args": args, "id": "r"}]
         )
 
     router = Router(
@@ -574,9 +579,14 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
         )
 
     def report():
-        args = {"decision_summary": "보고", "skill": "WRAP_UP", "summary": "통지 완료"}
+        args = {
+            "decision_summary": "보고",
+            "skill": "WRAP_UP",
+            "status": "DONE",
+            "summary": "통지 완료",
+        }
         return AIMessage(
-            content="", tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": "r"}]
+            content="", tool_calls=[{"name": "RETURN_RESULT", "args": args, "id": "r"}]
         )
 
     wait = call("WAIT_FOR_REPLIES", "대기")
@@ -629,9 +639,14 @@ def test_live_run_path_event_with_scripted_model(monkeypatch):
     """--path event --coord: R1 스크립트 준비 → 신고 → ER 조회·분석·제안 → 확인·해제 → Gamma → 협의 → R2 → 통지."""
 
     def report(text):
-        args = {"decision_summary": "보고", "skill": "WRAP_UP", "summary": text}
+        args = {
+            "decision_summary": "보고",
+            "skill": "WRAP_UP",
+            "status": "DONE",
+            "summary": text,
+        }
         return AIMessage(
-            content="", tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": text}]
+            content="", tool_calls=[{"name": "RETURN_RESULT", "args": args, "id": text}]
         )
 
     router = Router(

@@ -46,11 +46,16 @@ def _ask(*fields):
 
 
 def _report(text="정리해 보고한다"):
-    """REPORT_TO_SUPERVISOR의 인자 이름이 summary라 call()을 쓰지 않는다."""
-    args = {"decision_summary": "이유: 보고/다음: 종료", "skill": "WRAP_UP", "summary": text}
+    """RETURN_RESULT(DONE). 인자 이름이 summary라 call()을 쓰지 않는다."""
+    args = {
+        "decision_summary": "이유: 보고/다음: 종료",
+        "skill": "WRAP_UP",
+        "status": "DONE",
+        "summary": text,
+    }
     return AIMessage(
         content="",
-        tool_calls=[{"name": "REPORT_TO_SUPERVISOR", "args": args, "id": uuid.uuid4().hex}],
+        tool_calls=[{"name": "RETURN_RESULT", "args": args, "id": uuid.uuid4().hex}],
     )
 
 
@@ -187,7 +192,8 @@ def test_s3_passes_with_scripted_model(pack):
         ("CONSTRAINT_DRAFT", "foreman_a2", "ACCEPT"),
         ("MOVABILITY", "planner_a", "DECLINE"),
     ]
-    assert r["texts"]["endings"][-1]["result"] == {"reason": "C 담당자 이견, A 대체 자원 거절"}
+    ending = r["texts"]["endings"][-1]["result"]
+    assert (ending["status"], ending["summary"]) == ("BLOCKED", "C 담당자 이견, A 대체 자원 거절")
 
 
 def test_s3_report_path_gets_one_plain_rejection(pack):

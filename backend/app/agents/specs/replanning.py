@@ -2,7 +2,7 @@
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터(untried_levels 등)만 보고 계산한다.
 Action: SOLVE_WITH_SCOPE, LIST_ASSIGNABLE_RESOURCES, TRY_ALTERNATIVE_RESOURCE, ASK_TASK_OWNER,
-ESCALATE_NO_SOLUTION. 순서는 스킬 지침에 있고, 여기 조건은 사실·유효성·Budget뿐이다 (AG-01).
+RETURN_RESULT. 순서는 스킬 지침에 있고, 여기 조건은 사실·유효성·Budget뿐이다 (AG-01).
 모듈 이름(GOAL, ACTIONS, tool_schemas 등)은 그대로 두고, 그 값으로 SPEC(AgentSpec)을 만든다.
 """
 
@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents import skills
 from app.agents.types import AgentSpec
+from app.domain.needs import ResultFields
 
 AGENT_TYPE = "REPLANNING"
 GOAL = (
@@ -99,13 +100,12 @@ class AskTaskOwner(Action):
     question: str = Field(min_length=1, description="담당자에게 보일 설명 (한국어)")
 
 
-class EscalateNoSolution(Action):
+class ReturnResult(Action, ResultFields):
     """탐색 범위 확대, 자원 조회, 대체 자원 시도, 담당자 확인으로 열 수 있는 대안이 남아 있지 않을 때만
-    사유를 붙여 사람에게 넘기고 Run을 끝낸다."""
+    막힌 결과를 돌려주고 Run을 끝낸다. 시도한 범위와 결과를 요약에 적고, 무엇이 풀리면 해가 열리는지
+    알면 길마다 필요한 것을 적는다."""
 
     OPENS = "언제나 열려 있다. 단 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
-
-    reason: str = Field(min_length=1, description="해가 없다고 판단한 근거(시도한 범위와 결과)")
 
 
 ACTIONS: dict[str, type[Action]] = {
@@ -113,14 +113,14 @@ ACTIONS: dict[str, type[Action]] = {
     "LIST_ASSIGNABLE_RESOURCES": ListAssignableResources,
     "TRY_ALTERNATIVE_RESOURCE": TryAlternativeResource,
     "ASK_TASK_OWNER": AskTaskOwner,
-    "ESCALATE_NO_SOLUTION": EscalateNoSolution,
+    "RETURN_RESULT": ReturnResult,
 }
 FLOW = {
     "SOLVE_WITH_SCOPE": "CANDIDATE_OR_CONTINUE",
     "LIST_ASSIGNABLE_RESOURCES": "CONTINUE",
     "TRY_ALTERNATIVE_RESOURCE": "CANDIDATE_OR_CONTINUE",
     "ASK_TASK_OWNER": "WAIT",
-    "ESCALATE_NO_SOLUTION": "DONE",
+    "RETURN_RESULT": "DONE",
 }
 
 
@@ -214,7 +214,8 @@ def valid_actions(
             "axis": ["RESOURCE"],
             "allowed_values": _union(c["ASK"]),
         }
-    out["ESCALATE_NO_SOLUTION"] = {}
+    # 후보를 낸 Run은 승인·거절까지 열려 있으므로 스스로 끝내는 결과는 막힘뿐이다
+    out["RETURN_RESULT"] = {"status": ["BLOCKED"]}
     return out
 
 

@@ -156,11 +156,10 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
     if candidate.solver_result_id is not None:
         run_id = run_for_solver_result(tx, candidate.solver_result_id)
     _record_decided(tx, ctx, candidate, decision_id, "APPROVE", run_id)
-    if candidate.solver_result_id is not None:
-        if run_id is not None and not end_case_run(
-            tx, ctx.pack, run_id, "SUCCEEDED", f"COMMITTED:{plan_revision}"
-        ):
-            run_id = None
+    if run_id is not None and not end_case_run(
+        tx, ctx.pack, run_id, "SUCCEEDED", f"COMMITTED:{plan_revision}"
+    ):
+        run_id = None
     if run_id is None:
         close_case(tx, ctx.pack)
     # 이 후보의 협의 Run도 끝내고, 설정이 켜졌으면 확정 통지 Run을 등록한다

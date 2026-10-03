@@ -9,7 +9,7 @@ import json
 import uuid
 
 from langchain_core.messages import AIMessage
-from scripted import Router, call, solve
+from scripted import Router, blocked, call, solve
 
 from app.agents.prompts import event_response as prompt
 from app.agents.specs import event_response as spec
@@ -188,7 +188,7 @@ def _propose(value=60, task_id="E"):
 
 
 def _escalate(reason="수정안을 만들 수 없다"):
-    return call("ESCALATE", "이유: 더 할 수 없다/다음: 이관", reason=reason)
+    return blocked(reason)
 
 
 def _to_proposal(pack, er_replies=None):
@@ -298,8 +298,13 @@ def test_er_with_coordination_to_notice(seeded, event_response_on, coordination_
         content="",
         tool_calls=[
             {
-                "name": "REPORT_TO_SUPERVISOR",
-                "args": {"decision_summary": "보고", "skill": "WRAP_UP", "summary": "E 수락"},
+                "name": "RETURN_RESULT",
+                "args": {
+                    "decision_summary": "보고",
+                    "skill": "WRAP_UP",
+                    "status": "DONE",
+                    "summary": "E 수락",
+                },
                 "id": "r1",
             }
         ],
@@ -316,8 +321,13 @@ def test_er_with_coordination_to_notice(seeded, event_response_on, coordination_
         content="",
         tool_calls=[
             {
-                "name": "REPORT_TO_SUPERVISOR",
-                "args": {"decision_summary": "보고", "skill": "WRAP_UP", "summary": "통지 완료"},
+                "name": "RETURN_RESULT",
+                "args": {
+                    "decision_summary": "보고",
+                    "skill": "WRAP_UP",
+                    "status": "DONE",
+                    "summary": "통지 완료",
+                },
                 "id": "r2",
             }
         ],

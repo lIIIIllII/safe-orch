@@ -9,7 +9,7 @@ import json
 import uuid
 
 from fastapi.testclient import TestClient
-from scripted import Router, call, field_judgments, solve
+from scripted import Router, blocked, call, field_judgments, solve
 
 from app.agents.prompts import intake as prompt
 from app.agents.specs import intake as spec
@@ -258,20 +258,18 @@ def test_complete_with_other_values_is_mismatch(seeded):
     other = {**VALUES_A, "duration": 45}
     run_until_idle(
         pack,
-        model_factory=Router(
-            intake=[_complete(other), call("ESCALATE", "이관", reason="값이 다름")]
-        ).factory(),
+        model_factory=Router(intake=[_complete(other), blocked("값이 다름")]).factory(),
     )
     [run] = _runs("INTAKE")
     guards = [(s["action"]["name"], s["guard"]["reason_code"]) for s in _steps(run.run_id)[2:]]
-    assert guards == [("COMPLETE_TASKSPEC", "CONFIRMED_VALUE_MISMATCH"), ("ESCALATE", None)]
+    assert guards == [("COMPLETE_TASKSPEC", "CONFIRMED_VALUE_MISMATCH"), ("RETURN_RESULT", None)]
     assert _task(pack, "A") is None
 
 
 def test_complete_before_confirmation_is_not_available(seeded):
     pack = seeded
     assert _intake(pack).status == "APPLIED"
-    replies = [_complete(), call("ESCALATE", "이관", reason="확인 전")]
+    replies = [_complete(), blocked("확인 전")]
     run_until_idle(pack, model_factory=Router(intake=replies).factory())
     [run] = _runs("INTAKE")
     s0 = _steps(run.run_id)[0]
@@ -485,13 +483,16 @@ def test_third_question_uses_last_round(seeded):
     assert _reply(pack, q["message_id"], "ANSWER", demo.answer).status == "APPLIED"
     run_until_idle(
         pack,
-        model_factory=Router(
-            intake=[_request(), call("ESCALATE", reason="확인 라운드 없음")]
-        ).factory(),
+        model_factory=Router(intake=[_request(), blocked("확인 라운드 없음")]).factory(),
     )
     last = _steps(run.run_id)[3:]
     assert "REQUEST_CONFIRMATION" not in _tool_names(last[0])
     assert [s["guard"]["reason_code"] for s in last] == ["ACTION_NOT_AVAILABLE", None]
+    # 접수 미완: Run은 BLOCKED, 요청자에게 사유가 통지된다 (AG-06)
+    [run] = _runs("INTAKE")
+    assert (run.status, run.end_reason) == ("BLOCKED", "RETURN_BLOCKED")
+    [notice] = _messages("NOTICE")
+    assert notice["to_actor_id"] == "planner_a" and "HUMAN_ROUNDS_EXHAUSTED" in notice["body"]
 
 
 # ── 시각 인자는 현장 날짜·시각 문자열 (AG-21) ──────────────────

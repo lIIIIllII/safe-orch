@@ -82,8 +82,25 @@ def solve(level: str, summary: str = "범위를 정해 계산한다") -> AIMessa
     return call("SOLVE_WITH_SCOPE", summary, level=level)
 
 
+def _result(decision: str, status: str, summary: str, paths: Sequence[dict]) -> AIMessage:
+    message = call("RETURN_RESULT", decision, status=status, paths=list(paths))
+    message.tool_calls[0]["args"]["summary"] = summary  # call의 summary는 decision_summary다
+    return message
+
+
+def blocked(summary: str = "더 시도할 전략이 없다", paths: Sequence[dict] = ()) -> AIMessage:
+    """RETURN_RESULT(BLOCKED). paths는 [{"needs": [{"kind": ..., ...}]}]."""
+    return _result("막힌 결과를 돌려준다", "BLOCKED", summary, paths)
+
+
+def done(summary: str = "맡은 일을 마쳤다") -> AIMessage:
+    """RETURN_RESULT(DONE)."""
+    return _result("결과를 돌려준다", "DONE", summary, ())
+
+
 def escalate(reason: str = "더 시도할 전략이 없다") -> AIMessage:
-    return call("ESCALATE_NO_SOLUTION", "이관한다", reason=reason)
+    """부모 없는 Replanning Run의 막힌 결과. 임시 연결로 Run은 ESCALATED가 된다."""
+    return blocked(reason)
 
 
 class ScriptedChatModel:
@@ -110,11 +127,18 @@ class ScriptedChatModel:
         return [t["function"]["name"] for t in self.calls[i]["tools"]]
 
 
+AGENT_TITLES = {
+    "INTAKE": "Work Intake Agent",
+    "COORDINATION": "Coordination Agent",
+    "EVENT_RESPONSE": "Event Response Agent",
+    "REPLANNING": "Replanning Agent",
+}
+
+
 class Router:
     """agent_type별 응답 큐. 한 model_factory로 Replanning·Coordination Run을 함께 돌린다.
 
-    모델은 bind된 도구 이름으로 어느 Agent인지 안다: REPORT_TO_SUPERVISOR는 Coordination에만,
-    ESCALATE(그 밖)는 Event Response에만 있다(Replanning은 ESCALATE_NO_SOLUTION).
+    모델은 System 첫 문장("너는 SAFE-ORCH의 … Agent다")으로 어느 Agent인지 안다.
     """
 
     def __init__(
@@ -152,15 +176,8 @@ class RoutedChatModel(ScriptedChatModel):
     def invoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
         tools, kwargs = self._bound
         self.calls.append({"tools": tools, "kwargs": kwargs, "messages": list(messages)})
-        names = {t["function"]["name"] for t in tools}
-        if "LOOKUP_RESOURCE" in names:
-            kind = "INTAKE"
-        elif "REPORT_TO_SUPERVISOR" in names:
-            kind = "COORDINATION"
-        elif "ESCALATE" in names:
-            kind = "EVENT_RESPONSE"
-        else:
-            kind = "REPLANNING"
+        head = str(messages[0].content)[:60]
+        kind = next(k for k, title in AGENT_TITLES.items() if title in head)
         queue = self.router.queues[kind]
         if not queue:
             raise RuntimeError("script exhausted")

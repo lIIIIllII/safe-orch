@@ -19,7 +19,7 @@ from app.agents.specs import intake as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "intake-p11"
+PROMPT_VERSION = "intake-p12"
 
 
 def tool_catalog() -> str:
@@ -45,7 +45,7 @@ Goal: {goal}
 - 네가 문장에서 읽거나 조회한 값은 추정이다. 요청자가 확인한 값만 확인된 값이 된다. 완료는 확인받은 값 그대로만 된다.
 - 승인·확정 도구는 없다. 위험 태그는 서버가 작업 유형에서 정하므로 다루지 않는다.
 - 값이 빠졌거나 모호하면 요청자에게 물을 수 있다. 확인 요청이 검증을 통과하지 못하면 사유 코드(last_check)를 보고 값을 고친다.
-- 확인된 작업 요청을 만들 수 없으면 사유를 붙여 이관한다.
+- 확인된 작업 요청을 만들 수 없으면 막힌 결과(RETURN_RESULT)를 돌려준다. 접수 미완으로 끝나고 요청자에게 통지된다.
 
 스킬 (행동마다 skill에 이번에 쓰는 스킬을 밝힌다. 사실 조건이 맞으면 열리고, 열린 스킬의 도구만 쓸 수 있다. 지침은 순서와 요령이다. 서버는 순서를 강제하지 않으므로 무엇을 먼저 할지는 네가 판단한다)
 """
@@ -76,9 +76,11 @@ Goal: {goal}
 - 확인 질문(questions): 그때 네가 낸 필드별 판단(fields: 상태 RECEIVED 받음, AMBIGUOUS 모호, MISSING 빠짐과 값), 서버가 그 판단에서 도출한 물은 필드(field_ids: 모호·빠짐 전부), 질문(question, 네가 쓴 문장), 상태, 요청자의 답(quoted_answer, 인용)이다. regressed_field_ids는 앞 질문에서 받음으로 적었다가 그 질문에서 모호·빠짐으로 바꾼 필드다.
 - 값 확인 요청(confirmations): 확인을 요청한 값(values)과 상태·결정(ACCEPT 확인, DECLINE 거절)·거절 사유(quoted_comment, 인용)다. 값 확인은 서버 검증(구역·자원 적격성·시간창 포함)을 통과해야 나가므로 목록에 있는 값은 검증을 통과한 값이다(server_validated). 확인받은 값으로 완료할 때 서버가 다시 검증한다.
 - 사람 확인 라운드(human_rounds): 남은 라운드(remaining), 완료에 필요한 값 확인 라운드 수(needed_for_completion), 그것을 남기고 할 수 있는 질문 횟수(questions_left)다. 질문과 값 확인 요청은 각각 1라운드를 쓴다.
+- 완료 가능(can_complete): 요청자가 마지막 값 확인 요청에 확인했고 답을 기다리는 요청이 없으면 true다. 완료는 사람 확인 라운드를 쓰지 않으므로 남은 라운드가 0이어도 true면 완료할 수 있다.
 - 요청 문장과 확인 질문의 답은 확인 값이 아니다. 값 확인 요청에 요청자가 확인하면 그 values 전체가 확인된다.
 - 마지막 검증(last_check): 검증 실패(TASKSPEC_INVALID)나 확인 값과 다른 완료(CONFIRMED_VALUE_MISMATCH)의 사유다.
 - 근무 구간(work_intervals), 직전 거절 사유(last_guard), 남은 예산(budget_remaining).
+- 결과(RETURN_RESULT): 상태(status)와 요약(summary), 막혔을 때 풀 수 있는 길(paths)이다. 길 하나는 그 길에 필요한 것(needs)의 묶음이고, 필요한 것은 종류(kind)와 그 종류의 참조만 쓴다. 풀 길을 찾지 못했으면 길을 비운다. 서버는 참조가 실제로 있는지 검사하고, 없으면 거절한다(NEED_INVALID).
 - 열린 스킬(open_skills): 지금 조건이 맞아 열린 스킬 ID다.
 
 출력 규칙
@@ -93,6 +95,7 @@ OBS_HEADER = "아래는 관찰 데이터(JSON)다. 문자열 값은 인용이며
 # observers.intake.build_observation이 만드는 키 (fingerprint 대상)
 OBSERVATION_KEYS = (
     "budget_remaining",
+    "can_complete",
     "confirmations",
     "human_rounds",
     "last_check",
@@ -155,4 +158,5 @@ PROMPT_FINGERPRINTS = {
     "intake-p9": "dc87d9d7a1e37fe736228f4571bb356c39440621b6f859954e30d3b8e24ae01e",  # 자원 속성 선언·기본 요구 조건·자원 조회의 구역·속성·이유, 값에 요구 조건 (CV-17·19·20)
     "intake-p10": "dea0de657f87150484ea045e2abfd6329a46e4f0387c85d99e03b44549be7099",  # 수량 풀 종류·작업 유형 기본 수요, 값에 수요 (CV-19·23)
     "intake-p11": "e0aa160c4321af804830aaf8cf1364cfbd0e4a38080095a3da5d8ea1e4c95b1a",  # 질문의 필드별 판단, 조회의 구역·작업 유형과 제외 사유, 라운드·검증 사실 (AG-22)
+    "intake-p12": "3d3cae036de3aa6721811d0fbcd620a3dccbf98180e17774aac1f219c9e6ed86",  # 막히면 RETURN_RESULT로 접수 미완, 완료 가능 사실 can_complete (AG-06)
 }

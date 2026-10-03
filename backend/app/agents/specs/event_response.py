@@ -1,7 +1,7 @@
 """Event Response AgentSpec. 순수 데이터: Goal, Action 스키마, Budget.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
-Action: LOOKUP_TASKS, ANALYZE_IMPACT, PROPOSE_FACT_UPDATE, ASK_REPORTER, ESCALATE.
+Action: LOOKUP_TASKS, ANALYZE_IMPACT, PROPOSE_FACT_UPDATE, ASK_REPORTER, RETURN_RESULT.
 Hold 해제·사실 직접 적용은 할 수 없다. 사실 수정은 Supervisor가 확인해야 효력이 생긴다.
 """
 
@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents import skills
 from app.agents.types import AgentSpec
+from app.domain.needs import ResultFields
 
 AGENT_TYPE = "EVENT_RESPONSE"
 GOAL = (
@@ -86,13 +87,11 @@ class AskReporter(Action):
     question: str = Field(min_length=1, max_length=TEXT_MAX, description="신고자에게 보이는 질문")
 
 
-class Escalate(Action):
-    """조회·분석·신고자 확인으로 열 수 있는 대안이 남아 있지 않거나 신고가 시작 지연이 아닐 때만 사유와 함께 이관한다."""
+class ReturnResult(Action, ResultFields):
+    """조회·분석·신고자 확인으로 열 수 있는 대안이 남아 있지 않거나 신고가 시작 지연이 아닐 때만 막힌 결과를 돌려주고 Run을 끝낸다. 한 것과 막힌 이유를 요약에 적고, 필요한 것을 알면 길에 적는다."""
 
-    # Replanning p7과 같은 조건 문구
+    # Replanning과 같은 조건 문구
     OPENS = "언제나 열려 있다. 단 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
-
-    reason: str = Field(min_length=1, description="이관 사유")
 
 
 ACTIONS: dict[str, type[Action]] = {
@@ -100,14 +99,14 @@ ACTIONS: dict[str, type[Action]] = {
     "ANALYZE_IMPACT": AnalyzeImpact,
     "PROPOSE_FACT_UPDATE": ProposeFactUpdate,
     "ASK_REPORTER": AskReporter,
-    "ESCALATE": Escalate,
+    "RETURN_RESULT": ReturnResult,
 }
 FLOW = {
     "LOOKUP_TASKS": "CONTINUE",
     "ANALYZE_IMPACT": "CONTINUE",
     "PROPOSE_FACT_UPDATE": "WAIT",
     "ASK_REPORTER": "WAIT",
-    "ESCALATE": "DONE",
+    "RETURN_RESULT": "DONE",
 }
 
 
@@ -164,7 +163,8 @@ def valid_actions(
         out["PROPOSE_FACT_UPDATE"] = {"task_id": c["PROPOSE"]}
     if c["ASK"]:
         out["ASK_REPORTER"] = {}
-    out["ESCALATE"] = {}
+    # 수정안은 Supervisor 확인으로 끝나므로(AG-14) 스스로 끝내는 결과는 막힘뿐이다
+    out["RETURN_RESULT"] = {"status": ["BLOCKED"]}
     return out
 
 

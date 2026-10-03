@@ -36,6 +36,7 @@ class CoordinationExecutor:
         self._complete = gateway._complete
         self.begin_step = gateway.begin_step
         self.wait_or_continue = gateway.wait_or_continue
+        self.return_result = gateway.return_result
 
     def run(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
         action = parsed.action
@@ -59,14 +60,8 @@ class CoordinationExecutor:
                 return self._draft(tx, run_id, step_no, meta, parsed, obs, action)
             if isinstance(action, spec.SendNotice):
                 return self._notice(tx, run_id, step_no, meta, parsed, obs, action)
-            if isinstance(action, spec.ReportToSupervisor):
-                outcome = GatewayResult("DONE", None, "SUCCEEDED", "REPORT_TO_SUPERVISOR")
-                self._done(tx, run_id, step_no, meta, parsed, outcome, {"summary": action.summary})
-                return outcome
-            assert isinstance(action, spec.Escalate)
-            outcome = GatewayResult("DONE", None, "ESCALATED", "ESCALATE")
-            self._done(tx, run_id, step_no, meta, parsed, outcome, {"reason": action.reason})
-            return outcome
+            assert isinstance(action, spec.ReturnResult)
+            return self.return_result(tx, run_id, step_no, meta, parsed, _produced(obs))
 
     def _permitted(self, obs: Observation, action: Any) -> bool:
         """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (조합까지)."""
@@ -93,7 +88,7 @@ class CoordinationExecutor:
                 and allowed is not None
                 and set(action.task_ids) <= set(allowed)
             )
-        return isinstance(action, spec.ReportToSupervisor | spec.Escalate)
+        return isinstance(action, spec.ReturnResult)
 
     def _done(
         self,
@@ -261,6 +256,26 @@ class CoordinationExecutor:
         result = {"message_id": message_id, "to_actor_id": action.actor_id, "body": body}
         self._done(tx, run_id, step_no, meta, parsed, outcome, result, {"message_id": message_id})
         return outcome
+
+
+def _produced(obs: Observation) -> dict[str, Any]:
+    """결과에 서버가 채우는 내용: 협의는 항목별 상태와 남은 이견, 통지는 대상 수와 보낸 수."""
+    data = obs.data
+    if data["phase"] == "NOTICE":
+        targets = data["notice_targets"]
+        return {
+            "phase": "NOTICE",
+            "notice_targets": len(targets),
+            "sent": sum(1 for t in targets if t["sent"]),
+        }
+    items = {i["task_id"]: i["status"] for i in data["items"]}
+    return {
+        "phase": data["phase"],
+        "candidate_id": data["candidate"]["candidate_id"],
+        "consultation_status": data["candidate"]["consultation_status"],
+        "items": items,
+        "open_items": sorted(t for t, s in items.items() if s in spec.OPEN_ITEM),
+    }
 
 
 # ── 서버 문구 (Pack 표시 이름과 현장 시각으로 만든다) ───────────

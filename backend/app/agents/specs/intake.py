@@ -1,7 +1,8 @@
 """Work Intake AgentSpec. 순수 데이터: Goal, Action 스키마, Budget.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
-Action(최소 경로): LOOKUP_RESOURCE, ASK_CLARIFICATION, REQUEST_CONFIRMATION, COMPLETE_TASKSPEC, ESCALATE.
+Action(최소 경로): LOOKUP_RESOURCE, ASK_CLARIFICATION, REQUEST_CONFIRMATION, COMPLETE_TASKSPEC,
+RETURN_RESULT(막힘: 접수 미완으로 끝나고 요청자에게 알린다, AG-06).
 질문에는 필드별 판단을 함께 내고, 물을 필드는 그 판단에서 서버가 도출한다 (AG-22).
 모델이 추출·조회한 값은 PROPOSED이고, 요청자가 확인한 값만 CONFIRMED가 된다. 위험 태그는 받지 않는다.
 """
@@ -12,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents import skills
 from app.agents.types import AgentSpec
+from app.domain.needs import ResultFields
 
 AGENT_TYPE = "INTAKE"
 GOAL = (
@@ -203,12 +205,10 @@ class CompleteTaskspec(Action):
     values: TaskValues
 
 
-class Escalate(Action):
-    """확인된 작업 요청을 만들 수 없을 때(요청자가 거절, 값이 검증을 통과하지 못함 등) 사유와 함께 이관한다."""
+class ReturnResult(Action, ResultFields):
+    """확인된 작업 요청을 만들 수 없을 때(요청자가 거절, 값이 검증을 통과하지 못함 등) 접수 미완으로 끝낸다. 요청자에게 접수 미완과 사유가 통지된다. 한 것과 막힌 이유를 요약에 적고, 필요한 것을 알면 길에 적는다."""
 
     OPENS = "언제나 열려 있다"
-
-    reason: str = Field(min_length=1, description="이관 사유")
 
 
 ACTIONS: dict[str, type[Action]] = {
@@ -216,14 +216,14 @@ ACTIONS: dict[str, type[Action]] = {
     "ASK_CLARIFICATION": AskClarification,
     "REQUEST_CONFIRMATION": RequestConfirmation,
     "COMPLETE_TASKSPEC": CompleteTaskspec,
-    "ESCALATE": Escalate,
+    "RETURN_RESULT": ReturnResult,
 }
 FLOW = {
     "LOOKUP_RESOURCE": "CONTINUE",
     "ASK_CLARIFICATION": "WAIT",
     "REQUEST_CONFIRMATION": "WAIT",
     "COMPLETE_TASKSPEC": "DONE",
-    "ESCALATE": "DONE",
+    "RETURN_RESULT": "DONE",
 }
 
 
@@ -293,7 +293,8 @@ def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
         out["REQUEST_CONFIRMATION"] = values
     if c["COMPLETE"]:
         out["COMPLETE_TASKSPEC"] = values
-    out["ESCALATE"] = {}
+    # 완료는 COMPLETE_TASKSPEC으로 한다. 스스로 끝내는 결과는 막힘(접수 미완)뿐이다
+    out["RETURN_RESULT"] = {"status": ["BLOCKED"]}
     return out
 
 

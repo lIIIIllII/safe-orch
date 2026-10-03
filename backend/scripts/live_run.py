@@ -15,7 +15,7 @@
   아래 경로별 설명의 "금지 Action 0"·"MALFORMED 0"과 순서에 기댄 항목(ASK가 LIST 결과를 담음, 수락 전 TRY
   없음)은 기록만 하고 성공 기준에 넣지 않는다 (AG-01).
 - 요청 경로: 성공 = PASS 후보 도달. 기대값이 모든 범위 INFEASIBLE인
-  요청(N5)은 "후보 없음 ∧ ESCALATE_NO_SOLUTION으로 종료"가 성공이다. 기대 결과와 같은지는 matches_expected로 따로 남긴다.
+  요청(N5)은 "후보 없음 ∧ 막힌 결과(RETURN_RESULT)로 종료(Run ESCALATED·ESCALATE_NO_SOLUTION)"가 성공이다. 기대 결과와 같은지는 matches_expected로 따로 남긴다.
 - --path B(기본안 B): 요청 A만. 스크립트가 사람 역할을 한다: Alpha PASS 뒤 Supervisor로
   demo_rejections[0] 거절 → OPEN 메시지가 생기면 그 수신자로 ACCEPT(comment "live run 자동 수락")
   → Beta PASS ∧ 협의 완료면 승인(WAIVE 없음). 성공 = Beta PASS ∧ Consultation COMPLETE ∧ 확정 R1 ∧ Run SUCCEEDED
@@ -353,7 +353,7 @@ def run_once(
                 c["escalated"] = record.get("run_status") == "ESCALATED" and str(
                     record.get("end_reason") or ""
                 ).startswith("ESCALATE_NO_SOLUTION")
-                # 해가 없는 요청은 "후보 없음 + ESCALATE_NO_SOLUTION 종료"가 성공이다
+                # 해가 없는 요청은 "후보 없음 + 막힌 결과로 종료(ESCALATE_NO_SOLUTION)"가 성공이다
                 record["success"] = (
                     c["no_candidate"]
                     and c["escalated"]

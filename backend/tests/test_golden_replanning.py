@@ -3,7 +3,8 @@
 대상은 Run 행, AgentStep 행(created_at 제외), Gateway CommandResult(created_at 제외), 모델이 받은
 입력(System·Human 메시지, 바인딩한 도구, bind 인자)이다.
 uuid4 ID와 hash는 실행마다 달라지므로 등장 순서대로 치환한 뒤 hash한다.
-자원 모델 확장 ②(replanning-p11, 작업의 수요)에서 다시 만들었다. step 순서·Action·결과는 그 전과 같다.
+2단계 배관(replanning-p12)에서 다시 만들었다: 종료 도구 이름이 RETURN_RESULT로 바뀌고 agent_run에 칸이
+늘었다(스키마 9). step 순서·Action·결과·가드 사유·남은 Budget은 그 전과 같다.
 """
 
 import json
@@ -33,10 +34,10 @@ PREFIXED_ID = re.compile(r"(?<![0-9a-z_])([a-z]+)_[0-9a-f]{32}(?![0-9a-f])")
 BARE_ID = re.compile(r"(?<![0-9a-f_])[0-9a-f]{32}(?![0-9a-f])")
 HASH = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 REQ = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-# 자원 모델 확장 ② 뒤 다시 만든 값
+# 2단계 배관 뒤 다시 만든 값
 GOLDEN = {
-    "plan_b": "b9c02d6c9c55b21a9c89f00b0862f419631a843d58f1484c28cb9ee1e01e5b94",
-    "rejections": "4fb6c08a6beb3609dcb362fdd64b81e4691c5bbb41fd58f16c5fd4fcd1eda99d",
+    "plan_b": "37889c1fb17dd0e0e1945eca688dbc2fa380f5f606dc2e418851d7fd2be159cc",
+    "rejections": "2476a3100e3f09e7947e653c417f1ada89aa9b2ffe598f91c144dc5e5e82d4ff",
 }
 
 

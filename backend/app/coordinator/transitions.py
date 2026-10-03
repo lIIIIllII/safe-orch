@@ -66,7 +66,9 @@ def recover_running_runs(pack: LoadedPack) -> list[str]:
             count = mark_restart(tx, run_id)
             if count is not None:
                 key = f"CONTINUE_RUN:{run_id}:{count}"
-                register_job(tx, pack.site_id, "CONTINUE_RUN", key, {"run_id": run_id}, run_id=run_id)
+                register_job(
+                    tx, pack.site_id, "CONTINUE_RUN", key, {"run_id": run_id}, run_id=run_id
+                )
                 out.append(run_id)
     return out
 

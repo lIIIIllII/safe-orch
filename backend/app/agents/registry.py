@@ -29,27 +29,27 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=replanning_prompt,
         observer=replanning_observer,
         executor=ReplanningExecutor,
-        exec_contract_version="replanning-c2",  # 기록만. 스킬 층(skill 인자, 순서 조건 제거)
+        exec_contract_version="replanning-c3",  # 기록만. 종료는 RETURN_RESULT(길 묶음) (AG-23)
     ),
     coordination_spec.AGENT_TYPE: AgentBinding(
         spec=coordination_spec.SPEC,
         prompt=coordination_prompt,
         observer=coordination_observer,
         executor=CoordinationExecutor,
-        exec_contract_version="coordination-c3",  # 기록만. 스킬을 상대별로 나눔(AG-20)
+        exec_contract_version="coordination-c4",  # 기록만. 종료는 RETURN_RESULT(길 묶음) (AG-23)
     ),
     event_response_spec.AGENT_TYPE: AgentBinding(
         spec=event_response_spec.SPEC,
         prompt=event_response_prompt,
         observer=event_response_observer,
         executor=EventResponseExecutor,
-        exec_contract_version="event-response-c4",  # 기록만. 시각 인자는 현장 날짜·시각 문자열(AG-21)
+        exec_contract_version="event-response-c5",  # 기록만. 종료는 RETURN_RESULT(길 묶음) (AG-23)
     ),
     intake_spec.AGENT_TYPE: AgentBinding(
         spec=intake_spec.SPEC,
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-c7",  # 기록만. 질문의 필드별 판단, 조회의 구역·작업 유형 (AG-22)
+        exec_contract_version="intake-c8",  # 기록만. 막히면 RETURN_RESULT로 접수 미완 (AG-06)
     ),
 }
