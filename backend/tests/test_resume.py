@@ -4,8 +4,11 @@
 돌고, 이 파일의 스크립트는 Replanning의 응답이다. Replanning은 검증까지만 살고, 거절 뒤에는 메인이
 같은 Case에서 새 Run으로 다시 부른다.
 
+담당자 확인은 Replanning이 하지 않는다: 막힌 결과의 need를 메인이 Coordination 사전 확인으로 넘긴다
+(AG-09). 스크립트의 막힌 결과에는 길이 없으므로 메인의 기본 응답은 서버가 붙인 열 수 있는 것으로 부른다.
+
 1단계: T33·T36–T39·T41·T42, 대기열(QUEUED). 2단계: 기본안 B E2E, T02·T17·T23–T26·T38(답변)·T40,
-LIST·TRY·ASK 사용 조건, Consent 복사, N5 ASK 미노출, state inbox.
+LIST·TRY 사용 조건과 사전 확인, Consent 복사, 거절한 값, state inbox.
 """
 
 import threading
@@ -14,9 +17,18 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from scripted import Router, call, escalate, solve
+from scripted import (
+    Router,
+    ask_owner,
+    blocked,
+    call,
+    escalate,
+    main_call,
+    main_escalate,
+    solve,
+)
 
-from app.agents.specs import replanning as spec
+from app.agents import casefacts
 from app.api.state import build_state
 from app.commands.approval import (
     ApproveRequest,
@@ -48,7 +60,7 @@ from app.store import db
 from app.store.repos.cases import claim_resume, queued_task_ids, wake_run
 from app.store.repos.consultations import consultation_view
 from app.store.repos.dispatch import list_jobs, register_job
-from app.store.repos.messages import get_message, get_proposal
+from app.store.repos.messages import declined_values, get_message, get_proposal
 from app.store.repos.records import (
     get_candidate,
     get_search_spec,
@@ -209,7 +221,8 @@ def test_plan_b_reject_with_constraint_recalls_replanning(seeded):
     """Alpha를 TASK_IMMOVABLE(C)로 거절 → Context +1, 메인이 깨어나 재계획을 다시 부른다 → 새 Run이 같은
     Case의 이전 계산과 C 고정을 본다 → 미시도 범위 없음.
 
-    C 고정으로 L1·L2가 L0와 같은 탐색(같은 실효 탐색 키)이 되므로 계산을 반복하지 않고 조회·질문으로 간다.
+    C 고정으로 L1·L2가 L0와 같은 탐색(같은 실효 탐색 키)이 되므로 계산을 반복하지 않는다. 막힌 결과에
+    서버가 열 수 있는 것을 붙이고, 메인이 그 need로 Coordination 사전 확인을 부른다.
     """
     pack = seeded
     run = _alpha_waiting(pack)
@@ -258,39 +271,79 @@ def test_plan_b_reject_with_constraint_recalls_replanning(seeded):
     assert obs["latest_validation"]["live"] is False
     assert [c["task_id"] for c in obs["constraints"]] == ["C"]
     assert obs["untried_levels"] == []
-    assert _names(s3) == ["LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER", "RETURN_RESULT"]
+    assert _names(s3) == ["LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]  # 사람 도구는 없다
     assert s3["action"]["name"] == "RETURN_RESULT"
-    # 막힌 결과를 받은 메인은 이관한다
-    assert (_run(run.main_id).status, _run(run.main_id).end_reason) == ("ESCALATED", "ESCALATE")
+    # 열 수 있는 것: C는 고정이라 빠지고, A에 물을 수 있는 대체 자원과 권한 때문에 제외된 자원이 남는다
+    openers = [
+        {
+            "need_id": f"{second.run_id}:s:0",
+            "kind": "OWNER_CONSENT",
+            "task_id": "A",
+            "axis": "RESOURCE",
+            "values": ["SITE-CR-01"],
+        },
+        {
+            "need_id": f"{second.run_id}:s:1",
+            "kind": "FACT_CHANGE",
+            "field": "PERMISSION",
+            "resource_id": "B-CR-01",
+        },
+        # 모든 범위에서 해가 없다: 요청 작업의 시간창이 바뀌어야 열린다
+        {
+            "need_id": f"{second.run_id}:s:2",
+            "kind": "FACT_CHANGE",
+            "field": "WINDOW",
+            "task_id": "A",
+        },
+    ]
+    assert (s3["tool_result"]["paths"], s3["tool_result"]["openers"]) == ([], openers)
+    # 막힌 결과를 받은 메인은 그 need로 사전 확인을 부르고, Coordination이 A 담당자의 답을 기다린다
+    main, asking = _run(run.main_id), _last("COORDINATION")
+    assert (main.status, main.wait_kind, main.wait_ref) == (
+        "WAITING_HUMAN",
+        "CHILD_RUN",
+        asking.run_id,
+    )
+    assert (asking.input_ref["phase"], asking.input_ref["need_ids"]) == (
+        "ASK",
+        [f"{second.run_id}:s:0"],
+    )
+    woke = _steps(run.main_id)[-1]["observation"]
+    unit = next(u for u in woke["groups"][0]["units"] if u["unit_id"] == "UA")
+    assert (unit["last_result"]["paths"], unit["last_result"]["openers"]) == ([], openers)
+    assert "askable" not in unit
+    assert {"agent": "COORDINATION", "phase": "ASK", "need_ids": [openers[0]["need_id"]]} in woke[
+        "calls"
+    ]
 
 
 def _ask_waiting(pack):
-    """기본안 B 앞부분: Alpha 거절(C 고정) → 메인이 재계획을 다시 부름 → LIST(A) → ASK(A, RESOURCE,
-    [SITE-CR-01]). 답을 기다리는 새 Replanning Run을 돌려준다."""
+    """기본안 B 앞부분: Alpha 거절(C 고정) → 메인이 재계획을 다시 부름 → LIST(A) → 막힌 결과 → 메인이
+    사전 확인을 부름 → Coordination이 A 담당자에게 SITE-CR-01을 묻는다. 답을 기다리는 사전 확인 Run을
+    돌려준다(wait_ref는 질문 메시지)."""
     run = _alpha_waiting(pack)
     _reject_demo(pack, run.wait_ref)
     run_until_idle(
         pack,
         model_factory=_factory(
             call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
-            _ask_a(),
+            blocked("A 대체 자원은 담당자 확인이 필요하다"),
         ),
     )
-    waiting = _last()
-    assert waiting.run_id != run.run_id
-    assert (waiting.status, waiting.wait_kind) == ("WAITING_HUMAN", "MESSAGE")
+    stuck, waiting = _last(), _last("COORDINATION")
+    assert (stuck.run_id != run.run_id, stuck.status) == (True, "BLOCKED")
+    assert (waiting.status, waiting.wait_kind, waiting.input_ref["phase"]) == (
+        "WAITING_HUMAN",
+        "MESSAGE",
+        "ASK",
+    )
     return waiting
 
 
-def _ask_a(task_id="A", values=("SITE-CR-01",)):
-    return call(
-        "ASK_TASK_OWNER",
-        "자원 축 확인",
-        task_id=task_id,
-        axis="RESOURCE",
-        allowed_values=list(values),
-        question="SITE-CR-01을 써도 되나요?",
-    )
+def _path(task_id="A", values=("SITE-CR-01",), axis="RESOURCE"):
+    """담당자 확인 need 하나로 된 길."""
+    need = {"kind": "OWNER_CONSENT", "task_id": task_id, "axis": axis}
+    return {"needs": [{**need, "values": list(values)} if values else need]}
 
 
 def _reply(pack, message_id, decision="ACCEPT", actor="planner_a", key=None, **kw):
@@ -324,14 +377,13 @@ def _enum(step, name, arg):
 
 
 def test_plan_b_full_e2e(seeded):
-    """기본안 B 전체: 거절 → 메인이 재계획을 다시 부름 → LIST → ASK → 수락 → 재개 → TRY → Beta → DONE →
-    승인 R1 → 통지 → 메인 CLOSE."""
+    """기본안 B 전체: 거절 → 메인이 재계획을 다시 부름 → LIST → 막힘 → 사전 확인(Coordination) → 수락 →
+    메인이 재계획을 다시 부름 → TRY → Beta → DONE → 승인 R1 → 통지 → 메인 CLOSE."""
     pack = seeded
     waiting = _ask_waiting(pack)
-    run_id = waiting.run_id
-    steps = _steps(run_id)
+    stuck = _last()
+    s_list, s_end = _steps(stuck.run_id)
     # LIST: B-CR-01은 UA에 허용되지 않아 제외, 유형이 다른 SITE-GC-01은 대상이 아니다
-    s_list, s_ask = steps[0], steps[1]
     assert s_list["tool_result"] == {
         "task_id": "A",
         "required_type": "CRANE",
@@ -340,30 +392,53 @@ def test_plan_b_full_e2e(seeded):
         "excluded": [{"resource_id": "B-CR-01", "reasons": [{"reason": "NOT_ALLOWED"}]}],
         "resources_hash": s_list["tool_result"]["resources_hash"],
     }
-    # ASK는 조회와 무관하게 열려 있다(순서는 지침). LIST 대상은 자원이 필요하고 RESOURCE가 막히지 않은
-    # acting 작업이다(C는 제약 고정이라 빠진다. 주 충돌 밖 작업도 조회할 수 있다).
-    assert _names(s_list) == ["LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER", "RETURN_RESULT"]
+    # LIST 대상은 자원이 필요하고 RESOURCE가 막히지 않은 acting 작업이다(C는 제약 고정이라 빠진다)
+    assert _names(s_list) == ["LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]
     assert _enum(s_list, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A", "Q"]
-    assert _names(s_ask) == ["LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER", "RETURN_RESULT"]
-    assert s_ask["observation"]["untried_levels"] == []
-    assert waiting.human_rounds_used == 1
+    assert s_end["observation"]["untried_levels"] == []
+    assert (stuck.human_rounds_used, "human_rounds" in s_end["budget_remaining"]) == (0, False)
 
+    # 담당자 질문은 Coordination 사전 확인 Run이 보낸다. need 하나에 질문 하나다
+    [s_ask, s_wait] = _steps(waiting.run_id)
+    [ask] = s_ask["observation"]["asks"]
+    need_id = f"{stuck.run_id}:s:0"
+    assert ask == {
+        "need_id": need_id,
+        "owner_actor_id": "planner_a",
+        "task_id": "A",
+        "axis": "RESOURCE",
+        "values": ["SITE-CR-01"],
+        "message_id": None,
+        "status": "UNASKED",
+    }
+    assert _names(s_ask) == ["ASK_OWNER", "RETURN_RESULT"]
+    assert _enum(s_ask, "RETURN_RESULT", "status") == ["BLOCKED"]  # 답을 받기 전에는 DONE이 없다
+    assert (s_ask["action"]["args"]["need_id"], s_wait["action"]["name"]) == (
+        need_id,
+        "WAIT_FOR_REPLIES",
+    )
     message = _message(pack, waiting.wait_ref)
-    assert (message["type"], message["status"], message["to_actor_id"]) == (
+    assert (message["type"], message["status"], message["to_actor_id"], message["run_id"]) == (
         "QUESTION",
         "OPEN",
         "planner_a",
+        waiting.run_id,
     )
     assert message["body"].startswith("A(인양) 작업에 SITE-CR-01도 쓸 수 있게 허용하시겠습니까?")
-    assert message["agent_text"] == "SITE-CR-01을 써도 되나요?"
+    assert message["agent_text"] == "대체 자원을 써도 되는지 확인해 주세요."
     proposal = _proposal(pack, message["proposal_id"])
     assert (proposal["type"], proposal["status"], proposal["base_task_revision"]) == (
         "MOVABILITY",
         "PENDING",
         1,
     )
-    assert proposal["payload"] == {"axis": "RESOURCE", "allowed_values": ["SITE-CR-01"]}
+    assert proposal["payload"] == {
+        "axis": "RESOURCE",
+        "allowed_values": ["SITE-CR-01"],
+        "need_id": need_id,
+    }
 
+    # 수락: 작업 새 revision(자원 축 열림) + 자원 Consent, Context +1 (후보 없는 사전 확인, ST-15)
     ctx = _site(pack).context_version
     out = _reply(pack, waiting.wait_ref, comment="좋습니다")
     assert out.status == "APPLIED" and out.result_refs["task_revision"] == 2
@@ -383,46 +458,46 @@ def test_plan_b_full_e2e(seeded):
     ]
     assert '"A-CR-01"' in consents[1][1] and '"SITE-CR-01"' in consents[2][1]
     assert _proposal(pack, message["proposal_id"])["status"] == "CONFIRMED"
-    assert _run(run_id).wake_seq == 1  # 답변 1 (거절은 메인이 받았다)
+    assert _run(waiting.run_id).wake_seq == 1  # 답변 1
 
+    # 사전 확인 Run이 답을 결과로 돌려주고, 메인이 재계획을 다시 부른다(사실이 바뀌었다) → TRY → Beta
     run_until_idle(pack, model_factory=_factory(_try_beta()))
-    run = _run(run_id)
-    beta = _cand(run_id)
-    steps = _steps(run_id)
-    s_try = steps[2]
+    asked = _run(waiting.run_id)
+    assert (asked.status, asked.end_reason) == ("SUCCEEDED", "RETURN_DONE")
+    s_done = _steps(waiting.run_id)[-1]
+    assert s_done["observation"]["asks"][0]["quoted_comment"] == "좋습니다"
+    assert s_done["tool_result"]["asks"] == [
+        {
+            "need_id": need_id,
+            "task_id": "A",
+            "owner_actor_id": "planner_a",
+            "result": "ACCEPTED",
+            "accepted_values": ["SITE-CR-01"],
+        }
+    ]
+    run = _last()
+    assert run.run_id != stuck.run_id and run.case_id == stuck.case_id
+    beta = _cand(run.run_id)
+    s_try, _ = _steps(run.run_id)
     assert s_try["tool_result"]["try_resources"] == {"A": ["SITE-CR-01"]}
-    # 자원 축이 확인됐다(ASK 없음). 수락으로 context·Consent가 바뀌어도 Solver 입력이 같아 L0는 다시 열리지 않는다
+    # 자원 축이 열렸다. 수락으로 context·Consent가 바뀌어도 Solver 입력이 같아 L0는 다시 열리지 않는다
     assert _names(s_try) == [
         "LIST_ASSIGNABLE_RESOURCES",
         "TRY_ALTERNATIVE_RESOURCE",
         "RETURN_RESULT",
     ]
-    assert s_try["observation"]["untried_levels"] == []
     obs = s_try["observation"]
-    assert obs["assignable_resources"][0]["untried_alternatives"] == ["SITE-CR-01"]
-    assert obs["human_replies"] == [
-        {
-            "message_id": message["message_id"],
-            "task_id": "A",
-            "axis": "RESOURCE",
-            "allowed_values": ["SITE-CR-01"],
-            "status": "ANSWERED",
-            "decision": "ACCEPT",
-            "quoted_comment": "좋습니다",
-        }
+    assert (obs["untried_levels"], obs["openers"][0]["kind"]) == ([], "FACT_CHANGE")
+    assert [c["scope"] for c in obs["consents"] if c["axis"] == "RESOURCE"] == [
+        {"resource_ids": ["A-CR-01"]},
+        {"resource_ids": ["SITE-CR-01"]},
     ]
-    # 수락 전 TRY 없음. 새 Run: step 4 / Solver 1 / 사람 라운드 1 (거절 뒤 L0 재시도 없음)
-    assert [(s["action"] or {}).get("name") for s in steps] == [
-        "LIST_ASSIGNABLE_RESOURCES",
-        "ASK_TASK_OWNER",
-        "TRY_ALTERNATIVE_RESOURCE",
-        "RETURN_RESULT",
-    ]
+    assert next(t for t in obs["acting_tasks"] if t["task_id"] == "A")["movable"]["resource"]
     assert (run.status, run.steps_used, run.solver_calls_used, run.human_rounds_used) == (
         "SUCCEEDED",
-        4,
+        2,
         1,
-        1,
+        0,
     )
 
     with db.read() as conn:
@@ -437,6 +512,19 @@ def test_plan_b_full_e2e(seeded):
     run_until_idle(pack, model_factory=_factory())  # 통지 → 메인 CLOSE
     main = _last("MAIN")
     assert (main.status, main.end_reason, _site(pack).plan_revision) == ("SUCCEEDED", "CLOSE", 1)
+    calls = [
+        (s["action"]["args"]["agent"], s["action"]["args"]["phase"])
+        for s in _steps(main.run_id)
+        if s["action"]["name"] == "CALL_AGENT"
+    ]
+    assert calls == [
+        ("REPLANNING", None),
+        ("COORDINATION", "CONSULT"),
+        ("REPLANNING", None),
+        ("COORDINATION", "ASK"),
+        ("REPLANNING", None),
+        ("COORDINATION", "NOTICE"),
+    ]
 
 
 def test_accept_does_not_reopen_tried_levels(seeded):
@@ -447,7 +535,8 @@ def test_accept_does_not_reopen_tried_levels(seeded):
     assert _reply(pack, waiting.wait_ref).status == "APPLIED"
     assert _site(pack).context_version == ctx + 1
     run_until_idle(pack, model_factory=_factory(solve("L0", "다시 계산"), escalate()))
-    s_l0, s_end = _steps(waiting.run_id)[2:]
+    recalled = _last()
+    s_l0, s_end = _steps(recalled.run_id)
     assert s_l0["observation"]["untried_levels"] == []
     assert _names(s_l0) == [
         "LIST_ASSIGNABLE_RESOURCES",
@@ -456,7 +545,7 @@ def test_accept_does_not_reopen_tried_levels(seeded):
     ]
     assert s_l0["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
     assert s_end["action"]["name"] == "RETURN_RESULT"
-    assert _run(waiting.run_id).solver_calls_used == 0  # 계산은 앞 Run의 L0·L1뿐이다
+    assert recalled.solver_calls_used == 0  # 계산은 앞 Run의 L0·L1뿐이다
 
 
 def test_t17_moving_fixed_c_fails_c06(seeded):
@@ -465,7 +554,7 @@ def test_t17_moving_fixed_c_fails_c06(seeded):
     waiting = _ask_waiting(pack)
     _reply(pack, waiting.wait_ref)
     run_until_idle(pack, model_factory=_factory(_try_beta()))
-    beta = _cand(waiting.run_id)
+    beta = _cand(_last().run_id)
     with db.read() as conn:
         cand = get_candidate(conn, pack.site_id, beta)
         snapshot = get_snapshot(conn, cand.snapshot_id)
@@ -731,8 +820,11 @@ def test_queue_promoted_when_main_escalates(seeded):
     pack = seeded
     run = _queue_n1_during_alpha(pack)
     _reject(pack, run.wait_ref, "PREFERENCE")
-    # 다시 부른 재계획이 막히면 메인이 이관하고, 대기열에서 1건이 올라가 새 메인이 받는다
+    # 다시 부른 재계획이 막히고 담당자도 대체 자원을 거절하면 메인이 이관한다. 대기열에서 1건이 올라가
+    # 새 메인이 받는다
     run_until_idle(pack, model_factory=_factory(escalate(), escalate()))
+    assert _reply(pack, _last("COORDINATION").wait_ref, "DECLINE").status == "APPLIED"
+    run_until_idle(pack, model_factory=_factory(escalate()))
     assert _run(run.main_id).status == "ESCALATED"
     assert _task(pack, "N1").lifecycle == "READY"
     assert len(_runs("MAIN")) == 2
@@ -804,7 +896,7 @@ def test_t23_movability_consent_covers_only_allowed_resource_and_time_range(seed
     waiting = _ask_waiting(pack)
     _reply(pack, waiting.wait_ref)
     run_until_idle(pack, model_factory=_factory(_try_beta()))
-    beta = _cand(waiting.run_id)
+    beta = _cand(_last().run_id)
     with db.read() as conn:
         cand = get_candidate(conn, pack.site_id, beta)
         facts = get_snapshot(conn, cand.snapshot_id).facts()
@@ -928,38 +1020,98 @@ def test_decline_discards_and_wakes_without_context_change(seeded):
         "ANSWERED",
         1,
     )
-    # 거절당한 질문은 다시 보내지 않는다: SITE-CR-01을 거절했으므로 ASK 미노출 → 이관
-    run_until_idle(
-        pack, model_factory=_factory(_ask_a(), escalate("담당자가 대체 자원을 거절했다"))
-    )
-    retry, last = _steps(waiting.run_id)[-2:]
-    assert "ASK_TASK_OWNER" not in _names(retry) and "ASK_TASK_OWNER" not in _names(last)
-    assert retry["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
-    [reply] = last["observation"]["human_replies"]
-    assert (reply["decision"], reply["quoted_comment"]) == ("DECLINE", "크레인 일정이 없다")
+    # 사전 확인 Run은 거절을 결과로 돌려준다. 거절한 값은 다시 묻지 못하고 재계획에는 바뀐 사실이 없어,
+    # 메인은 다시 부르지 않고 이관한다
+    run_until_idle(pack, model_factory=_factory())
     ended = _run(waiting.run_id)
-    assert (ended.status, ended.end_reason, ended.human_rounds_used) == (
-        "BLOCKED",
-        "RETURN_BLOCKED",
-        1,
-    )
+    assert (ended.status, ended.end_reason) == ("SUCCEEDED", "RETURN_DONE")
+    last = _steps(waiting.run_id)[-1]
+    [ask] = last["observation"]["asks"]
+    assert (ask["status"], ask["quoted_comment"]) == ("DECLINED", "크레인 일정이 없다")
+    assert "ASK_OWNER" not in _names(last)
+    assert last["tool_result"]["asks"][0]["result"] == "DECLINED"
+    main = _last("MAIN")
+    assert (main.status, main.end_reason) == ("ESCALATED", "ESCALATE")
+    assert _steps(main.run_id)[-1]["observation"]["calls"] == []
+    assert len(_runs("REPLANNING")) == 2
     with db.read() as conn:
         asked = conn.execute("SELECT COUNT(*) FROM message WHERE type = 'QUESTION'").fetchone()[0]
     assert asked == 1
 
 
-def test_declined_values_are_removed_from_ask_choices(seeded):
-    """DECLINE한 (작업, 축, 값)만 빠진다. 남는 값이 있으면 ASK는 그 값으로만 열린다."""
+def _start_ask(pack, needs):
+    """메인 없이 Coordination 사전 확인 Run을 시작시킨다(START_RUN 등록)."""
+    with db.write() as tx:
+        payload = {
+            "agent_type": "COORDINATION",
+            "phase": "ASK",
+            "need_ids": [n["need_id"] for n in needs],
+            "needs": needs,
+            "acting_unit_id": "SITE",
+            "context_version": get_site(tx, pack.site_id).context_version,
+        }
+        register_job(tx, pack.site_id, "START_RUN", f"START_RUN:{_key()}", payload)
+
+
+def test_declined_value_is_not_asked_again_on_same_task_revision(seeded):
+    """거절한 값은 같은 작업 revision이면 현장 전체에서 다시 묻지 못한다. 다음 메인(다른 Case)에서도 need
+    검증, 열 수 있는 것, 메인의 사전 확인 호출, ASK_OWNER 유효성이 모두 막는다 (AG-09)."""
     pack = seeded
     waiting = _ask_waiting(pack)
-    _reply(pack, waiting.wait_ref, "DECLINE")
-    run_until_idle(pack, model_factory=_factory(escalate()))
-    obs = _steps(waiting.run_id)[-1]["observation"]
-    hidden = {"eligible": {"A": {"alternatives": ["SITE-CR-01"], "untried": []}}}
-    assert spec.choices(obs, hidden)["ASK"] == {}
-    widened = {"eligible": {"A": {"alternatives": ["SITE-CR-01", "X-1"], "untried": []}}}
-    assert spec.choices(obs, widened)["ASK"] == {"A": ["X-1"]}
-    assert spec.available_actions(obs, widened)["ASK_TASK_OWNER"]["allowed_values"] == ["X-1"]
+    declined_id = waiting.input_ref["need_ids"][0]
+    need = waiting.input_ref["needs"][0]
+    assert _reply(pack, waiting.wait_ref, "DECLINE").status == "APPLIED"
+    run_until_idle(pack, model_factory=_factory())
+    first_main = _last("MAIN")
+    assert first_main.status == "ESCALATED"
+
+    # 새 요청으로 다음 메인이 뜬다(다른 Case). A는 아직 계획에 없어 같은 충돌 그룹이 남아 있다
+    assert _submit(pack, "N2").status == "APPLIED"
+    with db.read() as conn:
+        _, _, groups = casefacts.current_groups(conn, pack)
+    gid = next(g.group_id for g in groups if "A" in g.task_ids)
+    router = Router(
+        replanning=[blocked("A 담당자 확인", [_path()]), blocked("길 없음")],
+        main=[
+            main_call("COORDINATION", phase="ASK", need_ids=[declined_id]),
+            main_call("REPLANNING", group_id=gid, acting_unit_id="UA"),
+            main_escalate(),
+        ],
+    )
+    run_until_idle(pack, model_factory=router.factory())
+    main = _last("MAIN")
+    assert main.case_id != first_main.case_id
+    guards = [(s["action"]["name"], s["guard"]["reason_code"]) for s in _steps(main.run_id)]
+    assert guards == [
+        ("CALL_AGENT", "VALUE_DECLINED"),  # 메인의 사전 확인 호출
+        ("CALL_AGENT", None),
+        ("ESCALATE", None),
+    ]
+    s_path, s_end = _steps(_last().run_id)
+    # need 검증: 거절한 값을 길에 넣을 수 없다
+    assert s_path["guard"]["reason_code"] == "NEED_INVALID"
+    assert [n["reason"] for n in s_path["tool_result"]["invalid_needs"]] == ["VALUE_DECLINED"]
+    # 열 수 있는 것: A의 담당자 확인이 빠졌다
+    assert [n["kind"] for n in s_end["observation"]["openers"]] == ["FACT_CHANGE"]
+    assert "OWNER_CONSENT" not in [n["kind"] for n in s_end["tool_result"]["openers"]]
+
+    # ASK_OWNER 유효성: 사전 확인 Run이 그 need를 받아도 묻지 못한다
+    _start_ask(pack, [need])
+    run_until_idle(pack, model_factory=Router(coordination=[ask_owner(), escalate()]).factory())
+    asking = _last("COORDINATION")
+    s_ask, s_ret = _steps(asking.run_id)
+    [ask] = s_ask["observation"]["asks"]
+    assert (ask["status"], ask["reason"]) == ("NOT_ASKABLE", "VALUE_DECLINED")
+    assert _names(s_ask) == ["RETURN_RESULT"]
+    # 물을 것이 없어 사전 확인 스킬이 열리지 않는다(도구도 없다)
+    assert s_ask["guard"] == {"verdict": "REJECTED", "reason_code": "SKILL_NOT_OPEN"}
+    assert s_ret["tool_result"]["asks"][0]["result"] == "NOT_ASKED"
+    with db.read() as conn:
+        asked = conn.execute("SELECT COUNT(*) FROM message WHERE type = 'QUESTION'").fetchone()[0]
+        # 판정 기준은 작업 revision이다: revision이 바뀌면 다시 물을 수 있다
+        assert declined_values(conn, pack.site_id, "A", 1) == {"SITE-CR-01"}
+        assert declined_values(conn, pack.site_id, "A", 2) == set()
+    assert asked == 1
 
 
 def test_t02_injected_comment_cannot_trigger_approval(seeded):
@@ -976,13 +1128,16 @@ def test_t02_injected_comment_cannot_trigger_approval(seeded):
         ]
     )
     run_until_idle(pack, model_factory=router.factory())
-    steps = _steps(waiting.run_id)[2:]
+    # 답의 문장은 물은 Coordination의 관찰에 인용으로만 들어간다. 재계획의 관찰에는 들어가지 않는다
+    assert _steps(waiting.run_id)[-1]["observation"]["asks"][0]["quoted_comment"] == text
+    recalled = _last()
+    steps = _steps(recalled.run_id)
     assert [s["guard"]["reason_code"] for s in steps] == [
         "MALFORMED",
         "RESOURCE_NOT_ELIGIBLE",
         None,
     ]
-    assert steps[0]["observation"]["human_replies"][0]["quoted_comment"] == text
+    assert text not in str(steps[0]["observation"])
     # 어느 Agent(메인 포함)의 도구에도 승인은 없다
     assert all(
         "APPROVE" not in name
@@ -994,43 +1149,47 @@ def test_t02_injected_comment_cannot_trigger_approval(seeded):
         decisions = conn.execute("SELECT COUNT(*) FROM decision WHERE type = 'APPROVE'").fetchone()
         holds = conn.execute("SELECT COUNT(*) FROM hold").fetchone()
     assert (_site(pack).plan_revision, decisions[0], holds[0]) == (0, 0, 0)
-    assert _run(waiting.run_id).status == "BLOCKED"
+    assert _run(recalled.run_id).status == "BLOCKED"
 
 
-# ── 2단계: LIST·TRY·ASK 사용 조건 ─────────────────
+# ── 2단계: LIST·TRY 사용 조건과 사전 확인 ─────────────────
 
 
-def test_server_does_not_order_list_try_ask(seeded):
+def test_server_does_not_order_list_try_or_blocked(seeded):
     """순서 규칙은 스킬 지침에 있다 (AG-01). 미시도 범위가 남아 있어도, 자원 조회를 하지 않아도 서버는
-    ASK·TRY를 막지 않고, LIST는 주 충돌 밖 작업도 받는다. 자원 축 미확인이면 TRY는 없다(동의)."""
+    TRY와 막힌 결과를 순서로 막지 않고, LIST는 주 충돌 밖 작업도 받는다. 자원 축 미확인이면 TRY는 없다(동의)."""
     pack = seeded
     assert _submit_a(pack).status == "APPLIED"
-    run_until_idle(pack, model_factory=_factory(_try_beta(), _ask_a()))
+    stuck = blocked("A 대체 자원은 담당자 확인이 필요하다", [_path()])
+    run_until_idle(pack, model_factory=_factory(_try_beta(), stuck))
     [run] = _runs("REPLANNING")
-    s_try, s_ask = _steps(run.run_id)
-    assert _names(s_ask) == [
-        "SOLVE_WITH_SCOPE",
-        "LIST_ASSIGNABLE_RESOURCES",
-        "ASK_TASK_OWNER",
-        "RETURN_RESULT",
-    ]
+    s_try, s_end = _steps(run.run_id)
+    assert _names(s_end) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]
     assert s_try["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"  # 자원 축 미확인
-    assert s_ask["observation"]["untried_levels"] == ["L0", "L1", "L2"]
-    assert s_ask["observation"]["assignable_resources"] == []
-    assert _enum(s_ask, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A", "C", "Q"]
-    assert (s_ask["result_kind"], s_ask["guard"]["verdict"]) == ("WAIT", "ACCEPTED")
-    assert run.human_rounds_used == 1
-    # 수락 뒤: 조회 없이 TRY가 받아들여진다
-    assert _reply(pack, run.wait_ref).status == "APPLIED"
+    assert s_end["observation"]["untried_levels"] == ["L0", "L1", "L2"]
+    assert s_end["observation"]["assignable_resources"] == []
+    assert _enum(s_end, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A", "C", "Q"]
+    assert (s_end["result_kind"], s_end["guard"]["verdict"], run.status) == (
+        "DONE",
+        "ACCEPTED",
+        "BLOCKED",
+    )
+    # 메인은 재계획 Agent가 엮은 길의 need로 사전 확인을 부른다
+    waiting = _last("COORDINATION")
+    assert waiting.input_ref["need_ids"] == [f"{run.run_id}:p0:0"]
+    # 수락 뒤: 메인이 다시 부른 재계획은 조회 없이 TRY가 받아들여진다
+    assert _reply(pack, waiting.wait_ref).status == "APPLIED"
     run_until_idle(pack, model_factory=_factory(_try_beta()))
-    s_beta = _steps(run.run_id)[2]
+    second = _last()
+    s_beta = _steps(second.run_id)[0]
     assert (s_beta["action"]["name"], s_beta["result_kind"]) == ("TRY_ALTERNATIVE_RESOURCE", "WAIT")
-    assert _run(run.run_id).status == "SUCCEEDED"  # 검증 뒤 DONE
+    assert second.status == "SUCCEEDED"  # 검증 뒤 DONE
     assert s_beta["observation"]["assignable_resources"] == []
 
 
-def test_ask_conditions_rounds_fixed_axis_and_values(seeded):
-    """C(RESOURCE 고정)는 ASK 대상이 아니고, 쓸 수 없는 자원은 거절, 라운드가 없으면 ASK가 빠진다."""
+def test_owner_consent_needs_and_openers_follow_facts(seeded):
+    """C(RESOURCE 고정)와 쓸 수 없는 자원은 담당자 확인의 need가 될 수 없고 열 수 있는 것에도 없다.
+    시간 축 담당자 확인은 유효한 need지만 사전 확인 대상이 아니다."""
     pack = seeded
     run = _alpha_waiting(pack)
     _reject_demo(pack, run.wait_ref)
@@ -1039,45 +1198,35 @@ def test_ask_conditions_rounds_fixed_axis_and_values(seeded):
         model_factory=_factory(
             call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
             call("LIST_ASSIGNABLE_RESOURCES", "C 자원 조회", task_id="C"),
-            _ask_a("C"),
-            _ask_a("A", ("B-CR-01",)),
-            escalate(),
+            blocked("틀린 길", [_path("C"), _path("A", ("B-CR-01",))]),
+            blocked("A의 자원 또는 시간", [_path(), _path("A", (), "TIME")]),
         ),
     )
     second = _last()
     steps = _steps(second.run_id)
     # C는 RESOURCE 축이 제약으로 고정돼 자원 조회 대상이 아니다
     assert steps[1]["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
-    s_ask_c, s_ask_bad = steps[2], steps[3]
-    ask = next(
-        t["function"]
-        for t in s_ask_c["available_actions"]
-        if t["function"]["name"] == "ASK_TASK_OWNER"
-    )
-    assert ask["parameters"]["properties"]["task_id"]["enum"] == ["A"]
-    assert ask["parameters"]["properties"]["allowed_values"]["items"]["enum"] == ["SITE-CR-01"]
-    assert s_ask_c["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
-    assert s_ask_bad["guard"]["reason_code"] == "RESOURCE_NOT_ELIGIBLE"  # 사용 권한 없음
-    hidden = {"eligible": {"A": {"alternatives": ["SITE-CR-01"], "untried": []}}}
-    obs = dict(s_ask_bad["observation"])
-    assert "ASK_TASK_OWNER" in spec.available_actions(obs, hidden)
-    assert "ASK_TASK_OWNER" not in spec.available_actions(obs, {"eligible": {}})  # 유효한 값 없음
-    obs["budget_remaining"] = {**obs["budget_remaining"], "human_rounds": 0}
-    assert "ASK_TASK_OWNER" not in spec.available_actions(obs, hidden)
-    open_ask = {
-        "task_id": "A",
-        "axis": "RESOURCE",
-        "status": "OPEN",
-        "decision": None,
-        "allowed_values": ["SITE-CR-01"],
-    }
-    obs = {**s_ask_bad["observation"], "human_replies": [open_ask]}
-    assert "ASK_TASK_OWNER" not in spec.available_actions(obs, hidden)  # 같은 작업·축 열린 질문
+    assert steps[2]["guard"]["reason_code"] == "NEED_INVALID"
+    assert [(n["path"], n["reason"]) for n in steps[2]["tool_result"]["invalid_needs"]] == [
+        (0, "AXIS_FROZEN"),
+        (1, "RESOURCE_NOT_ELIGIBLE"),  # 사용 권한 없음
+    ]
+    result = steps[3]["tool_result"]
+    owner = [n for n in result["openers"] if n["kind"] == "OWNER_CONSENT"]
+    assert [(n["task_id"], n["values"]) for n in owner] == [("A", ["SITE-CR-01"])]
+    assert [p["needs"][0]["need_id"] for p in result["paths"]] == [
+        f"{second.run_id}:p0:0",
+        f"{second.run_id}:p1:0",
+    ]
+    # 메인이 물을 수 있는 것은 자원 축 확인뿐이다. 시간 축 need(p1)는 호출 목록에 없다
+    woke = _steps(run.main_id)[-1]["observation"]
+    [ask] = [c for c in woke["calls"] if c.get("phase") == "ASK"]
+    assert ask["need_ids"] == [f"{second.run_id}:p0:0", f"{second.run_id}:s:0"]
     assert second.human_rounds_used == 0
 
 
-def test_n5_never_exposes_ask(seeded):
-    """N5: K의 GANTRY 대체 자원이 없어 allowed_values를 만들 수 없다 → ASK 미노출, 이관."""
+def test_n5_has_no_owner_consent_opener(seeded):
+    """N5: K의 GANTRY 대체 자원이 없어 물을 값이 없다 → 담당자 확인이 열 수 있는 것에 없다, 이관."""
     pack = seeded
     assert _submit(pack, "N5").status == "APPLIED"
     run_until_idle(
@@ -1099,8 +1248,13 @@ def test_n5_never_exposes_ask(seeded):
         "SITE-GC-01",
         [{"resource_id": "SITE-GC-01"}],
     )
-    assert "ASK_TASK_OWNER" not in _names(last)
-    assert (run.status, run.human_rounds_used) == ("BLOCKED", 0)
+    openers = last["tool_result"]["openers"]
+    assert "OWNER_CONSENT" not in [n["kind"] for n in openers]
+    # 모든 범위에서 해가 없다: 요청 작업의 시간창이 바뀌어야 열린다
+    assert {"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": "N5"} in [
+        {k: v for k, v in n.items() if k != "need_id"} for n in openers
+    ]
+    assert (run.status, _last("MAIN").status, _runs("COORDINATION")) == ("BLOCKED", "ESCALATED", [])
 
 
 # ── 대기열 순서 ─────────────────────────────────────
@@ -1161,7 +1315,7 @@ def test_state_inbox_separates_server_text_and_agent_text(seeded):
     assert other == []
     assert item["message_id"] == waiting.wait_ref
     assert item["body"].startswith("A(인양) 작업에")
-    assert item["agent_text"] == "SITE-CR-01을 써도 되나요?"
+    assert item["agent_text"] == "대체 자원을 써도 되는지 확인해 주세요."
     assert (item["task_id"], item["axis"], item["allowed_values"]) == (
         "A",
         "RESOURCE",
@@ -1205,7 +1359,7 @@ def test_state_shows_rejection_resume_count_and_queue(seeded):
         pack,
         model_factory=_factory(
             call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
-            _ask_a(),
+            blocked(),
         ),
     )
     with db.read() as conn:
@@ -1221,14 +1375,14 @@ def test_state_shows_rejection_resume_count_and_queue(seeded):
     assert [(c["task_id"], c["frozen_axes"]) for c in rej["constraints"]] == [
         ("C", ["RESOURCE", "TIME"])
     ]
-    # 메인이 다시 부른 Replanning Run(답 대기)
+    # 메인이 부른 사전 확인 Run(답 대기)
     [summary] = [
         r
         for r in state["runs"]
-        if r["agent_type"] == "REPLANNING" and r["status"] == "WAITING_HUMAN"
+        if r["agent_type"] == "COORDINATION" and r["status"] == "WAITING_HUMAN"
     ]
     assert (summary["agent_type"], summary["wait_generation"], summary["resume_count"]) == (
-        "REPLANNING",
+        "COORDINATION",
         1,
         0,
     )

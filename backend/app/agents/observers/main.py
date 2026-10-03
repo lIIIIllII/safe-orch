@@ -30,6 +30,9 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     if run is None or site is None:
         raise LookupError(f"run {run_id} or site not found")
     steps = [s for s in list_steps(conn, run_id) if s["status"] == "COMPLETED"]
+    facts = casefacts.build(conn, pack, run)
+    # 서버만 아는 유효성 사실: 사전 확인으로 물을 수 있는 need와 물을 수 없는 사유
+    hidden = {k: facts.pop(k) for k in ("ask_needs", "ask_refusals")}
     data = {
         "run": {"run_id": run.run_id, "agent_type": run.agent_type, "goal": spec.GOAL},
         "versions": {
@@ -37,7 +40,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "plan_revision": site.plan_revision,
             "wake_seq": run.wake_seq,
         },
-        **casefacts.build(conn, pack, run),
+        **facts,
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),
         "budget_remaining": budget_remaining(run, spec.SPEC),
@@ -49,5 +52,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         data=data,
         available=spec.available_actions(data),
         spec=spec.SPEC,
+        hidden=hidden,
         seen_event_seq=max((e["seq"] for e in data["events"]), default=0),
     )

@@ -11,7 +11,18 @@ import yaml
 from conftest import add_run
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
-from scripted import Router, ScriptedChatModel, call, done, escalate, field_judgments, solve
+from scripted import (
+    Router,
+    ScriptedChatModel,
+    ask_owner,
+    blocked,
+    call,
+    done,
+    escalate,
+    field_judgments,
+    solve,
+    wait_answers,
+)
 
 from app.agents import llm, runtime
 from app.agents.observers.replanning import build_observation
@@ -349,6 +360,7 @@ def test_live_run_flow_with_scripted_model(monkeypatch):
             "CALL_AGENT(COORDINATION·NOTICE)",
             "CLOSE",
         ],
+        "ask_sources": [],
     }
     assert r["agent_flags"] == {"main_auto_start": True}
     assert r["model_settings"]["temperature"] == 0.0 and "api_key" not in r["model_settings"]
@@ -399,25 +411,18 @@ def test_live_run_rejects_unknown_request(capsys):
 
 
 def _plan_b_replies(*after_reply):
-    ask = call(
-        "ASK_TASK_OWNER",
-        "자원 축 확인",
-        task_id="A",
-        axis="RESOURCE",
-        allowed_values=["SITE-CR-01"],
-        question="SITE-CR-01을 써도 되나요?",
-    )
     return [
         solve("L0"),
         solve("L1"),
         call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A"),
-        ask,
+        blocked("A 대체 자원은 담당자 확인이 필요하다"),
         *after_reply,
     ]
 
 
 def test_live_run_path_b_with_scripted_model(monkeypatch):
-    """--path B: 거절 → 메인이 재계획을 다시 부름 → LIST → ASK → 스크립트가 수락 → TRY → Beta → 승인 R1."""
+    """--path B: 거절 → 메인이 재계획을 다시 부름 → LIST → 막힘 → 사전 확인 → 스크립트가 수락 → 재계획 TRY →
+    Beta → 승인 R1."""
     try_ = call("TRY_ALTERNATIVE_RESOURCE", "대체 자원", task_id="A", resource_id="SITE-CR-01")
     router = Router(replanning=_plan_b_replies(try_))
     settings = _use(monkeypatch, router)
@@ -432,15 +437,23 @@ def test_live_run_path_b_with_scripted_model(monkeypatch):
         "CLOSE",
         True,
     )
+    assert c["owner_asked_by_coordination_only"] is True
     assert r["main"]["actions"] == [
         "CALL_AGENT(REPLANNING·UA)",
         "CALL_AGENT(COORDINATION·CONSULT)",
+        "CALL_AGENT(REPLANNING·UA)",
+        "CALL_AGENT(COORDINATION·ASK)",
         "CALL_AGENT(REPLANNING·UA)",
         "WAIT",
         "CALL_AGENT(COORDINATION·NOTICE)",
         "CLOSE",
     ]
-    assert (r["main"]["steps"], r["main"]["agent_calls"]) == (6, 4)
+    assert (r["main"]["steps"], r["main"]["agent_calls"]) == (8, 6)
+    # 스크립트의 막힌 결과에는 길이 없다: 메인은 서버가 붙인 열 수 있는 것으로 사전 확인을 불렀다
+    assert (r["main"]["ask_sources"], c["blocked_with_owner_consent_path"]) == (
+        ["SERVER_OPENERS"],
+        0,
+    )
     # 사람 역할: Supervisor 거절 → 담당자 질문 수락 → 승인. 변경 요청에는 답하지 않는다
     assert [
         next(k for k in e if k in ("form", "reject", "reply", "approve")) for e in r["events"]
@@ -526,7 +539,7 @@ def test_system_lists_every_action_with_open_condition(pack):
     ids = [r.resource_id for r in pack.resources] + [r.rule_id for r in pack.rules]
     ids += [*pack.work_types, *(t.task_id for t in pack.tasks)]
     assert not [i for i in ids if len(i) >= 3 and i in catalog]
-    assert "조회·확인으로 열 수 있는 대안" in system
+    assert "계산·조회로 열 수 있는 대안" in system
 
 
 def test_live_run_path_coord_with_scripted_model(monkeypatch):
@@ -554,14 +567,7 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
             solve("L0"),
             solve("L1"),
             call("LIST_ASSIGNABLE_RESOURCES", "조회", task_id="A"),
-            call(
-                "ASK_TASK_OWNER",
-                "확인",
-                task_id="A",
-                axis="RESOURCE",
-                allowed_values=["SITE-CR-01"],
-                question="SITE-CR-01?",
-            ),
+            blocked("A 대체 자원은 담당자 확인이 필요하다"),
             call("TRY_ALTERNATIVE_RESOURCE", "시도", task_id="A", resource_id="SITE-CR-01"),
         ],
         coordination=[
@@ -569,6 +575,9 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
             wait,
             draft,
             wait,
+            ask_owner(),
+            wait_answers(),
+            done("사전 확인 완료"),
             call("SEND_NOTICE", "통지", actor_id="planner_a", task_ids=["A"], message="A 변경"),
             call("SEND_NOTICE", "통지", actor_id="planner_b", task_ids=["B"], message="B 유지"),
             done("통지 완료"),
@@ -593,10 +602,13 @@ def test_live_run_path_coord_with_scripted_model(monkeypatch):
         "CALL_AGENT(REPLANNING·UA)",
         "CALL_AGENT(COORDINATION·CONSULT)",
         "CALL_AGENT(REPLANNING·UA)",
+        "CALL_AGENT(COORDINATION·ASK)",
+        "CALL_AGENT(REPLANNING·UA)",
         "WAIT",
         "CALL_AGENT(COORDINATION·NOTICE)",
         "CLOSE",
     ]
+    assert c["owner_asked_by_coordination_only"] is True
     assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
 
 

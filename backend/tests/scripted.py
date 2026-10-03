@@ -4,11 +4,13 @@ llm.ChatModel 프로토콜(bind_tools + invoke)을 따른다. 응답은 AIMessag
 함수(호출 순간의 부수 효과를 주입할 때)다. 응답이 모자라면 예외를 내고, 그 Run은 ERROR가 된다.
 
 판단을 시험하지 않는 자리에는 기본 응답(auto)이 있다. 스크립트를 주지 않은 Agent에만 쓴다:
-- 메인: 통지 → 신고 대응 → 협의 → 재계획(요청 작업을 가진 Unit) 순으로 받아들여지는 호출을 부르고,
-  없으면 기다릴 것이 있을 때 WAIT, 열린 일이 없으면 CLOSE, 그것도 아니면 ESCALATE.
+- 메인: 통지 → 신고 대응 → 협의 → 사전 확인(요청 작업의 담당자 확인만) → 재계획(요청 작업을 가진
+  Unit) 순으로 받아들여지는 호출을 부르고, 없으면 기다릴 것이 있을 때 WAIT, 열린 일이 없으면 CLOSE,
+  그것도 아니면 ESCALATE.
 - Replanning: 검증을 통과한 살아 있는 후보가 있으면 RETURN_RESULT(DONE). 스크립트보다 먼저 본다
   (Run이 깨어날 때마다 모델이 새로 만들어져 스크립트가 처음부터 다시 시작되기 때문이다).
-- Coordination: 협의는 요청할 항목마다 변경 요청 → 답 대기 → 결과, 통지는 대상마다 통지 → 결과.
+- Coordination: 협의는 요청할 항목마다 변경 요청 → 답 대기 → 결과, 통지는 대상마다 통지 → 결과,
+  사전 확인은 확인마다 질문 → 답 대기 → 결과.
 """
 
 import json
@@ -22,6 +24,7 @@ from app.agents import skills
 from app.agents.registry import BINDINGS
 from app.domain.calendar import site_time
 from app.packs.loader import load_pack, pack_dir
+from app.store import db
 
 Reply = AIMessage | Callable[[], AIMessage]
 
@@ -106,6 +109,26 @@ def done(summary: str = "맡은 일을 마쳤다") -> AIMessage:
     return _result("결과를 돌려준다", "DONE", summary, ())
 
 
+def ask_owner(index: int = 0, message: str = "대체 자원을 써도 되는지 확인해 주세요.") -> Reply:
+    """Coordination 사전 확인의 ASK_OWNER. need_id는 부를 때 정해지므로 가장 최근 사전 확인 Run에서 읽는다."""
+
+    def make() -> AIMessage:
+        with db.read() as conn:
+            row = conn.execute(
+                "SELECT input_ref FROM agent_run WHERE agent_type = 'COORDINATION'"
+                " AND json_extract(input_ref, '$.phase') = 'ASK' ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+        need_id = json.loads(row[0])["need_ids"][index]
+        return call("ASK_OWNER", need_id=need_id, message=message)
+
+    return make
+
+
+def wait_answers() -> AIMessage:
+    """사전 확인의 답 대기."""
+    return call("WAIT_FOR_REPLIES", skill="PRE_CONFIRM")
+
+
 def main_call(agent: str, **refs: Any) -> AIMessage:
     """메인의 CALL_AGENT. 참조만 넘긴다."""
     return call("CALL_AGENT", "이유: 부른다/다음: 결과를 본다", agent=agent, **refs)
@@ -128,7 +151,7 @@ def main_escalate(text: str = "풀 수 없다", needs: Sequence[dict] = ()) -> A
 
 
 def escalate(reason: str = "더 시도할 전략이 없다") -> AIMessage:
-    """부모 없는 Replanning Run의 막힌 결과. 임시 연결로 Run은 ESCALATED가 된다."""
+    """Replanning의 막힌 결과(길 없음). 서버가 열 수 있는 것을 붙이고, 다음은 메인이 정한다."""
     return blocked(reason)
 
 
@@ -158,6 +181,26 @@ def _limits(tools: Sequence[dict[str, Any]], name: str) -> dict[str, Any] | None
     return None
 
 
+def _auto_ask(obs: dict[str, Any], ask: dict[str, Any] | None) -> dict[str, Any] | None:
+    """기본 응답의 사전 확인: 물을 수 있는 확인 가운데 아직 계획에 없는 요청 작업의 것만 묻는다."""
+    if ask is None:
+        return None
+    units = [u for g in obs["groups"] for u in g["units"]]
+    requests = {t for u in units for t in u["request_task_ids"]}
+    needs = {}
+    for u in units:
+        last = u["last_result"] or {}
+        found = [n for p in last.get("paths", []) for n in p["needs"]] + last.get("openers", [])
+        needs.update({n["need_id"]: n for n in found})
+    ids, seen = [], []
+    for i in ask["need_ids"]:  # 정렬돼 있다: Agent가 엮은 길의 need(p)가 서버 need(s)보다 앞이다
+        what = (needs[i].get("task_id"), needs[i].get("values"))
+        if what[0] in requests and what not in seen:
+            ids.append(i)
+            seen.append(what)
+    return {**ask, "need_ids": ids} if ids else None
+
+
 def auto_main(obs: dict[str, Any]) -> AIMessage:
     """메인의 기본 응답(판단을 시험하지 않는 자리)."""
     calls = obs["calls"]
@@ -165,11 +208,15 @@ def auto_main(obs: dict[str, Any]) -> AIMessage:
     def first(**want: Any) -> dict[str, Any] | None:
         return next((c for c in calls if all(c.get(k) == v for k, v in want.items())), None)
 
-    failed = {
-        (r["call"].get("group_id"), r["call"].get("acting_unit_id"))
-        for r in obs["child_results"]
-        if r["call"] and r["run_status"] != "SUCCEEDED"
-    }
+    # 막힌 재계획은 다시 부르지 않는다. 그 뒤 사전 확인을 마쳤으면 사실이 바뀐 것이라 다시 부른다
+    failed: set[tuple[Any, Any]] = set()
+    for r in obs["child_results"]:
+        if not r["call"]:
+            continue
+        if r["call"].get("phase") == "ASK" and r["run_status"] == "SUCCEEDED":
+            failed.clear()
+        elif r["run_status"] != "SUCCEEDED":
+            failed.add((r["call"].get("group_id"), r["call"].get("acting_unit_id")))
     requesters = {
         (g["group_id"], u["unit_id"])
         for g in obs["groups"]
@@ -188,6 +235,7 @@ def auto_main(obs: dict[str, Any]) -> AIMessage:
         first(agent="COORDINATION", phase="NOTICE")
         or first(agent="EVENT_RESPONSE")
         or first(agent="COORDINATION", phase="CONSULT")
+        or _auto_ask(obs, first(agent="COORDINATION", phase="ASK"))
         # 검토 대기 후보가 있으면 재계획을 더 부르지 않고 기다린다
         or (None if obs["waiting_for"]["candidates"] else replanning)
     )
@@ -199,8 +247,12 @@ def auto_main(obs: dict[str, Any]) -> AIMessage:
 
 
 def auto_coordination(obs: dict[str, Any], tools: Sequence[dict[str, Any]]) -> AIMessage:
-    """Coordination의 기본 응답: 요청·통지를 빠짐없이 보내고, 기다릴 것이 있으면 기다리고, 끝낸다."""
+    """Coordination의 기본 응답: 요청·질문·통지를 빠짐없이 보내고, 기다릴 것이 있으면 기다리고, 끝낸다."""
     send, notice = _limits(tools, "SEND_CHANGE_REQUEST"), _limits(tools, "SEND_NOTICE")
+    ask, wait = _limits(tools, "ASK_OWNER"), _limits(tools, "WAIT_FOR_REPLIES")
+    if ask is not None:
+        need_id = ask["need_id"]["enum"][0]
+        return call("ASK_OWNER", need_id=need_id, message="대체 자원을 써도 되는지 확인해 주세요.")
     if send is not None:
         task_id = send["task_id"]["enum"][0]
         return call("SEND_CHANGE_REQUEST", task_id=task_id, message="후보의 변경을 확인해 주세요.")
@@ -212,8 +264,8 @@ def auto_coordination(obs: dict[str, Any], tools: Sequence[dict[str, Any]]) -> A
             task_ids=target["task_ids"],
             message="확정된 계획을 알립니다.",
         )
-    if _limits(tools, "WAIT_FOR_REPLIES") is not None:
-        return call("WAIT_FOR_REPLIES")
+    if wait is not None:
+        return call("WAIT_FOR_REPLIES", skill=wait["skill"]["enum"][0])
     return done("협의·통지 결과를 돌려준다")
 
 

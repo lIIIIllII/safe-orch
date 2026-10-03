@@ -92,12 +92,38 @@ def test_blocked_result_keeps_paths_and_server_fills_the_rest(with_a):
     # 스키마에는 지금 쓸 수 있는 상태만 보인다
     [tool] = [t for t in model.calls[0]["tools"] if t["function"]["name"] == "RETURN_RESULT"]
     assert tool["function"]["parameters"]["properties"]["status"]["enum"] == ["BLOCKED"]
-    assert steps[-1]["tool_result"] == {
+    result = dict(steps[-1]["tool_result"])
+    # 서버가 붙인 열 수 있는 것은 모델이 엮은 길과 따로 남는다. need ID는 Run·길(p<순번> 또는 s)·순번이다
+    openers = result.pop("openers")
+    assert [(n["need_id"], n["kind"]) for n in openers] == [
+        ("run_r:s:0", "OWNER_CONSENT"),
+        ("run_r:s:1", "OWNER_CONSENT"),
+        ("run_r:s:2", "FACT_CHANGE"),
+    ]
+    assert result == {
         "status": "BLOCKED",
         "summary": "L0에서 해가 없다",
         "paths": [
-            {"needs": [{"kind": "OWNER_CONSENT", "task_id": "A", "axis": "RESOURCE"}]},
-            {"needs": [{"kind": "FACT_CHANGE", "task_id": "A", "field": "WINDOW"}]},
+            {
+                "needs": [
+                    {
+                        "need_id": "run_r:p0:0",
+                        "kind": "OWNER_CONSENT",
+                        "task_id": "A",
+                        "axis": "RESOURCE",
+                    }
+                ]
+            },
+            {
+                "needs": [
+                    {
+                        "need_id": "run_r:p1:0",
+                        "kind": "FACT_CHANGE",
+                        "task_id": "A",
+                        "field": "WINDOW",
+                    }
+                ]
+            },
         ],
         "candidate_ids": [],
         "latest_validation": None,

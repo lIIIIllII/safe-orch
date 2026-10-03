@@ -19,13 +19,17 @@ NO_RESULT = ("ERROR", "CANCELLED")
 
 def call_key(agent_type: str, refs: dict[str, Any]) -> str:
     """Agent 종류와 참조로 만든 키. 참조: Replanning group_id·acting_unit_id, Coordination
-    phase·candidate_id(통지는 plan_revision), Event Response event_id."""
+    phase·candidate_id(통지는 plan_revision, 사전 확인은 need_ids), Event Response event_id."""
     names = {
         "REPLANNING": ("group_id", "acting_unit_id"),
-        "COORDINATION": ("phase", "candidate_id", "plan_revision"),
+        "COORDINATION": ("phase", "candidate_id", "plan_revision", "need_ids"),
         "EVENT_RESPONSE": ("event_id",),
     }[agent_type]
-    return ":".join([agent_type, *(str(refs.get(n)) for n in names if refs.get(n) is not None)])
+
+    def text(value: Any) -> str:
+        return ",".join(sorted(value)) if isinstance(value, list) else str(value)
+
+    return ":".join([agent_type, *(text(refs[n]) for n in names if refs.get(n) not in (None, []))])
 
 
 def _column(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...]) -> list[Any]:

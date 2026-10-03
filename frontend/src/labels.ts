@@ -97,6 +97,15 @@ export const REASON: Record<string, string> = {
   // 메인 도구의 거절 사유
   CHILD_RUN_OPEN: '부른 하위 Run이 아직 열려 있음',
   UNIT_NOT_IN_GROUP: '그 충돌 그룹에 작업이 없는 Unit',
+  UNIT_HAS_NO_MOVABLE_TASK: '그 Unit에 움직일 수 있는 작업이 없음',
+  // 사전 확인(담당자에게 대체 자원 허용을 묻기)의 거절 사유
+  NEED_NOT_FOUND: '지금 결과에 없는 필요한 것',
+  NOT_OWNER_CONSENT: '담당자 확인이 아닌 필요한 것',
+  TIME_AXIS_NOT_ASKABLE: '시간 축은 사전 확인 대상이 아님',
+  NO_VALUES: '물을 자원 값이 없음',
+  VALUE_DECLINED: '담당자가 이미 거절한 값',
+  ALREADY_CONSENTED: '이미 동의 범위에 있음',
+  ALREADY_ASKED: '같은 작업에 답을 기다리는 질문이 있음',
   GROUP_NOT_FOUND: '지금 없는 충돌 그룹',
   SAME_FACTS: '마지막 결과 뒤로 관련 사실이 바뀌지 않음',
   NEW_EVENT: '아직 보지 않은 사건이 있음',
@@ -326,6 +335,7 @@ export const ACTION_NAME: Record<string, string> = {
   LIST_ASSIGNABLE_RESOURCES: '사용 가능 자원 조회',
   TRY_ALTERNATIVE_RESOURCE: '대체 자원 시도',
   ASK_TASK_OWNER: '작업 담당자에게 확인 요청',
+  ASK_OWNER: '작업 담당자에게 사전 확인',
 }
 
 export const ROLE: Record<string, string> = {

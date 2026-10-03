@@ -2,7 +2,9 @@
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
 phase CONSULT(후보의 협의): SEND_CHANGE_REQUEST, WAIT_FOR_REPLIES, DRAFT_CONSTRAINT.
-phase NOTICE(확정 뒤 통지): SEND_NOTICE. 두 phase 모두 RETURN_RESULT.
+phase NOTICE(확정 뒤 통지): SEND_NOTICE.
+phase ASK(후보 없는 사전 확인): ASK_OWNER, WAIT_FOR_REPLIES. 메인이 넘긴 need마다 질문 하나다 (AG-09).
+모든 phase에 RETURN_RESULT.
 협의 완료는 서버가 계산하고, 이견은 담당자가 확인한 뒤에만 제약이 된다.
 """
 
@@ -17,7 +19,8 @@ from app.domain.needs import ResultFields
 AGENT_TYPE = "COORDINATION"
 GOAL = (
     "후보가 바꾸는 작업의 담당자와 협의해 동의 대기·이견 항목을 해소하고, 확정된 계획을 관련 담당자에게 "
-    "알린다. 협의 완료를 선언하지 않고, 이견을 담당자 확인 없이 제약으로 만들지 않는다."
+    "알린다. 후보가 없는 사전 확인에서는 맡은 확인을 담당자에게 묻고 답을 그대로 돌려준다. "
+    "협의 완료를 선언하지 않고, 이견을 담당자 확인 없이 제약으로 만들지 않는다."
 )
 
 MAX_STEPS = 12
@@ -57,10 +60,28 @@ class SendChangeRequest(Action):
     )
 
 
-class WaitForReplies(Action):
-    """보낸 변경 요청·제약 초안의 답을 기다린다. 답이 오면 다시 관찰한다."""
+class AskOwner(Action):
+    """작업 담당자에게 그 작업에 대체 자원을 써도 되는지 묻는다(후보 없는 사전 확인). 질문 내용(서버
+    문구)은 서버가 쓴다. 담당자가 수락하면 그 자원이 동의 범위에 들어가고 자원 축이 열린다."""
 
-    OPENS = "이 Run이 보낸 요청 중 답을 기다리는 변경 요청이나 확인 대기 중인 제약 초안이 있을 때"
+    OPENS = (
+        "사전 확인 단계에서, 맡은 확인 가운데 아직 묻지 않았고 지금도 물을 수 있는 것이 있을 때. 담당자가 "
+        "이미 거절한 값이거나 같은 작업에 답을 기다리는 질문이 있으면 받아들여지지 않는다"
+    )
+
+    need_id: str = Field(description="물을 확인의 need_id (맡은 확인 중 UNASKED인 것)")
+    message: str = Field(
+        min_length=1, max_length=TEXT_MAX, description="담당자에게 보이는 설명(Agent 설명으로 표시)"
+    )
+
+
+class WaitForReplies(Action):
+    """보낸 변경 요청·제약 초안·사전 확인 질문의 답을 기다린다. 답이 오면 다시 관찰한다."""
+
+    OPENS = (
+        "이 Run이 보낸 요청 중 답을 기다리는 변경 요청·사전 확인 질문이나 확인 대기 중인 제약 초안이 "
+        "있을 때"
+    )
 
 
 class DraftConstraint(Action):
@@ -96,15 +117,19 @@ class SendNotice(Action):
 
 
 class ReturnResult(Action, ResultFields):
-    """협의·통지 결과를 돌려주고 Run을 끝낸다. 협의·후보의 상태는 바꾸지 않는다. 맡은 일을 마쳤으면
-    DONE, 해결할 수 없는 상황(응답 불가, 해석할 수 없는 이견, 작업 고정 요구가 아닌 이견 등)이면
-    BLOCKED로 돌려주고 필요한 것을 길에 적는다."""
+    """협의·통지·사전 확인 결과를 돌려주고 Run을 끝낸다. 협의·후보의 상태는 바꾸지 않는다. 맡은 일을
+    마쳤으면 DONE, 해결할 수 없는 상황(응답 불가, 해석할 수 없는 이견, 작업 고정 요구가 아닌 이견 등)이면
+    BLOCKED로 돌려주고 필요한 것을 길에 적는다. 사전 확인의 답(수락한 값·거절·미응답)은 서버가 채운다."""
 
-    OPENS = "언제나 열려 있다"
+    OPENS = (
+        "언제나 열려 있다. 사전 확인 단계의 DONE은 맡은 확인마다 답을 받았거나 물을 수 없게 되었을 때만 "
+        "쓴다"
+    )
 
 
 ACTIONS: dict[str, type[Action]] = {
     "SEND_CHANGE_REQUEST": SendChangeRequest,
+    "ASK_OWNER": AskOwner,
     "WAIT_FOR_REPLIES": WaitForReplies,
     "DRAFT_CONSTRAINT": DraftConstraint,
     "SEND_NOTICE": SendNotice,
@@ -112,6 +137,7 @@ ACTIONS: dict[str, type[Action]] = {
 }
 FLOW = {
     "SEND_CHANGE_REQUEST": "CONTINUE",
+    "ASK_OWNER": "CONTINUE",
     "WAIT_FOR_REPLIES": "WAIT",
     "DRAFT_CONSTRAINT": "CONTINUE",
     "SEND_NOTICE": "CONTINUE",
@@ -126,8 +152,9 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
     REQUEST: 후보가 살아 있고 PENDING이며 이 Run의 변경 요청이 없는 항목.
     DRAFT: 이견(DECLINE + 사유)으로 답한 이 Run의 변경 요청 중 확인 대기 초안이 없는 것
            {message_id: {task_id, changed_axes}}.
-    WAIT: 답을 기다리는 변경 요청 또는 확인 대기 초안이 있음.
+    WAIT: 답을 기다리는 변경 요청·사전 확인 질문 또는 확인 대기 초안이 있음.
     NOTICE: 아직 알리지 않은 통지 대상 {actor_id: task_ids}.
+    ASK: 사전 확인에서 아직 묻지 않았고 지금 물을 수 있는 need_id.
     """
     live = bool((obs.get("candidate") or {}).get("live"))
     request, draft, waiting = [], {}, False
@@ -152,10 +179,14 @@ def choices(obs: dict[str, Any]) -> dict[str, Any]:
                     "changed_axes": item["changed_axes"],
                 }
     notice = {t["actor_id"]: list(t["task_ids"]) for t in obs["notice_targets"] if not t["sent"]}
-    return {"REQUEST": request, "DRAFT": draft, "WAIT": waiting, "NOTICE": notice}
+    asks = obs.get("asks", [])
+    waiting = waiting or any(a["status"] == "OPEN" for a in asks)
+    ask = [a["need_id"] for a in asks if a["status"] == "UNASKED"]
+    return {"REQUEST": request, "DRAFT": draft, "WAIT": waiting, "NOTICE": notice, "ASK": ask}
 
 
-SKILLS = ("CONSULT", "NOTIFY", "WRAP_UP")
+SKILLS = ("CONSULT", "PRE_CONFIRM", "NOTIFY", "WRAP_UP")
+ASK_PENDING = ("UNASKED", "OPEN")  # 아직 물을 수 있거나 답을 기다리는 사전 확인
 OPEN_ITEM = ("PENDING", "OBJECTED", "OBJECTION_DRAFT_PENDING")
 
 
@@ -165,6 +196,7 @@ def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
     consult = live and any(i["status"] in OPEN_ITEM for i in obs["items"])
     return {
         "has_consult_item": consult,
+        "has_ask_need": any(a["status"] in ASK_PENDING for a in obs.get("asks", [])),
         "has_unsent_notice": any(not t["sent"] for t in obs["notice_targets"]),
     }
 
@@ -184,6 +216,8 @@ def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     if c["REQUEST"]:
         out["SEND_CHANGE_REQUEST"] = {"task_id": sorted(c["REQUEST"])}
+    if c["ASK"]:
+        out["ASK_OWNER"] = {"need_id": list(c["ASK"])}  # 관찰 순서(담당자별) 그대로
     if c["WAIT"]:
         out["WAIT_FOR_REPLIES"] = {}
     if c["DRAFT"]:
@@ -198,6 +232,10 @@ def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "task_ids": sorted({t for ts in c["NOTICE"].values() for t in ts}),
         }
     out["RETURN_RESULT"] = {}
+    if obs.get("phase") == "ASK":
+        # 사전 확인의 DONE은 맡은 확인마다 답을 받았거나 물을 수 없을 때만 유효하다(사실 조건)
+        settled = not any(a["status"] in ASK_PENDING for a in obs.get("asks", []))
+        out["RETURN_RESULT"] = {"status": ["DONE", "BLOCKED"] if settled else ["BLOCKED"]}
     return out
 
 

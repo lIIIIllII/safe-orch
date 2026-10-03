@@ -16,14 +16,14 @@ from app.agents.observe import budget_remaining
 from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 from app.domain.eligibility import exclusion_reasons
-from app.domain.groups import conflict_groups
+from app.domain.groups import ConflictGroup, conflict_groups, movable_task_ids
 from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store.repos.consultations import candidate_state
 from app.store.repos.decisions import list_case_rejections
-from app.store.repos.messages import list_case_replies
+from app.store.repos.messages import declined_values, open_owner_asks
 from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.runs import get_run, list_attempts, list_steps, tried_search_keys
 from app.store.repos.site import get_site
@@ -132,6 +132,70 @@ def try_search_key(
     except SearchSpecError:
         return None
     return spec_.search_key
+
+
+FACT_BY_EXCLUSION = {"NOT_ALLOWED": "PERMISSION", "NO_AVAILABILITY": "AVAILABILITY"}
+
+
+def openers(
+    conn: sqlite3.Connection,
+    pack: LoadedPack,
+    run: AgentRun,
+    facts: SnapshotContent,
+    group: ConflictGroup | None,
+    eligible: dict[str, dict[str, Any]],
+    all_infeasible: bool,
+) -> list[dict[str, Any]]:
+    """열 수 있는 것 (서버가 계산한 사실, need 모양). 길은 모델이 엮는다 (AG-23).
+
+    - 담당자 확인(OWNER_CONSENT): 자원 축이 확인되지 않았고 제약으로 고정되지 않은 주체 Unit 작업과,
+      물을 수 있는 적격 대체 자원. 담당자가 그 작업 revision에 거절한 값과 답을 기다리는 질문이 있는
+      작업은 뺀다 (AG-09).
+    - 다른 Unit(OTHER_UNIT): 이 그룹에 움직일 수 있는 작업을 가진 다른 Unit.
+    - 사실(FACT_CHANGE): 풀 초과 충돌의 풀(QUANTITY), 그룹 안 주체 작업의 자원 제외 사유(권한 없음 →
+      PERMISSION, 가용 없음 → AVAILABILITY), 모든 범위가 INFEASIBLE인 요청 작업의 시간창(WINDOW).
+    """
+    unit = run.acting_unit_id
+    tasks = facts.task_map()
+    frozen = {(c.task_id, axis) for c in facts.constraints for axis in c.frozen_axes}
+    waiting = open_owner_asks(conn, pack.site_id)
+    out: list[dict[str, Any]] = []
+    for tid in sorted(eligible):
+        t = tasks[tid]
+        if t.movable.resource or (tid, "RESOURCE") in frozen or tid in waiting:
+            continue
+        declined = declined_values(conn, pack.site_id, tid, t.revision)
+        values = [v for v in eligible[tid]["alternatives"] if v not in declined]
+        if values:
+            out.append(
+                {"kind": "OWNER_CONSENT", "task_id": tid, "axis": "RESOURCE", "values": values}
+            )
+    if group is None:
+        return out
+    for other in sorted(group.units):
+        if other != unit and movable_task_ids(group, other, tasks, facts.constraints):
+            out.append({"kind": "OTHER_UNIT", "group_id": group.group_id, "unit_id": other})
+    changes: list[dict[str, Any]] = []
+    for c in group.conflicts:
+        if c.pool is not None:
+            changes.append({"kind": "FACT_CHANGE", "field": "QUANTITY", "pool_id": c.pool.pool_id})
+    in_plan = {a.task_id for a in facts.plan.assignments}
+    for tid in sorted(group.units.get(unit, ())):
+        t = tasks[tid]
+        if t.required_resource_type and (tid, "RESOURCE") not in frozen:
+            for r in assignable_resources(facts, t, unit)["excluded"]:
+                for e in r["reasons"]:
+                    field = FACT_BY_EXCLUSION.get(e["reason"])
+                    if field is not None:
+                        changes.append(
+                            {"kind": "FACT_CHANGE", "field": field, "resource_id": r["resource_id"]}
+                        )
+        if all_infeasible and tid not in in_plan:
+            changes.append({"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": tid})
+    for change in changes:
+        if change not in out:
+            out.append(change)
+    return out
 
 
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:
@@ -249,6 +313,12 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             ],
         }
     hidden = {"eligible": eligible, "done_ready": done_ready}
+    # 모든 범위를 계산했고 전부 해가 없다 (요청 작업의 시간창이 바뀌어야 열린다)
+    by_key = {a["search_key"]: a for a in attempts if not a["try_resources"]}
+    all_infeasible = bool(keys) and all(
+        ((by_key.get(k) or {}).get("stage1") or {}).get("status") == "INFEASIBLE"
+        for k in keys.values()
+    )
 
     data = {
         "run": {
@@ -287,8 +357,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "untried_remaining": bool(untried),
         },
         "assignable_resources": listings,
-        # 이 Case가 담당자에게 보낸 질문과 답. comment는 인용 데이터다
-        "human_replies": list_case_replies(conn, run.case_id),
+        # 열 수 있는 것: 지금 계산으로는 열 수 없지만 충족되면 해가 열릴 수 있는 것 (서버 계산)
+        "openers": openers(conn, pack, run, facts, group, eligible, all_infeasible),
         "last_guard": last_guard,
         "recent_steps": recent,
         "budget_remaining": budget_remaining(run, spec.SPEC),

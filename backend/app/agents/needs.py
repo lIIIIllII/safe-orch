@@ -15,9 +15,10 @@ from app.domain.models import AgentRun, Snapshot
 from app.domain.needs import FACT_TARGET, Need, Path
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
+from app.store.repos.consents import list_current_consents
 from app.store.repos.decisions import list_constraints
 from app.store.repos.events import get_event
-from app.store.repos.messages import get_message, list_case_replies
+from app.store.repos.messages import declined_values, get_message
 from app.store.repos.records import get_candidate
 from app.store.repos.resources import list_pools, list_resources
 from app.store.repos.site import list_actors
@@ -63,14 +64,10 @@ class _Facts:
             }
         return self._group_units
 
-    def declined(self, task_id: str, axis: str) -> set[str]:
-        """이 Case에서 그 작업·축에 담당자가 거절한 값."""
-        return {
-            v
-            for h in list_case_replies(self.conn, self.run.case_id)
-            if (h["task_id"], h["axis"], h["decision"]) == (task_id, axis, "DECLINE")
-            for v in h["allowed_values"]
-        }
+    def declined(self, task_id: str) -> set[str]:
+        """그 작업의 지금 revision에 담당자가 거절한 자원 값 (현장 전체, AG-09)."""
+        task = self.tasks[task_id]
+        return declined_values(self.conn, self.pack.site_id, task_id, task.revision)
 
     def has_task(self, task_id: str) -> bool:
         """현재 계산 대상 작업, 또는 이 Intake Run이 접수 중인 작업."""
@@ -91,7 +88,7 @@ def _check(f: _Facts, need: Need) -> str | None:
             resource = f.resources.get(rid)
             if resource is None or exclusion_reasons(task, resource, task.unit_id):
                 return "RESOURCE_NOT_ELIGIBLE"
-        if set(need.values) & f.declined(task.task_id, "RESOURCE"):
+        if set(need.values) & f.declined(task.task_id):
             return "VALUE_DECLINED"
         return None
     if need.kind == "OTHER_UNIT":
@@ -158,4 +155,37 @@ def invalid_needs(
             reason = _check(facts, need)
             if reason is not None:
                 out.append({"path": i, "need": j, "kind": need.kind, "reason": reason})
+    return out
+
+
+def ask_refusals(
+    conn: sqlite3.Connection, pack: LoadedPack, run: AgentRun, needs: list[Need]
+) -> list[str | None]:
+    """need마다 담당자 사전 확인으로 물을 수 없는 사유(물을 수 있으면 None). 메인의 호출 유효성과
+    Coordination의 ASK_OWNER 유효성이 같이 쓴다. 사실 조건만 본다.
+
+    물을 수 있는 것은 자원 축 OWNER_CONSENT뿐이다: 시간 축은 Solver가 움직이고 동의는 후보 협의에서
+    받는다. 값이 지금도 유효하고(need 검증과 같다) 이미 동의 범위에 들어 있지 않아야 한다.
+    """
+    facts = _Facts(conn, pack, run)
+    consented: dict[str, set[str]] = {}
+    for c in list_current_consents(conn, pack.site_id):
+        if c.axis == "RESOURCE":
+            consented.setdefault(c.task_id, set()).update(c.scope.get("resource_ids", []))
+    out: list[str | None] = []
+    for need in needs:
+        if need.kind != "OWNER_CONSENT":
+            out.append("NOT_OWNER_CONSENT")
+        elif need.axis != "RESOURCE":
+            out.append("TIME_AXIS_NOT_ASKABLE")
+        elif not need.values:
+            out.append("NO_VALUES")
+        elif (reason := _check(facts, need)) is not None:
+            out.append(reason)
+        elif facts.tasks[need.task_id or ""].movable.resource and set(need.values) <= consented.get(
+            need.task_id or "", set()
+        ):
+            out.append("ALREADY_CONSENTED")
+        else:
+            out.append(None)
     return out

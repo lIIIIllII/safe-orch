@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     # 끄면 사건은 기록만 되고 메인이 뜨지 않는다(전문 Agent는 메인이 부를 때만 돈다).
     main_auto_start: bool = True
     # 메인 Agent Budget: step 수와 전문 Agent 호출 수 (LLM 시도는 step × 2)
-    main_max_steps: int = 12
-    main_max_agent_calls: int = 8
+    main_max_steps: int = 14
+    main_max_agent_calls: int = 10
     # 현장의 지금을 고정한다(ISO 8601, 오프셋 필수). 비면 실제 시계. 읽는 곳은 app.clock.site_now 하나다 (ST-17)
     site_now: datetime | None = None
 

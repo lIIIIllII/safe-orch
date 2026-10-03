@@ -28,7 +28,7 @@ MAX_AGENT_CALLS = get_settings().main_max_agent_calls
 RECURSION_LIMIT = MAX_STEPS * 5 + 10
 SUMMARY_MAX_DECISION = 200
 
-CALL_ARGS = ("group_id", "acting_unit_id", "phase", "candidate_id", "event_id")
+CALL_ARGS = ("group_id", "acting_unit_id", "phase", "candidate_id", "event_id", "need_ids")
 
 
 class Action(BaseModel):
@@ -47,7 +47,7 @@ class Action(BaseModel):
 
 
 class CallAgent(Action):
-    """전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다. 재계획(REPLANNING)은 충돌 그룹과 그 그룹에 작업을 가진 Unit, 협의·통지(COORDINATION)는 단계와 후보, 신고 대응(EVENT_RESPONSE)은 신고를 가리킨다."""
+    """전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다. 재계획(REPLANNING)은 충돌 그룹과 그 그룹에 작업을 가진 Unit, 협의·통지(COORDINATION)는 단계와 후보, 담당자 사전 확인(COORDINATION, 단계 ASK)은 막힌 결과의 필요한 것 ID, 신고 대응(EVENT_RESPONSE)은 신고를 가리킨다."""
 
     OPENS = (
         "지금 받아들여지는 호출(calls)이 있고 전문 Agent 호출 수가 남아 있을 때. 열린 하위 Run이 있거나, "
@@ -62,11 +62,19 @@ class CallAgent(Action):
     acting_unit_id: str | None = Field(
         default=None, description="재계획의 주체 Unit. 그 그룹에 작업을 가진 Unit (REPLANNING)"
     )
-    phase: Literal["CONSULT", "NOTICE"] | None = Field(
-        default=None, description="CONSULT 후보의 협의, NOTICE 확정 뒤 통지 (COORDINATION)"
+    phase: Literal["CONSULT", "NOTICE", "ASK"] | None = Field(
+        default=None,
+        description="CONSULT 후보의 협의, NOTICE 확정 뒤 통지, ASK 후보 없는 담당자 사전 확인 (COORDINATION)",
     )
     candidate_id: str | None = Field(default=None, description="협의·통지할 후보 ID (COORDINATION)")
     event_id: str | None = Field(default=None, description="대응할 신고 ID (EVENT_RESPONSE)")
+    need_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "사전 확인할 필요한 것의 need_id (COORDINATION, 단계 ASK). 지금 물을 수 있는 담당자 확인"
+            "(OWNER_CONSENT)의 ID만. 여러 길·여러 그룹의 ID를 한 번에 담을 수 있다"
+        ),
+    )
 
 
 class Wait(Action):
@@ -123,7 +131,7 @@ def open_skills(obs: dict[str, Any]) -> list[str]:
 def call_refs(action: CallAgent) -> dict[str, Any]:
     """호출의 참조(관찰의 calls 항목과 같은 모양)."""
     out: dict[str, Any] = {"agent": action.agent}
-    out.update({k: v for k in CALL_ARGS if (v := getattr(action, k)) is not None})
+    out.update({k: v for k in CALL_ARGS if (v := getattr(action, k)) not in (None, [])})
     return out
 
 
@@ -137,7 +145,9 @@ def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
     if calls and obs["budget_remaining"]["agent_calls"] > 0:
         limits: dict[str, Any] = {"agent": sorted({c["agent"] for c in calls})}
         for arg in CALL_ARGS:
-            values = sorted({c[arg] for c in calls if c.get(arg) is not None})
+            found = [c[arg] for c in calls if c.get(arg) is not None]
+            # need_ids는 목록이다: 받아들여지는 ID 가운데 일부만 골라 넘길 수 있다
+            values = sorted({v for x in found for v in (x if isinstance(x, list) else [x])})
             if values:
                 limits[arg] = values
         out["CALL_AGENT"] = limits
@@ -156,8 +166,10 @@ def available_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _enum(prop: dict[str, Any], allowed: list[str]) -> None:
-    """선택 인자(str | None)면 문자열 쪽에만 enum을 건다."""
-    if "anyOf" in prop:
+    """선택 인자(str | None)면 문자열 쪽에만, 목록 인자면 항목에 enum을 건다."""
+    if prop.get("type") == "array":
+        prop["items"]["enum"] = list(allowed)
+    elif "anyOf" in prop:
         for branch in prop["anyOf"]:
             if branch.get("type") == "string":
                 branch["enum"] = list(allowed)

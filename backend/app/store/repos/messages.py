@@ -164,26 +164,54 @@ def _joined(r: dict[str, Any]) -> dict[str, Any]:
     return r
 
 
-def list_case_replies(conn: sqlite3.Connection, case_id: str) -> list[dict[str, Any]]:
-    """이 Case의 Run이 보낸 질문과 답 (Observation human_replies). comment는 인용 필드로만."""
-    out = []
+def declined_values(
+    conn: sqlite3.Connection, site_id: str, task_id: str, task_revision: int
+) -> set[str]:
+    """그 작업 revision에 담당자가 허용을 거절한 자원 값. 현장 전체에서 본다(Run·Case를 가리지 않는다,
+    AG-09). 작업 revision이 바뀌면 다시 물을 수 있다. 취소된 요청에 온 늦은 답은 세지 않는다 (ST-16)."""
+    out: set[str] = set()
     for r in rows(
         conn,
-        _JOINED + " JOIN agent_run r ON r.run_id = m.run_id"
-        # 같은 Case의 Coordination 메시지는 넣지 않는다(ASK 조건과 관찰에 섞이지 않게)
-        " WHERE r.case_id = ? AND r.agent_type = 'REPLANNING' ORDER BY m.rowid",
-        (case_id,),
+        "SELECT p.payload FROM message m JOIN proposal p ON p.proposal_id = m.proposal_id"
+        " WHERE m.site_id = ? AND p.type = 'MOVABILITY' AND p.target_task_id = ?"
+        " AND p.base_task_revision = ? AND m.status = 'ANSWERED'"
+        " AND json_extract(m.reply, '$.decision') = 'DECLINE'",
+        (site_id, task_id, task_revision),
+    ):
+        out.update((loads(r["payload"]) or {}).get("allowed_values", []))
+    return out
+
+
+def open_owner_asks(conn: sqlite3.Connection, site_id: str) -> set[str]:
+    """답을 기다리는 자원 허용 질문이 있는 작업."""
+    return {
+        r["target_task_id"]
+        for r in rows(
+            conn,
+            "SELECT p.target_task_id FROM message m JOIN proposal p"
+            " ON p.proposal_id = m.proposal_id"
+            " WHERE m.site_id = ? AND p.type = 'MOVABILITY' AND m.status = 'OPEN'",
+            (site_id,),
+        )
+    }
+
+
+def list_owner_asks(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
+    """이 Run이 보낸 사전 확인 질문과 답 (need별). comment는 인용 필드로만."""
+    out = []
+    for r in rows(
+        conn, _JOINED + " WHERE m.run_id = ? AND p.type = 'MOVABILITY' ORDER BY m.rowid", (run_id,)
     ):
         r = _joined(r)
         reply = r["reply"] or {}
         out.append(
             {
                 "message_id": r["message_id"],
+                "need_id": r["payload"].get("need_id"),
                 "task_id": r["target_task_id"],
-                "axis": r["payload"].get("axis"),
-                "allowed_values": r["payload"].get("allowed_values", []),
                 "status": r["status"],
                 "decision": reply.get("decision"),
+                "values": reply.get("values", []),
                 "quoted_comment": reply.get("comment"),
             }
         )

@@ -7,7 +7,16 @@ import uuid
 import pytest
 from conftest import add_run
 from langchain_core.messages import AIMessage
-from scripted import Router, call, escalate, field_judgments, solve
+from scripted import (
+    Router,
+    ask_owner,
+    call,
+    done,
+    escalate,
+    field_judgments,
+    solve,
+    wait_answers,
+)
 
 from app.store import db
 from evals import compare, judge
@@ -80,23 +89,14 @@ def _draft_time():
     )
 
 
-def _ask_a():
-    return call(
-        "ASK_TASK_OWNER",
-        task_id="A",
-        axis="RESOURCE",
-        allowed_values=["SITE-CR-01"],
-        question="대체 크레인을 써도 될까요?",
-    )
-
-
 S3_REPLANNING = [
     solve("L0"),
     solve("L1"),
     call("LIST_ASSIGNABLE_RESOURCES", task_id="A"),
-    _ask_a(),
-    escalate("C 담당자 이견, A 대체 자원 거절"),
+    escalate("C 담당자 이견, A 대체 자원은 담당자 확인이 필요하다"),
 ]
+# 메인이 부른 사전 확인: A 담당자에게 대체 자원을 묻고 답을 그대로 돌려준다
+S3_ASK = [ask_owner(), wait_answers(), done("사전 확인 결과")]
 
 
 # ── 실행기: 통과 스크립트 ──────────────────────────────────────
@@ -174,6 +174,7 @@ def test_s3_passes_with_scripted_model(pack):
             call("WAIT_FOR_REPLIES"),
             _draft_time,
             call("WAIT_FOR_REPLIES"),
+            *S3_ASK,
         ],
     )
     r = run_once(_scn(pack, "S3"), pack.name, router.factory())
@@ -191,15 +192,21 @@ def test_s3_passes_with_scripted_model(pack):
         ("CONSTRAINT_DRAFT", "foreman_a2", "ACCEPT"),
         ("MOVABILITY", "planner_a", "DECLINE"),
     ]
-    ending = r["texts"]["endings"][-1]["result"]
-    assert (ending["status"], ending["summary"]) == ("BLOCKED", "C 담당자 이견, A 대체 자원 거절")
+    # 담당자가 대체 자원을 거절하면 재계획에 바뀐 사실이 없다: 메인은 다시 부르지 않고 이관한다
+    ending = [e["result"] for e in r["texts"]["endings"] if e["agent"] == "REPLANNING"][-1]
+    assert (ending["status"], ending["summary"]) == (
+        "BLOCKED",
+        "C 담당자 이견, A 대체 자원은 담당자 확인이 필요하다",
+    )
+    assert [x["agent"] for x in r["metrics"]["requests"]] == ["COORDINATION"] * 3
 
 
 def test_s3_report_path_gets_one_plain_rejection(pack):
     """초안 없이 보고로 끝나면 Supervisor가 제약 없는 거절을 한 번 한다. 그 뒤 이관하면 통과다."""
     report = _report("C 담당자 이견")
     router = Router(
-        replanning=S3_REPLANNING, coordination=[_request_c(), call("WAIT_FOR_REPLIES"), report]
+        replanning=S3_REPLANNING,
+        coordination=[_request_c(), call("WAIT_FOR_REPLIES"), report, *S3_ASK],
     )
     r = run_once(_scn(pack, "S3"), pack.name, router.factory())
     assert (r["end"], r["grade"]) == ("DONE", "PASS")

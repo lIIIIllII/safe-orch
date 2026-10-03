@@ -36,8 +36,8 @@ interface Props {
 }
 
 const BUDGET_MAX: Record<string, Record<string, number>> = {
-  MAIN: { steps: 12, agent_calls: 8 },
-  REPLANNING: { steps: 15, solver_calls: 6, human_rounds: 2 },
+  MAIN: { steps: 14, agent_calls: 10 },
+  REPLANNING: { steps: 15, solver_calls: 6 },
 }
 
 /** 메인 Run 바로 아래에 그 메인이 부른 하위 Run을 둔다(서버가 준 순서는 그대로). */
@@ -290,18 +290,25 @@ function FieldsResult({ tr }: { tr: Record<string, unknown> }) {
 
 /** 담당자 확인 요청: 메시지와 서버 문구. 모델의 question은 모델 블록으로 따로 둔다. */
 function AskResult({ tr, args }: { tr: Record<string, unknown>; args: Record<string, unknown> }) {
+  // 사전 확인(ASK_OWNER)은 need 하나를 묻는다. 옛 기록(ASK_TASK_OWNER)은 작업·축·허용 값을 인자로 가졌다
   const values = Array.isArray(args.allowed_values) ? (args.allowed_values as string[]) : []
+  const text = typeof args.message === 'string' ? args.message : args.question
   return (
     <>
       <p>
-        메시지 <code>{String(tr.message_id)}</code> → {String(tr.to_actor_id)} · 작업 {String(args.task_id)} ·{' '}
-        {AXIS[String(args.axis)] ?? String(args.axis)} 축 · 허용 값 {values.join(', ')}
+        메시지 <code>{String(tr.message_id)}</code> → {String(tr.to_actor_id)}
+        {typeof args.task_id === 'string' && (
+          <>
+            {' '}
+            · 작업 {args.task_id} · {AXIS[String(args.axis)] ?? String(args.axis)} 축 · 허용 값 {values.join(', ')}
+          </>
+        )}
       </p>
       <p className="ask-body">서버 문구: {String(tr.body)}</p>
-      {typeof args.question === 'string' && (
+      {typeof text === 'string' && (
         <div className="model-block">
           <div className="block-label">Agent 설명(모델 작성)</div>
-          <p>{args.question}</p>
+          <p>{text}</p>
         </div>
       )}
     </>
@@ -404,7 +411,9 @@ function StepCard({ s }: { s: AgentStep }) {
             <ListResult tr={tr} />
           )}
           {name === 'ASK_CLARIFICATION' && isRecord(tr.fields) && <FieldsResult tr={tr} />}
-          {name === 'ASK_TASK_OWNER' && 'message_id' in tr && <AskResult tr={tr} args={args} />}
+          {(name === 'ASK_OWNER' || name === 'ASK_TASK_OWNER') && 'message_id' in tr && (
+            <AskResult tr={tr} args={args} />
+          )}
           {name === 'TRY_ALTERNATIVE_RESOURCE' && isRecord(tr.try_resources) && (
             <p>
               대체 자원 시도{' '}

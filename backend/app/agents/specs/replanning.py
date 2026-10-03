@@ -1,8 +1,9 @@
 """Replanning AgentSpec. 순수 데이터: Goal, Action 스키마, Budget, 사용 조건.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터(untried_levels 등)만 보고 계산한다.
-Action: SOLVE_WITH_SCOPE, LIST_ASSIGNABLE_RESOURCES, TRY_ALTERNATIVE_RESOURCE, ASK_TASK_OWNER,
-RETURN_RESULT. 순서는 스킬 지침에 있고, 여기 조건은 사실·유효성·Budget뿐이다 (AG-01).
+Action: SOLVE_WITH_SCOPE, LIST_ASSIGNABLE_RESOURCES, TRY_ALTERNATIVE_RESOURCE, RETURN_RESULT.
+사람 도구는 없다: 담당자 확인은 Coordination 한 창구로만 한다 (AG-09).
+순서는 스킬 지침에 있고, 여기 조건은 사실·유효성·Budget뿐이다 (AG-01).
 모듈 이름(GOAL, ACTIONS, tool_schemas 등)은 그대로 두고, 그 값으로 SPEC(AgentSpec)을 만든다.
 """
 
@@ -22,7 +23,6 @@ GOAL = (
 
 MAX_STEPS = 15
 MAX_LLM_ATTEMPTS = 30  # step × 2 (전송 재시도 1회 계상)
-MAX_HUMAN_ROUNDS = 2
 MAX_SOLVER_CALLS = 6
 RECURSION_LIMIT = MAX_STEPS * 5 + 10
 SUMMARY_MAX = 200
@@ -59,7 +59,7 @@ class SolveWithScope(Action):
 
 class ListAssignableResources(Action):
     """작업에 쓸 수 있는 자원을 조회한다(유형·사용 권한·가용 구간 기준). 결과는 자원 사실이 같은 동안
-    유효하다. 대체 자원 시도와 담당자 확인 요청은 서버가 같은 기준으로 쓸 수 있는 자원만 받는다."""
+    유효하다. 대체 자원 시도는 서버가 같은 기준으로 쓸 수 있는 자원만 받는다."""
 
     OPENS = (
         "필요한 자원이 있고 자원 축이 확인된 제약으로 고정되지 않은 작업을 현재 자원 사실에서 "
@@ -70,11 +70,11 @@ class ListAssignableResources(Action):
 
 
 class TryAlternativeResource(Action):
-    """충돌 당사자 범위(L0)에 대체 자원 하나를 더해 CP-SAT로 계산한다. 자원 축이 확인된 작업에만 쓸 수
-    있다. 해가 있으면 후보가 등록되고 검증을 기다린다."""
+    """충돌 당사자 범위(L0)에 대체 자원 하나를 더해 CP-SAT로 계산한다. 자원 축이 열린 작업(담당자가
+    대체 자원을 허용한 작업)에만 쓸 수 있다. 해가 있으면 후보가 등록되고 검증을 기다린다."""
 
     OPENS = (
-        "자원 축이 확인된(담당자 동의) 작업에 그 작업이 쓸 수 있는 아직 시도하지 않은 대체 자원이 있고 "
+        "자원 축이 열린(담당자 동의) 작업에 그 작업이 쓸 수 있는 아직 시도하지 않은 대체 자원이 있고 "
         "Solver 호출이 남아 있을 때"
     )
 
@@ -82,32 +82,14 @@ class TryAlternativeResource(Action):
     resource_id: str = Field(description="시도할 대체 자원 (그 작업이 쓸 수 있는 자원)")
 
 
-class AskTaskOwner(Action):
-    """작업 담당자에게 이동 축(자원)을 열어 줄지 묻고 답을 기다린다. 담당자가 수락하면 그 자원이 동의
-    범위에 들어가고 자원 축이 확인된다."""
-
-    OPENS = (
-        "자원 축이 미확인인 작업에 현재 자원 말고 담당자가 거절하지 않은 쓸 수 있는 대체 자원이 있고, "
-        "같은 작업·축의 답을 기다리는 질문이 없으며, 사람 확인 라운드가 남아 있을 때"
-    )
-
-    task_id: str = Field(description="확인을 요청할 작업")
-    axis: Literal["RESOURCE"] = Field(description="확인할 이동 축")
-    allowed_values: list[str] = Field(
-        min_length=1,
-        description="허용을 요청할 자원 (그 작업이 쓸 수 있는 자원에서 현재 자원을 뺀 것)",
-    )
-    question: str = Field(min_length=1, description="담당자에게 보일 설명 (한국어)")
-
-
 class ReturnResult(Action, ResultFields):
     """결과를 돌려주고 Run을 끝낸다. 검증을 통과한 살아 있는 후보가 있으면 DONE으로 돌려준다(승인·거절은
-    사람이 하고 그 결과는 이 Run이 받지 않는다). 탐색 범위 확대, 자원 조회, 대체 자원 시도, 담당자
-    확인으로 열 수 있는 대안이 남아 있지 않을 때만 BLOCKED로 돌려주고, 시도한 범위와 결과를 요약에,
-    무엇이 풀리면 해가 열리는지 알면 길마다 필요한 것을 적는다."""
+    사람이 하고 그 결과는 이 Run이 받지 않는다). 탐색 범위 확대, 자원 조회, 대체 자원 시도로 열 수 있는
+    대안이 남아 있지 않을 때만 BLOCKED로 돌려주고, 시도한 범위와 결과를 요약에, 무엇이 충족되면 해가
+    열리는지를 길마다 필요한 것으로 적는다(담당자 확인, 다른 Unit, 사실 변경)."""
 
     OPENS = (
-        "언제나 열려 있다. DONE은 검증을 통과한 살아 있는 후보가 있을 때만, BLOCKED는 조회·확인으로 열 수 "
+        "언제나 열려 있다. DONE은 검증을 통과한 살아 있는 후보가 있을 때만, BLOCKED는 계산·조회로 열 수 "
         "있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
     )
 
@@ -116,19 +98,17 @@ ACTIONS: dict[str, type[Action]] = {
     "SOLVE_WITH_SCOPE": SolveWithScope,
     "LIST_ASSIGNABLE_RESOURCES": ListAssignableResources,
     "TRY_ALTERNATIVE_RESOURCE": TryAlternativeResource,
-    "ASK_TASK_OWNER": AskTaskOwner,
     "RETURN_RESULT": ReturnResult,
 }
 FLOW = {
     "SOLVE_WITH_SCOPE": "CANDIDATE_OR_CONTINUE",
     "LIST_ASSIGNABLE_RESOURCES": "CONTINUE",
     "TRY_ALTERNATIVE_RESOURCE": "CANDIDATE_OR_CONTINUE",
-    "ASK_TASK_OWNER": "WAIT",
     "RETURN_RESULT": "DONE",
 }
 
 
-SKILLS = ("ASSESS", "BUILD_CANDIDATE", "APPLY_REJECTION", "ASK_OWNER_TEMP", "WRAP_UP")
+SKILLS = ("ASSESS", "BUILD_CANDIDATE", "APPLY_REJECTION", "WRAP_UP")
 
 
 def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
@@ -136,10 +116,6 @@ def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
     return {
         "has_conflict": bool(obs["conflicts"]),
         "has_rejection": bool(obs["rejections"]) or bool(obs["constraints"]),
-        "has_unconfirmed_axis": any(
-            t["required_resource_type"] and not t["movable"]["resource"]
-            for t in obs["acting_tasks"]
-        ),
     }
 
 
@@ -155,32 +131,17 @@ def choices(obs: dict[str, Any], hidden: dict[str, Any] | None = None) -> dict[s
     자원 조회를 했는지는 보지 않는다.
     LIST: 필요 자원이 있고 RESOURCE 축이 제약으로 막히지 않았으며 같은 자원 사실에서 아직 조회하지 않은 작업.
     TRY: 자원 축 허용(movable.resource ∧ RESOURCE 제약 없음) 작업의 미시도 대체 자원.
-    ASK: 자원 축 미확인 ∧ RESOURCE 제약 없음 ∧ 같은 작업·축의 열린 질문 없음, 값은 대체 자원 −
-    이 Case에서 담당자가 거절(DECLINE)한 값. 거절당한 질문을 같은 사람에게 다시 보내지 않는다.
     """
     eligible = (hidden or {}).get("eligible", {})
     acting = {t["task_id"]: t for t in obs["acting_tasks"]}
     frozen = {(c["task_id"], axis) for c in obs["constraints"] for axis in c["frozen_axes"]}
     listed = {r["task_id"] for r in obs["assignable_resources"] if r["task_id"] in acting}
-    open_asks = {(h["task_id"], h["axis"]) for h in obs["human_replies"] if h["status"] == "OPEN"}
-    declined = {
-        (h["task_id"], h["axis"], v)
-        for h in obs["human_replies"]
-        if h["decision"] == "DECLINE"
-        for v in h["allowed_values"]
-    }
     try_: dict[str, list[str]] = {}
-    ask: dict[str, list[str]] = {}
     for tid, e in eligible.items():
         if tid not in acting or (tid, "RESOURCE") in frozen:
             continue
-        if acting[tid]["movable"]["resource"]:
-            if e["untried"]:
-                try_[tid] = list(e["untried"])
-        elif (tid, "RESOURCE") not in open_asks:
-            values = [v for v in e["alternatives"] if (tid, "RESOURCE", v) not in declined]
-            if values:
-                ask[tid] = values
+        if acting[tid]["movable"]["resource"] and e["untried"]:
+            try_[tid] = list(e["untried"])
     return {
         "LIST": [
             tid
@@ -188,7 +149,6 @@ def choices(obs: dict[str, Any], hidden: dict[str, Any] | None = None) -> dict[s
             if t["required_resource_type"] and (tid, "RESOURCE") not in frozen and tid not in listed
         ],
         "TRY": try_,
-        "ASK": ask,
     }
 
 
@@ -211,12 +171,6 @@ def valid_actions(
         out["TRY_ALTERNATIVE_RESOURCE"] = {
             "task_id": sorted(c["TRY"]),
             "resource_id": _union(c["TRY"]),
-        }
-    if c["ASK"] and budget["human_rounds"] > 0:
-        out["ASK_TASK_OWNER"] = {
-            "task_id": sorted(c["ASK"]),
-            "axis": ["RESOURCE"],
-            "allowed_values": _union(c["ASK"]),
         }
     # DONE은 검증을 통과한 살아 있는 후보가 있을 때만 유효하다(사실 조건)
     ready = bool((hidden or {}).get("done_ready"))
@@ -259,7 +213,6 @@ SPEC = AgentSpec(
     budget={
         "steps": MAX_STEPS,
         "llm_attempts": MAX_LLM_ATTEMPTS,
-        "human_rounds": MAX_HUMAN_ROUNDS,
         "solver_calls": MAX_SOLVER_CALLS,
     },
     recursion_limit=RECURSION_LIMIT,

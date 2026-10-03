@@ -131,7 +131,8 @@ def _report(pack, text=DELAY, event_type="DELAY"):
 
 
 def _r1(pack):
-    """기본안 B로 R1(Beta 확정)까지: 폼 A → Alpha → 구조화 거절(C 고정) → LIST → ASK → 수락 → TRY → 승인."""
+    """기본안 B로 R1(Beta 확정)까지: 폼 A → Alpha → 구조화 거절(C 고정) → 재계획 막힘 → 사전 확인 → 수락
+    → 재계획 TRY → 승인."""
     a = pack.new_task.model_dump(exclude={"requested", "unit_id", "owner_actor_id", "movable"})
     assert submit_task_request(pack, "planner_a", _key(), TaskRequestForm(**a)).status == "APPLIED"
     run_until_idle(pack, model_factory=Router(replanning=[solve("L0"), solve("L1")]).factory())
@@ -146,16 +147,9 @@ def _r1(pack):
         comment=x.comment,
     )
     assert reject_candidate(pack, "supervisor", _key(), body).status == "APPLIED"
-    ask = call(
-        "ASK_TASK_OWNER",
-        "확인",
-        task_id="A",
-        axis="RESOURCE",
-        allowed_values=["SITE-CR-01"],
-        question="SITE-CR-01?",
-    )
     listing = call("LIST_ASSIGNABLE_RESOURCES", "조회", task_id="A")
-    run_until_idle(pack, model_factory=Router(replanning=[listing, ask]).factory())
+    # 재계획은 막힌 결과를 내고, 메인이 Coordination 사전 확인을 부른다(기본 응답)
+    run_until_idle(pack, model_factory=Router(replanning=[listing, blocked()]).factory())
     [q] = _messages("QUESTION")
     assert _reply(pack, "planner_a", q["message_id"]).status == "APPLIED"
     try_ = call("TRY_ALTERNATIVE_RESOURCE", "시도", task_id="A", resource_id="SITE-CR-01")

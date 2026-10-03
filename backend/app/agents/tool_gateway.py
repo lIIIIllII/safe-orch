@@ -44,6 +44,11 @@ RETRY_ONCE = {"MALFORMED", "LLM_ERROR"}
 RESULT_END = {"DONE": ("SUCCEEDED", "RETURN_DONE"), "BLOCKED": ("BLOCKED", "RETURN_BLOCKED")}
 
 
+def need_id(run_id: str, path: str, index: int) -> str:
+    """결과의 need ID. 모델이 엮은 길은 p<길 순번>, 서버가 붙인 열 수 있는 것은 s다 (AG-23)."""
+    return f"{run_id}:{path}:{index}"
+
+
 class _Parsed:
     def __init__(
         self,
@@ -268,7 +273,8 @@ class ToolGateway:
         """RETURN_RESULT 공통 (AG-06·AG-23): needs 서버 검증 → step 완료와 Run 종료(같은 tx).
 
         모델이 쓰는 것은 status·summary·paths뿐이다. produced는 서버가 채운 내용이고, 결과 전체는
-        이 step의 tool_result에 남는다.
+        이 step의 tool_result에 남는다. need마다 서버가 ID를 붙인다(Run·길·순번). 막힌 결과에 서버가
+        붙이는 열 수 있는 것(produced의 openers)은 모델이 엮은 길(paths)과 따로 둔다.
         """
         run = get_run(tx, run_id)
         action = parsed.action
@@ -288,6 +294,21 @@ class ToolGateway:
             )
             return GatewayResult("REJECTED", NEED_INVALID)
         outcome = GatewayResult("DONE", None, *RESULT_END[action.status])
+        paths = [
+            {
+                "needs": [
+                    {"need_id": need_id(run_id, f"p{i}", j), **n.model_dump(exclude_defaults=True)}
+                    for j, n in enumerate(p.needs)
+                ]
+            }
+            for i, p in enumerate(action.paths)
+        ]
+        produced = dict(produced)
+        if "openers" in produced:
+            found = produced["openers"] if action.status == "BLOCKED" else []
+            produced["openers"] = [
+                {"need_id": need_id(run_id, "s", j), **n} for j, n in enumerate(found)
+            ]
         self._complete(
             tx,
             run_id,
@@ -300,7 +321,7 @@ class ToolGateway:
             tool_result={
                 "status": action.status,
                 "summary": action.summary,
-                "paths": [p.model_dump(exclude_defaults=True) for p in action.paths],
+                "paths": paths,
                 **produced,
             },
             end=outcome,

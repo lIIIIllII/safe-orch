@@ -98,7 +98,7 @@ def test_gate_path_automated(seeded):
     pack = seeded
     main, run, _, alpha = _alpha(pack)
 
-    assert main.case_id.startswith("case_") and main.exec_contract_version == "main-c1"
+    assert main.case_id.startswith("case_") and main.exec_contract_version == "main-c2"
     assert (run.parent_run_id, run.case_id) == (main.run_id, main.case_id)
     assert (run.acting_unit_id, run.acting_actor_id) == ("UA", "planner_a")
     # Replanning은 검증까지만 산다: L0 → L1(후보) → 검증 결과로 깨어나 DONE

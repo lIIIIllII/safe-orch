@@ -5,10 +5,12 @@ from langchain_core.messages import AIMessage
 from scripted import ScriptedChatModel, call, escalate
 
 from app.agents import runtime, skills
+from app.agents.needs import ask_refusals
 from app.agents.observers.replanning import assignable_resources, build_observation
 from app.agents.registry import BINDINGS
 from app.agents.specs import coordination, event_response, intake, replanning
 from app.domain.models import Requirement
+from app.domain.needs import Need
 from app.store import db
 from app.store.repos.runs import list_steps
 
@@ -54,7 +56,7 @@ def test_system_lists_skill_guides_and_observation_has_open_skills(with_a):
     add_run(with_a, "run_o", input_ref=CONFLICT)
     with db.read() as conn:
         obs = build_observation(conn, with_a, "run_o")
-    assert obs.data["open_skills"] == ["ASSESS", "BUILD_CANDIDATE", "ASK_OWNER_TEMP", "WRAP_UP"]
+    assert obs.data["open_skills"] == ["ASSESS", "BUILD_CANDIDATE", "WRAP_UP"]
     assert "eligible" not in obs.data  # 자원 적격성은 모델에 보이지 않는다
     assert obs.available["SOLVE_WITH_SCOPE"]["skill"] == ["BUILD_CANDIDATE"]
 
@@ -65,8 +67,12 @@ def test_system_lists_skill_guides_and_observation_has_open_skills(with_a):
 def test_skills_open_on_facts_only():
     facts = {"has_conflict": True, "has_rejection": False}
     assert skills.open_skills(replanning.SKILLS, facts) == ["ASSESS", "BUILD_CANDIDATE", "WRAP_UP"]
-    facts = {"has_conflict": True, "has_rejection": True, "has_unconfirmed_axis": True}
+    facts = {"has_conflict": True, "has_rejection": True}
     assert skills.open_skills(replanning.SKILLS, facts) == list(replanning.SKILLS)
+    assert skills.open_skills(coordination.SKILLS, {"has_ask_need": True}) == [
+        "PRE_CONFIRM",
+        "WRAP_UP",
+    ]
     assert skills.open_skills(coordination.SKILLS, {}) == ["WRAP_UP"]
     assert skills.open_skills(coordination.SKILLS, {"has_unsent_notice": True}) == [
         "NOTIFY",
@@ -86,13 +92,19 @@ def test_available_is_open_skill_tools_with_valid_arguments():
     valid = {
         "SOLVE_WITH_SCOPE": {"level": ["L1"]},
         "LIST_ASSIGNABLE_RESOURCES": {"task_id": ["A"]},
-        "ASK_TASK_OWNER": {"task_id": ["A"]},
         "RETURN_RESULT": {},
     }
-    facts = {"has_conflict": True, "has_rejection": True, "has_unconfirmed_axis": False}
+    facts = {"has_conflict": True, "has_rejection": True}
     out = skills.available(replanning.SKILLS, facts, valid)
-    # 유효한 인자 값이 없는 도구(TRY)와 열리지 않은 스킬의 도구(ASK)는 빠진다
+    # 유효한 인자 값이 없는 도구(TRY)는 빠진다
     assert list(out) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]
+    # 열리지 않은 스킬의 도구(사전 확인이 없을 때의 ASK_OWNER)도 빠진다
+    asking = {"ASK_OWNER": {"need_id": ["n1"]}, "RETURN_RESULT": {}}
+    assert list(skills.available(coordination.SKILLS, {}, asking)) == ["RETURN_RESULT"]
+    assert skills.available(coordination.SKILLS, {"has_ask_need": True}, asking)["ASK_OWNER"] == {
+        "need_id": ["n1"],
+        "skill": ["PRE_CONFIRM"],
+    }
     assert out["SOLVE_WITH_SCOPE"] == {
         "level": ["L1"],
         "skill": ["BUILD_CANDIDATE", "APPLY_REJECTION"],
@@ -107,7 +119,6 @@ def test_replanning_skill_facts(with_a):
     assert replanning.skill_facts(data) == {
         "has_conflict": True,
         "has_rejection": False,
-        "has_unconfirmed_axis": True,
     }
     assert "APPLY_REJECTION" in replanning.open_skills({**data, "rejections": [{"x": 1}]})
     assert "BUILD_CANDIDATE" not in replanning.open_skills({**data, "conflicts": []})
@@ -174,12 +185,6 @@ def test_missing_skill_argument_is_malformed(with_a):
 
 
 # ── 자원 적격성 (CV-15) ────────────────────────────────────────
-
-
-def _ask(*values):
-    return call(
-        "ASK_TASK_OWNER", task_id="A", axis="RESOURCE", allowed_values=list(values), question="?"
-    )
 
 
 def test_resource_eligibility_type_permission_and_availability(with_a):
@@ -252,16 +257,35 @@ def test_listing_reports_zone_and_requirement_reasons(with_a):
     }
 
 
-def test_ineligible_resource_is_rejected_at_execution(with_a):
-    """쓰거나 묻는 자원은 실행 때 적격성을 검사한다. 조회했는지는 보지 않는다."""
-    run, steps = _run(
-        with_a,
-        [_ask("B-CR-01"), _ask("SITE-GC-01"), _ask("SITE-CR-01", "B-CR-01"), _ask("SITE-CR-01")],
-    )
-    assert _reasons(steps) == [
-        ("REJECTED", "RESOURCE_NOT_ELIGIBLE"),  # 사용 권한 없음
-        ("REJECTED", "RESOURCE_NOT_ELIGIBLE"),  # 유형이 다름
-        ("REJECTED", "RESOURCE_NOT_ELIGIBLE"),  # 하나라도 쓸 수 없으면 거절
-        ("WAIT", None),  # 조회 없이도 쓸 수 있는 자원이면 받는다
+def test_owner_ask_validity_is_checked_on_facts(with_a):
+    """사전 확인으로 물을 수 있는 것은 지금 유효한 자원 축 담당자 확인뿐이다. 조회했는지는 보지 않는다."""
+
+    def need(**refs):
+        return Need(kind="OWNER_CONSENT", task_id="A", **refs)
+
+    add_run(with_a, "run_q", input_ref=CONFLICT)
+    with db.read() as conn:
+        run = build_observation(conn, with_a, "run_q").run
+        refusals = ask_refusals(
+            conn,
+            with_a,
+            run,
+            [
+                need(axis="RESOURCE", values=["B-CR-01"]),  # 사용 권한 없음
+                need(axis="RESOURCE", values=["SITE-GC-01"]),  # 유형이 다름
+                need(axis="RESOURCE", values=["SITE-CR-01", "B-CR-01"]),  # 하나라도 쓸 수 없으면
+                need(axis="RESOURCE", values=["SITE-CR-01"]),
+                need(axis="TIME"),  # 시간 동의는 후보 협의에서 받는다
+                need(axis="RESOURCE"),
+                Need(kind="OTHER_UNIT", group_id="g", unit_id="UB"),
+            ],
+        )
+    assert refusals == [
+        "RESOURCE_NOT_ELIGIBLE",
+        "RESOURCE_NOT_ELIGIBLE",
+        "RESOURCE_NOT_ELIGIBLE",
+        None,
+        "TIME_AXIS_NOT_ASKABLE",
+        "NO_VALUES",
+        "NOT_OWNER_CONSENT",
     ]
-    assert (run.status, run.human_rounds_used) == ("WAITING_HUMAN", 1)

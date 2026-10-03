@@ -3,7 +3,7 @@
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 공통 판정(MALFORMED·LLM 오류·
 STALE_OBSERVATION·연속 2회·step 완료 기록)은 ToolGateway에 있고, 이 클래스는 그 도우미를 받아 쓴다.
 SOLVE_WITH_SCOPE·TRY_ALTERNATIVE_RESOURCE는 예약 tx → tx 밖 Solver → 등록 tx, 나머지는 tx 하나다.
-ASK_TASK_OWNER는 MOVABILITY 제안과 질문 메시지를 만들고 대기한다.
+사람에게 묻지 않는다. 막힌 결과에는 서버가 계산한 열 수 있는 것(openers)을 붙인다 (AG-23).
 관찰 계산은 binding.observer로 쓴다(observers를 import하지 않는다).
 승인·확정·Hold 해제·Proposal 확인·Validation 등록 함수는 없다.
 """
@@ -16,15 +16,12 @@ from app.agents.specs import replanning as spec
 from app.agents.tool_gateway import ACCEPTED, REJECTED, ToolGateway, _Parsed
 from app.agents.types import GatewayResult, StepMeta
 from app.domain.canonical import canonical_hash
-from app.domain.ids import new_id
-from app.domain.models import Snapshot, Task
-from app.packs.loader import LoadedPack
+from app.domain.models import Snapshot
 from app.solver import cpsat
 from app.solver.candidate import build_candidate
 from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store import db
 from app.store.repos.decisions import rejected_candidate_ids
-from app.store.repos.messages import insert_message, insert_proposal
 from app.store.repos.records import (
     StaleError,
     get_candidate,
@@ -36,7 +33,6 @@ from app.store.repos.runs import (
     finish_solver_job,
     insert_solver_job,
 )
-from app.store.repos.site import get_site
 from app.store.repos.snapshots import create_snapshot
 from app.store.repos.tasks import list_current_tasks
 
@@ -56,14 +52,14 @@ class ReplanningExecutor:
     def run(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
         if parsed.name in ("SOLVE_WITH_SCOPE", "TRY_ALTERNATIVE_RESOURCE"):
             return self._solve(run_id, step_no, meta, parsed)
-        if parsed.name in ("LIST_ASSIGNABLE_RESOURCES", "ASK_TASK_OWNER"):
+        if parsed.name == "LIST_ASSIGNABLE_RESOURCES":
             return self._single_tx(run_id, step_no, meta, parsed)
         return self._return(run_id, step_no, meta, parsed)
 
     def _permitted(self, obs: Observation, action: spec.Action) -> bool | str:
         """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (작업별 조합까지).
 
-        자원을 쓰거나 묻는 행동은 자원 적격성(유형·사용 권한·가용 구간·구역·요구 조건)을 여기서 검사한다.
+        자원을 쓰는 행동은 자원 적격성(유형·사용 권한·가용 구간·구역·요구 조건)을 여기서 검사한다.
         조회했는지는 보지 않는다 (CV-15). 적격이 아니면 RESOURCE_NOT_ELIGIBLE.
         """
         available = obs.available
@@ -79,11 +75,6 @@ class ReplanningExecutor:
                 return "RESOURCE_NOT_ELIGIBLE"
             tries = c["TRY"].get(action.task_id, [])
             return "TRY_ALTERNATIVE_RESOURCE" in available and action.resource_id in tries
-        if isinstance(action, spec.AskTaskOwner):
-            if eligible and not set(action.allowed_values) <= alternatives:
-                return "RESOURCE_NOT_ELIGIBLE"
-            asks = set(c["ASK"].get(action.task_id, []))
-            return "ASK_TASK_OWNER" in available and set(action.allowed_values) <= asks
         if isinstance(action, spec.ReturnResult):
             return action.status in available.get("RETURN_RESULT", {}).get("status", [])
         return False
@@ -91,7 +82,7 @@ class ReplanningExecutor:
     def _single_tx(
         self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed
     ) -> GatewayResult:
-        """LIST(CONTINUE)와 ASK(WAIT). 재계산·효과·step 완료가 tx 하나다."""
+        """LIST(CONTINUE). 재계산·효과·step 완료가 tx 하나다."""
         action = parsed.action
         assert action is not None
         with db.write() as tx:
@@ -102,8 +93,6 @@ class ReplanningExecutor:
                 return rejected
             assert obs is not None
             tasks = {t.task_id: t for t in list_current_tasks(tx, self.pack.site_id, self.pack)}
-            if isinstance(action, spec.AskTaskOwner):
-                return self._ask(tx, run_id, step_no, meta, parsed, action, tasks[action.task_id])
             assert isinstance(action, spec.ListAssignableResources)
             facts = self.observer.current_snapshot(tx, self.pack).facts()
             result = self.observer.assignable_resources(
@@ -122,74 +111,6 @@ class ReplanningExecutor:
             )
             return GatewayResult("CONTINUE")
 
-    def _ask(
-        self,
-        tx: sqlite3.Connection,
-        run_id: str,
-        step_no: int,
-        meta: StepMeta,
-        parsed: _Parsed,
-        action: spec.AskTaskOwner,
-        task: Task,
-    ) -> GatewayResult:
-        """MOVABILITY 제안 → 질문 메시지(수신자 = 작업 담당자) → 사람 라운드 차감 → 대기.
-
-        동의 효과는 구조화 값(axis·allowed_values)으로만 정해진다. 모델의 question은 agent_text로만 둔다.
-        """
-        site_id = self.pack.site_id
-        site = get_site(tx, site_id)
-        assert site is not None
-        values = list(dict.fromkeys(action.allowed_values))
-        proposal_id, message_id = new_id("prop"), new_id("msg")
-        insert_proposal(
-            tx,
-            site_id,
-            proposal_id,
-            type_="MOVABILITY",
-            run_id=run_id,
-            step_no=step_no,
-            target_task_id=task.task_id,
-            base_task_revision=task.revision,
-            context_version=site.context_version,
-            payload={"axis": action.axis, "allowed_values": values},
-            confirmer_actor_id=task.owner_actor_id,
-        )
-        body = movability_text(self.pack, task, values)
-        insert_message(
-            tx,
-            site_id,
-            message_id,
-            run_id=run_id,
-            step_no=step_no,
-            to_actor_id=task.owner_actor_id,
-            type_="QUESTION",
-            proposal_id=proposal_id,
-            body=body,
-            agent_text=action.question,
-            context_version=site.context_version,
-        )
-        charge(tx, run_id, human_rounds=1)
-        # 관찰 이후 새 변화(wake)가 왔으면 질문은 열어 둔 채 다시 관찰한다
-        outcome = self.wait_or_continue(tx, run_id, step_no, "MESSAGE", message_id)
-        self._complete(
-            tx,
-            run_id,
-            step_no,
-            meta,
-            parsed,
-            verdict=ACCEPTED,
-            reason=outcome.reason,
-            result_kind=outcome.kind,
-            tool_result={
-                "proposal_id": proposal_id,
-                "message_id": message_id,
-                "to_actor_id": task.owner_actor_id,
-                "body": body,
-            },
-            state_changes={"proposal_id": proposal_id, "message_id": message_id},
-        )
-        return outcome
-
     def _return(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
         action = parsed.action
         assert isinstance(action, spec.ReturnResult)
@@ -206,6 +127,8 @@ class ReplanningExecutor:
                     a["candidate_id"] for a in obs.data["attempts"] if a["candidate_id"]
                 ],
                 "latest_validation": obs.data["latest_validation"],
+                # 막힌 결과에 서버가 붙인다: 모델이 길을 비워도 메인이 볼 것이 남는다
+                "openers": obs.data["openers"],
             }
             return self.return_result(tx, run_id, step_no, meta, parsed, produced)
 
@@ -343,16 +266,6 @@ def _solver_summary(
         "delay_optimality_unconfirmed": result.delay_optimality_unconfirmed,
         "candidate_id": None if candidate is None else candidate.candidate_id,
     }
-
-
-def movability_text(pack: LoadedPack, task: Task, values: list[str]) -> str:
-    """질문의 서버 문구(동의 내용의 기준). Pack 표시 이름으로 서버가 만든다."""
-    name = pack.work_types[task.work_type].display_name
-    return (
-        f"{task.task_id}({name}) 작업에 {', '.join(values)}도 쓸 수 있게 허용하시겠습니까? "
-        f"현재 요청 자원 {task.requested_resource_id}. "
-        "허용하면 재계획이 이 자원을 대안으로 검토합니다."
-    )
 
 
 def assignments_hash(assignments: Any) -> str:

@@ -5,7 +5,7 @@
 메인이 같은 Case에서 다시 부른 Run이 따로 남는다. 메인 골든은 같은 흐름의 메인 Run이다(메인과
 Coordination은 스크립트의 기본 응답으로 돈다).
 uuid4 ID와 hash는 실행마다 달라지므로 등장 순서대로 치환한 뒤 hash한다.
-2단계 메인(replanning-p13, main-p1)에서 다시 만들었다.
+2단계 판단 살리기(replanning-p15, main-p3: 담당자 확인은 Coordination 사전 확인으로)에서 다시 만들었다.
 """
 
 import json
@@ -16,7 +16,7 @@ import httpx
 import openai
 import pytest
 from langchain_core.messages import AIMessage
-from scripted import Router, agent_kind, call, escalate, solve
+from scripted import Router, agent_kind, blocked, call, escalate, solve
 
 from app.commands.approval import (
     ApproveRequest,
@@ -39,11 +39,11 @@ HASH = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 REQ = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
 pytestmark = pytest.mark.usefixtures("main_on")
 
-# 2단계 메인 뒤 다시 만든 값
+# 2단계 판단 살리기 뒤 다시 만든 값
 GOLDEN = {
-    "plan_b": "a5bf81426e87bdc6db73bcc85fa6822938d5c128d58f59b5894a39d639dca0d2",
-    "rejections": "1b0199892c4b27d1e3b1652b4a59ab25c8a9f8a051a48b072f5270fed3160150",
-    "main_plan_b": "897076595d493d19f9af5459f8253d83827b6f3fbffaaa9f089d1d8fa849332f",
+    "plan_b": "f541696bde504fcde025492e4f24733db528a0c287b6a5bfca86f8dbe469aabf",
+    "rejections": "2599db389b1d94f64b7219cc3790f1cf90d2636a5fe3b3eedf29b0fa315790aa",
+    "main_plan_b": "de9f13c7e91928990f29d42708edbdb7a22ccd73bcf88d9a3ff0585f2aef320b",
 }
 
 
@@ -160,8 +160,8 @@ def test_normalize_replaces_ids_in_order():
 
 
 def test_golden_plan_b(seeded):
-    """기본안 B 전체: Alpha → 거절(C 고정) → 메인이 재계획을 다시 부름 → LIST → ASK → 수락 → TRY → Beta →
-    승인 → 통지 → 메인 CLOSE."""
+    """기본안 B 전체: Alpha → 거절(C 고정) → 메인이 재계획을 다시 부름 → LIST → 막힘 → 사전 확인 → 수락 →
+    재계획 TRY → Beta → 승인 → 통지 → 메인 CLOSE."""
     pack, rec = seeded, Recorder()
     _submit_a(pack)
     run_until_idle(pack, model_factory=rec.factory(solve("L0"), solve("L1")))
@@ -176,17 +176,11 @@ def test_golden_plan_b(seeded):
         comment=x.comment,
     )
     assert reject_candidate(pack, "supervisor", _key(), body).status == "APPLIED"
-    ask = call(
-        "ASK_TASK_OWNER",
-        "자원 축 확인",
-        task_id="A",
-        axis="RESOURCE",
-        allowed_values=["SITE-CR-01"],
-        question="SITE-CR-01을 써도 되나요?",
-    )
     listing = call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A")
-    run_until_idle(pack, model_factory=rec.factory(listing, ask))
-    _, status, message_id = _runs("REPLANNING")[-1]
+    stuck = blocked("A 대체 자원은 담당자 확인이 필요하다")
+    run_until_idle(pack, model_factory=rec.factory(listing, stuck))
+    # 담당자 질문은 메인이 부른 Coordination 사전 확인 Run이 보낸다
+    _, status, message_id = _runs("COORDINATION")[-1]
     assert status == "WAITING_HUMAN"
     reply = ReplyRequest(message_id=message_id, decision="ACCEPT", comment="좋습니다")
     assert reply_message(pack, "planner_a", _key(), reply).status == "APPLIED"
@@ -204,26 +198,28 @@ def test_golden_plan_b(seeded):
     )
     assert approve_and_commit(pack, "supervisor", _key(), approve).status == "APPLIED"
     run_until_idle(pack, model_factory=rec.factory())
-    assert [r[1] for r in _runs("REPLANNING")] == ["SUCCEEDED", "SUCCEEDED"]
+    assert [r[1] for r in _runs("REPLANNING")] == ["SUCCEEDED", "BLOCKED", "SUCCEEDED"]
     assert [r[1] for r in _runs("MAIN")] == ["SUCCEEDED"]
-    # Replanning: Run 둘(L0·L1·DONE / LIST·ASK·TRY·DONE)
+    # Replanning: Run 셋(L0·L1·DONE / LIST·BLOCKED / TRY·DONE)
     steps = _dump(rec)["steps"]
     assert [json.loads(s["action"])["name"] for s in steps] == [
         "SOLVE_WITH_SCOPE",
         "SOLVE_WITH_SCOPE",
         "RETURN_RESULT",
         "LIST_ASSIGNABLE_RESOURCES",
-        "ASK_TASK_OWNER",
+        "RETURN_RESULT",
         "TRY_ALTERNATIVE_RESOURCE",
         "RETURN_RESULT",
     ]
     assert _digest(rec) == GOLDEN["plan_b"]
-    # 메인: 재계획 → 협의 → 재계획 → 승인 대기 → 통지 → CLOSE
+    # 메인: 재계획 → 협의 → 재계획 → 사전 확인 → 재계획 → 승인 대기 → 통지 → CLOSE
     main_steps = _dump(rec, "MAIN")["steps"]
     assert [
         (json.loads(s["action"])["name"], json.loads(s["action"])["args"].get("agent"))
         for s in main_steps
     ] == [
+        ("CALL_AGENT", "REPLANNING"),
+        ("CALL_AGENT", "COORDINATION"),
         ("CALL_AGENT", "REPLANNING"),
         ("CALL_AGENT", "COORDINATION"),
         ("CALL_AGENT", "REPLANNING"),

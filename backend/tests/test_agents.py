@@ -69,7 +69,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p14",
+        "replanning-p15",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -107,10 +107,9 @@ def test_same_effective_spec_is_not_retried_within_case(with_a):
     run, steps, model = _run(
         with_a, [solve("L2"), escalate()], run_id="run_2", case_id="case_run_1"
     )
-    # 계산 Action은 없다. 자원 조회와 담당자 확인은 Solver를 부르지 않으므로 남는다
+    # 계산 Action은 없다. 자원 조회는 Solver를 부르지 않으므로 남는다
     assert model.tool_names(0) == [
         "LIST_ASSIGNABLE_RESOURCES",
-        "ASK_TASK_OWNER",
         "RETURN_RESULT",
     ]
     assert _guards(steps)[0] == ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE")
@@ -134,13 +133,40 @@ def test_action_not_available_then_escalate(with_a):
         "RETURN_BLOCKED",
         1,
     )
-    assert steps[2]["tool_result"] == {
+    result = dict(steps[2]["tool_result"])
+    # 모델이 길을 비워도 서버가 계산한 열 수 있는 것이 붙는다(need ID는 Run·s·순번, AG-23)
+    assert result.pop("openers") == [
+        {
+            "need_id": "run_1:s:0",
+            "kind": "OWNER_CONSENT",
+            "task_id": "A",
+            "axis": "RESOURCE",
+            "values": ["SITE-CR-01"],
+        },
+        {
+            "need_id": "run_1:s:1",
+            "kind": "OWNER_CONSENT",
+            "task_id": "C",
+            "axis": "RESOURCE",
+            "values": ["SITE-CR-01"],
+        },
+        {
+            "need_id": "run_1:s:2",
+            "kind": "FACT_CHANGE",
+            "field": "PERMISSION",
+            "resource_id": "B-CR-01",
+        },
+    ]
+    assert result == {
         "status": "BLOCKED",
         "summary": "해가 없다",
         "paths": [],
         "candidate_ids": [],
         "latest_validation": None,
     }
+    assert steps[2]["observation"]["openers"] == [
+        {k: v for k, v in n.items() if k != "need_id"} for n in steps[2]["tool_result"]["openers"]
+    ]
     assert steps[2]["observation"]["last_guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
 
 
@@ -225,7 +251,6 @@ def test_solver_budget_exhausted_leaves_only_escalate(with_a):
     run = runtime.invoke(with_a, {"run_id": "run_s"}, model)
     assert model.tool_names(0) == [
         "LIST_ASSIGNABLE_RESOURCES",
-        "ASK_TASK_OWNER",
         "RETURN_RESULT",
     ]
     assert run.status == "BLOCKED"
@@ -354,12 +379,11 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
     assert dict(binding.spec.budget) == {
         "steps": spec.MAX_STEPS,
         "llm_attempts": spec.MAX_LLM_ATTEMPTS,
-        "human_rounds": spec.MAX_HUMAN_ROUNDS,
         "solver_calls": spec.MAX_SOLVER_CALLS,
     }
-    assert binding.prompt.PROMPT_VERSION == "replanning-p14"
-    assert runtime.exec_contract_version("REPLANNING") == "replanning-c4"
-    assert runtime.exec_contract_version("COORDINATION") == "coordination-c5"
+    assert binding.prompt.PROMPT_VERSION == "replanning-p15"
+    assert runtime.exec_contract_version("REPLANNING") == "replanning-c5"
+    assert runtime.exec_contract_version("COORDINATION") == "coordination-c6"
     assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c6"
     assert runtime.exec_contract_version("INTAKE") == "intake-c9"
     assert runtime.exec_contract_version("ASSISTANT") == "AGENT_TYPE_NOT_REGISTERED"

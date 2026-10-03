@@ -9,7 +9,8 @@
   (.env·기본값과 무관). 기록 agent_flags·site_now에 남긴다.
 - 루프: idle까지 실행 → 사람 행동(경로가 정한 답) → 반복. 할 사람 행동이 없으면 끝난다.
 - 결과: 콘솔 요약 + data/live_runs/<UTC시각>.jsonl (gitignore). --raw일 때만 prompt·응답 원문을 넣는다.
-  기록 main에 메인의 step·전문 Agent 호출 수와 고른 행동 순서가 있다.
+  기록 main에 메인의 step·전문 Agent 호출 수와 고른 행동 순서, 사전 확인에 넘긴 need의 출처(ask_sources:
+  MODEL_PATH 재계획 Agent가 엮은 길, SERVER_OPENERS 서버가 붙인 열 수 있는 것)가 있다.
 - 공통 성공 기준(모든 경로): 권한 위반 0 ∧ 같은 요청 두 번 0 ∧ Budget 안(BUDGET_EXHAUSTED Run 없음) ∧ 오류 Run
   없음. 메인 Run에도 적용한다. 가드 거절(ACTION_NOT_AVAILABLE·MALFORMED·SKILL_NOT_OPEN 등)은 사유별로 기록만
   한다(guard_rejections, EV-02). 순서에 기댄 항목은 성공 기준에 넣지 않는다 (AG-01).
@@ -19,12 +20,15 @@
     하나씩 확정한다. 기대값이 모든 범위 INFEASIBLE인 요청(N5)은 "후보 없음 ∧ Replanning BLOCKED ∧ 메인이 자기
     행동으로 ESCALATE"가 성공이다. 기대 결과(verify_demo_values.py와 같은 출처)와 같은지는 matches_expected로
     따로 남긴다.
-  - B: 요청 A. Alpha PASS 뒤 Supervisor가 demo_rejections[0]으로 거절 → 메인이 재계획을 다시 부름 → 담당자
-    질문에 수락 → Beta. 성공 = Alpha PASS ∧ 거절 뒤 재호출 ∧ Beta PASS ∧ 협의 완료 ∧ R1 ∧ 통지 전원 ∧ 메인 CLOSE.
-  - B-decline: 같은 흐름에서 담당자 질문에 DECLINE. 성공 = Alpha PASS ∧ DECLINE 적용 ∧ 거절한 값 재질문 0 ∧
-    Replanning BLOCKED ∧ 메인이 자기 행동으로 ESCALATE.
-  - coord: 요청 A. 담당자가 변경 요청에 이견(demo_rejections[0].comment) → 제약 초안 확정 → Beta. 성공 = Alpha
-    PASS ∧ 변경 요청 ∧ 제약 source PROPOSAL ∧ Beta PASS ∧ R1 ∧ 통지 전원 ∧ 메인 CLOSE.
+  - B: 요청 A. Alpha PASS 뒤 Supervisor가 demo_rejections[0]으로 거절 → 메인이 재계획을 다시 부름(막힘 + 길)
+    → 메인이 Coordination 사전 확인을 부름 → 담당자 수락 → 재계획(대체 자원) → Beta. 성공 = Alpha PASS ∧ 거절 뒤
+    재호출 ∧ 담당자 질문이 Coordination Run에서만 나옴 ∧ Beta PASS ∧ 협의 완료 ∧ R1 ∧ 통지 전원 ∧ 메인 CLOSE.
+    막힌 결과에 OWNER_CONSENT 길이 있었는지(blocked_with_owner_consent_path)는 기록만 한다.
+  - B-decline: 같은 흐름에서 사전 확인 질문에 DECLINE. 성공 = Alpha PASS ∧ DECLINE 적용 ∧ 거절한 값 재질문 0 ∧
+    담당자 질문이 Coordination Run에서만 나옴 ∧ Replanning BLOCKED ∧ 메인이 자기 행동으로 ESCALATE.
+  - coord: 요청 A. 담당자가 변경 요청에 이견(demo_rejections[0].comment) → 제약 초안 확정 → 재계획(막힘 + 길) →
+    사전 확인(수락) → Beta. 성공 = Alpha PASS ∧ 변경 요청 ∧ 제약 source PROPOSAL ∧ 담당자 질문이 Coordination
+    Run에서만 나옴 ∧ Beta PASS ∧ R1 ∧ 통지 전원 ∧ 메인 CLOSE.
   - event [--ambiguous]: R1(기본안 B, Beta 확정)까지는 스크립트 응답으로 준비하고(LLM 없음, 메인 없음), Reporter가
     demo_events[0](--ambiguous면 [1])을 신고한다. Supervisor가 사실 수정안을 확정하고 FACT_CONFIRMED로 해제,
     담당자가 변경 요청을 수락, Supervisor 승인. 성공 = 사실 수정 CONFIRMED ∧ Hold FACT_CONFIRMED ∧ Hold 중 재계획
@@ -73,6 +77,7 @@ from app.coordinator.dispatcher import run_until_idle
 from app.domain.calendar import parse_site_time, work_delay
 from app.packs.loader import load_pack, pack_dir
 from app.store import db
+from app.store.repos.cases import supervisor_actor
 from app.store.repos.consultations import consultation_view, list_review_queue
 from app.store.repos.decisions import list_constraints
 from app.store.repos.dispatch import register_job
@@ -508,7 +513,10 @@ def _collect(pack: Any, rec: _Recorder, before: set[str]) -> dict[str, Any]:
         targets = casefacts.notice_targets(conn, pack, site.plan_revision)
         sent = casefacts.notified_actors(conn, site_id, site.plan_revision)
         proposals = [
-            dict(zip(("type", "status", "run_id", "payload"), r, strict=True))
+            {
+                **dict(zip(("type", "status", "run_id", "payload"), r, strict=True)),
+                "agent": agent_of[r[2]],
+            }
             for r in conn.execute(
                 "SELECT type, status, run_id, payload FROM proposal ORDER BY rowid"
             )
@@ -566,6 +574,30 @@ def _main_actions(facts: dict[str, Any]) -> list[str]:
     return out
 
 
+def _ask_sources(facts: dict[str, Any]) -> list[str]:
+    """사전 확인으로 물은 need의 출처(Run 순서대로): 재계획 Agent가 엮은 길인가, 서버가 붙인 것인가.
+    같은 확인이 둘 다에 있어 메인이 둘 다 넘겼으면 한 번만 묻고 Agent가 엮은 길로 센다."""
+    out = []
+    for r in facts["runs"]:
+        if r.agent_type == "COORDINATION" and r.input_ref.get("phase") == "ASK":
+            for need in r.input_ref.get("needs") or []:
+                source = "SERVER_OPENERS" if need["need_id"].split(":")[-2] == "s" else "MODEL_PATH"
+                out.append(source)
+    return out
+
+
+def _owner_consent_paths(facts: dict[str, Any]) -> int:
+    """막힌 재계획 결과 가운데 Agent가 엮은 길에 담당자 확인(OWNER_CONSENT)이 있는 결과 수."""
+    count = 0
+    for s in facts["steps"]:
+        result = s["tool_result"] or {}
+        if (s["action"] or {}).get("name") != "RETURN_RESULT" or result.get("status") != "BLOCKED":
+            continue
+        kinds = {n["kind"] for p in result.get("paths", []) for n in p["needs"]}
+        count += "OWNER_CONSENT" in kinds
+    return count
+
+
 def _criteria(path: str, facts: dict[str, Any], pack: Any, base_plan: int) -> dict[str, Any]:
     """경로별 성공 기준(DB 사실). 공통: 권한 위반 0, 같은 요청 두 번 0, Budget 안, 오류 Run 없음."""
     runs, mains, replanning = facts["runs"], facts["mains"], facts["replanning"]
@@ -585,6 +617,12 @@ def _criteria(path: str, facts: dict[str, Any], pack: Any, base_plan: int) -> di
     first_pass = bool(candidates) and candidates[0]["pass"]
     last_pass = len(candidates) >= 2 and candidates[-1]["pass"]
     movability = [p for p in facts["proposals"] if p["type"] == "MOVABILITY"]
+    # 담당자 질문은 Coordination 사전 확인 Run에서만 나온다 (AG-09)
+    asked = {
+        "owner_asked_by_coordination_only": bool(movability)
+        and all(p["agent"] == "COORDINATION" for p in movability),
+        "blocked_with_owner_consent_path": _owner_consent_paths(facts),
+    }
     if path == "A":
         c = {
             "replanning_done": bool(replanning) and replanning[0].status == "SUCCEEDED",
@@ -595,6 +633,7 @@ def _criteria(path: str, facts: dict[str, Any], pack: Any, base_plan: int) -> di
         c = {
             "alpha_pass": first_pass,
             "recalled_after_reject": len(replanning) >= 2,
+            **asked,
             "beta_pass": last_pass,
             "consultation_complete": last_pass and candidates[-1]["consultation"] == "COMPLETE",
             **done,
@@ -605,6 +644,7 @@ def _criteria(path: str, facts: dict[str, Any], pack: Any, base_plan: int) -> di
             "alpha_pass": first_pass,
             "decline_applied": len(declined) == 1,
             "no_reask_after_decline": len(movability) == 1,
+            **asked,
             "replanning_blocked": last_rp is not None and last_rp.status == "BLOCKED",
             "main_escalated": escalated,
         }
@@ -615,6 +655,7 @@ def _criteria(path: str, facts: dict[str, Any], pack: Any, base_plan: int) -> di
             "constraint_from_proposal": any(
                 x.source_type == "PROPOSAL" for x in facts["constraints"]
             ),
+            **asked,
             "beta_pass": last_pass,
             **done,
         }
@@ -652,7 +693,7 @@ def _criteria(path: str, facts: dict[str, Any], pack: Any, base_plan: int) -> di
 
 
 RECORDED_ONLY = ("guard_rejections", "malformed", "llm_errors", "authority_violations",
-                 "repeat_violations")  # fmt: skip
+                 "repeat_violations", "blocked_with_owner_consent_path")  # fmt: skip
 
 
 def _success(criteria: dict[str, Any]) -> bool:
@@ -683,6 +724,7 @@ def _record(
             "steps": sum(m.steps_used for m in mains),
             "agent_calls": sum(m.agent_calls_used for m in mains),
             "actions": _main_actions(facts),
+            "ask_sources": _ask_sources(facts),
         },
         run_status=None if last_main is None else last_main.status,
         end_reason=None if last_main is None else last_main.end_reason,
@@ -775,7 +817,9 @@ def run_once(
                     # 해가 없는 요청은 "후보 없음 ∧ 재계획이 막힘 ∧ 메인이 자기 행동으로 이관"이 성공이다
                     last = facts["mains"][-1] if facts["mains"] else None
                     keep = {
-                        k: criteria[k] for k in (*RECORDED_ONLY, "within_budget", "no_error_run")
+                        k: criteria[k]
+                        for k in (*RECORDED_ONLY, "within_budget", "no_error_run")
+                        if k in criteria
                     }
                     criteria = {
                         "no_candidate": actual is None,
@@ -978,10 +1022,37 @@ def _start_replanning(pack: Any) -> None:
         register_job(tx, site_id, "START_RUN", f"START_RUN:setup:{_key()}", payload)
 
 
-def _setup_r1(pack: Any) -> None:
-    """기본안 B로 R1(Beta 확정)까지: Alpha → 거절(C 고정) → LIST → ASK → 수락 → TRY → Beta → 승인.
+def _start_ask(pack: Any, task_id: str, resource_id: str) -> str:
+    """메인 없이 Coordination 사전 확인 Run 하나를 시작시킨다(준비용). 넘긴 need_id."""
+    need_id = "setup:s:0"
+    need = {
+        "need_id": need_id,
+        "kind": "OWNER_CONSENT",
+        "task_id": task_id,
+        "axis": "RESOURCE",
+        "values": [resource_id],
+    }
+    with db.write() as tx:
+        site = get_site(tx, pack.site_id)
+        payload = {
+            "agent_type": "COORDINATION",
+            "phase": "ASK",
+            "case_id": SETUP_CASE,
+            "need_ids": [need_id],
+            "needs": [need],
+            "acting_unit_id": supervisor_actor(tx, pack).unit_id,
+            "context_version": site.context_version,
+            "plan_revision": site.plan_revision,
+        }
+        register_job(tx, pack.site_id, "START_RUN", f"START_RUN:setup:{_key()}", payload)
+    return need_id
 
-    사건 → 메인 자동 시작이 꺼진 상태에서 Replanning Run을 직접 시작시킨다. 통지는 없다.
+
+def _setup_r1(pack: Any) -> None:
+    """기본안 B로 R1(Beta 확정)까지: Alpha → 거절(C 고정) → 재계획 막힘 → 사전 확인 → 수락 → TRY → Beta →
+    승인.
+
+    사건 → 메인 자동 시작이 꺼진 상태에서 Replanning·Coordination Run을 직접 시작시킨다. 통지는 없다.
     """
     site_id, task_id = pack.site_id, pack.new_task.task_id
     form, requester = _form_and_requester(pack, task_id)
@@ -1016,21 +1087,20 @@ def _setup_r1(pack: Any) -> None:
         ),
     )
     _start_replanning(pack)
+    blocked = _call("RETURN_RESULT", status="BLOCKED", summary="R1 준비")
+    run(_call("LIST_ASSIGNABLE_RESOURCES", task_id=task_id), blocked)
+    need_id = _start_ask(pack, task_id, "SITE-CR-01")
     run(
-        _call("LIST_ASSIGNABLE_RESOURCES", task_id=task_id),
-        _call(
-            "ASK_TASK_OWNER",
-            task_id=task_id,
-            axis="RESOURCE",
-            allowed_values=["SITE-CR-01"],
-            question="대체 자원 확인",
-        ),
+        _call("ASK_OWNER", need_id=need_id, message="대체 자원 확인"),
+        _call("WAIT_FOR_REPLIES", skill="PRE_CONFIRM"),
     )
     with db.read() as conn:
         mid, to = conn.execute(
             "SELECT message_id, to_actor_id FROM message WHERE status = 'OPEN'"
         ).fetchone()
     reply_message(pack, to, _key(), ReplyRequest(message_id=mid, decision="ACCEPT"))
+    run(done())  # 사전 확인 Run이 답을 받고 끝난다
+    _start_replanning(pack)
     run(_call("TRY_ALTERNATIVE_RESOURCE", task_id=task_id, resource_id="SITE-CR-01"), done())
     beta, beta_v, ctx = review()
     out = approve_and_commit(
@@ -1076,7 +1146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--path",
         choices=PATHS,
         default="A",
-        help="A 요청 → 수용·승인, B 거절 → 다시 재계획 → 승인, B-decline 담당자 거절 → 이관, "
+        help="A 요청 → 수용·승인, B 거절 → 재계획 → 사전 확인 → 승인, B-decline 담당자 거절 → 이관, "
         "coord 이견 → 제약 → 승인, event 신고 → 사실 수정 → 승인, intake 자연어 접수",
     )
     args = parser.parse_args(argv)

@@ -77,6 +77,11 @@ CONSULTING: dict[tuple[str | None, str, str], Callable[[str], dict[str, list[AIM
     ): _consulting_v2,  # 스킬 상대별 분할(CONSULT는 그대로)
     (None, "replanning-c3", "coordination-c4"): _consulting_v2,  # 종료 도구만 RETURN_RESULT로 바뀜
     ("main-c1", "replanning-c4", "coordination-c5"): _consulting_v3,  # 메인이 부른다, 검증 뒤 DONE
+    (
+        "main-c2",
+        "replanning-c5",
+        "coordination-c6",
+    ): _consulting_v3,  # 사전 확인(준비 행동은 그대로)
 }
 
 

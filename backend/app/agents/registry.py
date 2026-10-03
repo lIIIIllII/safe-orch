@@ -33,21 +33,21 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=main_prompt,
         observer=main_observer,
         executor=MainExecutor,
-        exec_contract_version="main-c1",  # 기록만. CALL_AGENT·WAIT·ESCALATE·CLOSE (AG-24)
+        exec_contract_version="main-c2",  # 기록만. 사전 확인 호출(need_ids) (AG-09)
     ),
     replanning_spec.AGENT_TYPE: AgentBinding(
         spec=replanning_spec.SPEC,
         prompt=replanning_prompt,
         observer=replanning_observer,
         executor=ReplanningExecutor,
-        exec_contract_version="replanning-c4",  # 기록만. 검증까지만 살고 DONE을 낸다 (AG-25)
+        exec_contract_version="replanning-c5",  # 기록만. 사람 도구 없음, 열 수 있는 것 (AG-23)
     ),
     coordination_spec.AGENT_TYPE: AgentBinding(
         spec=coordination_spec.SPEC,
         prompt=coordination_prompt,
         observer=coordination_observer,
         executor=CoordinationExecutor,
-        exec_contract_version="coordination-c5",  # 기록만. 결과의 OTHER_UNIT에 충돌 그룹 참조 (AG-23)
+        exec_contract_version="coordination-c6",  # 기록만. 사전 확인 단계 ASK_OWNER (AG-09)
     ),
     event_response_spec.AGENT_TYPE: AgentBinding(
         spec=event_response_spec.SPEC,

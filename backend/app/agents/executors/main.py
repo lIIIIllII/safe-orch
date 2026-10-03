@@ -81,7 +81,7 @@ class MainExecutor:
             # 하위 Run은 한 번에 하나다. 열려 있으면 부르지도 끝내지도 못한다
             return "CHILD_RUN_OPEN"
         if isinstance(action, spec.CallAgent):
-            reason = self._call_refusal(data, spec.call_refs(action))
+            reason = self._call_refusal(tx, obs, spec.call_refs(action))
             if reason is None and "CALL_AGENT" not in available:
                 return "ACTION_NOT_AVAILABLE"  # 호출 Budget이 없다
             return reason
@@ -97,10 +97,25 @@ class MainExecutor:
             return NEED_INVALID if needs else None
         return None if "CLOSE" in available else "OPEN_WORK"
 
-    def _call_refusal(self, data: dict[str, Any], refs: dict[str, Any]) -> str | None:
+    def _call_refusal(
+        self, tx: sqlite3.Connection, obs: Observation, refs: dict[str, Any]
+    ) -> str | None:
+        data = obs.data
+        holds = bool(data["holds"])
+        if refs.get("phase") == "ASK" or "need_ids" in refs:
+            # 사전 확인: 지금 물을 수 있는 need ID만 받는다(일부만 골라도 된다)
+            ids = refs.get("need_ids") or []
+            if set(refs) != {"agent", "phase", "need_ids"} or refs["agent"] != "COORDINATION":
+                return "ACTION_NOT_AVAILABLE"
+            for need_id in ids:
+                if need_id not in obs.hidden["ask_needs"]:
+                    return str(obs.hidden["ask_refusals"].get(need_id, "NEED_NOT_FOUND"))
+            if holds:
+                return "HOLD_ACTIVE"
+            key = call_key("COORDINATION", refs)
+            return "SAME_FACTS" if casefacts.same_facts(tx, self.pack.site_id, key) else None
         if refs in data["calls"]:
             return None
-        holds = bool(data["holds"])
         if refs["agent"] == "REPLANNING":
             group = next((g for g in data["groups"] if g["group_id"] == refs.get("group_id")), None)
             if group is None:
@@ -231,6 +246,22 @@ class MainExecutor:
         supervisor = supervisor_actor(tx, self.pack)
         if supervisor is None:
             return None
+        if action.agent == "COORDINATION" and action.phase == "ASK":
+            ids = sorted(set(action.need_ids))
+            # 물을 내용은 부를 때의 need 그대로 넘긴다(유효성은 물을 때 다시 본다). 같은 확인이 여러 길이나
+            # 서버 need에 같이 있으면 한 번만 묻는다(정렬상 앞선 ID: Agent가 엮은 길이 서버 need보다 앞이다)
+            needs: list[dict[str, Any]] = []
+            for need in (obs.hidden["ask_needs"][i] for i in ids):
+                what = {k: v for k, v in need.items() if k != "need_id"}
+                if what not in [{k: v for k, v in n.items() if k != "need_id"} for n in needs]:
+                    needs.append(need)
+            return {
+                "agent_type": "COORDINATION",
+                "phase": "ASK",
+                "need_ids": ids,
+                "needs": needs,
+                "acting_unit_id": supervisor.unit_id,
+            }
         if action.agent == "COORDINATION":
             assert action.candidate_id is not None
             payload: dict[str, Any] = {
