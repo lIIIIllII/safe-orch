@@ -143,11 +143,45 @@ function FactChanges({ changes, base, state }: { changes: FactChange[]; base: nu
 const offHopeText = (x: CandidateView['off_hope'][number]) =>
   `${x.task_id} ${delayText(x.delay, x.work_delay)} ${x.direction === 'EARLY' ? '이름' : '늦음'}`
 
-/** 안 번호: 그 후보에 도달한 접근의 호출 순번. 여럿이면 다른 접근이 같은 배치를 낸 것이다. */
+/** 안 번호: 서버가 이 Case의 살아 있는 후보에 만들어진 순서로 매긴 번호다. 한 호출이 후보를 여럿 내도 다르다. */
 function planLabel(c: CandidateView): string {
-  const nos = [...new Set(c.approaches.map((a) => a.no))].sort((a, b) => a - b)
-  if (nos.length === 0) return short(c.candidate_id)
-  return `${nos.map((n) => `${n}안`).join('·')}${nos.length > 1 ? ' 동일 의견' : ''}`
+  return c.plan_no === null ? short(c.candidate_id) : `${c.plan_no}안`
+}
+
+/** 그 후보의 배치에 도달한 접근 이름(겹치지 않게). 둘 이상이면 다른 접근이 같은 배치를 낸 것이다. */
+const approachNames = (c: CandidateView) => [...new Set(c.approaches.map((a) => APPROACH[a.approach] ?? a.approach))]
+
+/** 안이 바꾸는 것 한 작업분: 시각 줄과 자원 줄. 목록과 "요청 자원과 다름"은 서버 계산이고 화면은 풀어 쓰기만 한다. */
+function PlanChange({ x }: { x: CandidateView['plan_changes'][number] }) {
+  const { clock, meta } = useEnv()
+  const type = x.resource_type ? (meta.resource_types[x.resource_type] ?? x.resource_type) : ''
+  const off = x.off_request ? '요청 자원과 다름' : ''
+  if (x.kind === 'NEW') {
+    return (
+      <div className={x.resource_changed ? 'chg chg-resource' : 'chg'}>
+        {x.resource_changed && <span className="tag tag-resource">자원</span>}
+        {x.task_id} 새로 배치: {clock.format(x.after.start)}
+        {x.after.resource_id && ` · ${x.after.resource_id}`}
+        {off && `(${off})`}
+      </div>
+    )
+  }
+  return (
+    <>
+      {x.time_changed && x.before && (
+        <div className="chg">
+          {x.task_id} {clock.format(x.before.start)} → {clock.format(x.after.start)}
+        </div>
+      )}
+      {x.resource_changed && (
+        <div className="chg chg-resource">
+          <span className="tag tag-resource">자원</span>
+          {x.task_id} {type} {x.before?.resource_id ?? '없음'} → {x.after.resource_id ?? '없음'}
+          {off && ` · ${off}`}
+        </div>
+      )}
+    </>
+  )
 }
 
 /** 이 Case의 안을 나란히: 접근, 서버 지표, 필요한 동의, 조건, 거절·이견된 변경, 고르기.
@@ -179,6 +213,7 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
           <tr>
             <th>안</th>
             <th>접근</th>
+            <th>바뀌는 것</th>
             <th>지표</th>
             <th>필요한 동의</th>
             <th>조건·표시</th>
@@ -206,14 +241,21 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                   {c.approaches.length === 0 && <span className="muted">—</span>}
                   {c.approaches.map((a) => (
                     <div key={`${a.run_id}`}>
-                      {a.no}안 {APPROACH[a.approach] ?? a.approach}
-                      {a.same && <span className="muted"> (같은 배치)</span>}
+                      {APPROACH[a.approach] ?? a.approach}
+                      {a.same && <span className="muted"> (같은 배치에 도달)</span>}
                       {a.quoted_reason && <div className="agent-quote">Agent: “{a.quoted_reason}”</div>}
                     </div>
                   ))}
+                  {approachNames(c).length > 1 && <div className="tag">{approachNames(c).join('·')} 동일 의견</div>}
                 </td>
                 <td>
-                  변경 {c.changes.length}건
+                  {c.plan_changes.length === 0 && <span className="muted">없음</span>}
+                  {c.plan_changes.map((x) => (
+                    <PlanChange key={x.task_id} x={x} />
+                  ))}
+                </td>
+                <td>
+                  변경 {c.changes.length}건 · 자원 변경 {c.plan_changes.filter((x) => x.resource_changed).length}건
                   <br />
                   희망에서 벗어남 {delayText(delay, workDelay)}
                   {c.off_hope.map((x) => (
@@ -317,7 +359,7 @@ function CandidateDetail({
           후보: {CANDIDATE_STATUS[c.display_status] ?? c.display_status}
         </span>
         {v ? <ValidationBadge status={v.display_status} /> : <span className="badge">검증 대기</span>}
-        {c.approaches.length > 0 && <span className="badge">{planLabel(c)}</span>}
+        {c.plan_no !== null && <span className="badge">{planLabel(c)}</span>}
         {c.chosen && <span className="badge">고른 안</span>}
         {missing && <span className="badge badge-stale">목록에서 제외됨(갱신 중단)</span>}
       </div>
@@ -393,7 +435,10 @@ function CandidateDetail({
                 <th>{ch.task_id}</th>
                 <td>{assign(ch.before)}</td>
                 <td>→</td>
-                <td className="strong">{assign(ch.after)}</td>
+                <td className="strong">
+                  {assign(ch.after)}
+                  {ch.before.resource_id !== ch.after.resource_id && <span className="tag tag-resource"> 자원 바뀜</span>}
+                </td>
                 <td className="small">
                   {ch.delay > 0 ? `희망에서 벗어남 ${delayText(ch.delay, ch.work_delay)}` : ''}
                 </td>

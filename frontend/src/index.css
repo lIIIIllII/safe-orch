@@ -1549,3 +1549,30 @@ input.time {
   border: 1.5px solid #4b5563;
   border-top: none;
 }
+
+/* 안 비교의 바뀌는 것: 자원 변경은 시각 변경과 다른 색·배지로 보인다 */
+.chg {
+  white-space: nowrap;
+}
+
+.chg-resource {
+  color: #7a3e00;
+}
+
+.tag-resource {
+  background: #ffe8c7;
+  color: #7a3e00;
+  font-weight: 700;
+}
+
+/* 후보가 자원을 바꾼 작업: 원래 자원 행의 자리는 흐린 점선 윤곽 */
+.bar.bar-left {
+  background: transparent;
+  border-style: dashed;
+  opacity: 0.45;
+}
+
+.lg-left::before {
+  border: 1px dashed var(--ua);
+  opacity: 0.6;
+}

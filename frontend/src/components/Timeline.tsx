@@ -4,6 +4,7 @@
 // 고정은 자물쇠와 굵은 테두리, 희망 영역은 막대 뒤 Unit 색의 옅은 띠(늘 보임, 접수 Agent가 정했고 아직 확인하지
 // 않은 희망은 점선 테두리), 가능 범위(시간창)는 막대 아래 가는 괄호다. 괄호는 사람이 좁힌 작업은 늘 보이고,
 // Horizon 전체인 작업은 선택했을 때만 보인다. 후보 겹쳐 보기에서는 후보가 옮긴 자리에도 둘을 같이 그린다.
+// 후보가 자원을 바꾼 작업은 후보 막대에 "자원 → 새 자원"을 달고, 원래 자원 행의 자리는 흐린 점선 윤곽으로 남긴다.
 // 담당자는 자기 작업의 Plan 막대를 끌어 시각을 옮긴다(AG-31): 놓을 수 있는 구간은 서버가 계산해 주고 화면은 칠하기만
 // 한다. 놓으면 미리보기와 [확정]/[취소]가 뜬다. 조금만 움직이면 선택이다. 희망 영역은 [희망 영역 그리기]를 누른 뒤
 // 그 작업의 행에서 끈다. 작업 카드의 [작업 없애기]는 서버 확인을 거쳐 [확정]해야 없어진다(계획 밖 요청은 요청 철회).
@@ -282,7 +283,11 @@ export function Timeline(props: Props) {
     const t = taskMap.get(b.taskId)
     const wt = t ? workTypeName(meta, t.work_type) : ''
     const mark = t?.pin ? `${PIN_MARK} ` : ''
-    const line1 = `${b.kind === 'after' ? '→ ' : ''}${mark}${b.taskId} ${wt}${b.kind === 'request' ? ' · 요청' : ''}`
+    // 후보가 이 작업의 자원을 바꿨는가(겹쳐 보기)
+    const ch = changed.get(b.taskId)
+    const swapped = !!ch && ch.before.resource_id !== ch.after.resource_id
+    const moved = b.kind === 'after' && swapped ? ` · 자원 → ${ch.after.resource_id ?? '없음'}` : ''
+    const line1 = `${b.kind === 'after' ? '→ ' : ''}${mark}${b.taskId} ${wt}${b.kind === 'request' ? ' · 요청' : ''}${moved}`
     const line2 = `${clock.hm(b.start)}–${clock.hm(b.end)}`
     // Gate(시작 가능 아님)는 막대 안에 글자가 들어갈 때만 배지로, 아니면 모서리 표시로 둔다(사유는 카드)
     const gated = (b.kind === 'plan' || b.kind === 'before') && !!t && t.gate !== 'ALLOW'
@@ -297,7 +302,7 @@ export function Timeline(props: Props) {
     }
     const lo = outLeft !== null ? Math.min(where.left, outLeft) : where.left
     const hi = outLeft !== null ? Math.max(where.left + where.width, outLeft + textW + 8) : where.left + where.width
-    return [{ b, t, wt, where, line1, line2, gated, showGate, inside, textW, outLeft, lo, hi }]
+    return [{ b, t, wt, where, line1, line2, gated, showGate, inside, textW, outLeft, lo, hi, swapped }]
   })
   const drawnBy = new Map(drawn.map((d) => [d.b.key, d]))
 
@@ -715,6 +720,11 @@ export function Timeline(props: Props) {
               {CANDIDATE_STATUS[candidate.display_status] ?? candidate.display_status}
             </span>
           )}
+          {overlay && candidate && candidate.changes.some((c) => c.before.resource_id !== c.after.resource_id) && (
+            <span className="lg lg-left" title="후보가 자원을 바꾼 작업의 원래 자원 행 자리">
+              옮기기 전 자원 자리
+            </span>
+          )}
           <span className="lg lg-pinned" title="사람이 고정한 작업. 재계획이 움직이지 않는다">
             {PIN_MARK} 고정
           </span>
@@ -903,6 +913,8 @@ export function Timeline(props: Props) {
                             selected?.taskId === b.taskId ? 'bar-selected' : '',
                             d.gated && !d.showGate && t ? `bar-gate bar-gate-${t.gate.toLowerCase()}` : '',
                             night ? 'bar-night' : '',
+                            // 후보가 자원을 바꾼 작업: 원래 자원 행의 자리는 윤곽만 남긴다
+                            d.swapped && b.kind !== 'after' && row.group === 'resource' ? 'bar-left' : '',
                             where.clipL ? 'bar-clip-l' : '',
                             where.clipR ? 'bar-clip-r' : '',
                           ].join(' ')}

@@ -224,6 +224,8 @@ export interface CandidateView {
     same: boolean
     quoted_reason: string | null
   }[]
+  /** 안 번호: 이 Case의 살아 있는 후보에 만들어진 순서로 매긴 번호(후보마다 다르다). 없으면 null */
+  plan_no: number | null
   /** Supervisor가 고른 안. 고른 안만 협의한다 */
   chosen: boolean
   context_version: number
@@ -238,6 +240,19 @@ export interface CandidateView {
     after: Assignment
     delay: number
     work_delay: number
+  }[]
+  /** 이 안이 기준 계획에서 바꾸는 것 (서버 계산). CHANGED 계획에 있던 작업의 시각·자원이 바뀜(before = 지금 배치),
+   *  NEW 계획에 없던 작업을 새로 배치(before 없음). off_request는 배치된 자원이 요청 자원과 다르다는 뜻이다 */
+  plan_changes: {
+    task_id: string
+    kind: 'NEW' | 'CHANGED'
+    before: Assignment | null
+    after: Assignment
+    time_changed: boolean
+    resource_changed: boolean
+    off_request: boolean
+    requested_resource_id: string | null
+    resource_type: string | null
   }[]
   /** 이 안에서 희망 영역 밖에 놓인 작업과 정도 (서버 계산). EARLY 희망보다 이름, LATE 늦음 */
   off_hope: { task_id: string; delay: number; work_delay: number; direction: 'EARLY' | 'LATE' }[]
