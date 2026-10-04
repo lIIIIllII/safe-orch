@@ -7,9 +7,9 @@
 import uuid
 from types import SimpleNamespace
 
-from conftest import LEGACY_PINNED, add_task, choose, make_task
+from conftest import LEGACY_PINNED, choose
 from langchain_core.messages import AIMessage
-from scripted import Router, ask_owner, blocked, call, done, solve, wait_answers
+from scripted import Router, call, solve
 
 from app.agents.observers.coordination import _items
 from app.agents.prompts import coordination as prompt
@@ -31,8 +31,8 @@ from app.domain.consultation import change_hash, item_statuses
 from app.domain.models import Assignment, ConsultationItem
 from app.store import db
 from app.store.repos.consultations import consultation_view
-from app.store.repos.dispatch import list_jobs, register_job
-from app.store.repos.records import list_validations
+from app.store.repos.dispatch import list_jobs
+from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import bump_context_version, get_site
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
@@ -145,6 +145,15 @@ def _alpha_consulting(pack):
     return SimpleNamespace(run_id=rp.run_id, case_id=rp.case_id, wait_ref=alpha), coord
 
 
+def _free_site_crane():
+    """기준 장면은 공용 크레인을 첫날에 못 쓴다. 자원을 바꿔 푸는 흐름을 볼 때 첫날에도 쓸 수 있게 한다."""
+    with db.write() as tx:
+        tx.execute(
+            "UPDATE resource SET available_intervals = '[[0, 3360]]'"
+            " WHERE resource_id = 'SITE-CR-01'"
+        )
+
+
 def _candidate_of(run_id):
     ids = [(s["tool_result"] or {}).get("candidate_id") for s in _steps(run_id)]
     return [c for c in ids if c][-1]
@@ -163,7 +172,7 @@ def _objected(pack, comment=OBJECTION):
 
 def test_plan_a_full_e2e(seeded, main_on):
     """Alpha → 변경 요청 → 이견 → A2가 C를 고정 → 협의가 결과를 돌려줌 → 메인이 재계획을 다시 부름 →
-    Beta → R1 → 통지 2건 → 메인 CLOSE."""
+    Beta(A의 자원이 바뀜) → Supervisor가 고름 → A 담당자 협의 → R1 → 통지 2건 → 메인 CLOSE."""
     pack = seeded
     rp, coord = _alpha_consulting(pack)
     alpha = rp.wait_ref
@@ -211,41 +220,42 @@ def test_plan_a_full_e2e(seeded, main_on):
     assert events[-1] == "TASK_PINNED"  # 열린 메인의 Case에 사건으로 들어간다
 
     # 협의는 이견을 결과에 담아 돌려주고(제약을 만들지 않는다), 메인이 깨어나 재계획을 다시 부른다.
-    # 이후: C 고정 관찰 → LIST → 막힘 → 사전 확인(Coordination) → 수락 → TRY → Beta
-    listing = call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A")
-    run_until_idle(pack, model_factory=Router(replanning=[listing, blocked()]).factory())
+    # C가 고정이라 A는 시각만으로는 풀리지 않는다. 공용 크레인을 쓸 수 있으면 자원을 바꿔 푼다 (AG-34)
+    _free_site_crane()
+    run_until_idle(pack, model_factory=Router(replanning=[solve("L0")]).factory())
     ended = _runs("COORDINATION")[0]
     assert (ended.status, ended.end_reason) == ("SUCCEEDED", "RETURN_DONE")
     s_back = _steps(coord.run_id)[-1]
     obs_c = next(i for i in s_back["observation"]["items"] if i["task_id"] == "C")
     assert obs_c["requests"][0]["quoted_comment"] == OBJECTION
     assert s_back["observation"]["candidate"]["live"] is False
-    [question] = _messages("QUESTION")
-    # 담당자 질문은 Coordination 사전 확인 Run에서만 나온다 (AG-09)
-    asking = _runs("COORDINATION")[-1]
-    assert (question["run_id"], asking.input_ref["phase"]) == (asking.run_id, "ASK")
-    assert _reply(pack, "planner_a", question["message_id"], "ACCEPT").status == "APPLIED"
-    try_beta = call(
-        "TRY_ALTERNATIVE_RESOURCE", "SITE-CR-01 시도", task_id="A", resource_id="SITE-CR-01"
-    )
-    run_until_idle(pack, model_factory=Router(replanning=[try_beta]).factory())
-    first, second, third = _runs("REPLANNING")
-    assert (third.case_id, second.status, third.status) == (first.case_id, "BLOCKED", "SUCCEEDED")
-    beta = _candidate_of(third.run_id)
+    assert _messages("QUESTION") == []  # 사전 확인은 없다
+    first, second = _runs("REPLANNING")
+    assert (second.case_id, second.status) == (first.case_id, "SUCCEEDED")
+    beta = _candidate_of(second.run_id)
     steps = _steps(second.run_id)
-    names = [[(s["action"] or {}).get("name") for s in _steps(r.run_id)] for r in (second, third)]
-    assert names == [
-        ["LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"],
-        ["TRY_ALTERNATIVE_RESOURCE", "RETURN_RESULT"],
-    ]
-    assert (third.steps_used, third.solver_calls_used, third.human_rounds_used) == (2, 1, 0)
+    assert [(s["action"] or {}).get("name") for s in steps] == ["SOLVE_WITH_SCOPE", "RETURN_RESULT"]
+    assert (second.steps_used, second.solver_calls_used, second.human_rounds_used) == (2, 1, 0)
     assert steps[0]["observation"]["rejections"] == []  # 고정은 거절이 아니라 사람이 직접 걸었다
     acting = {t["task_id"]: t for t in steps[0]["observation"]["acting_tasks"]}
     assert acting["C"]["pinned"] == {"pinned_by": "foreman_a2", "by_role": "OWNER"}
     assert acting["A"]["pinned"] is None
+    with db.read() as conn:
+        placed = {
+            a.task_id: (a.start, a.resource_id)
+            for a in get_candidate(conn, pack.site_id, beta).assignments
+        }
+    assert (placed["A"], placed["C"]) == ((60, "SITE-CR-01"), (60, "A-CR-01"))
+    # 요청 자원(A-CR-01)은 동의다: 다른 자원으로 바뀐 안은 고른 안의 협의에서 A 담당자에게 간다
+    assert _view(pack, beta).item_status == {"A": "PENDING"}
+    choose(pack, beta)
+    run_until_idle(pack, model_factory=Router().factory())
+    request = _messages("CHANGE_REQUEST")[-1]
+    assert (request["to_actor_id"], request["candidate_id"]) == ("planner_a", beta)
+    assert _reply(pack, "planner_a", request["message_id"]).status == "APPLIED"
+    run_until_idle(pack, model_factory=Router().factory())
     assert _view(pack, beta).items_status == "COMPLETE"
-    # Beta에는 동의 대기가 없어 협의를 부르지 않는다: 협의(Alpha) + 사전 확인
-    assert [r.input_ref["phase"] for r in _runs("COORDINATION")] == ["CONSULT", "ASK"]
+    assert [r.input_ref["phase"] for r in _runs("COORDINATION")] == ["CONSULT", "CONSULT"]
 
     assert _approve(pack, beta).status == "APPLIED"
 
@@ -297,8 +307,7 @@ def test_plan_a_full_e2e(seeded, main_on):
         ("REPLANNING", None),
         ("COORDINATION", "CONSULT"),
         ("REPLANNING", None),
-        ("COORDINATION", "ASK"),
-        ("REPLANNING", None),
+        ("COORDINATION", "CONSULT"),
         ("COORDINATION", "NOTICE"),
     ]
 
@@ -328,17 +337,18 @@ def test_supervisor_reject_during_consultation_runs_plan_b(seeded, main_on):
     late = _reply(pack, "foreman_a2", cr["message_id"], "DECLINE", OBJECTION)
     assert late.status == "APPLIED" and late.result_refs["late"] is True
 
-    listing = call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A")
-    run_until_idle(pack, model_factory=Router(replanning=[listing, blocked()]).factory())
-    [question] = _messages("QUESTION")
-    assert _reply(pack, "planner_a", question["message_id"]).status == "APPLIED"
-    try_beta = call(
-        "TRY_ALTERNATIVE_RESOURCE", "SITE-CR-01 시도", task_id="A", resource_id="SITE-CR-01"
-    )
-    run_until_idle(pack, model_factory=Router(replanning=[try_beta]).factory())
+    # C가 고정이라 A는 자원을 바꿔 풀린다. 바뀐 자원은 A 담당자의 협의를 거친다 (AG-34)
+    _free_site_crane()
+    run_until_idle(pack, model_factory=Router(replanning=[solve("L0")]).factory())
     second = _runs("REPLANNING")[-1]
     assert (second.steps_used, second.solver_calls_used, second.human_rounds_used) == (2, 1, 0)
-    assert _approve(pack, _candidate_of(second.run_id)).status == "APPLIED"
+    beta = _candidate_of(second.run_id)
+    choose(pack, beta)
+    run_until_idle(pack, model_factory=Router().factory())
+    request = _messages("CHANGE_REQUEST")[-1]
+    assert _reply(pack, "planner_a", request["message_id"]).status == "APPLIED"
+    run_until_idle(pack, model_factory=Router().factory())
+    assert _approve(pack, beta).status == "APPLIED"
     assert _site(pack).plan_revision == 1
     run_until_idle(pack, model_factory=Router().factory())  # 통지 → 메인 CLOSE
     assert _runs("MAIN")[0].status == "SUCCEEDED"
@@ -598,142 +608,3 @@ def test_state_shows_item_request_and_inbox_types(seeded, main_on):
     )
     by_type = {m["type"]: m for m in a2["inbox"]}
     assert by_type["CHANGE_REQUEST"]["candidate_id"] == rp.wait_ref
-
-
-# ── 사전 확인 단계 (phase ASK, 후보 없음) ──────────────────────
-
-
-def _need(need_id, task_id, values=("SITE-CR-01",)):
-    return {
-        "need_id": need_id,
-        "kind": "OWNER_CONSENT",
-        "task_id": task_id,
-        "axis": "RESOURCE",
-        "values": list(values),
-    }
-
-
-def test_ask_phase_sorts_by_owner_and_returns_answers(with_a):
-    """같은 담당자의 need 여럿을 한 호출로 처리한다: need마다 질문 하나, 담당자별로 정렬. 결과는 서버가
-    채운다(수락한 값·거절·미응답). 답을 다 받기 전에는 DONE이 없고, 응답을 받을 수 없으면 BLOCKED다."""
-    pack = with_a
-    add_task(pack, make_task(pack, task_id="A2"))  # planner_a의 작업이 둘(A, A2)
-    needs = [_need("n:s:0", "A"), _need("n:s:1", "C"), _need("n:s:2", "A2")]
-    with db.write() as tx:
-        payload = {
-            "agent_type": "COORDINATION",
-            "phase": "ASK",
-            "need_ids": [n["need_id"] for n in needs],
-            "needs": needs,
-            "acting_unit_id": "SITE",
-            "context_version": get_site(tx, pack.site_id).context_version,
-        }
-        register_job(tx, pack.site_id, "START_RUN", f"START_RUN:{_key()}", payload)
-    run_until_idle(pack, model_factory=Router().factory())
-    [run] = _runs("COORDINATION")
-    steps = _steps(run.run_id)
-    assert [s["action"]["name"] for s in steps] == ["ASK_OWNER"] * 3 + ["WAIT_FOR_REPLIES"]
-    first = steps[0]["observation"]
-    assert (first["phase"], first["open_skills"]) == ("ASK", ["PRE_CONFIRM", "WRAP_UP"])
-    assert [(a["owner_actor_id"], a["task_id"], a["status"]) for a in first["asks"]] == [
-        ("foreman_a2", "C", "UNASKED"),
-        ("planner_a", "A", "UNASKED"),
-        ("planner_a", "A2", "UNASKED"),
-    ]
-    sent = _messages("QUESTION")
-    assert [(m["to_actor_id"], m["status"]) for m in sent] == [
-        ("foreman_a2", "OPEN"),
-        ("planner_a", "OPEN"),
-        ("planner_a", "OPEN"),
-    ]
-    assert (run.status, run.wait_kind, run.wait_ref) == (
-        "WAITING_HUMAN",
-        "MESSAGE",
-        sent[0]["message_id"],
-    )
-    assert [p["type"] for p in _proposals("MOVABILITY")] == ["MOVABILITY"] * 3
-
-    # planner_a: A 수락, A2 거절. C 담당자는 답하지 않는다
-    assert _reply(pack, "planner_a", sent[1]["message_id"], "ACCEPT").status == "APPLIED"
-    assert _reply(pack, "planner_a", sent[2]["message_id"], "DECLINE").status == "APPLIED"
-    info = {"kind": "HUMAN_INFO", "actor_id": "foreman_a2", "task_id": "C"}
-    router = Router(
-        coordination=[done("다 받았다"), blocked("C 담당자 미응답", [{"needs": [info]}])]
-    )
-    run_until_idle(pack, model_factory=router.factory())
-    s_done, s_blocked = _steps(run.run_id)[-2:]
-    # 답을 기다리는 확인이 남아 있으면 DONE은 유효하지 않다
-    assert s_done["guard"] == {"verdict": "REJECTED", "reason_code": "ACTION_NOT_AVAILABLE"}
-    assert [(a["task_id"], a["status"]) for a in s_done["observation"]["asks"]] == [
-        ("C", "OPEN"),
-        ("A", "ACCEPTED"),
-        ("A2", "DECLINED"),
-    ]
-    result = s_blocked["tool_result"]
-    assert (result["status"], result["paths"][0]["needs"][0]["kind"]) == ("BLOCKED", "HUMAN_INFO")
-    assert [(a["task_id"], a["result"], a["accepted_values"]) for a in result["asks"]] == [
-        ("C", "NO_REPLY", []),
-        ("A", "ACCEPTED", ["SITE-CR-01"]),
-        ("A2", "DECLINED", []),
-    ]
-    ended = _runs("COORDINATION")[0]
-    assert (ended.status, ended.end_reason) == ("BLOCKED", "RETURN_BLOCKED")
-    assert [m["status"] for m in _messages("QUESTION")] == ["CANCELLED", "ANSWERED", "ANSWERED"]
-
-
-def _start_ask(pack, needs):
-    """메인 없이 Coordination 사전 확인 Run을 시작시킨다(START_RUN 등록)."""
-    with db.write() as tx:
-        payload = {
-            "agent_type": "COORDINATION",
-            "phase": "ASK",
-            "need_ids": [n["need_id"] for n in needs],
-            "needs": needs,
-            "acting_unit_id": "SITE",
-            "context_version": get_site(tx, pack.site_id).context_version,
-        }
-        register_job(tx, pack.site_id, "START_RUN", f"START_RUN:{_key()}", payload)
-
-
-def test_ask_owner_refuses_declined_value_while_other_needs_remain(with_a):
-    """다른 확인이 남아 있어 사전 확인 스킬이 열려 있어도, 담당자가 거절한 값(같은 작업 revision)을 다시
-    물으면 VALUE_DECLINED로 거절된다. 같은 요청은 두 번 나가지 않는다 (AG-09)."""
-    pack = with_a
-    add_task(pack, make_task(pack, task_id="A2"))
-    # 앞 사전 확인에서 A 담당자가 SITE-CR-01을 거절했다
-    _start_ask(pack, [_need("n1:s:0", "A")])
-    run_until_idle(pack, model_factory=Router().factory())
-    [question] = _messages("QUESTION")
-    assert _reply(pack, "planner_a", question["message_id"], "DECLINE").status == "APPLIED"
-    run_until_idle(pack, model_factory=Router().factory())
-    assert _runs("COORDINATION")[0].status == "SUCCEEDED"
-
-    # 다음 사전 확인(다른 Run): 같은 값의 need와 아직 묻지 않은 need(A2)를 함께 받는다
-    _start_ask(pack, [_need("n2:s:0", "A"), _need("n2:s:1", "A2")])
-    router = Router(coordination=[ask_owner(0), ask_owner(1), wait_answers()])
-    run_until_idle(pack, model_factory=router.factory())
-    run = _runs("COORDINATION")[-1]
-    s_declined, s_ask, _ = _steps(run.run_id)
-    asks = {a["task_id"]: a for a in s_declined["observation"]["asks"]}
-    assert (asks["A"]["status"], asks["A"]["reason"], asks["A2"]["status"]) == (
-        "NOT_ASKABLE",
-        "VALUE_DECLINED",
-        "UNASKED",
-    )
-    assert "PRE_CONFIRM" in s_declined["observation"]["open_skills"]  # A2가 남아 스킬은 열려 있다
-    tool = next(
-        t["function"]
-        for t in s_declined["available_actions"]
-        if t["function"]["name"] == "ASK_OWNER"
-    )
-    assert tool["parameters"]["properties"]["need_id"]["enum"] == ["n2:s:1"]
-    assert s_declined["guard"] == {"verdict": "REJECTED", "reason_code": "VALUE_DECLINED"}
-    assert (s_ask["guard"]["verdict"], s_ask["action"]["args"]["need_id"]) == ("ACCEPTED", "n2:s:1")
-    # A에 나간 질문은 처음 하나뿐이다
-    with db.read() as conn:
-        sent = conn.execute(
-            "SELECT p.target_task_id FROM message m JOIN proposal p"
-            " ON p.proposal_id = m.proposal_id WHERE m.type = 'QUESTION' ORDER BY m.rowid"
-        ).fetchall()
-    assert [r[0] for r in sent] == ["A", "A2"]
-    assert run.status == "WAITING_HUMAN"

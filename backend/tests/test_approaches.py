@@ -95,14 +95,25 @@ def _events(kind):
 # ── 목적 순서 ──────────────────────────────────────────────────
 
 
+def _first_day_busy():
+    """목적 순서의 효과를 보려고 대체 자원(공용 크레인)은 첫날에 쓸 수 없게 둔다: 고정되지 않은 작업은
+    자원도 움직이므로 그대로 두면 자원을 바꿔 풀린다 (AG-34)."""
+    with db.write() as tx:
+        tx.execute(
+            "UPDATE resource SET available_intervals = '[[1440, 3360]]'"
+            " WHERE resource_id = 'SITE-CR-01'"
+        )
+
+
 def test_delay_first_swaps_stages_and_is_a_different_search(seeded_real):
     pack = seeded_real
+    _first_day_busy()
     add_task(pack, make_task(pack))
     snap = take_snapshot(pack)
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), pack)[0]
     conds = {"C": Condition(start_min=60)}
-    plain = build_search_spec(snap, conflict, "UA", "L1", None, conds)
-    spec = build_search_spec(snap, conflict, "UA", "L1", None, conds, "DELAY_FIRST")
+    plain = build_search_spec(snap, conflict, "UA", "L1", conds)
+    spec = build_search_spec(snap, conflict, "UA", "L1", conds, "DELAY_FIRST")
     assert (spec.objective, plain.objective) == ("DELAY_FIRST", "CHANGE_FIRST")
     assert spec.search_key != plain.search_key and spec.hash != plain.hash
 
@@ -119,6 +130,7 @@ def test_delay_first_swaps_stages_and_is_a_different_search(seeded_real):
 
 def test_objective_argument_through_the_tool(seeded_real):
     pack = seeded_real
+    _first_day_busy()
     add_task(pack, make_task(pack))
     add_run(pack, "run_1", input_ref=CONFLICT)
     replies = [

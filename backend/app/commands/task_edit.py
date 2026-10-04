@@ -73,7 +73,7 @@ def _needs_agent(tx: sqlite3.Connection, ctx: CommandContext) -> bool:
     return unplanned or bool(detect_conflicts(probe, facts.check_assignments(), ctx.pack))
 
 
-def _fields(
+def edited_fields(
     task: Task, data: dict[str, Any], changed: set[str], confirm: bool, source_ref: str
 ) -> dict[str, FieldRecord]:
     """새 revision의 확인 기록. 값이 바뀌었거나 정한 값을 확인한 필드만 새 기록(출처 card)이 되고,
@@ -130,7 +130,7 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         update={
             **changes,
             "revision": revision,
-            "fields": _fields(task, data, changed, body.confirm, source),
+            "fields": edited_fields(task, data, changed, body.confirm, source),
         }
     )
     insert_task_revision(tx, site_id, updated)

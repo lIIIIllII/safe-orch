@@ -6,7 +6,7 @@ from app.domain.models import Task
 from app.packs.loader import LoadedPack
 from app.store.repos._rows import dumps, loads, rows
 
-JSON_COLUMNS = ("resource_requirements", "pool_demands", "predecessors", "movable", "fields")
+JSON_COLUMNS = ("resource_requirements", "pool_demands", "predecessors", "fields")
 
 
 def list_current_tasks(conn: sqlite3.Connection, site_id: str, pack: LoadedPack) -> list[Task]:
@@ -49,8 +49,8 @@ def insert_task_revision(tx: sqlite3.Connection, site_id: str, task: Task) -> No
     tx.execute(
         "INSERT INTO task (site_id, task_id, revision, unit_id, owner_actor_id, work_type,"
         " zone_id, duration, earliest_start, latest_start, latest_end, required_resource_type,"
-        " requested_resource_id, resource_requirements, pool_demands, predecessors, movable, fields,"
-        " lifecycle) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " requested_resource_id, resource_requirements, pool_demands, predecessors, fields,"
+        " lifecycle) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             site_id,
             task.task_id,
@@ -68,7 +68,6 @@ def insert_task_revision(tx: sqlite3.Connection, site_id: str, task: Task) -> No
             dumps([r.model_dump() for r in task.resource_requirements]),
             dumps([d.model_dump() for d in task.pool_demands]),
             dumps([p.model_dump() for p in task.predecessors]),
-            dumps(task.movable.model_dump()),
             dumps({k: v.model_dump() for k, v in task.fields.items()}),
             task.lifecycle,
         ),

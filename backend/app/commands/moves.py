@@ -1,12 +1,14 @@
 """담당자의 직접 이동과 작업 없애기 (AG-31). 사람만 한다. Agent·Tool Gateway에는 이 함수가 없다.
 
-담당자가 타임라인에서 자기 작업의 시각을 옮기거나 자기 작업을 없앤다. 한 트랜잭션에서 사람이 만든 후보
+담당자가 타임라인에서 자기 작업의 시각을 옮기거나, 작업 카드에서 자원을 바꾸거나, 자기 작업을 없앤다. 한 트랜잭션에서 사람이 만든 후보
 (MOVE·REMOVE) + 검증 + Plan을 남기고 바로 확정한다(Supervisor 승인 없음). 검토 대기열에 오르지 않는다.
 - 할 수 없는 것: 남의 작업, 고정된 작업, Plan에 없는 작업, ACTIVE Hold 중(ST-13), 검증을 통과하지
   못하는 배치(이동: 시간창 밖, 근무 달력, 다른 작업과의 Rule 위반 / 없애기: 뒤에 이어지는 작업이 있음).
 - 놓을 수 있는 시작 구간(move_range)과 놓은 자리의 판정(move_check), 확정(move_task)은 같은 함수
   (_judge)로 판정한다. 없애기의 확인(remove_check)과 확정(remove_task)도 같은 함수(_remove_verdict)다.
   확인은 읽기 전용이다.
+- 자원 바꾸기(change_resource)는 지금 시각 그대로 자원만 바꾼 배치를 같은 함수로 판정한다. 확정하면
+  요청 자원과 그 동의도 새 자원으로 바뀌고 출처는 말함이 된다. Plan에 없는 요청은 값 고치기(EDIT_TASK)로 한다.
 - 없앤 작업은 지우지 않고 새 revision에 CANCELLED로 남긴다(Snapshot·충돌·관찰에서 빠진다). Plan에 없는
   요청 작업은 이 명령이 아니라 요청 철회(withdraw_task_request)로 없앤다.
 - 확정되면 Plan revision이 올라 살아 있는 후보는 기존 판정으로 무효가 된다. 열린 재계획·협의 Run은
@@ -21,6 +23,8 @@ from typing import Any
 from pydantic import Field
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
+from app.commands.task_edit import edited_fields
+from app.commands.task_request import stated_consents
 from app.domain.calendar import local_clock
 from app.domain.canonical import canonical_hash
 from app.domain.hashes import candidate_hash
@@ -28,7 +32,13 @@ from app.domain.ids import new_id
 from app.domain.models import Assignment, Candidate, Plan, Snapshot, SnapshotContent, Validation
 from app.packs.loader import LoadedPack
 from app.rules.engine import separation_links
-from app.store.repos.cases import deliver_to_open_main, register_recheck, wake_run
+from app.store.repos.cases import (
+    copy_consents,
+    deliver_to_open_main,
+    register_recheck,
+    wake_run,
+)
+from app.store.repos.consents import insert_consent
 from app.store.repos.consultations import list_review_queue
 from app.store.repos.messages import insert_message
 from app.store.repos.plans import insert_plan
@@ -49,6 +59,11 @@ class MoveRequest(Body):
 
 class RemoveRequest(Body):
     task_id: str = Field(min_length=1)
+
+
+class ResourceRequest(Body):
+    task_id: str = Field(min_length=1)
+    resource_id: str = Field(min_length=1)
 
 
 def _refusal(facts: SnapshotContent, task_id: str, actor_id: str) -> str | None:
@@ -74,8 +89,10 @@ def _judge(
     task_id: str,
     start: int,
     actor_id: str,
+    resource_id: str | None = None,
 ) -> tuple[Candidate, Validation]:
-    """현재 Plan에서 그 작업의 시작만 바꾼 배치를 Validator로 본다. 구간 계산·놓기·확정이 같이 쓴다."""
+    """현재 Plan에서 그 작업의 시작(또는 자원)만 바꾼 배치를 Validator로 본다. 구간 계산·놓기·확정과
+    카드의 자원 바꾸기가 같이 쓴다. resource_id를 주지 않으면 자원은 그대로다."""
     tasks = facts.task_map()
     assignments = tuple(
         a
@@ -84,7 +101,7 @@ def _judge(
             task_id=task_id,
             start=start,
             end=start + tasks[task_id].duration,
-            resource_id=a.resource_id,
+            resource_id=resource_id or a.resource_id,
         )
         for a in facts.plan.assignments
         if a.task_id in tasks
@@ -212,6 +229,20 @@ def move_notice_text(
         f"담당자가 작업 {moved}을(를) 직접 옮겨 계획 R{plan_revision}이 확정되었습니다: "
         f"시작 {_clock(pack, before.start)} → {_clock(pack, after.start)}. "
         f"이 작업과 엮인 작업: {_linked(links)}."
+    )
+
+
+def resource_notice_text(
+    plan_revision: int,
+    moved: str,
+    before: str | None,
+    after: str,
+    links: list[tuple[str, str]],
+) -> str:
+    """카드의 자원 바꾸기 통지의 서버 문구."""
+    return (
+        f"담당자가 작업 {moved}의 자원을 바꿔 계획 R{plan_revision}이 확정되었습니다: "
+        f"자원 {before} → {after}. 이 작업과 엮인 작업: {_linked(links)}."
     )
 
 
@@ -345,6 +376,124 @@ def move_task(
     pack: LoadedPack, actor_id: str, idempotency_key: str, body: MoveRequest
 ) -> CommandOutcome:
     return run_command(pack, "MOVE_TASK", actor_id, idempotency_key, body, _move)
+
+
+# ── 카드에서 자원 바꾸기 ───────────────────────────────────────
+
+
+def _resource_verdict(
+    snapshot: Snapshot,
+    facts: SnapshotContent,
+    pack: LoadedPack,
+    task_id: str,
+    resource_id: str,
+    actor_id: str,
+) -> tuple[list[str], Candidate | None, Validation | None]:
+    """그 자원으로 바꿀 수 있는지. 지금 시각 그대로 자원만 바꾼 배치를 직접 이동과 같은 함수로 본다."""
+    refusal = _refusal(facts, task_id, actor_id)
+    if refusal is not None:
+        return [refusal], None, None
+    current = next(a for a in facts.plan.assignments if a.task_id == task_id)
+    if resource_id == current.resource_id:
+        return ["NO_CHANGE"], None, None
+    if resource_id not in facts.resource_map():
+        return ["RESOURCE_NOT_FOUND"], None, None
+    candidate, validation = _judge(
+        snapshot, facts, pack, task_id, current.start, actor_id, resource_id
+    )
+    if validation.status != "PASS":
+        failed = [c.reason_code for c in validation.checks if c.reason_code is not None]
+        return ["MOVE_NOT_VALID", *dict.fromkeys(failed)], candidate, validation
+    return [], candidate, validation
+
+
+def resource_check(
+    conn: sqlite3.Connection, pack: LoadedPack, actor_id: str, task_id: str, resource_id: str
+) -> dict[str, Any]:
+    """작업 카드의 자원 바꾸기 확인 (읽기 전용). Plan에 있는 작업은 확정과 같은 판정이다.
+
+    Plan에 없는 요청 작업(READY·QUEUED)은 요청 자원을 고친다(path EDIT): 판정은 값 고치기 명령이 한다.
+    """
+    snapshot, facts = _probe(conn, pack)
+    queue = list_review_queue(conn, pack.site_id)
+    task = next(
+        (t for t in list_current_tasks(conn, pack.site_id, pack) if t.task_id == task_id), None
+    )
+    in_plan = any(a.task_id == task_id for a in facts.plan.assignments)
+    base = {"task_id": task_id, "resource_id": resource_id}
+    if task is not None and not in_plan and task.lifecycle in ("READY", "QUEUED"):
+        invalidates = queue if task.lifecycle == "READY" else []
+        return {**base, "path": "EDIT", "ok": True, "reason_codes": [], "invalidates": invalidates}
+    codes, _, _ = _resource_verdict(snapshot, facts, pack, task_id, resource_id, actor_id)
+    return {**base, "path": "MOVE", "ok": not codes, "reason_codes": codes, "invalidates": queue}
+
+
+def _change_resource(tx: sqlite3.Connection, ctx: CommandContext, body: ResourceRequest) -> Result:
+    r = Result()
+    site_id = ctx.site_id
+    snapshot = create_snapshot(tx, site_id, ctx.pack)
+    facts = snapshot.facts()
+    codes, candidate, validation = _resource_verdict(
+        snapshot, facts, ctx.pack, body.task_id, body.resource_id, ctx.actor_id
+    )
+    for code in codes:
+        r.reject(code)
+    if r.reason_codes or candidate is None or validation is None:
+        return r
+
+    # 요청 자원과 그 동의도 새 자원으로 바꾼다. 담당자가 직접 고른 값이라 출처는 말함이다 (AG-33)
+    task = facts.task_map()[body.task_id]
+    revision = task.revision + 1
+    data = {**task.model_dump(), "requested_resource_id": body.resource_id}
+    source = f"card:{new_id('edit')}"
+    updated = task.model_copy(
+        update={
+            "revision": revision,
+            "requested_resource_id": body.resource_id,
+            "fields": edited_fields(task, data, {"requested_resource_id"}, False, source),
+        }
+    )
+    insert_task_revision(tx, site_id, updated)
+    context_version = bump_context_version(tx, site_id)
+    consent_ids = copy_consents(
+        tx, site_id, task.task_id, task.revision, revision, context_version, ("TIME",)
+    )
+    for consent in stated_consents(updated, source):
+        if consent.axis == "RESOURCE":
+            insert_consent(tx, site_id, consent, context_version)
+            consent_ids.append(consent.consent_id)
+    plan_revision = _commit(
+        tx, ctx, candidate, validation, "TASK_MOVED", body.task_id, context_version
+    )
+    before = next(a for a in facts.plan.assignments if a.task_id == body.task_id)
+    notified = _notify_linked(
+        tx,
+        ctx,
+        facts,
+        candidate,
+        body.task_id,
+        lambda links: resource_notice_text(
+            plan_revision, body.task_id, before.resource_id, body.resource_id, links
+        ),
+    )
+    r.refs = {
+        "task_id": body.task_id,
+        "revision": revision,
+        "plan_revision": plan_revision,
+        "candidate_id": candidate.candidate_id,
+        "validation_id": validation.validation_id,
+        "consent_ids": consent_ids,
+        "notified": notified,
+    }
+    return r
+
+
+def change_resource(
+    pack: LoadedPack, actor_id: str, idempotency_key: str, body: ResourceRequest
+) -> CommandOutcome:
+    return run_command(
+        pack, "CHANGE_TASK_RESOURCE", actor_id, idempotency_key, body, _change_resource
+    )
 
 
 # ── 작업 없애기 ────────────────────────────────────────────────

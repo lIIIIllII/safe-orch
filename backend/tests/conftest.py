@@ -93,6 +93,8 @@ LEGACY_WINDOWS = {  # task_id: (earliest_start, latest_start, latest_end)
     "M": (2910, 2910, 3000),
 }
 LEGACY_PINNED = ("B", "D", "K", "M", "P", "Q", "W")
+LEGACY_BUSY_RESOURCE = "SITE-CR-01"  # 기준 장면에서 첫날에는 쓸 수 없는 대체 자원
+LEGACY_DAY_MIN = 1440
 
 
 def _legacy_task(task):
@@ -112,8 +114,31 @@ def real_pack():
 
 @pytest.fixture(scope="session")
 def pack(real_pack):
-    """기준 상태의 Pack: plan_r0 작업의 시간창만 LEGACY_WINDOWS로 바꾼 것."""
-    return real_pack.model_copy(update={"tasks": tuple(_legacy_task(t) for t in real_pack.tasks)})
+    """기준 상태의 Pack: plan_r0 작업의 시간창을 LEGACY_WINDOWS로 바꾸고, 공용 크레인은 첫날에 쓸 수 없게 한 것.
+
+    고정되지 않은 작업은 자원도 움직인다(AG-34). 기준 장면(첫날의 A·B·C)이 자원을 바꿔 풀리지 않도록
+    대체 자원의 첫날 가용 구간을 뺀다. 자원이 바뀌는 흐름은 Pack 그대로(real_pack)에서 본다.
+    """
+    resources = tuple(
+        r.model_copy(
+            update={
+                "available_intervals": tuple(
+                    (max(lo, LEGACY_DAY_MIN), hi)
+                    for lo, hi in r.available_intervals
+                    if hi > LEGACY_DAY_MIN
+                )
+            }
+        )
+        if r.resource_id == LEGACY_BUSY_RESOURCE
+        else r
+        for r in real_pack.resources
+    )
+    return real_pack.model_copy(
+        update={
+            "tasks": tuple(_legacy_task(t) for t in real_pack.tasks),
+            "resources": resources,
+        }
+    )
 
 
 def pin_tasks(pack, task_ids, actor_id=None, by_role="OWNER"):
@@ -223,6 +248,21 @@ def with_facts(snapshot, **updates):
     content = snapshot.facts().model_copy(update=updates).model_dump(mode="json")
     return Snapshot(
         snapshot_id=snapshot.snapshot_id, snapshot_hash=canonical_hash(content), content=content
+    )
+
+
+def free_alternative(snapshot):
+    """기준 장면은 대체 자원(공용 크레인)을 첫날에 못 쓴다. 자원이 바뀌는 흐름을 볼 때 첫날에도 쓸 수 있게
+    되돌린 Snapshot (DB에는 저장하지 않음)."""
+    horizon = snapshot.facts().horizon_minutes
+    return with_facts(
+        snapshot,
+        resources=tuple(
+            r.model_copy(update={"available_intervals": ((0, horizon),)})
+            if r.resource_id == LEGACY_BUSY_RESOURCE
+            else r
+            for r in snapshot.facts().resources
+        ),
     )
 
 

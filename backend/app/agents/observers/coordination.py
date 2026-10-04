@@ -1,7 +1,6 @@
 """Coordination Observation과 Available Actions 계산.
 
 읽기 전용이다. GET_CHANGE_IMPACT는 Action이 아니라 이 관찰에 서버가 넣는다(협의 항목·통지 대상).
-사전 확인(phase ASK)은 메인이 넘긴 need를 담당자별로 정렬해 지금 상태와 함께 준다.
 사람이 쓴 이견 문장은 quoted_comment(인용 데이터)로만 들어간다. 이 모듈을 import하는 곳은
 registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다.
 """
@@ -10,23 +9,15 @@ import sqlite3
 from typing import Any
 
 from app.agents.casefacts import notice_targets
-from app.agents.needs import ask_refusals
 from app.agents.observe import Observation, budget_remaining, last_guard, recent_steps
 from app.agents.specs import coordination as spec
-from app.domain.models import AgentRun, Assignment
-from app.domain.needs import Need
+from app.domain.models import Assignment
 from app.packs.loader import LoadedPack
 from app.store.repos.consultations import candidate_state, consultation_view
-from app.store.repos.messages import (
-    list_change_requests,
-    list_owner_asks,
-    list_run_messages,
-    open_owner_asks,
-)
+from app.store.repos.messages import list_change_requests, list_run_messages
 from app.store.repos.records import get_candidate
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
-from app.store.repos.tasks import list_current_tasks
 
 
 def changed_axes(before: Assignment, after: Assignment) -> list[str]:
@@ -72,51 +63,6 @@ def _items(conn: sqlite3.Connection, pack: LoadedPack, run_id: str, candidate_id
     ]
 
 
-ASK_STATUS = {"ACCEPT": "ACCEPTED", "DECLINE": "DECLINED"}
-
-
-def _asks(conn: sqlite3.Connection, pack: LoadedPack, run: AgentRun) -> list[dict[str, Any]]:
-    """사전 확인할 need와 지금 상태, 담당자별로 정렬한다.
-
-    UNASKED 물을 수 있다, NOT_ASKABLE 지금은 물을 수 없다(reason: 담당자가 거절한 값, 고정된 작업, 같은
-    작업에 답을 기다리는 질문 등), OPEN 답 대기, ACCEPTED·DECLINED 담당자의 답.
-    """
-    needs = run.input_ref.get("needs") or []
-    asked = {a["need_id"]: a for a in list_owner_asks(conn, run.run_id)}
-    waiting = open_owner_asks(conn, pack.site_id)
-    refusals = ask_refusals(
-        conn,
-        pack,
-        run,
-        [Need(**{k: v for k, v in n.items() if k not in ("need_id", "decided")}) for n in needs],
-    )
-    owners = {t.task_id: t.owner_actor_id for t in list_current_tasks(conn, pack.site_id, pack)}
-    out = []
-    for need, refusal in zip(needs, refusals, strict=True):
-        sent = asked.get(need["need_id"])
-        entry: dict[str, Any] = {
-            "need_id": need["need_id"],
-            "owner_actor_id": owners.get(need["task_id"]),
-            "task_id": need["task_id"],
-            "axis": need["axis"],
-            "values": list(need["values"]),
-            "message_id": None if sent is None else sent["message_id"],
-        }
-        if sent is not None and sent["status"] == "ANSWERED":
-            entry["status"] = ASK_STATUS[sent["decision"]]
-            entry["accepted_values"] = sent["values"]
-            entry["quoted_comment"] = sent["quoted_comment"]
-        elif sent is not None:
-            entry["status"] = "OPEN"
-        elif refusal is not None or need["task_id"] in waiting:
-            entry["status"] = "NOT_ASKABLE"
-            entry["reason"] = refusal or "ALREADY_ASKED"
-        else:
-            entry["status"] = "UNASKED"
-        out.append(entry)
-    return sorted(out, key=lambda a: (a["owner_actor_id"] or "", a["task_id"], a["need_id"]))
-
-
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:
     run = get_run(conn, run_id)
     site = get_site(conn, pack.site_id)
@@ -159,8 +105,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         },
         "items": items,
         "notice_targets": targets,
-        # 사전 확인(phase ASK): 메인이 넘긴 확인과 지금 상태, 담당자별 정렬
-        "asks": _asks(conn, pack, run) if phase == "ASK" else [],
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),
         "budget_remaining": budget_remaining(run, spec.SPEC),

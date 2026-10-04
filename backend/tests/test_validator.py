@@ -6,7 +6,7 @@ import json
 import sqlite3
 
 import pytest
-from conftest import add_task, make_task, take_snapshot, with_facts
+from conftest import add_task, free_alternative, make_task, take_snapshot, with_facts
 
 from app.domain.hashes import candidate_hash
 from app.domain.models import (
@@ -36,10 +36,10 @@ from app.validator.validator import BASIC_TO_CHECK, RULE_TYPE_TO_CHECK, validate
 # ── 도우미 ─────────────────────────────────────────────────────
 
 
-def _solve(pack, snap, level, try_resources=None, conflict=None):
+def _solve(pack, snap, level, conflict=None):
     if conflict is None:
         conflict = detect_conflicts(snap, snap.facts().check_assignments(), pack)[0]
-    spec = build_search_spec(snap, conflict, "UA", level, try_resources)
+    spec = build_search_spec(snap, conflict, "UA", level)
     cand = build_candidate(snap, spec, cpsat.solve(snap, spec, pack))
     assert cand is not None
     return spec, cand
@@ -124,9 +124,8 @@ def alpha(with_a):
 
 @pytest.fixture
 def beta(with_a):
-    add_task(with_a, make_task(with_a, revision=2, movable={"resource": True}))
-    snap = take_snapshot(with_a)
-    spec, cand = _solve(with_a, snap, "L0", {"A": ["SITE-CR-01"]})
+    snap = free_alternative(take_snapshot(with_a))
+    spec, cand = _solve(with_a, snap, "L0")
     return with_a, snap, spec, cand
 
 
@@ -251,18 +250,12 @@ def test_t06_out_of_spec_task_moved(alpha):
     assert _bad(v) == [("C06", "TIME_AXIS_NOT_ALLOWED", ("E",))]
 
 
-def test_c06_resource_axis_not_allowed(alpha):
-    pack, snap, spec, cand = alpha  # Alpha: A 자원 축 false
-    v = validate(snap, _reshape(cand, snap, _asg("A", 60, 90, "SITE-CR-01")), spec, pack)
-    assert ("C06", "RESOURCE_AXIS_NOT_ALLOWED", ("A",)) in _bad(v)
-
-
-def test_c06_resource_not_in_spec_without_try(with_a):
-    add_task(with_a, make_task(with_a, revision=2, movable={"resource": True}))
-    snap = take_snapshot(with_a)
-    spec, cand = _solve(with_a, snap, "L1")  # try 없음 → 대안 없음
-    changed = _reshape(cand, snap, _asg("A", 60, 90, "SITE-CR-01"), _asg("C", 60, 90, "A-CR-01"))
-    assert _bad(validate(snap, changed, spec, with_a)) == [("C06", "RESOURCE_NOT_IN_SPEC", ("A",))]
+def test_c06_resource_not_in_spec(alpha):
+    """탐색 범위의 대안(서버가 채운 적격 자원)에 없는 자원으로 바꾼 후보는 걸린다."""
+    pack, snap, spec, cand = alpha
+    assert "B-CR-01" not in spec.resource_alternatives.get("A", ())  # UA가 쓸 수 없는 자원
+    v = validate(snap, _reshape(cand, snap, _asg("A", 60, 90, "B-CR-01")), spec, pack)
+    assert ("C06", "RESOURCE_NOT_IN_SPEC", ("A",)) in _bad(v)
 
 
 def test_c06_reconfirm_change_fails(with_a):
@@ -448,16 +441,15 @@ def test_t31_time_fixed_resource_moved_pass(seeded):
         earliest_start=60,
         latest_start=60,
         latest_end=90,
-        movable={"resource": True},
     )
     add_task(seeded, x)
-    snap = take_snapshot(seeded)
+    snap = free_alternative(take_snapshot(seeded))
     cap = next(
         c
         for c in detect_conflicts(snap, snap.facts().check_assignments(), seeded)
         if c.rule_id == "CAP-RESOURCE"
     )
-    spec, cand = _solve(seeded, snap, "L0", {"X": ["SITE-CR-01"]}, conflict=cap)
+    spec, cand = _solve(seeded, snap, "L0", conflict=cap)
     assert _asg("X", 60, 90, "SITE-CR-01") in cand.assignments
     v = validate(snap, cand, spec, seeded)
     assert v.status == "PASS"

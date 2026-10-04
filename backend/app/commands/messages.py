@@ -12,11 +12,9 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
-from app.domain.ids import new_id
-from app.domain.models import Consent, FieldRecord, TaskMovable
+from app.domain.models import FieldRecord
 from app.packs.loader import LoadedPack
 from app.store.repos.cases import copy_consents, end_case_run, wake_run
-from app.store.repos.consents import insert_consent
 from app.store.repos.events import get_hold
 from app.store.repos.messages import (
     decide_proposal,
@@ -157,14 +155,6 @@ def _answer(
             tx, proposal["proposal_id"], "CONFIRMED", ctx.actor_id, context_version, fact
         )
         refs.update(fact)
-    elif proposal is not None and decision == "ACCEPT":
-        assert task is not None
-        result_ref = _confirm_movability(tx, ctx, task, message["message_id"], chosen)
-        context_version = result_ref.pop("context_version")
-        decide_proposal(
-            tx, proposal["proposal_id"], "CONFIRMED", ctx.actor_id, context_version, result_ref
-        )
-        refs.update(result_ref)
     elif proposal is not None:
         decide_proposal(tx, proposal["proposal_id"], "DISCARDED", ctx.actor_id, context_version)
     set_message_reply(
@@ -222,43 +212,6 @@ def _confirm_fact_update(
     return {
         "task_revision": revision,
         "consent_ids": consent_ids,
-        "context_version": context_version,
-    }
-
-
-def _confirm_movability(
-    tx: sqlite3.Connection,
-    ctx: CommandContext,
-    task: Any,
-    message_id: str,
-    values: list[str],
-) -> dict[str, Any]:
-    """MOVABILITY 확인. 한 tx:
-
-    새 task revision(movable.resource = true, 나머지 그대로) → 기존 Consent를 같은 source_ref로 복사
-    + RESOURCE Consent [values](source_ref message:<mid>) → context +1.
-    """
-    site_id = ctx.site_id
-    revision = task.revision + 1
-    movable = TaskMovable(resource=True)
-    insert_task_revision(
-        tx, site_id, task.model_copy(update={"revision": revision, "movable": movable})
-    )
-    context_version = bump_context_version(tx, site_id)
-    consent_ids = copy_consents(tx, site_id, task.task_id, task.revision, revision, context_version)
-    consent = Consent(
-        consent_id=new_id("cns"),
-        task_id=task.task_id,
-        task_revision=revision,
-        owner_actor_id=task.owner_actor_id,
-        axis="RESOURCE",
-        scope={"resource_ids": values},
-        source_ref=f"message:{message_id}",
-    )
-    insert_consent(tx, site_id, consent, context_version)
-    return {
-        "task_revision": revision,
-        "consent_ids": [*consent_ids, consent.consent_id],
         "context_version": context_version,
     }
 

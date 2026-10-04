@@ -274,7 +274,7 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
     found = rows(
         conn,
         "SELECT j.run_id, j.step_no, j.status AS job_status, s.scope_level, s.search_key,"
-        " s.resource_alternatives, s.conditions, s.objective, r.stage1, r.stage2, c.candidate_id,"
+        " s.conditions, s.objective, r.stage1, r.stage2, c.candidate_id,"
         " j.same_candidate_id FROM solver_job j"
         " JOIN search_spec s ON s.search_spec_id = j.search_spec_id"
         " JOIN agent_run a ON a.run_id = j.run_id"
@@ -296,7 +296,6 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
                 "this_run": r["run_id"] == run_id,
                 "job_status": r["job_status"],
                 "scope_level": r["scope_level"],
-                "try_resources": loads(r["resource_alternatives"]),  # TRY 시도
                 "conditions": loads(r["conditions"]),  # Agent가 건 조건 (분)
                 "objective": r["objective"],  # 목적 순서
                 "search_key": r["search_key"],

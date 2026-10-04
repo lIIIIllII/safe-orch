@@ -11,15 +11,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-NeedKind = Literal["OWNER_CONSENT", "OTHER_UNIT", "FACT_CHANGE", "HUMAN_INFO", "HUMAN_DECISION"]
+NeedKind = Literal["OTHER_UNIT", "FACT_CHANGE", "HUMAN_INFO", "HUMAN_DECISION"]
 ResultStatus = Literal["DONE", "BLOCKED"]
 # 바뀌어야 하는 사실. 작업: WINDOW·DURATION·WITHDRAWAL, 자원: AVAILABILITY·PERMISSION, 풀: QUANTITY
 FactField = Literal["WINDOW", "DURATION", "WITHDRAWAL", "AVAILABILITY", "PERMISSION", "QUANTITY"]
 
 REF_FIELDS = (
     "task_id",
-    "axis",
-    "values",
     "unit_id",
     "group_id",
     "field",
@@ -32,7 +30,6 @@ REF_FIELDS = (
 )
 # 종류 → (반드시 있어야 하는 참조, 그중 정확히 하나가 있어야 하는 참조, 있어도 되는 참조)
 NEED_REFS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {
-    "OWNER_CONSENT": (("task_id", "axis"), (), ("values",)),
     "OTHER_UNIT": (("group_id", "unit_id"), (), ()),
     "FACT_CHANGE": (("field",), ("task_id", "resource_id", "pool_id"), ()),
     "HUMAN_INFO": (("actor_id",), ("event_id", "task_id"), ()),
@@ -59,7 +56,6 @@ class Need(BaseModel):
 
     kind: NeedKind = Field(
         description=(
-            "OWNER_CONSENT 작업 담당자가 그 작업의 축(값)을 열어 줘야 한다(task_id, axis, 자원이면 values). "
             "OTHER_UNIT 그 충돌 그룹을 다른 Unit으로 재계획해야 한다(group_id, unit_id). "
             "FACT_CHANGE 사실이 바뀌어야 한다(field와 대상 하나: task_id·resource_id·pool_id). "
             "HUMAN_INFO 사람에게서 답을 받지 못했다(actor_id와 event_id 또는 task_id). "
@@ -67,8 +63,6 @@ class Need(BaseModel):
         )
     )
     task_id: str | None = Field(default=None, description="작업 ID")
-    axis: Literal["TIME", "RESOURCE"] | None = Field(default=None, description="이동 축")
-    values: list[str] = Field(default_factory=list, description="허용이 필요한 자원 ID(자원 축)")
     unit_id: str | None = Field(default=None, description="Unit ID")
     group_id: str | None = Field(default=None, description="충돌 그룹 ID")
     field: FactField | None = Field(
@@ -95,8 +89,6 @@ class Need(BaseModel):
             raise ValueError(f"{self.kind} needs exactly one of {', '.join(one_of)}")
         if given - {*required, *one_of, *optional}:
             raise ValueError(f"{self.kind} takes only its own references")
-        if self.values and self.axis != "RESOURCE":
-            raise ValueError("values are resource ids (axis RESOURCE)")
         if self.field is not None and not getattr(self, FACT_TARGET[self.field]):
             raise ValueError(f"{self.field} needs {FACT_TARGET[self.field]}")
         return self

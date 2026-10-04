@@ -5,12 +5,10 @@ from langchain_core.messages import AIMessage
 from scripted import ScriptedChatModel, call, escalate
 
 from app.agents import runtime, skills
-from app.agents.needs import ask_refusals
 from app.agents.observers.replanning import assignable_resources, build_observation
 from app.agents.registry import BINDINGS
 from app.agents.specs import coordination, event_response, intake, replanning
 from app.domain.models import Requirement
-from app.domain.needs import Need
 from app.store import db
 from app.store.repos.runs import list_steps
 
@@ -69,10 +67,6 @@ def test_skills_open_on_facts_only():
     assert skills.open_skills(replanning.SKILLS, facts) == ["ASSESS", "BUILD_CANDIDATE", "WRAP_UP"]
     facts = {"has_conflict": True, "has_rejection": True}
     assert skills.open_skills(replanning.SKILLS, facts) == list(replanning.SKILLS)
-    assert skills.open_skills(coordination.SKILLS, {"has_ask_need": True}) == [
-        "PRE_CONFIRM",
-        "WRAP_UP",
-    ]
     assert skills.open_skills(coordination.SKILLS, {}) == ["WRAP_UP"]
     assert skills.open_skills(coordination.SKILLS, {"has_unsent_notice": True}) == [
         "NOTIFY",
@@ -96,15 +90,13 @@ def test_available_is_open_skill_tools_with_valid_arguments():
     }
     facts = {"has_conflict": True, "has_rejection": True}
     out = skills.available(replanning.SKILLS, facts, valid)
-    # 유효한 인자 값이 없는 도구(TRY)는 빠진다
+    # 유효한 인자 값이 없는 도구(조건을 걸어 풀기)는 빠진다
     assert list(out) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]
-    # 열리지 않은 스킬의 도구(사전 확인이 없을 때의 ASK_OWNER)도 빠진다
-    asking = {"ASK_OWNER": {"need_id": ["n1"]}, "RETURN_RESULT": {}}
+    # 열리지 않은 스킬의 도구(협의 항목이 없을 때의 변경 요청)도 빠진다
+    asking = {"SEND_CHANGE_REQUEST": {"task_id": ["C"]}, "RETURN_RESULT": {}}
     assert list(skills.available(coordination.SKILLS, {}, asking)) == ["RETURN_RESULT"]
-    assert skills.available(coordination.SKILLS, {"has_ask_need": True}, asking)["ASK_OWNER"] == {
-        "need_id": ["n1"],
-        "skill": ["PRE_CONFIRM"],
-    }
+    opened = skills.available(coordination.SKILLS, {"has_consult_item": True}, asking)
+    assert opened["SEND_CHANGE_REQUEST"] == {"task_id": ["C"], "skill": ["CONSULT"]}
     assert out["SOLVE_WITH_SCOPE"] == {
         "level": ["L1"],
         "skill": ["BUILD_CANDIDATE", "APPLY_REJECTION"],
@@ -191,9 +183,7 @@ def test_resource_eligibility_type_permission_and_availability(with_a):
     add_run(with_a, "run_e", input_ref=CONFLICT)
     with db.read() as conn:
         obs = build_observation(conn, with_a, "run_e")
-    # 조회하지 않아도 서버는 쓸 수 있는 자원을 안다: 유형이 같고 사용 권한이 있는 것
     assert obs.data["assignable_resources"] == []
-    assert obs.hidden["eligible"]["A"]["alternatives"] == ["SITE-CR-01"]
     snapshot = take_snapshot(with_a)
     facts = snapshot.facts()
     a = facts.task_map()["A"]
@@ -255,37 +245,3 @@ def test_listing_reports_zone_and_requirement_reasons(with_a):
         ],
         "SITE-CR-01": [{"reason": "REQUIREMENT_NOT_MET", "attribute": "usage"}],
     }
-
-
-def test_owner_ask_validity_is_checked_on_facts(with_a):
-    """사전 확인으로 물을 수 있는 것은 지금 유효한 자원 축 담당자 확인뿐이다. 조회했는지는 보지 않는다."""
-
-    def need(**refs):
-        return Need(kind="OWNER_CONSENT", task_id="A", **refs)
-
-    add_run(with_a, "run_q", input_ref=CONFLICT)
-    with db.read() as conn:
-        run = build_observation(conn, with_a, "run_q").run
-        refusals = ask_refusals(
-            conn,
-            with_a,
-            run,
-            [
-                need(axis="RESOURCE", values=["B-CR-01"]),  # 사용 권한 없음
-                need(axis="RESOURCE", values=["SITE-GC-01"]),  # 유형이 다름
-                need(axis="RESOURCE", values=["SITE-CR-01", "B-CR-01"]),  # 하나라도 쓸 수 없으면
-                need(axis="RESOURCE", values=["SITE-CR-01"]),
-                need(axis="TIME"),  # 시간 동의는 후보 협의에서 받는다
-                need(axis="RESOURCE"),
-                Need(kind="OTHER_UNIT", group_id="g", unit_id="UB"),
-            ],
-        )
-    assert refusals == [
-        "RESOURCE_NOT_ELIGIBLE",
-        "RESOURCE_NOT_ELIGIBLE",
-        "RESOURCE_NOT_ELIGIBLE",
-        None,
-        "TIME_AXIS_NOT_ASKABLE",
-        "NO_VALUES",
-        "NOT_OWNER_CONSENT",
-    ]

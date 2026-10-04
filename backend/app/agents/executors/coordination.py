@@ -3,7 +3,6 @@
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 모든 Action은 tx 하나다:
 begin_step(활성·차감·STALE_OBSERVATION·재관찰·허용 판정) → 효과 → step 완료.
 변경 요청·통지의 서버 문구(body)는 여기서 서버 값으로 만들고, 모델 문장은 agent_text다.
-사전 확인(ASK_OWNER)은 MOVABILITY 제안과 질문을 만든다. 동의 효과는 담당자의 답 명령이 만든다.
 승인·확정·Hold 해제·Proposal 확인·미응답 수용·고정·고정 해제 함수는 없다.
 """
 
@@ -21,7 +20,7 @@ from app.domain.models import Task
 from app.packs.loader import LoadedPack
 from app.store import db
 from app.store.repos.consultations import get_consultation_items
-from app.store.repos.messages import insert_message, insert_proposal
+from app.store.repos.messages import insert_message
 from app.store.repos.plans import get_current_plan
 from app.store.repos.site import get_site
 from app.store.repos.tasks import list_current_tasks
@@ -48,16 +47,9 @@ class CoordinationExecutor:
             assert obs is not None
             if isinstance(action, spec.SendChangeRequest):
                 return self._request(tx, run_id, step_no, meta, parsed, obs, action)
-            if isinstance(action, spec.AskOwner):
-                return self._ask(tx, run_id, step_no, meta, parsed, obs, action)
             if isinstance(action, spec.WaitForReplies):
-                opened = [a["message_id"] for a in obs.data["asks"] if a["status"] == "OPEN"]
-                kind, ref = (
-                    ("MESSAGE", opened[0])
-                    if obs.data["phase"] == "ASK"
-                    else ("CONSULTATION", obs.data["candidate"]["candidate_id"])
-                )
-                outcome = self.wait_or_continue(tx, run_id, step_no, kind, ref)
+                ref = obs.data["candidate"]["candidate_id"]
+                outcome = self.wait_or_continue(tx, run_id, step_no, "CONSULTATION", ref)
                 self._done(tx, run_id, step_no, meta, parsed, outcome, None)
                 return outcome
             if isinstance(action, spec.SendNotice):
@@ -69,13 +61,8 @@ class CoordinationExecutor:
         """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (조합까지)."""
         available = obs.available
         c = spec.choices(obs.data)
-        if isinstance(action, spec.AskOwner):
-            ask = next((a for a in obs.data["asks"] if a["need_id"] == action.need_id), None)
-            if ask is not None and ask["status"] == "NOT_ASKABLE":
-                return str(ask["reason"])  # 거절한 값(VALUE_DECLINED), 고정된 작업 등 사실 조건
-            return "ASK_OWNER" in available and action.need_id in c["ASK"]
         if isinstance(action, spec.ReturnResult):
-            return action.status in available["RETURN_RESULT"].get("status", ["DONE", "BLOCKED"])
+            return "RETURN_RESULT" in available
         if isinstance(action, spec.SendChangeRequest):
             return "SEND_CHANGE_REQUEST" in available and action.task_id in c["REQUEST"]
         if isinstance(action, spec.WaitForReplies):
@@ -158,65 +145,6 @@ class CoordinationExecutor:
         self._done(tx, run_id, step_no, meta, parsed, outcome, result, {"message_id": message_id})
         return outcome
 
-    def _ask(
-        self,
-        tx: sqlite3.Connection,
-        run_id: str,
-        step_no: int,
-        meta: StepMeta,
-        parsed: _Parsed,
-        obs: Observation,
-        action: spec.AskOwner,
-    ) -> GatewayResult:
-        """사전 확인: MOVABILITY 제안 + 질문(QUESTION). need 하나에 질문 하나, 수신자는 작업 담당자다.
-
-        동의 효과는 구조화 값(axis·allowed_values)으로만 정해진다. 모델의 message는 agent_text로만 둔다.
-        """
-        ask = next(a for a in obs.data["asks"] if a["need_id"] == action.need_id)
-        site = get_site(tx, self.pack.site_id)
-        assert site is not None
-        task = self._task(tx, ask["task_id"])
-        values = list(dict.fromkeys(ask["values"]))
-        proposal_id, message_id = new_id("prop"), new_id("msg")
-        insert_proposal(
-            tx,
-            self.pack.site_id,
-            proposal_id,
-            type_="MOVABILITY",
-            run_id=run_id,
-            step_no=step_no,
-            target_task_id=task.task_id,
-            base_task_revision=task.revision,
-            context_version=site.context_version,
-            payload={"axis": ask["axis"], "allowed_values": values, "need_id": action.need_id},
-            confirmer_actor_id=task.owner_actor_id,
-        )
-        body = movability_text(self.pack, task, values)
-        insert_message(
-            tx,
-            self.pack.site_id,
-            message_id,
-            run_id=run_id,
-            step_no=step_no,
-            to_actor_id=task.owner_actor_id,
-            type_="QUESTION",
-            proposal_id=proposal_id,
-            body=body,
-            agent_text=action.message,
-            context_version=site.context_version,
-        )
-        outcome = GatewayResult("CONTINUE")
-        result = {
-            "need_id": action.need_id,
-            "proposal_id": proposal_id,
-            "message_id": message_id,
-            "to_actor_id": task.owner_actor_id,
-            "body": body,
-        }
-        changes = {"proposal_id": proposal_id, "message_id": message_id}
-        self._done(tx, run_id, step_no, meta, parsed, outcome, result, changes)
-        return outcome
-
     def _notice(
         self,
         tx: sqlite3.Connection,
@@ -254,24 +182,8 @@ class CoordinationExecutor:
 
 
 def _produced(obs: Observation) -> dict[str, Any]:
-    """결과에 서버가 채우는 내용: 협의는 항목별 상태와 남은 이견, 통지는 대상 수와 보낸 수, 사전 확인은
-    need별 답(수락한 값·거절·미응답·묻지 못함)."""
+    """결과에 서버가 채우는 내용: 협의는 항목별 상태와 남은 이견, 통지는 대상 수와 보낸 수."""
     data = obs.data
-    if data["phase"] == "ASK":
-        results = {"OPEN": "NO_REPLY", "UNASKED": "NOT_ASKED", "NOT_ASKABLE": "NOT_ASKED"}
-        return {
-            "phase": "ASK",
-            "asks": [
-                {
-                    "need_id": a["need_id"],
-                    "task_id": a["task_id"],
-                    "owner_actor_id": a["owner_actor_id"],
-                    "result": results.get(a["status"], a["status"]),
-                    "accepted_values": a.get("accepted_values", []),
-                }
-                for a in data["asks"]
-            ],
-        }
     if data["phase"] == "NOTICE":
         targets = data["notice_targets"]
         return {
@@ -311,15 +223,6 @@ def change_request_text(pack: LoadedPack, task: Task, before: Any, after: Any) -
     return (
         f"재계획 후보가 {_work(pack, task)} 작업을 바꿉니다: {', '.join(parts)}. "
         "이 변경을 수락하시겠습니까? 받아들일 수 없으면 이견과 사유를 적어 주세요."
-    )
-
-
-def movability_text(pack: LoadedPack, task: Task, values: list[str]) -> str:
-    """사전 확인 질문의 서버 문구(동의 내용의 기준). Pack 표시 이름으로 서버가 만든다."""
-    return (
-        f"{_work(pack, task)} 작업에 {', '.join(values)}도 쓸 수 있게 허용하시겠습니까? "
-        f"현재 요청 자원 {task.requested_resource_id}. "
-        "허용하면 재계획이 이 자원을 대안으로 검토합니다."
     )
 
 

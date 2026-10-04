@@ -20,16 +20,20 @@ from app.commands.moves import (
     SNAP_MIN,
     MoveRequest,
     RemoveRequest,
+    ResourceRequest,
     _judge,
     _probe,
     _remove_verdict,
+    change_resource,
     move_check,
     move_range,
     remove_check,
+    resource_check,
 )
 from app.commands.moves import move_task as move_command
 from app.commands.moves import remove_task as remove_command
 from app.commands.pins import TaskRef, pin_task
+from app.commands.task_edit import EditRequest, edit_task
 from app.commands.task_request import (
     TaskRequestForm,
     TaskWithdraw,
@@ -190,7 +194,7 @@ def test_validator_checks_move_is_one_task_by_its_owner(seeded_real):
         a.model_copy(update={"resource_id": "SITE-CR-01"}) if a.task_id == "D" else a
         for a in candidate.assignments
     )
-    assert "RESOURCE_AXIS_NOT_ALLOWED" in reasons(other, "planner_b")
+    assert "MOVE_TIME_AND_RESOURCE" in reasons(other, "planner_b")  # 시각만 또는 자원만 바꾼다
     # Plan 밖 작업을 넣은 MOVE 후보는 받지 않는다
     assert validate(
         snapshot, candidate.model_copy(update={"assignments": candidate.assignments[1:]}), None, pack
@@ -503,3 +507,96 @@ def test_remove_api(client, seeded_real):
     body = state.json()
     assert "D" not in {a["task_id"] for a in body["plan"]["assignments"]}
     assert next(t for t in body["tasks"] if t["task_id"] == "D")["lifecycle"] == "CANCELLED"
+
+
+# ── 작업 카드에서 자원 바꾸기 (AG-31·AG-34) ────────────────────
+
+
+def _resource(pack, actor, task_id, resource_id):
+    body = ResourceRequest(task_id=task_id, resource_id=resource_id)
+    return change_resource(pack, actor, _key(), body)
+
+
+def _resource_check(pack, actor, task_id, resource_id):
+    with db.read() as conn:
+        return resource_check(conn, pack, actor, task_id, resource_id)
+
+
+def test_owner_changes_resource_on_card_and_it_commits(seeded_real):
+    """계획에 있는 작업의 자원을 카드에서 바꾸면, 지금 시각 그대로 자원만 바꾼 배치를 직접 이동과 같은
+    판정으로 보고 바로 확정한다. 요청 자원과 그 동의도 새 자원으로 바뀐다."""
+    pack = seeded_real
+    plan, placed = _plan(pack)
+    before = placed["C"]
+    assert before.resource_id == "A-CR-01"
+    ok = _resource_check(pack, "foreman_a2", "C", "SITE-CR-01")
+    assert (ok["path"], ok["ok"], ok["reason_codes"]) == ("MOVE", True, [])
+    # 안 되는 자원: 확인과 확정이 같은 사유로 거절한다
+    bad = _resource_check(pack, "foreman_a2", "C", "B-CR-01")
+    out = _resource(pack, "foreman_a2", "C", "B-CR-01")
+    assert bad["ok"] is False and list(out.reason_codes) == bad["reason_codes"]
+    assert out.reason_codes[0] == "MOVE_NOT_VALID" and "RESOURCE_AUTH" in out.reason_codes
+    for actor in ("supervisor", "planner_a"):
+        assert _resource(pack, actor, "C", "SITE-CR-01").reason_codes == ("NOT_AUTHORIZED",)
+    assert _resource(pack, "foreman_a2", "C", "A-CR-01").reason_codes == ("NO_CHANGE",)
+    assert _resource(pack, "foreman_a2", "C", "NOPE").reason_codes == ("RESOURCE_NOT_FOUND",)
+    assert _plan(pack)[0].plan_revision == plan.plan_revision and _task(pack, "C").revision == 1
+
+    out = _resource(pack, "foreman_a2", "C", "SITE-CR-01")
+    assert out.status == "APPLIED"
+    new_plan, placed = _plan(pack)
+    assert new_plan.plan_revision == plan.plan_revision + 1
+    assert (placed["C"].start, placed["C"].resource_id) == (before.start, "SITE-CR-01")
+    task = _task(pack, "C")
+    assert (task.revision, task.requested_resource_id) == (2, "SITE-CR-01")
+    assert task.fields["resource"].value["requested_resource_id"] == "SITE-CR-01"
+    assert task.fields["resource"].source_ref.startswith("card:") and task.decided_values == ()
+    with db.read() as conn:
+        candidate = get_candidate(conn, pack.site_id, new_plan.candidate_id)
+        [validation] = list_validations(conn, pack.site_id, candidate.candidate_id)
+        consents = conn.execute(
+            "SELECT axis, scope, source_ref FROM consent WHERE task_id = 'C' AND task_revision = 2"
+            " ORDER BY rowid"
+        ).fetchall()
+        assert list_review_queue(conn, pack.site_id) == []
+    assert (candidate.kind, candidate.made_by, validation.status) == ("MOVE", "foreman_a2", "PASS")
+    by_axis = {c[0]: (c[1], c[2]) for c in consents}
+    assert "RESOURCE" in by_axis  # 다른 축의 동의가 있으면 그대로 따라온다
+    assert "SITE-CR-01" in by_axis["RESOURCE"][0] and "A-CR-01" not in by_axis["RESOURCE"][0]
+    assert by_axis["RESOURCE"][1].startswith("card:")
+    assert _count("case_event") == 0  # 열린 메인이 없으면 사건을 만들지 않는다
+
+
+def test_unplanned_request_changes_its_requested_resource(seeded_real):
+    """계획 밖 요청은 요청 자원을 고친다(값 고치기). 고친 자원이 그 작업의 기준 자원이 된다."""
+    pack = seeded_real
+    _submit_a(pack)
+    found = _resource_check(pack, "planner_a", "A", "SITE-CR-01")
+    assert (found["path"], found["ok"]) == ("EDIT", True)
+    assert _resource(pack, "planner_a", "A", "SITE-CR-01").reason_codes == ("TASK_NOT_IN_PLAN",)
+    out = edit_task(
+        pack, "planner_a", _key(), EditRequest(task_id="A", requested_resource_id="SITE-CR-01")
+    )
+    assert out.status == "APPLIED"
+    assert _task(pack, "A").requested_resource_id == "SITE-CR-01"
+    base = take_snapshot(pack).facts().base_assignments()["A"]
+    assert base.resource_id == "SITE-CR-01"
+
+
+def test_resource_change_api(client, seeded_real):
+    def get(actor, resource_id):
+        url = f"/api/tasks/C/resource-check?resource_id={resource_id}"
+        return client.get(url, headers={"X-Actor": actor}).json()
+
+    def post(actor, resource_id):
+        headers = {"X-Actor": actor, "Idempotency-Key": _key()}
+        return client.post(
+            "/api/tasks/C/resource", json={"resource_id": resource_id}, headers=headers
+        )
+
+    assert get("foreman_a2", "SITE-CR-01")["ok"] is True
+    assert get("foreman_a2", "B-CR-01")["ok"] is False
+    assert post("supervisor", "SITE-CR-01").status_code == 403
+    assert post("foreman_a2", "B-CR-01").status_code == 409
+    res = post("foreman_a2", "SITE-CR-01")
+    assert res.status_code == 200 and res.json()["plan_revision"] == 1

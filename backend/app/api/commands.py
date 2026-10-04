@@ -34,7 +34,14 @@ from app.commands.messages import (
     discard_proposal,
     reply_message,
 )
-from app.commands.moves import MoveRequest, RemoveRequest, move_task, remove_task
+from app.commands.moves import (
+    MoveRequest,
+    RemoveRequest,
+    ResourceRequest,
+    change_resource,
+    move_task,
+    remove_task,
+)
 from app.commands.pins import (
     PreferredWindow,
     TaskRef,
@@ -99,6 +106,10 @@ class WindowBody(Body):
 
 class MoveBody(Body):
     start: int
+
+
+class ResourceBody(Body):
+    resource_id: str = Field(min_length=1)
 
 
 class EditBody(Body):
@@ -181,6 +192,15 @@ def post_move(
     """담당자의 직접 이동: 자기 작업의 시각을 옮기고 바로 확정한다 (AG-31)."""
     req = MoveRequest(task_id=task_id, **body.model_dump())
     return respond(move_task(pack, actor.actor_id, key, req))
+
+
+@router.post("/tasks/{task_id}/resource")
+def post_resource(
+    task_id: str, body: ResourceBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """담당자가 작업 카드에서 계획에 있는 자기 작업의 자원을 바꾸고 바로 확정한다 (AG-31)."""
+    req = ResourceRequest(task_id=task_id, **body.model_dump())
+    return respond(change_resource(pack, actor.actor_id, key, req))
 
 
 @router.post("/tasks/{task_id}/edit")

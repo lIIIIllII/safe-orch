@@ -2,7 +2,7 @@
 
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 공통 판정(MALFORMED·LLM 오류·
 STALE_OBSERVATION·연속 2회·step 완료 기록)은 ToolGateway에 있고, 이 클래스는 그 도우미를 받아 쓴다.
-SOLVE_WITH_SCOPE·SOLVE_WITH_CONDITIONS·TRY_ALTERNATIVE_RESOURCE는 예약 tx → tx 밖 Solver → 등록 tx,
+SOLVE_WITH_SCOPE·SOLVE_WITH_CONDITIONS는 예약 tx → tx 밖 Solver → 등록 tx,
 나머지는 tx 하나다. 조건은 좁히기만 하고 서버는 유효성만 본다(CV-24). 해가 살아 있는 기존 후보와 같은
 배치면 새 후보를 만들지 않는다(CV-25). 같은 사실에서 이미 한 탐색(같은 범위·조건·목적 순서)이면 Solver를
 부르지 않고 그때의 결과를 돌려준다(CV-13).
@@ -59,34 +59,23 @@ class ReplanningExecutor:
         self.return_result = gateway.return_result
 
     def run(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
-        if parsed.name in ("SOLVE_WITH_SCOPE", "SOLVE_WITH_CONDITIONS", "TRY_ALTERNATIVE_RESOURCE"):
+        if parsed.name in ("SOLVE_WITH_SCOPE", "SOLVE_WITH_CONDITIONS"):
             return self._solve(run_id, step_no, meta, parsed)
         if parsed.name == "LIST_ASSIGNABLE_RESOURCES":
             return self._single_tx(run_id, step_no, meta, parsed)
         return self._return(run_id, step_no, meta, parsed)
 
     def _permitted(self, obs: Observation, action: spec.Action) -> bool | str:
-        """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (작업별 조합까지).
-
-        자원을 쓰는 행동은 자원 적격성(유형·사용 권한·가용 구간·구역·요구 조건)을 여기서 검사한다.
-        조회했는지는 보지 않는다 (CV-15). 적격이 아니면 RESOURCE_NOT_ELIGIBLE.
-        """
+        """선택한 Action과 인자 조합이 최신 Available Actions 안에 있는가 (작업별 조합까지)."""
         available = obs.available
         if isinstance(action, spec.SolveWithScope):
             return action.level in available.get("SOLVE_WITH_SCOPE", {}).get("level", [])
         if isinstance(action, spec.SolveWithConditions):
             # 조건의 유효성은 예약 tx에서 본다(시각 형식, 시간창, 고정, 범위, 자원 적격성)
             return action.level in available.get("SOLVE_WITH_CONDITIONS", {}).get("level", [])
-        c = spec.choices(obs.data, obs.hidden)
         if isinstance(action, spec.ListAssignableResources):
+            c = spec.choices(obs.data, obs.hidden)
             return "LIST_ASSIGNABLE_RESOURCES" in available and action.task_id in c["LIST"]
-        eligible = obs.hidden.get("eligible", {}).get(getattr(action, "task_id", ""), {})
-        alternatives = set(eligible.get("alternatives", []))
-        if isinstance(action, spec.TryAlternativeResource):
-            if eligible and action.resource_id not in alternatives:
-                return "RESOURCE_NOT_ELIGIBLE"
-            tries = c["TRY"].get(action.task_id, [])
-            return "TRY_ALTERNATIVE_RESOURCE" in available and action.resource_id in tries
         if isinstance(action, spec.ReturnResult):
             return action.status in available.get("RETURN_RESULT", {}).get("status", [])
         return False
@@ -153,22 +142,17 @@ class ReplanningExecutor:
             return self.return_result(tx, run_id, step_no, meta, parsed, produced)
 
     def _solve(self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed) -> GatewayResult:
-        """SOLVE_WITH_SCOPE(level), SOLVE_WITH_CONDITIONS(level + 작업별 조건),
-        TRY_ALTERNATIVE_RESOURCE(주 충돌 L0 + 대체 자원 1개)."""
+        """SOLVE_WITH_SCOPE(level), SOLVE_WITH_CONDITIONS(level + 작업별 조건)."""
         action = parsed.action
-        try_resources: dict[str, list[str]] | None = None
         asked: list[spec.TaskCondition] = []
         objective = "CHANGE_FIRST"
-        if isinstance(action, spec.TryAlternativeResource):
-            level, try_resources = "L0", {action.task_id: [action.resource_id]}
-        elif isinstance(action, spec.SolveWithConditions):
+        if isinstance(action, spec.SolveWithConditions):
             level, asked, objective = action.level, action.conditions, action.objective
         else:
             assert isinstance(action, spec.SolveWithScope)
             level = action.level
         site_id = self.pack.site_id
         # 범위·조건 계산은 허용 판정을 미룬다: 이미 한 탐색이면 허용 여부와 관계없이 그때의 결과를 돌려준다
-        repeatable = not isinstance(action, spec.TryAlternativeResource)
         verdicts: list[bool | str] = []
 
         def permitted(o: Observation) -> bool | str:
@@ -176,7 +160,7 @@ class ReplanningExecutor:
             if verdict is True:
                 verdict = o.primary is not None
             verdicts.append(verdict)
-            return o.primary is not None if repeatable else verdict
+            return o.primary is not None
 
         # 1. 예약 tx: 관찰 버전 확인 → Available 재계산 → Snapshot·SearchSpec·SolverJob, Solver Budget
         with db.write() as tx:
@@ -196,7 +180,6 @@ class ReplanningExecutor:
                 obs.primary,
                 obs.run.acting_unit_id,
                 level,
-                try_resources,
                 conditions,
                 objective,
             )
@@ -208,7 +191,7 @@ class ReplanningExecutor:
                 return self._reject(tx, run_id, step_no, meta, parsed, reason)
             # 같은 사실에서 같은 범위·같은 조건·같은 목적 순서는 다시 풀지 않는다: Solver를 부르지 않고
             # Solver Budget도 쓰지 않으며, 그때의 결과를 돌려준다 (CV-13)
-            if repeatable and probe.search_key in tried_search_keys(tx, site_id, obs.run.case_id):
+            if probe.search_key in tried_search_keys(tx, site_id, obs.run.case_id):
                 previous = _previous_result(tx, run_id, probe.search_key)
                 self._complete(
                     tx,
@@ -240,8 +223,6 @@ class ReplanningExecutor:
                 finish_solver_job(tx, run_id, step_no, "ABORTED")
                 return GatewayResult("INACTIVE")
             tool_result = _solver_summary(snapshot, level, search_spec.hash, result, candidate)
-            if try_resources:
-                tool_result["try_resources"] = try_resources
             if search_spec.objective != "CHANGE_FIRST":
                 tool_result["objective"] = search_spec.objective
             if search_spec.conditions:

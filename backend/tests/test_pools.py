@@ -4,7 +4,7 @@ import json
 import uuid
 
 import pytest
-from conftest import add_task, make_task, take_snapshot, with_facts
+from conftest import free_alternative, take_snapshot, with_facts
 from scripted import Router, solve
 
 from app.commands.task_request import TaskRequestForm, submit_task_request
@@ -179,38 +179,31 @@ def test_validator_catches_pool_conflicts_through_rule_engine(seeded):
 # ── Solver ─────────────────────────────────────────────────────
 
 
-@pytest.fixture
-def resource_movable_a(with_a):
-    add_task(with_a, make_task(with_a, revision=2, movable={"resource": True}))
-    return with_a
-
-
-def _solve(pack, snap, level, try_resources=None):
-    spec = build_search_spec(snap, A_B, "UA", level, try_resources)
+def _solve(pack, snap, level):
+    spec = build_search_spec(snap, A_B, "UA", level)
     return cpsat.solve(snap, spec, pack)
 
 
-def test_cumulative_constraint_counts_fixed_tasks(resource_movable_a):
+def test_cumulative_constraint_counts_fixed_tasks(with_a):
     """Beta(A 10:00 SITE-CR-01)는 고정된 C(10:00)와 겹친다: 작업 인원 4 + 4 = 8."""
-    pack = resource_movable_a
-    snap = take_snapshot(pack)
-    try_site = {"A": ["SITE-CR-01"]}
-    beta = _solve(pack, snap, "L0", try_site)
+    pack = with_a
+    snap = free_alternative(take_snapshot(pack))
+    beta = _solve(pack, snap, "L0")
     placed = {a["task_id"]: (a["start"], a["resource_id"]) for a in beta.solution}
     assert placed["A"] == (60, "SITE-CR-01") and placed["C"] == (60, "A-CR-01")
-    assert _solve(pack, _pools(snap, UA_WRK=8), "L0", try_site).stage1["status"] == "OPTIMAL"
-    assert _solve(pack, _pools(snap, UA_WRK=7), "L0", try_site).stage1["status"] == "INFEASIBLE"
-    assert _solve(pack, _pools(snap, UA_SIG=1), "L0", try_site).stage1["status"] == "INFEASIBLE"
+    assert _solve(pack, _pools(snap, UA_WRK=8), "L0").stage1["status"] == "OPTIMAL"
+    assert _solve(pack, _pools(snap, UA_WRK=7), "L0").stage1["status"] == "INFEASIBLE"
+    assert _solve(pack, _pools(snap, UA_SIG=1), "L0").stage1["status"] == "INFEASIBLE"
     # 범위를 넓혀 C도 움직이면 겹치지 않게 푼다(Alpha와 같은 해)
     alpha = _solve(pack, _pools(snap, UA_WRK=7), "L1")
     placed = {a["task_id"]: a["start"] for a in alpha.solution}
     assert (placed["A"], placed["C"]) == (60, 90)
 
 
-def test_solver_result_passes_rule_engine_pool_check(resource_movable_a):
-    pack = resource_movable_a
-    snap = _pools(take_snapshot(pack), UA_WRK=7)
-    result = _solve(pack, snap, "L1", {"A": ["SITE-CR-01"]})
+def test_solver_result_passes_rule_engine_pool_check(with_a):
+    pack = with_a
+    snap = _pools(free_alternative(take_snapshot(pack)), UA_WRK=7)
+    result = _solve(pack, snap, "L1")
     assignments = [Assignment(**a) for a in result.solution]
     assert [c for c in detect_conflicts(snap, assignments, pack) if c.pool] == []
 

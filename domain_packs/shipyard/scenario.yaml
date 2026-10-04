@@ -15,7 +15,6 @@ new_task:
   required_resource_type: CRANE
   requested_resource_id: A-CR-01
   predecessors: []
-  movable: { resource: false }               # 자원 축 미확인
   requested: { start: 0, end: 30 }           # 요청 일정 09:00–09:30
 
 # 시연 확장 요청 (가정). 요청자(requester)가 Unit·담당자를 정한다. 하나씩 확정한 뒤 다음을 보낸다.

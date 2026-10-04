@@ -166,60 +166,6 @@ def _joined(r: dict[str, Any]) -> dict[str, Any]:
     return r
 
 
-def declined_values(
-    conn: sqlite3.Connection, site_id: str, task_id: str, task_revision: int
-) -> set[str]:
-    """그 작업 revision에 담당자가 허용을 거절한 자원 값. 현장 전체에서 본다(Run·Case를 가리지 않는다,
-    AG-09). 작업 revision이 바뀌면 다시 물을 수 있다. 취소된 요청에 온 늦은 답은 세지 않는다 (ST-15)."""
-    out: set[str] = set()
-    for r in rows(
-        conn,
-        "SELECT p.payload FROM message m JOIN proposal p ON p.proposal_id = m.proposal_id"
-        " WHERE m.site_id = ? AND p.type = 'MOVABILITY' AND p.target_task_id = ?"
-        " AND p.base_task_revision = ? AND m.status = 'ANSWERED'"
-        " AND json_extract(m.reply, '$.decision') = 'DECLINE'",
-        (site_id, task_id, task_revision),
-    ):
-        out.update((loads(r["payload"]) or {}).get("allowed_values", []))
-    return out
-
-
-def open_owner_asks(conn: sqlite3.Connection, site_id: str) -> set[str]:
-    """답을 기다리는 자원 허용 질문이 있는 작업."""
-    return {
-        r["target_task_id"]
-        for r in rows(
-            conn,
-            "SELECT p.target_task_id FROM message m JOIN proposal p"
-            " ON p.proposal_id = m.proposal_id"
-            " WHERE m.site_id = ? AND p.type = 'MOVABILITY' AND m.status = 'OPEN'",
-            (site_id,),
-        )
-    }
-
-
-def list_owner_asks(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
-    """이 Run이 보낸 사전 확인 질문과 답 (need별). comment는 인용 필드로만."""
-    out = []
-    for r in rows(
-        conn, _JOINED + " WHERE m.run_id = ? AND p.type = 'MOVABILITY' ORDER BY m.rowid", (run_id,)
-    ):
-        r = _joined(r)
-        reply = r["reply"] or {}
-        out.append(
-            {
-                "message_id": r["message_id"],
-                "need_id": r["payload"].get("need_id"),
-                "task_id": r["target_task_id"],
-                "status": r["status"],
-                "decision": reply.get("decision"),
-                "values": reply.get("values", []),
-                "quoted_comment": reply.get("comment"),
-            }
-        )
-    return out
-
-
 def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[dict[str, Any]]:
     """X-Actor 본인에게 온 메시지. 서버 문구(body)와 모델 문구(agent_text)를 나눈다."""
     out = []

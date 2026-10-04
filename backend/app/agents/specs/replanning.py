@@ -2,7 +2,7 @@
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터(untried_levels 등)만 보고 계산한다.
 Action: SOLVE_WITH_SCOPE, SOLVE_WITH_CONDITIONS, LIST_ASSIGNABLE_RESOURCES,
-TRY_ALTERNATIVE_RESOURCE, RETURN_RESULT.
+RETURN_RESULT.
 사람 도구는 없다: 담당자 확인은 Coordination 한 창구로만 한다 (AG-09).
 순서는 스킬 지침에 있고, 여기 조건은 사실·유효성·Budget뿐이다 (AG-01).
 모듈 이름(GOAL, ACTIONS, tool_schemas 등)은 그대로 두고, 그 값으로 SPEC(AgentSpec)을 만든다.
@@ -78,7 +78,7 @@ class TaskCondition(BaseModel):
     )
     resource_id: str | None = Field(
         default=None,
-        description="이 자원을 쓴다(자원 지정). 현재 자원이거나 자원 축이 열린 작업의 적격 자원",
+        description="이 자원을 쓴다(자원 지정). 현재 자원이거나 그 작업이 쓸 수 있는 적격 자원",
     )
     use_preferred_window: bool = Field(
         default=False,
@@ -118,31 +118,18 @@ class SolveWithConditions(Action):
 
 class ListAssignableResources(Action):
     """작업에 쓸 수 있는 자원을 조회한다(유형·사용 권한·가용 구간 기준). 결과는 자원 사실이 같은 동안
-    유효하다. 대체 자원 시도는 서버가 같은 기준으로 쓸 수 있는 자원만 받는다."""
+    유효하다. 조건의 자원 지정은 서버가 같은 기준으로 쓸 수 있는 자원만 받는다."""
 
     OPENS = "필요한 자원이 있고 고정되지 않은 작업을 현재 자원 사실에서 아직 조회하지 않았을 때"
 
     task_id: str = Field(description="자원을 조회할 작업 (자원이 필요한 acting_unit 작업)")
 
 
-class TryAlternativeResource(Action):
-    """충돌 당사자 범위(L0)에 대체 자원 하나를 더해 CP-SAT로 계산한다. 자원 축이 열린 작업(담당자가
-    대체 자원을 허용한 작업)에만 쓸 수 있다. 해가 있으면 후보가 등록되고 검증을 기다린다."""
-
-    OPENS = (
-        "자원 축이 열린(담당자 동의) 작업에 그 작업이 쓸 수 있는 아직 시도하지 않은 대체 자원이 있고 "
-        "Solver 호출이 남아 있을 때"
-    )
-
-    task_id: str = Field(description="자원을 바꿔 볼 작업")
-    resource_id: str = Field(description="시도할 대체 자원 (그 작업이 쓸 수 있는 자원)")
-
-
 class ReturnResult(Action, ResultFields):
     """결과를 돌려주고 Run을 끝낸다. 검증을 통과한 살아 있는 후보가 있으면 DONE으로 돌려준다(승인·거절은
-    사람이 하고 그 결과는 이 Run이 받지 않는다). 탐색 범위 확대, 자원 조회, 대체 자원 시도로 열 수 있는
+    사람이 하고 그 결과는 이 Run이 받지 않는다). 탐색 범위 확대, 조건 걸기, 자원 조회로 열 수 있는
     대안이 남아 있지 않을 때만 BLOCKED로 돌려주고, 시도한 범위와 결과를 요약에, 무엇이 충족되면 해가
-    열리는지를 길마다 필요한 것으로 적는다(담당자 확인, 다른 Unit, 사실 변경)."""
+    열리는지를 길마다 필요한 것으로 적는다(다른 Unit, 사실 변경)."""
 
     OPENS = (
         "언제나 열려 있다. DONE은 검증을 통과한 살아 있는 후보가 있을 때만, BLOCKED는 계산·조회로 열 수 "
@@ -154,14 +141,12 @@ ACTIONS: dict[str, type[Action]] = {
     "SOLVE_WITH_SCOPE": SolveWithScope,
     "SOLVE_WITH_CONDITIONS": SolveWithConditions,
     "LIST_ASSIGNABLE_RESOURCES": ListAssignableResources,
-    "TRY_ALTERNATIVE_RESOURCE": TryAlternativeResource,
     "RETURN_RESULT": ReturnResult,
 }
 FLOW = {
     "SOLVE_WITH_SCOPE": "CANDIDATE_OR_CONTINUE",
     "SOLVE_WITH_CONDITIONS": "CANDIDATE_OR_CONTINUE",
     "LIST_ASSIGNABLE_RESOURCES": "CONTINUE",
-    "TRY_ALTERNATIVE_RESOURCE": "CANDIDATE_OR_CONTINUE",
     "RETURN_RESULT": "DONE",
 }
 
@@ -184,34 +169,17 @@ def open_skills(obs: dict[str, Any]) -> list[str]:
 def choices(obs: dict[str, Any], hidden: dict[str, Any] | None = None) -> dict[str, Any]:
     """작업별 허용 값. Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다.
 
-    hidden["eligible"]은 서버가 계산한 자원 적격성이다(유형·사용 권한·가용 구간·구역·요구 조건, CV-15):
-    {작업: {"alternatives": 현재 자원 말고 쓸 수 있는 자원, "untried": 그중 아직 시도하지 않은 것}}.
-    자원 조회를 했는지는 보지 않는다.
     LIST: 필요 자원이 있고 고정되지 않았으며 같은 자원 사실에서 아직 조회하지 않은 작업.
-    TRY: 자원 축이 열렸고(movable.resource) 고정되지 않은 작업의 미시도 대체 자원.
     """
-    eligible = (hidden or {}).get("eligible", {})
     acting = {t["task_id"]: t for t in obs["acting_tasks"]}
-    pinned = {tid for tid, t in acting.items() if t["pinned"]}
     listed = {r["task_id"] for r in obs["assignable_resources"] if r["task_id"] in acting}
-    try_: dict[str, list[str]] = {}
-    for tid, e in eligible.items():
-        if tid not in acting or tid in pinned:
-            continue
-        if acting[tid]["movable"]["resource"] and e["untried"]:
-            try_[tid] = list(e["untried"])
     return {
         "LIST": [
             tid
             for tid, t in acting.items()
-            if t["required_resource_type"] and tid not in pinned and tid not in listed
+            if t["required_resource_type"] and not t["pinned"] and tid not in listed
         ],
-        "TRY": try_,
     }
-
-
-def _union(groups: dict[str, list[str]]) -> list[str]:
-    return sorted({v for vs in groups.values() for v in vs})
 
 
 def valid_actions(
@@ -229,11 +197,6 @@ def valid_actions(
     c = choices(obs, hidden)
     if c["LIST"]:
         out["LIST_ASSIGNABLE_RESOURCES"] = {"task_id": c["LIST"]}
-    if c["TRY"] and obs["primary_conflict"] and budget["solver_calls"] > 0:
-        out["TRY_ALTERNATIVE_RESOURCE"] = {
-            "task_id": sorted(c["TRY"]),
-            "resource_id": _union(c["TRY"]),
-        }
     # DONE은 검증을 통과한 살아 있는 후보가 있을 때만 유효하다(사실 조건)
     ready = bool((hidden or {}).get("done_ready"))
     out["RETURN_RESULT"] = {"status": ["DONE", "BLOCKED"] if ready else ["BLOCKED"]}

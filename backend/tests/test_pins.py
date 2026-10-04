@@ -159,7 +159,7 @@ def test_committed_task_is_not_pinned(seeded_real):
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), pack)[0]
     assert set(conflict.task_ids) == {"K", "N1"}
     spec = build_search_spec(snap, conflict, "UB", "L0")
-    assert (spec.axes["K"].time, spec.axes["K"].resource) == (True, False)
+    assert (spec.axes["K"].time, spec.axes["K"].resource) == (True, True)
 
 
 # ── Solver·Validator ───────────────────────────────────────────
@@ -294,7 +294,7 @@ def test_replanning_observation_shows_who_pinned(with_a):
     with db.read() as conn:
         obs = replanning_observer.build_observation(conn, pack, "run_test").data
     acting = {t["task_id"]: t for t in obs["acting_tasks"]}
-    assert "constraints" not in obs and acting["A"]["movable"] == {"resource": False}
+    assert "constraints" not in obs and "movable" not in acting["A"]
     assert {tid for tid, t in acting.items() if t["pinned"]} == {"M", "Q"}  # 기준 상태의 UA 고정
     assert acting["Q"]["pinned"] == {"pinned_by": "foreman_a2", "by_role": "OWNER"}
     assert set(LEGACY_PINNED) >= {"M", "Q"}
@@ -324,7 +324,7 @@ def test_pin_and_preferred_window_api(client, seeded):
     c = next(t for t in state.json()["tasks"] if t["task_id"] == "C")
     assert (c["pin"]["pinned_by"], c["pin"]["by_role"]) == ("foreman_a2", "OWNER")
     assert (c["preferred_window"]["start"], c["preferred_window"]["end"]) == (90, 150)
-    assert "time" not in c["movable"]
+    assert "movable" not in c
     assert _post(client, "tasks/C/preferred-window/clear", "foreman_a2").status_code == 200
     assert _post(client, "tasks/C/unpin", "planner_a").status_code == 403
     assert _post(client, "tasks/C/unpin", "foreman_a2").status_code == 200

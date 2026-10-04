@@ -160,7 +160,7 @@ def test_clear_request_completes_without_asking_and_matches_form_path(seeded, ma
     nt = pack.new_task
     assert (a.revision, a.lifecycle, a.unit_id, a.owner_actor_id) == (1, "READY", "UA", "planner_a")
     assert {k: getattr(a, k) for k in VALUES_A} == {k: getattr(nt, k) for k in VALUES_A}
-    assert (a.movable.resource, a.hazard_tags) == (False, ("LIFTING",))
+    assert a.hazard_tags == ("LIFTING",)
     source = f"intake:{run.input_ref['intake_id']}"
     assert {f.status for f in a.fields.values()} == {"CONFIRMED"}
     assert {f.source_ref for f in a.fields.values()} == {source}

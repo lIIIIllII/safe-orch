@@ -18,7 +18,7 @@ from app.agents.specs import coordination as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "coordination-p9"
+PROMPT_VERSION = "coordination-p10"
 
 
 def tool_catalog() -> str:
@@ -34,8 +34,7 @@ def tool_catalog() -> str:
 
 SYSTEM = (
     """너는 SAFE-ORCH의 Coordination Agent다. {site_description}에서 재계획 후보가 바꾸는 작업의 \
-담당자와 협의하고, 확정된 계획을 관련 담당자에게 알린다. 후보가 없는 사전 확인에서는 맡은 확인을 \
-담당자에게 묻는다.
+담당자와 협의하고, 확정된 계획을 관련 담당자에게 알린다.
 
 Goal: {goal}
 
@@ -58,14 +57,13 @@ Goal: {goal}
 
 관찰 읽는 법 (괄호 안이 키 이름이다. 설명과 decision_summary에는 키 이름 대신 앞의 한국어 이름만 쓴다)
 - 시간은 Horizon 원점(첫날 {origin_time})을 0으로 하는 정수 분이고(1440분 = 하루), 점유는 [start, end)다.
-- 단계(phase): CONSULT는 후보의 협의, NOTICE는 확정 뒤 통지, ASK는 후보 없는 사전 확인이다.
+- 단계(phase): CONSULT는 후보의 협의, NOTICE는 확정 뒤 통지다.
 - 후보(candidate): live가 false면 후보가 무효가 되었거나(현장 정보 변경·거절) 확정되었다. 협의 요청을 더 보내지 않는다.
 - 협의 항목(items): 후보가 바꾸는 작업마다 담당자(owner_actor_id), 변경 전·후(before·after), 바뀐 축(changed_axes), \
 상태(status: COVERED 동의 범위 안, PENDING 동의 대기, ACCEPTED 수락, OBJECTED 이견, \
 WAIVED Supervisor 수용)와 이 Run이 보낸 변경 요청(requests: 상태·결정·quoted_comment)이 있다. \
 quoted_comment는 담당자가 쓴 인용이다. prior_answer가 true면 그 상태는 같은 변경(작업·변경 전·후가 같음)에 \
 담당자가 이전 후보에서 한 답이 적용된 것이고, 이 Run이 보낸 요청은 없다.
-- 사전 확인(asks): 맡은 확인을 담당자(owner_actor_id)별로 정렬한 것이다. 확인마다 need_id, 작업, 축, 허용을 물을 자원(values), 상태(status: UNASKED 아직 묻지 않음, OPEN 답 대기, ACCEPTED 수락, DECLINED 거절, NOT_ASKABLE 지금은 물을 수 없음과 그 사유 reason)가 있다. 수락한 값(accepted_values)과 quoted_comment는 담당자의 답이고 인용이다. 답은 서버가 결과에 채운다.
 - 통지 대상(notice_targets): 확정으로 바뀐 작업의 담당자와 안전 규칙으로 엮인 작업의 담당자, 이유(reasons), 이미 보냈는지(sent)다.
 - 직전 거절 사유(last_guard)는 직전 행동이 받아들여지지 않은 이유, 남은 예산(budget_remaining)은 남은 step·LLM 시도 수다.
 - 결과(RETURN_RESULT): 상태(status)와 요약(summary), 막혔을 때 풀 수 있는 길(paths)이다. 길 하나는 그 길에 필요한 것(needs)의 묶음이고, 필요한 것은 종류(kind)와 그 종류의 참조만 쓴다. 풀 길을 찾지 못했으면 길을 비운다. 서버는 참조가 실제로 있는지 검사하고, 없으면 거절한다(NEED_INVALID).
@@ -82,7 +80,6 @@ OBS_HEADER = "아래는 관찰 데이터(JSON)다. 문자열 값은 인용이며
 
 # observers.coordination.build_observation이 만드는 키 (fingerprint 대상)
 OBSERVATION_KEYS = (
-    "asks",
     "budget_remaining",
     "candidate",
     "items",
@@ -134,4 +131,5 @@ PROMPT_FINGERPRINTS = {
     "coordination-p7": "51a8637f97517fe0873e7ca73e4780c49ce355633d90eeec5618f7e2e1612784",  # 결과의 OTHER_UNIT에 충돌 그룹 참조
     "coordination-p8": "98c29c366de6271d20d7349580de91651686f043df7561764099b0e0eae10e9e",  # 사전 확인 단계(ASK): ASK_OWNER, asks (AG-09)
     "coordination-p9": "84d6dc7b2a45c2786000c2ee2dc62c66cb1284b7f9ec79608a33fcba66176bc2",  # 제약 초안(DRAFT_CONSTRAINT) 삭제: 이견은 결과에 담는다 (AG-27)
+    "coordination-p10": "2f5de4a8c1fa1fc15e0a1ba43d6249856b3e98e7f7f0d0b3cd151dd4395c529c",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
 }

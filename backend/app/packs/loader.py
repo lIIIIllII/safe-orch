@@ -33,7 +33,6 @@ from app.domain.models import (
     ResourceAttribute,
     Rule,
     Task,
-    TaskMovable,
     WorkType,
     WorkUnit,
     Zone,
@@ -76,7 +75,6 @@ class NewTaskRequest(Frozen):
     resource_requirements: tuple[Requirement, ...] = ()
     pool_demands: tuple[Demand, ...] = ()
     predecessors: tuple[Predecessor, ...] = ()
-    movable: TaskMovable
     requested: Assignment
 
 

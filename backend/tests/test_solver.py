@@ -12,7 +12,6 @@ from app.domain.models import (
     Pin,
     Requirement,
     SolverResult,
-    TaskMovable,
 )
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
@@ -29,8 +28,8 @@ def _conflict(pack, snapshot):
     return found[0]
 
 
-def _run(pack, snapshot, level, try_resources=None, acting="UA"):
-    spec = build_search_spec(snapshot, _conflict(pack, snapshot), acting, level, try_resources)
+def _run(pack, snapshot, level, acting="UA"):
+    spec = build_search_spec(snapshot, _conflict(pack, snapshot), acting, level)
     result = cpsat.solve(snapshot, spec, pack)
     return spec, result
 
@@ -38,13 +37,6 @@ def _run(pack, snapshot, level, try_resources=None, acting="UA"):
 def _placed(result, *task_ids):
     by_id = {a["task_id"]: a for a in result.solution}
     return [(t, by_id[t]["start"], by_id[t]["resource_id"]) for t in task_ids]
-
-
-@pytest.fixture
-def resource_movable_a(with_a):
-    """A를 movable.resource = true인 새 revision으로 바꾼다 (이동 축 확인 가정)."""
-    add_task(with_a, make_task(with_a, revision=2, movable={"resource": True}))
-    return with_a
 
 
 def _fix(snapshot, *task_ids):
@@ -87,28 +79,25 @@ def test_l1_alpha(with_a):
     assert result.minimal_change and not result.delay_optimality_unconfirmed
 
 
-def test_beta_site_crane(resource_movable_a):
-    pack = resource_movable_a
-    snap = take_snapshot(pack)
-    spec, result = _run(pack, snap, "L0", {"A": ["SITE-CR-01"]})
-    assert spec.resource_alternatives == {"A": ("SITE-CR-01",)}
+def _site_crane_free(snapshot):
+    """기준 장면은 공용 크레인을 첫날에 못 쓴다. 이 테스트들은 첫날에도 쓸 수 있게 되돌린다."""
+    return _resources(snapshot, "SITE-CR-01", available_intervals=((0, 3360),))
+
+
+def test_unpinned_task_moves_to_eligible_resource(with_a):
+    """고정되지 않은 작업은 자원도 움직인다: 서버가 채운 적격 자원 가운데서 Solver가 고른다 (AG-34)."""
+    pack = with_a
+    snap = _site_crane_free(take_snapshot(pack))
+    spec, result = _run(pack, snap, "L0")
+    assert spec.axes["A"] == Movable(time=True, resource=True)
+    assert spec.resource_alternatives == {"A": ("SITE-CR-01",)}  # B-CR-01은 UA가 쓸 수 없다
     assert (result.stage1["changed"], result.stage2["delay"]) == (1, 60)
     assert _placed(result, "A", "C") == [("A", 60, "SITE-CR-01"), ("C", 60, "A-CR-01")]
 
 
-def test_b_crane_not_authorized_solver_not_called(resource_movable_a, monkeypatch):
-    """T09(SearchSpec)·T10: 권한 필터 후 대안이 비면 Solver 미호출."""
-    _forbid_solver(monkeypatch)
-    snap = take_snapshot(resource_movable_a)
-    with pytest.raises(SearchSpecError) as exc:
-        _run(resource_movable_a, snap, "L0", {"A": ["B-CR-01"]})
-    assert exc.value.reason_code == "RESOURCE_NOT_AUTHORIZED"
-
-
-def test_t10_no_authorized_alternative(resource_movable_a, monkeypatch):
-    """fixture 변형: SITE-CR-01 권한 제거 → 대체 자원 없음."""
-    _forbid_solver(monkeypatch)
-    snap = take_snapshot(resource_movable_a)
+def test_no_eligible_alternative_leaves_only_the_base_resource(with_a):
+    """SITE-CR-01 권한을 빼면 A에는 대체 자원이 없다. 자원 대안은 비고 기준 자원만 남는다."""
+    snap = take_snapshot(with_a)
     snap = with_facts(
         snap,
         resources=tuple(
@@ -118,17 +107,9 @@ def test_t10_no_authorized_alternative(resource_movable_a, monkeypatch):
             for r in snap.facts().resources
         ),
     )
-    with pytest.raises(SearchSpecError) as exc:
-        _run(resource_movable_a, snap, "L0", {"A": ["SITE-CR-01", "B-CR-01"]})
-    assert exc.value.reason_code == "RESOURCE_NOT_AUTHORIZED"
-
-
-def test_unauthorized_filtered_when_authorized_remains(resource_movable_a):
-    snap = take_snapshot(resource_movable_a)
-    spec = build_search_spec(
-        snap, _conflict(resource_movable_a, snap), "UA", "L0", {"A": ["B-CR-01", "SITE-CR-01"]}
-    )
-    assert spec.resource_alternatives == {"A": ("SITE-CR-01",)}
+    spec, result = _run(with_a, snap, "L0")
+    assert spec.resource_alternatives == {}
+    assert result.stage1["status"] == "INFEASIBLE"
 
 
 def _resources(snapshot, resource_id, **changes):
@@ -151,13 +132,11 @@ def _tasks(snapshot, task_id, **changes):
     )
 
 
-def test_alternative_filtered_by_zone_and_requirement(resource_movable_a, monkeypatch):
+def test_alternative_filtered_by_zone_and_requirement(with_a):
     """대체 자원 필터는 적격성 함수다: 구역·요구 조건이 안 맞으면 Solver 입력에 들어가지 않는다 (CV-20)."""
-    pack = resource_movable_a
+    pack = with_a
     snap = take_snapshot(pack)
-    try_site = {"A": ["SITE-CR-01"]}
-    assert _run(pack, snap, "L0", try_site)[0].resource_alternatives == {"A": ("SITE-CR-01",)}
-    _forbid_solver(monkeypatch)
+    assert _run(pack, snap, "L0")[0].resource_alternatives == {"A": ("SITE-CR-01",)}
     for changed in (
         _resources(snap, "SITE-CR-01", allowed_zone_ids=("C", "D")),  # A는 B구역
         _resources(
@@ -169,23 +148,10 @@ def test_alternative_filtered_by_zone_and_requirement(resource_movable_a, monkey
             resource_requirements=(Requirement(attribute="max_load", op="LTE", value=30),),
         ),  # 작업 값 ≤ 30: A-CR-01(25 t)은 맞고 SITE-CR-01(50 t)은 안 맞는다
     ):
-        with pytest.raises(SearchSpecError) as exc:
-            _run(pack, changed, "L0", try_site)
-        assert exc.value.reason_code == "RESOURCE_NOT_AUTHORIZED"
+        assert _run(pack, changed, "L0")[0].resource_alternatives == {}
 
 
 # ── SearchSpec 오류·hash ───────────────────────────────────────
-
-
-def test_resource_axis_not_allowed(with_a, monkeypatch):
-    _forbid_solver(monkeypatch)
-    snap = take_snapshot(with_a)
-    with pytest.raises(SearchSpecError) as exc:
-        _run(with_a, snap, "L0", {"A": ["SITE-CR-01"]})
-    assert exc.value.reason_code == "RESOURCE_AXIS_NOT_ALLOWED"
-    with pytest.raises(SearchSpecError) as exc:  # 범위 밖 작업
-        _run(with_a, snap, "L0", {"C": ["SITE-CR-01"]})
-    assert exc.value.reason_code == "RESOURCE_AXIS_NOT_ALLOWED"
 
 
 def test_no_acting_tasks(with_a):
@@ -251,16 +217,15 @@ def test_t31_time_fixed_resource_moves(seeded):
         earliest_start=60,
         latest_start=60,
         latest_end=90,
-        movable={"resource": True},
     )
     add_task(pack, x)
-    snap = take_snapshot(pack)
+    snap = _site_crane_free(take_snapshot(pack))
     cap = next(
         c
         for c in detect_conflicts(snap, snap.facts().check_assignments(), pack)
         if c.rule_id == "CAP-RESOURCE" and "X" in c.task_ids
     )
-    spec = build_search_spec(snap, cap, "UA", "L0", {"X": ["SITE-CR-01"]})
+    spec = build_search_spec(snap, cap, "UA", "L0")
     assert spec.axes["X"] == Movable(time=True, resource=True)  # 시각은 시간창(60–60)이 묶는다
     result = cpsat.solve(snap, spec, pack)
     assert list(spec.axes) == ["C", "X"]
@@ -269,16 +234,15 @@ def test_t31_time_fixed_resource_moves(seeded):
     assert _placed(result, "C", "X") == [("C", 60, "A-CR-01"), ("X", 60, "SITE-CR-01")]
 
 
-def test_pinned_task_closes_both_axes(resource_movable_a):
-    """고정된 A는 시각·자원 모두 닫힌다. 자원 축이 열려 있어도 대체 자원을 시도할 수 없다 (AG-27)."""
-    pack = resource_movable_a
-    snap = _fix(take_snapshot(pack), "A")
+def test_pinned_task_closes_both_axes(with_a):
+    """고정된 A는 시각·자원 모두 닫힌다. 쓸 수 있는 대체 자원이 있어도 대안에 들어가지 않는다 (AG-27)."""
+    pack = with_a
+    snap = _fix(_site_crane_free(take_snapshot(pack)), "A")
     spec = build_search_spec(snap, _conflict(pack, snap), "UA", "L2")
     assert spec.axes["A"] == Movable(time=False, resource=False)
     result = cpsat.solve(snap, spec, pack)
     assert result.stage1["status"] == "INFEASIBLE"  # A가 0–30에 묶이면 B 아래를 벗어날 수 없다
-    with pytest.raises(SearchSpecError, match="RESOURCE_AXIS_NOT_ALLOWED"):
-        build_search_spec(snap, _conflict(pack, snap), "UA", "L0", {"A": ["SITE-CR-01"]})
+    assert "A" not in spec.resource_alternatives
 
 
 def test_solver_keeps_pinned_task_and_moves_unpinned(with_a):
@@ -286,8 +250,8 @@ def test_solver_keeps_pinned_task_and_moves_unpinned(with_a):
     snap = take_snapshot(with_a)
     spec = build_search_spec(snap, _conflict(with_a, snap), "UA", "L1")
     assert spec.axes == {
-        "A": Movable(time=True, resource=False),
-        "C": Movable(time=True, resource=False),
+        "A": Movable(time=True, resource=True),
+        "C": Movable(time=True, resource=True),
     }
     pinned = _fix(snap, "C")
     spec_c = build_search_spec(pinned, _conflict(with_a, pinned), "UA", "L1")
@@ -430,8 +394,8 @@ def test_register_stale_plan_discarded(with_a):
 # ── 실효 탐색 키: 미시도 판정용 ─────
 
 
-def _key(pack, snapshot, level="L0", try_resources=None):
-    spec = build_search_spec(snapshot, _conflict(pack, snapshot), "UA", level, try_resources)
+def _key(pack, snapshot, level="L0"):
+    spec = build_search_spec(snapshot, _conflict(pack, snapshot), "UA", level)
     return spec.search_key, spec.hash
 
 
@@ -452,21 +416,13 @@ def test_search_key_ignores_versions_consents_and_revisions(with_a):
     assert digest != other_digest  # 무결성 hash는 snapshot_hash를 따라 달라진다
 
 
-def test_search_key_normalizes_resource_axis_without_alternatives(with_a, resource_movable_a):
-    """resource 축이 열려도 대체 자원이 없으면 Solver 입력이 같다(MOVABILITY 수락 직후의 L0)."""
-    pack = resource_movable_a
-    snapshot = take_snapshot(pack)
-    assert snapshot.facts().task_map()["A"].movable.resource is True
-    key, _ = _key(pack, snapshot)
-    closed = with_facts(
-        snapshot,
-        tasks=tuple(
-            t.model_copy(update={"movable": TaskMovable(resource=False)})
-            for t in snapshot.facts().tasks
-        ),
-    )
-    assert _key(pack, closed)[0] == key
-    assert _key(pack, snapshot, try_resources={"A": ["SITE-CR-01"]})[0] != key
+def test_search_key_follows_eligible_alternatives(with_a):
+    """탐색 키에는 서버가 채운 대체 자원이 들어간다: 쓸 수 있는 자원이 달라지면 다른 탐색이다 (CV-04)."""
+    snapshot = take_snapshot(with_a)
+    key, _ = _key(with_a, snapshot)
+    assert _key(with_a, take_snapshot(with_a))[0] == key  # 같은 사실이면 같은 키
+    none = _resources(snapshot, "SITE-CR-01", allowed_unit_ids=("UB",))
+    assert _key(with_a, none)[0] != key
 
 
 def test_search_key_changes_with_ready_set_and_in_scope_constraints(with_a):

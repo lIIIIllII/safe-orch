@@ -11,7 +11,7 @@ from fastapi import APIRouter
 
 from app.agents import casefacts
 from app.api.deps import ActorDep, ApiError, PackDep, check_site
-from app.commands.moves import move_check, move_range, remove_check
+from app.commands.moves import move_check, move_range, remove_check, resource_check
 from app.domain.calendar import work_delay
 from app.domain.canonical import canonical_hash
 from app.domain.models import AgentRun, Assignment, Plan, Snapshot, SnapshotContent, Task
@@ -453,6 +453,15 @@ def get_move_check(task_id: str, start: int, pack: PackDep, actor: ActorDep) -> 
     """놓은 자리의 판정. 확정과 같은 판정이다 (CV-28)."""
     with db.read_tx() as conn:
         return move_check(conn, pack, actor.actor_id, task_id, start)
+
+
+@router.get("/tasks/{task_id}/resource-check")
+def get_resource_check(
+    task_id: str, resource_id: str, pack: PackDep, actor: ActorDep
+) -> dict[str, Any]:
+    """작업 카드의 자원 바꾸기 확인: 그 자원으로 바꿀 수 있는지와 무효가 될 검토 중인 안 (AG-31)."""
+    with db.read_tx() as conn:
+        return resource_check(conn, pack, actor.actor_id, task_id, resource_id)
 
 
 @router.get("/tasks/{task_id}/remove-check")

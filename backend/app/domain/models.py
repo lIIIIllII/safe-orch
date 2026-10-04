@@ -180,12 +180,6 @@ class Movable(Frozen):
     resource: bool
 
 
-class TaskMovable(Frozen):
-    """작업의 자원 축이 담당자 확인으로 열렸는가. 시각이 움직이는지는 고정 여부로 정한다 (AG-27)."""
-
-    resource: bool
-
-
 class FieldRecord(Frozen):
     """critical field 하나의 확인 기록.
 
@@ -217,7 +211,6 @@ class Task(Frozen):
     default_demands: tuple[PoolDemand, ...] = ()  # 서버가 Pack의 작업 유형에서 도출 (CV-11)
     pool_demands: tuple[Demand, ...] = ()  # 작업 값. 기본 수요보다 낮출 수 없다 (CV-11)
     predecessors: tuple[Predecessor, ...] = ()
-    movable: TaskMovable
     fields: dict[str, FieldRecord]
     lifecycle: Lifecycle
 

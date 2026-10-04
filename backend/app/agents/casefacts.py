@@ -7,13 +7,11 @@ Hold, 하위 Run 결과, 이 Case의 열린 일, 지금 받아들여지는 호�
 import sqlite3
 from typing import Any
 
-from app.agents.needs import ask_refusals
 from app.agents.specs import main as main_spec
 from app.agents.types import APPROACHES
 from app.domain.canonical import canonical_hash
 from app.domain.groups import ConflictGroup, conflict_groups, movable_task_ids
 from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent
-from app.domain.needs import Need
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts, separation_links
 from app.solver.search_spec import SearchSpecError, build_search_spec
@@ -40,8 +38,6 @@ from app.store.repos.tasks import list_current_tasks
 LEVELS = ("L0", "L1", "L2")
 OPEN_ITEM = ("PENDING", "OBJECTED")
 CHILD_RESULTS = 3  # 관찰에 보이는 최근 하위 Run 결과 수
-# 결과의 need에 서버가 붙인 표시(need의 참조가 아니다): need ID, 접수 Agent가 정한 값
-NOT_NEED_REFS = ("need_id", "decided")
 # 사람이 직접 한 조작의 사건: 한 번마다 사람이 만든 일 하나다 (AG-30)
 HUMAN_EVENTS = ("TASK_PINNED", "TASK_UNPINNED", "TASK_MOVED", "TASK_REMOVED", "TASK_EDITED")
 
@@ -370,7 +366,6 @@ CALL_REFS = (
     "candidate_id",
     "plan_revision",
     "event_id",
-    "need_ids",
 )
 
 
@@ -462,7 +457,6 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
     wanted = preferred_windows(conn, site_id)
     calls: list[dict[str, Any]] = []
     group_views = []
-    found_needs: dict[str, dict[str, Any]] = {}  # 그룹 Unit의 마지막 결과에 있는 need (ID → need)
     for g in groups:
         units = []
         for unit, task_ids in g.units.items():
@@ -482,10 +476,6 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                 run = get_run(conn, last["run_id"])
                 assert run is not None
                 result = run_result(conn, run)
-                openers = result.get("openers", [])
-                for need in [n for path in result["paths"] for n in path["needs"]] + openers:
-                    if "need_id" in need:
-                        found_needs[need["need_id"]] = need
                 last_view = {
                     "approach": run.input_ref.get("approach"),
                     "run_status": last["status"],
@@ -493,7 +483,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                     "result_status": result["status"],
                     # 전문 Agent가 엮은 길과 서버가 붙인 열 수 있는 것. need마다 need_id가 있다
                     "paths": result["paths"],
-                    "openers": openers,
+                    "openers": result.get("openers", []),
                     # 그 Run이 끝난 뒤 관련 사실이 바뀌었는가 (바뀌지 않았으면 같은 호출은 거절된다)
                     "facts_changed": not unchanged,
                 }
@@ -524,18 +514,6 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                 "units": units,
             }
         )
-
-    # 사전 확인으로 물을 수 있는 need: 지금 유효한 자원 축 OWNER_CONSENT뿐이다 (AG-09)
-    ids = sorted(found_needs)
-    refusals = ask_refusals(
-        conn,
-        pack,
-        main,
-        [Need(**{k: v for k, v in found_needs[i].items() if k not in NOT_NEED_REFS}) for i in ids],
-    )
-    ask_needs = {i: found_needs[i] for i, r in zip(ids, refusals, strict=True) if r is None}
-    if ask_needs and not hold_active:
-        calls.append({"agent": "COORDINATION", "phase": "ASK", "need_ids": sorted(ask_needs)})
 
     candidates = [
         candidate_view(conn, pack, cid, facts) for cid in case_candidate_ids(conn, pack, case_id)
@@ -612,7 +590,4 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
             "candidates": [c["candidate_id"] for c in candidates if c["review_pending"]],
             "holds": [h["hold_id"] for h in holds],
         },
-        # 유효성 판정용(관찰에는 넣지 않는다): 물을 수 있는 need와 물을 수 없는 사유
-        "ask_needs": ask_needs,
-        "ask_refusals": {i: r for i, r in zip(ids, refusals, strict=True) if r is not None},
     }

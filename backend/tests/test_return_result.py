@@ -22,8 +22,6 @@ from app.store.repos.runs import list_steps
 @pytest.mark.parametrize(
     "need",
     [
-        {"kind": "OWNER_CONSENT", "task_id": "A", "axis": "RESOURCE", "values": ["R1"]},
-        {"kind": "OWNER_CONSENT", "task_id": "A", "axis": "TIME"},
         {"kind": "OTHER_UNIT", "group_id": "grp_1", "unit_id": "UB"},
         {"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": "A"},
         {"kind": "FACT_CHANGE", "field": "QUANTITY", "pool_id": "P"},
@@ -39,8 +37,7 @@ def test_need_takes_the_references_of_its_kind(need):
     "need",
     [
         {"kind": "BUDGET"},  # Budget 소진은 need가 아니다
-        {"kind": "OWNER_CONSENT", "task_id": "A"},  # 축이 없다
-        {"kind": "OWNER_CONSENT", "task_id": "A", "axis": "TIME", "values": ["R1"]},
+        {"kind": "OWNER_CONSENT", "task_id": "A"},  # 담당자 확인은 need가 아니다(협의에서 받는다)
         {"kind": "OTHER_UNIT", "unit_id": "UB"},  # 충돌 그룹이 없다
         {
             "kind": "OTHER_UNIT",
@@ -85,7 +82,7 @@ def _invoke(pack, replies, run_id="run_r", **changes):
 
 def test_blocked_result_keeps_paths_and_server_fills_the_rest(with_a):
     paths = [
-        {"needs": [{"kind": "OWNER_CONSENT", "task_id": "A", "axis": "RESOURCE"}]},
+        {"needs": [{"kind": "FACT_CHANGE", "field": "DURATION", "task_id": "A"}]},
         {"needs": [{"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": "A"}]},
     ]
     run, steps, model = _invoke(with_a, [solve("L0"), blocked("L0에서 해가 없다", paths)])
@@ -95,11 +92,7 @@ def test_blocked_result_keeps_paths_and_server_fills_the_rest(with_a):
     result = dict(steps[-1]["tool_result"])
     # 서버가 붙인 열 수 있는 것은 모델이 엮은 길과 따로 남는다. need ID는 Run·길(p<순번> 또는 s)·순번이다
     openers = result.pop("openers")
-    assert [(n["need_id"], n["kind"]) for n in openers] == [
-        ("run_r:s:0", "OWNER_CONSENT"),
-        ("run_r:s:1", "OWNER_CONSENT"),
-        ("run_r:s:2", "FACT_CHANGE"),
-    ]
+    assert [(n["need_id"], n["kind"]) for n in openers] == [("run_r:s:0", "FACT_CHANGE")]
     assert result == {
         "status": "BLOCKED",
         "summary": "L0에서 해가 없다",
@@ -108,9 +101,9 @@ def test_blocked_result_keeps_paths_and_server_fills_the_rest(with_a):
                 "needs": [
                     {
                         "need_id": "run_r:p0:0",
-                        "kind": "OWNER_CONSENT",
+                        "kind": "FACT_CHANGE",
                         "task_id": "A",
-                        "axis": "RESOURCE",
+                        "field": "DURATION",
                     }
                 ]
             },
@@ -138,8 +131,8 @@ def test_needs_are_checked_against_facts(with_a):
     gid = obs.data["group"]["group_id"]
     assert obs.data["group"]["unit_ids"] == ["UA", "UB"]
     bad = [
-        {"kind": "OWNER_CONSENT", "task_id": "NOPE", "axis": "TIME"},
-        {"kind": "OWNER_CONSENT", "task_id": "A", "axis": "RESOURCE", "values": ["B-CR-01"]},
+        {"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": "NOPE"},
+        {"kind": "FACT_CHANGE", "field": "PERMISSION", "resource_id": "NOPE"},
         {"kind": "OTHER_UNIT", "group_id": gid, "unit_id": "UA"},
         {"kind": "OTHER_UNIT", "group_id": gid, "unit_id": "SITE"},
         {"kind": "OTHER_UNIT", "group_id": "grp_none", "unit_id": "UB"},
@@ -164,8 +157,8 @@ def test_needs_are_checked_against_facts(with_a):
     assert [
         (n["path"], n["need"], n["reason"]) for n in steps[0]["tool_result"]["invalid_needs"]
     ] == [
-        (0, 0, "TASK_NOT_FOUND"),
-        (0, 1, "RESOURCE_NOT_ELIGIBLE"),
+        (0, 0, "TARGET_NOT_FOUND"),
+        (0, 1, "TARGET_NOT_FOUND"),
         (0, 2, "SAME_UNIT"),
         (0, 3, "UNIT_NOT_IN_GROUP"),
         (1, 0, "GROUP_NOT_FOUND"),

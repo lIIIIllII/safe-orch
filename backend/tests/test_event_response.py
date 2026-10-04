@@ -17,15 +17,12 @@ from app.agents.specs import event_response as spec
 from app.api.state import build_state
 from app.commands.approval import (
     ApproveRequest,
-    RejectRequest,
     WaiveRequest,
     approve_and_commit,
-    reject_candidate,
     waive,
 )
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.messages import ReplyRequest, reply_message
-from app.commands.pins import TaskRef, pin_task
 from app.commands.task_request import (
     TaskRequestForm,
     TaskWithdraw,
@@ -133,30 +130,17 @@ def _report(pack, text=DELAY, event_type="DELAY"):
 
 
 def _r1(pack):
-    """기본안 B로 R1(Beta 확정)까지: 폼 A → Alpha → 구조화 거절(C 고정) → 재계획 막힘 → 사전 확인 → 수락
-    → 재계획 TRY → 승인."""
-    a = pack.new_task.model_dump(exclude={"requested", "unit_id", "owner_actor_id", "movable"})
+    """R1(Alpha 확정)까지: 폼 A → Alpha → Supervisor가 고름 → 협의(C 담당자 수락) → 승인 → 통지."""
+    a = pack.new_task.model_dump(exclude={"requested", "unit_id", "owner_actor_id"})
     assert submit_task_request(pack, "planner_a", _key(), TaskRequestForm(**a)).status == "APPLIED"
     run_until_idle(pack, model_factory=Router(replanning=[solve("L0"), solve("L1")]).factory())
     alpha = _review_candidate(pack)
-    x = pack.demo_rejections[0]
-    body = RejectRequest(
-        candidate_id=alpha,
-        validation_id=_pass_id(pack, alpha),
-        reason_code=x.reason_code,
-        target_task_ids=x.target_task_ids,
-        comment=x.comment,
-    )
-    assert reject_candidate(pack, "supervisor", _key(), body).status == "APPLIED"
-    assert pin_task(pack, "supervisor", _key(), TaskRef(task_id="C")).status == "APPLIED"
-    listing = call("LIST_ASSIGNABLE_RESOURCES", "조회", task_id="A")
-    # 재계획은 막힌 결과를 내고, 메인이 Coordination 사전 확인을 부른다(기본 응답)
-    run_until_idle(pack, model_factory=Router(replanning=[listing, blocked()]).factory())
-    [q] = _messages("QUESTION")
-    assert _reply(pack, "planner_a", q["message_id"]).status == "APPLIED"
-    try_ = call("TRY_ALTERNATIVE_RESOURCE", "시도", task_id="A", resource_id="SITE-CR-01")
-    run_until_idle(pack, model_factory=Router(replanning=[try_]).factory())
-    assert _approve(pack, _review_candidate(pack)).status == "APPLIED"
+    choose(pack, alpha)
+    run_until_idle(pack, model_factory=Router().factory())
+    [request] = _messages("CHANGE_REQUEST")
+    assert _reply(pack, request["to_actor_id"], request["message_id"]).status == "APPLIED"
+    run_until_idle(pack, model_factory=Router().factory())
+    assert _approve(pack, alpha).status == "APPLIED"
     assert _site(pack).plan_revision == 1
     # 메인이 통지를 부르고 끝낸다. 뒤의 신고는 새 메인이 받는다
     run_until_idle(pack, model_factory=Router().factory())

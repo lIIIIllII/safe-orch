@@ -19,7 +19,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p15"
+PROMPT_VERSION = "event-response-p16"
 
 
 def tool_catalog() -> str:
@@ -150,4 +150,5 @@ PROMPT_FINGERPRINTS = {
     "event-response-p13": "04bb2d49774b061b1ac30ac17528af623c8746c78d5bb850dadab056f0f29630",  # 종료는 RETURN_RESULT: 막힌 결과와 길 묶음 (AG-23)
     "event-response-p14": "43a0642c3ea495c7c3358a2cb764e25f7826a7db6437e7e67ab980521bce7c36",  # 결과의 OTHER_UNIT에 충돌 그룹 참조
     "event-response-p15": "07cca8c45e301930dd505b4463da05959d12b056888d2a2bd76f4d389b4540da",  # 조회 결과에 고정·희망 영역, 스킬 지침의 제약 문구 정리 (AG-27)
+    "event-response-p16": "d535abf2764d19d04bed726153f81208a60f2aff8f31c9ac42f7d69845f6bb56",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
 }

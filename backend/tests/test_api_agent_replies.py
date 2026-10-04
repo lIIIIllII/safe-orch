@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 from scripted import Router, call
 from test_coordination import _alpha_consulting
 from test_event_response import _lookup, _r1, _report, _to_proposal
-from test_resume import _ask_waiting
 
 from app.api.commands import (
     ApproveBody,
@@ -88,13 +87,6 @@ def test_answer_reporter_question_via_api(seeded, client, main_on):
     )
     res = _reply(client, "reporter", q["message_id"], "ANSWER", seeded.demo_events[1].answer)
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
-
-
-def test_answer_on_proposal_question_is_rejected_via_api(seeded, client, main_on):
-    """제안이 붙은 질문(담당자 이동 가능 여부)에는 ANSWER를 쓸 수 없다 → 409 INVALID_DECISION."""
-    waiting = _ask_waiting(seeded)
-    res = _reply(client, "planner_a", waiting.wait_ref, "ANSWER", "SITE-CR-01 써도 됩니다")
-    assert _reasons(res) == (409, ["INVALID_DECISION"])
 
 
 # ── Coordination: 변경 요청 답 ─────

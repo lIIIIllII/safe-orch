@@ -7,7 +7,7 @@ Pack 파일 그대로(seeded_real)에서 요청 A를 넣은 장면을 쓴다: A�
 import uuid
 
 import pytest
-from conftest import add_run, add_task, make_task, take_snapshot
+from conftest import add_run, add_task, free_alternative, make_task, take_snapshot
 from scripted import (
     Router,
     ScriptedChatModel,
@@ -49,15 +49,21 @@ def _key():
 
 @pytest.fixture
 def real_a(seeded_real):
-    """Pack 그대로의 R0 + 신규 작업 A."""
+    """Pack 그대로의 R0 + 신규 작업 A. 조건의 효과를 보려고 대체 자원(공용 크레인)은 첫날에 쓸 수
+    없게 둔다: 고정되지 않은 작업은 자원도 움직이므로 그대로 두면 자원을 바꿔 풀린다 (AG-34)."""
     add_task(seeded_real, make_task(seeded_real))
+    with db.write() as tx:
+        tx.execute(
+            "UPDATE resource SET available_intervals = '[[1440, 3360]]'"
+            " WHERE resource_id = 'SITE-CR-01'"
+        )
     return seeded_real
 
 
-def _spec(pack, snap, level, conditions=None, try_resources=None):
+def _spec(pack, snap, level, conditions=None):
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), pack)[0]
     assert (conflict.rule_id, conflict.task_ids) == ("SEP-LIFT-BELOW", ("A", "B"))
-    return build_search_spec(snap, conflict, "UA", level, try_resources, conditions)
+    return build_search_spec(snap, conflict, "UA", level, conditions)
 
 
 def _starts(result, *task_ids):
@@ -119,7 +125,6 @@ def test_start_at_and_resource_conditions(real_a):
         ("L1", {"A": Condition(start_min=120)}, "CONDITION_OUTSIDE_WINDOW"),  # A 시작 한도 10:00
         ("L0", {"C": Condition(start_min=60)}, "CONDITION_TASK_NOT_IN_SCOPE"),  # L0은 A만
         ("L2", {"B": Condition(start_min=60)}, "CONDITION_TASK_NOT_IN_SCOPE"),  # 다른 Unit
-        ("L1", {"A": Condition(resource_id="SITE-CR-01")}, "RESOURCE_AXIS_NOT_ALLOWED"),
     ],
 )
 def test_condition_validity(real_a, level, conditions, reason):
@@ -130,12 +135,13 @@ def test_condition_validity(real_a, level, conditions, reason):
 
 def test_condition_on_pinned_task_and_ineligible_resource(real_a):
     pack = real_a
-    add_task(pack, make_task(pack, revision=2, movable={"resource": True}))  # A 자원 축 열림
     snap = take_snapshot(pack)
     with pytest.raises(SearchSpecError, match="RESOURCE_NOT_ELIGIBLE"):
         _spec(pack, snap, "L1", {"A": Condition(resource_id="B-CR-01")})  # UA에 허용되지 않음
-    ok = _spec(pack, snap, "L0", {"A": Condition(resource_id="SITE-CR-01")})
-    result = cpsat.solve(snap, ok, pack)
+    # 고정되지 않은 작업은 적격 자원이면 자원을 지정할 수 있다(담당자 확인이 필요 없다, AG-34)
+    free = free_alternative(snap)
+    ok = _spec(pack, free, "L0", {"A": Condition(resource_id="SITE-CR-01")})
+    result = cpsat.solve(free, ok, pack)
     assert next(a for a in result.solution if a["task_id"] == "A")["resource_id"] == "SITE-CR-01"
 
     assert pin_task(pack, "foreman_a2", _key(), TaskRef(task_id="C")).status == "APPLIED"
@@ -339,6 +345,12 @@ def test_rejected_change_marks_other_live_candidate_and_conditions_solve_again(
     """목표 장면: 거절된 후보의 C 변경과 같은 변경을 담은 다른 후보에 표시가 붙고, 재계획이 사유를 읽어
     "C 시작 ≥ 10:00"을 걸면 새 안(A 10:00, C 10:30)이 나온다."""
     pack = seeded_real
+    # 이 장면은 C를 옮겨 푸는 안을 본다. 대체 자원은 첫날에 쓸 수 없게 둔다(자원을 바꿔 풀리지 않게)
+    with db.write() as tx:
+        tx.execute(
+            "UPDATE resource SET available_intervals = '[[1440, 3360]]'"
+            " WHERE resource_id = 'SITE-CR-01'"
+        )
     _submit_a(pack)
     replies = [solve("L1"), solve_with("L2", cond("M", start_at=2940)), done()]
     router = Router(replanning=replies, auto_done=False)

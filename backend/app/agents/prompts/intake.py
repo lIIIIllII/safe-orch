@@ -19,7 +19,7 @@ from app.agents.specs import intake as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "intake-p16"
+PROMPT_VERSION = "intake-p17"
 
 
 def tool_catalog() -> str:
@@ -155,4 +155,5 @@ PROMPT_FINGERPRINTS = {
     "intake-p14": "2aecae0f5f0868501a55c42fe7f8ebe325eb523863cb5b2e4de2dcf449b6cc06",  # 스킬 지침의 제약 문구 정리 (AG-27)
     "intake-p15": "20c6cd09eb3b7315c3b0987ebd97974c50152f69d51906f0040207bc5f04694b",  # 모호는 해석이 둘 이상일 때만, 해석이 하나면 받음으로 적고 되묻지 않는다
     "intake-p16": "d30cc58d01cdf8ce5627e8e3fb029363bf18602ae4cc7182da9d7896a52c8fdd",  # 요청자에게 묻지 않고 완료, 값마다 출처(말함·정함), 질문·값 확인·사람 라운드 삭제 (AG-32)
+    "intake-p17": "bb47e2a228db9799958aeb7cf6a9db8765db1f5dd4238346a3b5a3870868bb29",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
 }

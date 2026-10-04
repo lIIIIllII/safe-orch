@@ -7,7 +7,6 @@ from langchain_core.messages import AIMessage
 from scripted import (
     Router,
     blocked,
-    call,
     main_call,
     main_close,
     main_escalate,
@@ -110,19 +109,15 @@ def test_call_agent_starts_child_and_result_wakes_main(with_a):
     assert units["UA"]["last_result"]["facts_changed"] is False
     # UB는 그룹에 작업이 있지만 움직일 수 있는 작업이 없어 호출 목록에 없다
     assert (units["UB"]["task_ids"], units["UB"]["movable_task_ids"]) == (["B"], [])
-    # 막힌 결과에 서버가 붙인 담당자 확인은 사전 확인으로 부를 수 있다. 같은 접근의 재계획은 없고
-    # 다른 접근은 부를 수 있다 (AG-24)
-    openers = units["UA"]["last_result"]["openers"]
-    asks = [n["need_id"] for n in openers if n["kind"] == "OWNER_CONSENT"]
-    assert (units["UA"]["last_result"]["paths"], [n["task_id"] for n in openers[:2]]) == (
-        [],
-        ["A", "C"],
-    )
+    # 사전 확인은 없다. 같은 접근의 재계획은 받지 않고 다른 접근은 부를 수 있다 (AG-24)
+    last_result = units["UA"]["last_result"]
+    assert last_result["paths"] == []
+    assert "OWNER_CONSENT" not in [n["kind"] for n in last_result["openers"]]
     group_id = last["observation"]["groups"][0]["group_id"]
     assert last["observation"]["calls"] == [
         {"agent": "REPLANNING", "group_id": group_id, "acting_unit_id": "UA", "approach": a}
         for a in ("MIN_DELAY", "PREFER_WINDOW")
-    ] + [{"agent": "COORDINATION", "phase": "ASK", "need_ids": asks}]
+    ]
     with db.read() as conn:
         [notice] = conn.execute(
             "SELECT to_actor_id, type, agent_text FROM message WHERE run_id = 'main'"
@@ -158,114 +153,6 @@ def test_call_agent_checks_group_unit_and_same_facts(with_a):
 def _reply(pack, message_id, actor, decision="ACCEPT"):
     body = ReplyRequest(message_id=message_id, decision=decision)
     return reply_message(pack, actor, uuid.uuid4().hex, body)
-
-
-def test_ask_call_takes_valid_owner_consent_need_ids(with_a):
-    """사전 확인은 need ID로 부른다. 받는 것은 지금 물을 수 있는 자원 축 담당자 확인뿐이다. 재계획 Agent가
-    엮은 길에 그런 need가 없어도 서버가 붙인 열 수 있는 것의 ID로 부를 수 있고, 기록에 출처가 남는다.
-    수락 → 작업 새 revision + Consent → 다시 부른 재계획이 대체 자원으로 탐색한다 (AG-09·AG-23)."""
-    pack, gid = with_a, _group(with_a).group_id
-    replan = main_call("REPLANNING", group_id=gid, acting_unit_id="UA")
-    child = _main(pack, [replan]).wait_ref  # 하위 Run ID = need ID의 앞부분
-    time_need = {"kind": "OWNER_CONSENT", "task_id": "A", "axis": "TIME"}
-    crane = {"kind": "OWNER_CONSENT", "task_id": "A", "axis": "RESOURCE", "values": ["SITE-CR-01"]}
-
-    def ask(*need_ids):
-        return main_call("COORDINATION", phase="ASK", need_ids=list(need_ids))
-
-    a, c, fact = (f"{child}:s:{i}" for i in range(3))
-    woven = f"{child}:p1:0"  # 재계획 Agent가 엮은 길의 A 자원 확인(서버 need a와 같은 확인)
-    paths = [{"needs": [time_need]}, {"needs": [crane]}]
-    router = Router(
-        replanning=[blocked("A의 시간을 넓히거나 대체 자원을 쓴다", paths)],
-        main=[
-            ask(f"{child}:p0:0"),  # 시간 축: 유효한 need지만 사전 확인 대상이 아니다
-            ask("run_none:s:0"),
-            ask(fact),
-            ask(),
-            main_call("COORDINATION", phase="ASK", candidate_id="cand_x", need_ids=[a]),
-            ask(woven, a, c),  # 여러 need를 한 번에
-        ],
-    )
-    run_until_idle(pack, model_factory=router.factory())
-    assert _guards("main")[1:] == [
-        ("CALL_AGENT", "TIME_AXIS_NOT_ASKABLE"),
-        ("CALL_AGENT", "NEED_NOT_FOUND"),
-        ("CALL_AGENT", "NOT_OWNER_CONSENT"),
-        ("CALL_AGENT", "ACTION_NOT_AVAILABLE"),
-        ("CALL_AGENT", "ACTION_NOT_AVAILABLE"),
-        ("CALL_AGENT", None),
-    ]
-    woke = _steps("main")[1]
-    last = next(u for u in woke["observation"]["groups"][0]["units"] if u["unit_id"] == "UA")[
-        "last_result"
-    ]
-    # 출처가 갈린다: 모델이 엮은 길(p)과 서버가 붙인 열 수 있는 것(s)
-    assert [n["need_id"] for p in last["paths"] for n in p["needs"]] == [f"{child}:p0:0", woven]
-    assert [(n["need_id"], n["kind"]) for n in last["openers"]] == [
-        (a, "OWNER_CONSENT"),
-        (c, "OWNER_CONSENT"),
-        (fact, "FACT_CHANGE"),
-    ]
-    assert {"agent": "COORDINATION", "phase": "ASK", "need_ids": [woven, a, c]} in woke[
-        "observation"
-    ]["calls"]
-    schema = next(t["function"] for t in woke["available_actions"] if t["function"]["name"])
-    assert schema["parameters"]["properties"]["need_ids"]["items"]["enum"] == [woven, a, c]
-
-    # 사전 확인 Run: need를 담당자별로 정렬해 받고, need마다 질문 하나를 보낸 뒤 기다린다
-    [asking] = _runs("COORDINATION")
-    assert (asking.parent_run_id, asking.status, asking.input_ref["need_ids"]) == (
-        "main",
-        "WAITING_HUMAN",
-        [woven, a, c],
-    )
-    # 같은 확인(A의 SITE-CR-01)은 한 번만 묻는다: Agent가 엮은 길의 need가 남는다
-    asks = _steps(asking.run_id)[0]["observation"]["asks"]
-    assert [(x["owner_actor_id"], x["task_id"], x["need_id"]) for x in asks] == [
-        ("foreman_a2", "C", c),
-        ("planner_a", "A", woven),
-    ]
-    with db.read() as conn:
-        sent = conn.execute(
-            "SELECT message_id, to_actor_id FROM message WHERE run_id = ? ORDER BY rowid",
-            (asking.run_id,),
-        ).fetchall()
-    assert [m[1] for m in sent] == ["foreman_a2", "planner_a"]
-    for message_id, actor in sent:
-        assert _reply(pack, message_id, actor).status == "APPLIED"
-    with db.read() as conn:
-        revisions = conn.execute(
-            "SELECT task_id, MAX(revision) FROM task WHERE task_id IN ('A', 'C') GROUP BY task_id"
-        ).fetchall()
-        consents = conn.execute(
-            "SELECT task_id, scope FROM consent WHERE source_ref LIKE 'message:%' ORDER BY task_id"
-        ).fetchall()
-    assert [tuple(r) for r in revisions] == [("A", 2), ("C", 2)]
-    assert [(r[0], "SITE-CR-01" in r[1]) for r in consents] == [("A", True), ("C", True)]
-
-    # 답을 받은 사전 확인이 끝나면 메인이 재계획을 다시 부를 수 있고(사실이 바뀌었다), 대체 자원으로 탐색한다
-    try_a = call("TRY_ALTERNATIVE_RESOURCE", "대체 자원", task_id="A", resource_id="SITE-CR-01")
-    router = Router(replanning=[try_a], main=[ask(a), replan, main_wait()])
-    assert [n["need_id"] for n in asking.input_ref["needs"]] == [woven, c]
-    run_until_idle(pack, model_factory=router.factory())
-    done = _steps(asking.run_id)[-1]["tool_result"]
-    assert (done["status"], [(x["task_id"], x["result"]) for x in done["asks"]]) == (
-        "DONE",
-        [("C", "ACCEPTED"), ("A", "ACCEPTED")],
-    )
-    assert _guards("main")[7:] == [
-        ("CALL_AGENT", "ALREADY_CONSENTED"),  # 이미 연 것은 다시 묻지 않는다
-        ("CALL_AGENT", None),
-        ("WAIT", None),
-    ]
-    second = _runs("REPLANNING")[-1]
-    s_try = _steps(second.run_id)[0]
-    assert (second.status, s_try["tool_result"]["try_resources"]) == (
-        "SUCCEEDED",
-        {"A": ["SITE-CR-01"]},
-    )
-    assert s_try["tool_result"]["candidate_id"] is not None
 
 
 def test_only_one_child_and_wait_close_need_facts(with_a):

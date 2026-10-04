@@ -20,7 +20,6 @@ from app.domain.models import (
     Requirement,
     Site,
     Task,
-    TaskMovable,
     pool_for,
 )
 from app.packs.loader import LoadedPack, confirmed_fields
@@ -48,7 +47,7 @@ class PredecessorInput(Body):
 
 
 class TaskRequestForm(Body):
-    """unit_id·owner_actor_id·movable은 받지 않는다(요청자와 고정값으로 채운다)."""
+    """unit_id·owner_actor_id는 받지 않는다(요청자로 채운다)."""
 
     task_id: str = Field(min_length=1)
     work_type: str
@@ -212,7 +211,7 @@ def create_requested_task(
 ) -> dict[str, Any]:
     """검증을 통과한 요청으로 작업을 만든다. 폼과 Work Intake가 같이 쓴다.
 
-    critical field CONFIRMED(source_ref), Consent(시작 범위, 요청 자원), 자원 축 닫힘,
+    critical field CONFIRMED(source_ref), Consent(시작 범위, 요청 자원),
     대기열 판단, Context +1, RECHECK. source_ref만 다르면 같은 작업이 된다.
     origins(값 이름 → 출처, Work Intake): Agent가 정한 값은 기록에 적고, Consent는 사람이 말한 시작
     범위·요청 자원에만 만든다. 정한 값의 동의는 요청자가 작업 카드에서 확인할 때 생긴다 (AG-33).
@@ -228,7 +227,6 @@ def create_requested_task(
         hazard_tags=pack.hazard_tags(form.work_type),
         default_requirements=pack.default_requirements(form.work_type),
         default_demands=pack.default_demands(form.work_type),
-        movable=TaskMovable(resource=False),  # 자원 축은 MOVABILITY로만 연다
         fields=confirmed_fields(data, wt.critical_fields, source_ref, origins),
         lifecycle="READY",
     )

@@ -68,7 +68,7 @@ def test_zone_relations_adjacent_stored_both_ways(seeded):
     ]
 
 
-def test_resources(seeded):
+def test_resources(seeded_real):
     with db.read() as conn:
         res = list_resources(conn, "YARD-01")
 
@@ -103,25 +103,19 @@ def test_resources(seeded):
 # 기준 상태(conftest LEGACY_WINDOWS)의 값이다. Pack 파일 그대로는 아래 seeded_real 테스트가 본다.
 # (unit, 담당, work_type, hazard_tags, zone, duration, es, ls, le, 자원 유형, 자원, 자원 축 열림)
 EXPECTED_TASKS = {
-    "B": ("UB", "planner_b", "WORK_BELOW", ("WORK_BELOW",), "B", 60, 0, 0, 60, None, None,
-          False),
-    "C": ("UA", "foreman_a2", "LIFTING", ("LIFTING",), "C", 30, 60, 90, 120, "CRANE", "A-CR-01",
-          False),
-    "D": ("UB", "planner_b", "HOT_WORK", ("HOT_WORK",), "D", 30, 0, 0, 30, None, None,
-          False),
-    "E": ("UB", "planner_b", "PAINTING", ("FLAMMABLE",), "D2", 30, 45, 120, 150, None, None,
-          False),
+    "B": ("UB", "planner_b", "WORK_BELOW", ("WORK_BELOW",), "B", 60, 0, 0, 60, None, None),
+    "C": ("UA", "foreman_a2", "LIFTING", ("LIFTING",), "C", 30, 60, 90, 120, "CRANE", "A-CR-01"),
+    "D": ("UB", "planner_b", "HOT_WORK", ("HOT_WORK",), "D", 30, 0, 0, 30, None, None),
+    "E": ("UB", "planner_b", "PAINTING", ("FLAMMABLE",), "D2", 30, 45, 120, 150, None, None),
     # 시연 확장: 모두 고정
     "K": ("UB", "planner_b", "LIFTING", ("LIFTING",), "F", 120, 1440, 1440, 1560, "GANTRY",
-          "SITE-GC-01", False),
+          "SITE-GC-01"),
     "M": ("UA", "foreman_a2", "WORK_BELOW", ("WORK_BELOW",), "H", 90, 2910, 2910, 3000, None,
-          None, False),
-    "P": ("UB", "planner_b", "PAINTING", ("FLAMMABLE",), "G2", 60, 1500, 1500, 1560, None, None,
-          False),
+          None),
+    "P": ("UB", "planner_b", "PAINTING", ("FLAMMABLE",), "G2", 60, 1500, 1500, 1560, None, None),
     "Q": ("UA", "foreman_a2", "LIFTING", ("LIFTING",), "F", 60, 2910, 2910, 2970, "GANTRY",
-          "SITE-GC-01", False),
-    "W": ("UB", "planner_b", "PAINTING", ("FLAMMABLE",), "G2", 240, 1680, 1680, 1920, None, None,
-          False),
+          "SITE-GC-01"),
+    "W": ("UB", "planner_b", "PAINTING", ("FLAMMABLE",), "G2", 240, 1680, 1680, 1920, None, None),
 }
 # fmt: on
 
@@ -143,7 +137,6 @@ def test_tasks_match_a5_table(seeded):
             t.latest_end,
             t.required_resource_type,
             t.requested_resource_id,
-            t.movable.resource,
         ) == EXPECTED_TASKS[t.task_id]
         assert t.revision == 1
         assert t.lifecycle == "READY"
@@ -160,7 +153,7 @@ def test_pack_plan_r0_starts_unpinned_with_full_horizon_windows(seeded_real):
     assert {(t.earliest_start, t.latest_start + t.duration, t.latest_end) for t in tasks} == {
         (0, horizon, horizon)
     }
-    assert pins == 0 and not any(t.movable.resource for t in tasks)
+    assert pins == 0
     snap = take_snapshot(pack)
     assert snap.facts().pins == ()
     assert detect_conflicts(snap, snap.facts().check_assignments(), pack) == []
@@ -196,7 +189,7 @@ def test_current_task_revision_is_max(seeded):
         tx.execute(
             "INSERT INTO task SELECT site_id, task_id, 2, unit_id, owner_actor_id, work_type,"
             " zone_id, duration, 60, latest_start, latest_end, required_resource_type,"
-            " requested_resource_id, resource_requirements, pool_demands, predecessors, movable,"
+            " requested_resource_id, resource_requirements, pool_demands, predecessors,"
             " fields, lifecycle FROM task WHERE task_id = 'E'"
         )
     with db.read() as conn:
@@ -246,7 +239,6 @@ def test_scenario_task_a_not_seeded(seeded):
     assert (a.earliest_start, a.latest_start, a.latest_end) == (0, 60, 90)
     assert (a.required_resource_type, a.requested_resource_id) == ("CRANE", "A-CR-01")
     assert (a.requested.start, a.requested.end) == (0, 30)
-    assert a.movable.resource is False
 
 
 def test_seed_twice_raises(seeded):

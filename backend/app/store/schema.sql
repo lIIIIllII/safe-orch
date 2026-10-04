@@ -105,7 +105,6 @@ CREATE TABLE task (
     resource_requirements  TEXT NOT NULL CHECK (json_valid(resource_requirements)),
     pool_demands           TEXT NOT NULL CHECK (json_valid(pool_demands)),
     predecessors           TEXT NOT NULL CHECK (json_valid(predecessors)),
-    movable                TEXT NOT NULL CHECK (json_valid(movable)),
     fields                 TEXT NOT NULL CHECK (json_valid(fields)),
     lifecycle              TEXT NOT NULL CHECK (lifecycle IN ('DRAFT', 'NEEDS_INFO', 'READY', 'QUEUED',
                                                                'CANCELLED')),
@@ -490,7 +489,7 @@ CREATE TABLE solver_job (
 CREATE TABLE proposal (
     proposal_id             TEXT PRIMARY KEY,
     site_id                 TEXT NOT NULL REFERENCES site (site_id),
-    type                    TEXT NOT NULL CHECK (type IN ('FACT_UPDATE', 'MOVABILITY')),
+    type                    TEXT NOT NULL CHECK (type IN ('FACT_UPDATE')),
     run_id                  TEXT NOT NULL REFERENCES agent_run (run_id),
     step_no                 INTEGER NOT NULL CHECK (step_no >= 1),
     target_task_id          TEXT NOT NULL,

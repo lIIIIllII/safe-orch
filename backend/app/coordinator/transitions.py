@@ -225,12 +225,6 @@ def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, 
         ) == (site.context_version, site.plan_revision)
     if payload.get("phase") == "NOTICE":
         return payload.get("plan_revision") == site.plan_revision
-    if payload.get("phase") == "ASK":
-        # 사전 확인(후보 없음): Hold가 없고, 메인이 부를 때 본 현장 정보 그대로일 때만
-        return (
-            not list_active_holds(tx, pack.site_id)
-            and payload.get("context_version") == site.context_version
-        )
     candidate = get_candidate(tx, pack.site_id, payload["candidate_id"])
     if candidate is None or list_active_holds(tx, pack.site_id):
         return False
@@ -247,7 +241,6 @@ CALL_REFS = (
     "candidate_id",
     "plan_revision",
     "event_id",
-    "need_ids",
 )
 
 

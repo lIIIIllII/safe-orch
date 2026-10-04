@@ -42,7 +42,7 @@ BASIC_TO_CHECK = {
 }
 RULE_TYPE_TO_CHECK = {"CAPACITY": "C09", "SEPARATION": "C10"}
 NOT_MOVABLE = Movable(time=False, resource=False)
-TIME_ONLY = Movable(time=True, resource=False)  # 직접 이동(MOVE)은 시각만 바꾼다 (AG-31)
+FREE = Movable(time=True, resource=True)  # 직접 이동(MOVE)은 시각만 또는 자원만 바꾼다 (AG-31)
 
 Violation = tuple[str, tuple[str, ...], str]  # (check_id, task_ids, reason_code)
 
@@ -138,6 +138,13 @@ def _c06(
             for tid in changed
             if tasks[tid].owner_actor_id != candidate.made_by
         ]
+        # 시각만 또는 자원만 바꾼다. 바꾼 자원이 적격인지는 충돌 검사(C07~C09)가 본다
+        out += [
+            ("C06", (tid,), "MOVE_TIME_AND_RESOURCE")
+            for tid in changed
+            if usable[tid].start != base[tid].start
+            and usable[tid].resource_id != base[tid].resource_id
+        ]
     if candidate.kind == "REMOVE":
         # 빠진 작업은 하나이고, 없앤 사람이 그 작업의 담당자이며, 고정된 작업이 아니다 (AG-31)
         in_plan = {a.task_id for a in facts.plan.assignments if a.task_id in tasks}
@@ -152,12 +159,16 @@ def _c06(
         out += [("C06", (tid,), "TASK_PINNED") for tid in removed if tid in facts.pinned_task_ids()]
     for tid, a in usable.items():
         ref = base[tid]
-        ax = axes.get(tid, TIME_ONLY if moved else NOT_MOVABLE)
+        ax = axes.get(tid, FREE if moved else NOT_MOVABLE)
         if not ax.time and a.start != ref.start:
             out.append(("C06", (tid,), "TIME_AXIS_NOT_ALLOWED"))
         if not ax.resource and a.resource_id != ref.resource_id:
             out.append(("C06", (tid,), "RESOURCE_AXIS_NOT_ALLOWED"))
-        if ax.resource and a.resource_id not in {ref.resource_id, *alternatives.get(tid, ())}:
+        if (
+            ax.resource
+            and not moved
+            and a.resource_id not in {ref.resource_id, *alternatives.get(tid, ())}
+        ):
             out.append(("C06", (tid,), "RESOURCE_NOT_IN_SPEC"))
     # 고정된 작업은 search_spec과 관계없이 따로 확인한다: 시각·자원 모두 기준 배정 그대로 (AG-27)
     for tid in sorted(facts.pinned_task_ids()):

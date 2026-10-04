@@ -146,18 +146,17 @@ def test_section15_values_on_extended_fixture(with_a):
     assert (l1.stage1["changed"], l1.stage2["delay"]) == (2, 90)
     placed = {a["task_id"]: (a["start"], a["resource_id"]) for a in l1.solution}
     assert (placed["A"], placed["C"]) == ((60, "A-CR-01"), (90, "A-CR-01"))
-    beta_facts = snap.facts().model_copy(
-        update={
-            "tasks": tuple(
-                t.model_copy(update={"movable": t.movable.model_copy(update={"resource": True})})
-                if t.task_id == "A"
-                else t
-                for t in snap.facts().tasks
-            )
-        }
+    # 공용 크레인을 첫날에도 쓸 수 있으면 L0에서 A가 자원을 바꿔 풀린다 (AG-34)
+    beta = with_facts(
+        snap,
+        resources=tuple(
+            r.model_copy(update={"available_intervals": ((0, 3360),)})
+            if r.resource_id == "SITE-CR-01"
+            else r
+            for r in snap.facts().resources
+        ),
     )
-    beta = with_facts(snap, tasks=beta_facts.tasks)
-    spec = build_search_spec(beta, conflict, "UA", "L0", {"A": ["SITE-CR-01"]})
+    spec = build_search_spec(beta, conflict, "UA", "L0")
     r = cpsat.solve(beta, spec, with_a)
     assert (r.stage1["changed"], r.stage2["delay"]) == (1, 60)
     assert {a["task_id"]: (a["start"], a["resource_id"]) for a in r.solution}["A"] == (

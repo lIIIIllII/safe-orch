@@ -3,7 +3,7 @@
 app.rules·app.validator를 import하지 않는다.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 from app.domain.eligibility import exclusion_reasons
 from app.domain.hashes import search_key, search_spec_hash
@@ -34,7 +34,6 @@ def build_search_spec(
     conflict: Conflict,
     acting_unit_id: str,
     scope_level: ScopeLevel,
-    try_resources: Mapping[str, Sequence[str]] | None = None,
     conditions: Mapping[str, Condition] | None = None,
     objective: Objective = "CHANGE_FIRST",
 ) -> SearchSpec:
@@ -58,32 +57,28 @@ def build_search_spec(
     else:
         raise ValueError(f"unknown scope_level {scope_level!r}")
 
-    # 고정되지 않은 작업은 시각이 움직인다. 자원 축은 담당자 확인으로 열린 것만 (AG-27)
+    # 고정되지 않은 작업은 시각도 자원도 움직인다 (AG-34)
     pinned = facts.pinned_task_ids()
     axes = {
-        t.task_id: Movable(
-            time=t.task_id not in pinned,
-            resource=t.movable.resource and t.task_id not in pinned,
-        )
+        t.task_id: Movable(time=t.task_id not in pinned, resource=t.task_id not in pinned)
         for t in scope
     }
 
-    # 자원 대안은 try_resources로만 추가한다. 적격성 필터(CV-20) 후 비면 Solver를 부르지 않는다.
+    # 자원 대안은 서버가 채운다: 범위 안 고정되지 않은 작업마다 기준 자원 말고 쓸 수 있는 적격 자원 전부 (CV-20)
     tasks = facts.task_map()
     resources = facts.resource_map()
     alternatives: dict[str, tuple[str, ...]] = {}
-    for tid, rids in sorted((try_resources or {}).items()):
-        if tid not in axes or not axes[tid].resource:
-            raise SearchSpecError("RESOURCE_AXIS_NOT_ALLOWED", tid)
-        task = tasks[tid]
-        ok = []
-        for rid in rids:
-            r = resources.get(rid)
-            if r is not None and not exclusion_reasons(task, r, acting_unit_id) and rid not in ok:
-                ok.append(rid)
-        if not ok:
-            raise SearchSpecError("RESOURCE_NOT_AUTHORIZED", f"{tid}: {list(rids)}")
-        alternatives[tid] = tuple(ok)
+    for t in scope:
+        if t.required_resource_type is None or not axes[t.task_id].resource:
+            continue
+        ok = tuple(
+            r.resource_id
+            for r in sorted(facts.resources, key=lambda r: r.resource_id)
+            if r.resource_id != base[t.task_id].resource_id
+            and not exclusion_reasons(t, r, acting_unit_id)
+        )
+        if ok:
+            alternatives[t.task_id] = ok
 
     # Agent가 건 조건은 좁히기만 한다. 서버는 유효성만 본다 (CV-24)
     conds = dict(sorted((conditions or {}).items()))
@@ -103,13 +98,10 @@ def build_search_spec(
         ):
             raise SearchSpecError("CONDITION_OUTSIDE_WINDOW", tid)
         if c.resource_id is not None and c.resource_id != base[tid].resource_id:
-            # 기준 자원이 아니면 자원 축이 열려 있고 적격인 자원이어야 한다 (CV-20)
-            if not axes[tid].resource:
-                raise SearchSpecError("RESOURCE_AXIS_NOT_ALLOWED", tid)
+            # 기준 자원이 아니면 그 작업이 쓸 수 있는 적격 자원이어야 한다 (CV-20)
             r = resources.get(c.resource_id)
             if r is None or exclusion_reasons(task, r, acting_unit_id):
                 raise SearchSpecError("RESOURCE_NOT_ELIGIBLE", f"{tid}: {c.resource_id}")
-            alternatives[tid] = tuple(dict.fromkeys((*alternatives.get(tid, ()), c.resource_id)))
     alternatives = dict(sorted(alternatives.items()))
 
     return SearchSpec(

@@ -24,7 +24,6 @@ from app.rules.engine import detect_conflicts
 from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store.repos.consultations import candidate_state, case_objections, contested_changes
 from app.store.repos.decisions import list_case_rejections
-from app.store.repos.messages import declined_values, open_owner_asks
 from app.store.repos.pins import preferred_windows
 from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.runs import (
@@ -84,7 +83,7 @@ def resources_hash(facts: SnapshotContent) -> str:
 
 
 def assignable_resources(facts: SnapshotContent, task: Task, acting_unit_id: str) -> dict[str, Any]:
-    """LIST_ASSIGNABLE_RESOURCES 결과. TRY 필터·실행 검사와 같은 적격성 함수로 판정한다 (CV-20).
+    """LIST_ASSIGNABLE_RESOURCES 결과. 탐색 범위·실행 검사와 같은 적격성 함수로 판정한다 (CV-20).
 
     유형이 다른 자원은 대상이 아니므로 목록에 넣지 않는다(excluded는 같은 유형만).
     excluded의 reasons는 제외 사유 전부다. 요구 조건 사유에는 어느 속성인지(attribute)가 붙는다.
@@ -131,17 +130,6 @@ def valid_listings(
     return out
 
 
-def try_search_key(
-    snapshot: Snapshot, primary: Conflict, acting_unit_id: str, task_id: str, resource_id: str
-) -> str | None:
-    """TRY의 실효 탐색 키(주 충돌 L0 + 대체 자원 1개). 만들 수 없으면 None."""
-    try:
-        spec_ = build_search_spec(snapshot, primary, acting_unit_id, "L0", {task_id: [resource_id]})
-    except SearchSpecError:
-        return None
-    return spec_.search_key
-
-
 FACT_BY_EXCLUSION = {"NOT_ALLOWED": "PERMISSION", "NO_AVAILABILITY": "AVAILABILITY"}
 
 
@@ -158,14 +146,10 @@ def openers(
     run: AgentRun,
     facts: SnapshotContent,
     group: ConflictGroup | None,
-    eligible: dict[str, dict[str, Any]],
     all_infeasible: bool,
 ) -> list[dict[str, Any]]:
     """열 수 있는 것 (서버가 계산한 사실, need 모양). 길은 모델이 엮는다 (AG-23).
 
-    - 담당자 확인(OWNER_CONSENT): 자원 축이 확인되지 않았고 고정되지 않은 주체 Unit 작업과,
-      물을 수 있는 적격 대체 자원. 담당자가 그 작업 revision에 거절한 값과 답을 기다리는 질문이 있는
-      작업은 뺀다 (AG-09).
     - 다른 Unit(OTHER_UNIT): 이 그룹에 움직일 수 있는 작업을 가진 다른 Unit.
     - 사실(FACT_CHANGE): 풀 초과 충돌의 풀(QUANTITY), 그룹 안 주체 작업의 자원 제외 사유(권한 없음 →
       PERMISSION, 가용 없음 → AVAILABILITY), 모든 범위가 INFEASIBLE인 요청 작업의 시간창(WINDOW),
@@ -174,18 +158,7 @@ def openers(
     unit = run.acting_unit_id
     tasks = facts.task_map()
     pinned = facts.pinned_task_ids()
-    waiting = open_owner_asks(conn, pack.site_id)
     out: list[dict[str, Any]] = []
-    for tid in sorted(eligible):
-        t = tasks[tid]
-        if t.movable.resource or tid in pinned or tid in waiting:
-            continue
-        declined = declined_values(conn, pack.site_id, tid, t.revision)
-        values = [v for v in eligible[tid]["alternatives"] if v not in declined]
-        if values:
-            out.append(
-                {"kind": "OWNER_CONSENT", "task_id": tid, "axis": "RESOURCE", "values": values}
-            )
     if group is None:
         return out
     for other in sorted(group.units):
@@ -299,7 +272,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             },
             "required_resource_type": t.required_resource_type,
             "demands": t.demands,
-            "movable": t.movable.model_dump(),
             # 접수 Agent가 정한 값(요청자가 아직 확인하거나 고치지 않았다, AG-32)
             "decided_values": list(t.decided_values),
             # 사람이 건 고정(누가). 고정된 작업은 시각·자원 모두 움직이지 않는다 (AG-27)
@@ -377,50 +349,13 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             previous["conditions_as_args"] = condition_args(pack, previous["conditions"])
         last_guard = {**last_guard, "previous": previous}
     # 유효한 자원 조회 결과 + 아직 시도하지 않은 대체 자원. resources_hash는 모델에 보이지 않는다.
-    listings = []
-    for tid, r in sorted(valid_listings(steps, facts).items()):
-        alternatives = [
-            a["resource_id"] for a in r["assignable"] if a["resource_id"] != r["current"]
-        ]
-        untried_alt = [
-            rid
-            for rid in alternatives
-            if primary is not None
-            and (h := try_search_key(snapshot, primary, run.acting_unit_id, tid, rid)) is not None
-            and h not in tried
-        ]
-        listings.append(
-            {
-                **{k: v for k, v in r.items() if k != "resources_hash"},
-                "untried_alternatives": untried_alt,
-            }
-        )
-
-    # 자원 적격성(유형·사용 권한·가용 구간·구역·요구 조건). 조회했는지와 무관하게 서버가 계산하고 모델에는 보이지 않는다 (CV-15)
-    eligible = {}
-    for t in facts.tasks:
-        if t.unit_id != run.acting_unit_id or not t.required_resource_type:
-            continue
-        r = assignable_resources(facts, t, run.acting_unit_id)
-        alternatives = [
-            a["resource_id"] for a in r["assignable"] if a["resource_id"] != r["current"]
-        ]
-        eligible[t.task_id] = {
-            "alternatives": alternatives,
-            "untried": [
-                rid
-                for rid in alternatives
-                if primary is not None
-                and (h := try_search_key(snapshot, primary, run.acting_unit_id, t.task_id, rid))
-                is not None
-                and h not in tried
-            ],
-        }
-    hidden = {"eligible": eligible, "done_ready": done_ready}
+    listings = [
+        {k: v for k, v in r.items() if k != "resources_hash"}
+        for _, r in sorted(valid_listings(steps, facts).items())
+    ]
+    hidden = {"done_ready": done_ready}
     # 모든 범위를 계산했고 전부 해가 없다 (요청 작업의 시간창이 바뀌어야 열린다)
-    by_key = {
-        a["search_key"]: a for a in attempts if not a["try_resources"] and not a["conditions"]
-    }
+    by_key = {a["search_key"]: a for a in attempts if not a["conditions"]}
     all_infeasible = bool(keys) and all(
         ((by_key.get(k) or {}).get("stage1") or {}).get("status") == "INFEASIBLE"
         for k in keys.values()
@@ -484,7 +419,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         },
         "assignable_resources": listings,
         # 열 수 있는 것: 지금 계산으로는 열 수 없지만 충족되면 해가 열릴 수 있는 것 (서버 계산)
-        "openers": openers(conn, pack, run, facts, group, eligible, all_infeasible),
+        "openers": openers(conn, pack, run, facts, group, all_infeasible),
         "last_guard": last_guard,
         "recent_steps": recent,
         "budget_remaining": budget_remaining(run, spec.SPEC),

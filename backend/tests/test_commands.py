@@ -268,14 +268,13 @@ def test_t01_form_missing_critical_field_rejected(seeded):
     assert _count("consent") == 0 and _count("audit") == audit and _jobs(seeded) == []
 
 
-def test_form_records_confirmed_fields_movable_and_consents(seeded):
+def test_form_records_confirmed_fields_and_consents(seeded):
     out = _submit_a(seeded, hazard_tags=("NONE",))
     source_ref = f"form:{out.result_refs['form_id']}"
     snap = take_snapshot(seeded)
     a = snap.facts().task_map()["A"]
     assert (a.unit_id, a.owner_actor_id, a.lifecycle, a.revision) == ("UA", "planner_a", "READY", 1)
     assert a.hazard_tags == ("LIFTING",)  # 입력 태그는 버리고 도출
-    assert a.movable.resource is False
     assert set(a.fields) == {"zone_id", "duration", "window", "resource"}
     assert {(f.status, f.source_ref) for f in a.fields.values()} == {("CONFIRMED", source_ref)}
     consents = {c.axis: c.scope for c in snap.facts().consents}

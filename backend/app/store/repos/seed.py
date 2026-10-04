@@ -78,8 +78,8 @@ def seed_pack(tx: sqlite3.Connection, pack: LoadedPack) -> None:
     tx.executemany(
         "INSERT INTO task (site_id, task_id, revision, unit_id, owner_actor_id, work_type,"
         " zone_id, duration, earliest_start, latest_start, latest_end, required_resource_type,"
-        " requested_resource_id, resource_requirements, pool_demands, predecessors, movable, fields,"
-        " lifecycle) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " requested_resource_id, resource_requirements, pool_demands, predecessors, fields,"
+        " lifecycle) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 sid,
@@ -98,7 +98,6 @@ def seed_pack(tx: sqlite3.Connection, pack: LoadedPack) -> None:
                 dumps([r.model_dump() for r in t.resource_requirements]),
                 dumps([d.model_dump() for d in t.pool_demands]),
                 dumps([p.model_dump() for p in t.predecessors]),
-                dumps(t.movable.model_dump()),
                 dumps({k: v.model_dump() for k, v in t.fields.items()}),
                 t.lifecycle,
             )
