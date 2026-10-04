@@ -19,7 +19,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p19"
+PROMPT_VERSION = "event-response-p20"
 
 
 def tool_catalog() -> str:
@@ -69,8 +69,8 @@ Goal: {goal}
 고정(pinned_by: 고정한 사람, 없으면 고정되지 않음)이다. \
 start_slack은 시작 가능 시각을 늦출 수 있는 최대 분이다. 0이면 시작 가능 시각을 늦추는 수정안은 영향 분석을 통과하지 못한다. \
 같은 Context에서 같은 조건의 LOOKUP_TASKS는 같은 결과를 돌려준다. 지금까지의 조회 결과는 lookups에 모두 있다.
-- 영향 분석(analyses): 새 시작 가능 시각에서의 검사(checks)와 통과 여부(ok), 현재 값보다 늦추는 분(delay_minutes), 현재 배정이 새 창을 어기는지(plan_window_violation), \
-연결 작업이다. current가 false면 그 뒤 현장 정보가 바뀌어 다시 분석해야 한다.
+- 영향 분석(analyses): 새 시작 가능 시각에서의 검사(checks)와 통과 여부(ok), 현재 시작 가능 시각(시간창의 시작)보다 늦추는 분(delay_minutes), 현재 배정이 새 창을 어기는지(plan_window_violation), \
+연결 작업이다. 지연 신고의 분은 지금 계획된 시작에서 센다: 계획에 있는 작업이면(in_plan) 계획된 시작(planned_start_clock)과 새 값이 그보다 몇 분 뒤인지(minutes_after_planned_start)가 있고, "N분 지연"이면 이 값이 N이어야 한다. 시작 가능 시각은 시간창의 시작일 뿐 계획된 시작이 아니다(자연어·일정으로 접수된 작업은 시간창이 계획 기간 전체다). no_plan_effect가 true면 새 값이 계획된 시작보다 늦지 않아 확정해도 계획이 그대로다. 계획에 없는 작업은 planned_start가 없고, 기준 위치(base: 요청한 시작 범위)가 있으면 거기서 센다. current가 false면 그 뒤 현장 정보가 바뀌어 다시 분석해야 한다.
 - 사실 수정안(proposals): 이 Run이 낸 수정안과 상태(PENDING 확인 대기, CONFIRMED 확정, DISCARDED 폐기)다. 폐기된 값은 다시 낼 수 없다.
 - 근무 구간(work_intervals), 직전 거절 사유(last_guard), 남은 예산(budget_remaining).
 - 결과(RETURN_RESULT): 상태(status)와 요약(summary), 막혔을 때 풀 수 있는 길(paths)이다. 길 하나는 그 길에 필요한 것(needs)의 묶음이고, 필요한 것은 종류(kind)와 그 종류의 참조만 쓴다. 풀 길을 찾지 못했으면 길을 비운다. 서버는 참조가 실제로 있는지 검사하고, 없으면 거절한다(NEED_INVALID).
@@ -153,4 +153,5 @@ PROMPT_FINGERPRINTS = {
     "event-response-p17": "7a9027b1ae95db67286a0a02898eb0198b094f91be15cda9fe6edc02ea9b09ac",  # 희망 영역은 재계획에서 지연의 기준 (ST-22)
     "event-response-p18": "d16d7d79f193b74d0623de3639c51247ecfe42013ca9d5367dc05a8fd8be1a1f",  # 결과의 OTHER_UNIT 삭제 (AG-24)
     "event-response-p19": "4fd2960a121bbb3826115052066d4135ea44d56da6011d044afd629aaa9ec134",  # 신고자 되묻기(ASK_REPORTER)·신고자 답 삭제: 묻지 않고 스스로 해석한다, 조회의 희망 영역 삭제
+    "event-response-p20": "9ae12a0cdf57c8b663d2165868a86ba4b64066f7e5c37289cb2a661c880124bc",  # 지연 신고의 분은 지금 계획된 시작에서 센다: 영향 분석의 planned_start·minutes_after_planned_start·no_plan_effect·base
 }

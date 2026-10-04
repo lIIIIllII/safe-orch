@@ -20,6 +20,7 @@ from app.store.repos.messages import list_fact_updates
 from app.store.repos.pins import list_active_pins
 from app.store.repos.plans import get_current_plan
 from app.store.repos.runs import get_run, list_steps
+from app.store.repos.schedules import get_task_base
 from app.store.repos.site import get_site
 from app.store.repos.tasks import list_current_tasks
 
@@ -101,6 +102,17 @@ def analyze_impact(
         ),
     }
     current = placed.get(task_id)
+    # 계획에 없는 작업의 기준 위치(요청한 자리). 없으면 None이다 (CV-29)
+    given = None if current is not None else get_task_base(conn, pack.site_id, task_id)
+    base = None
+    if given is not None:
+        base_max = given["start"] if given["start_max"] is None else given["start_max"]
+        base = {
+            "start": given["start"],
+            "start_max": base_max,
+            "start_clock": clock(pack, given["start"]),
+            "start_max_clock": clock(pack, base_max),
+        }
     links = []
     for other in sorted(ready.values(), key=lambda t: t.task_id):
         if other.task_id == task_id:
@@ -121,7 +133,17 @@ def analyze_impact(
         "old_clock": clock(pack, task.earliest_start),
         "new_earliest_start": new,
         "new_clock": clock(pack, new),
-        "delay_minutes": new - task.earliest_start,  # 새 값 − 현재 earliest_start
+        # 새 값 − 현재 시작 가능 시각(시간창의 시작). 계획된 시작에서 센 값이 아니다
+        "delay_minutes": new - task.earliest_start,
+        # 지연 신고의 분은 지금 계획된 시작에서 센다: 새 값 − 현재 배정의 시작. 계획에 없으면 None이다
+        "in_plan": current is not None,
+        "planned_start": None if current is None else current.start,
+        "planned_start_clock": None if current is None else clock(pack, current.start),
+        "minutes_after_planned_start": None if current is None else new - current.start,
+        # 새 값이 현재 배정의 시작보다 늦지 않다: 확정해도 계획은 그대로다
+        "no_plan_effect": current is not None and new <= current.start,
+        # 계획에 없는 작업의 기준 위치(요청한 자리). 계획에 있거나 기준이 없으면 None이다
+        "base": base,
         "latest_start": task.latest_start,
         "latest_start_clock": clock(pack, task.latest_start),
         "checks": checks,

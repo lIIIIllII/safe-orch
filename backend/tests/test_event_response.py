@@ -663,3 +663,54 @@ def test_er_time_invalid_is_rejected(seeded, main_on):
         ("REJECTED", "TIME_INVALID"),
         ("WAIT", None),
     ]
+
+
+# ── 영향 분석 값의 기준: 지연 신고의 분은 계획된 시작에서 센다 ──
+
+
+def test_impact_counts_minutes_from_the_planned_start(seeded_real):
+    """계획에 있는 작업의 영향 분석은 새 값이 지금 계획된 시작보다 몇 분 뒤인지를 준다. 시작 가능
+    시각(시간창의 시작)에서 센 값과는 기준이 다르다. 새 값이 계획된 시작보다 늦지 않으면 계획이 그대로다."""
+    from test_schedule_review import _import_two_conflicts
+
+    from app.agents.observers.event_response import analyze_impact
+    from app.store.repos.plans import get_current_plan
+    from app.store.repos.schedules import get_task_base
+    from app.store.repos.tasks import list_current_tasks
+
+    pack = seeded_real
+    out = _import_two_conflicts(pack)  # 계획에 없고 기준 위치(문서의 배정)가 있는 작업이 생긴다
+    with db.read() as conn:
+        tasks = {t.task_id: t for t in list_current_tasks(conn, pack.site_id, pack)}
+        for a in get_current_plan(conn, pack.site_id).assignments:
+            task = tasks[a.task_id]
+            for new in (a.start - 10, a.start, a.start + 10):
+                found = analyze_impact(conn, pack, a.task_id, new)
+                assert (found["in_plan"], found["planned_start"], found["base"]) == (
+                    True,
+                    a.start,
+                    None,
+                )
+                assert found["minutes_after_planned_start"] == new - a.start
+                assert found["delay_minutes"] == new - task.earliest_start
+                assert found["no_plan_effect"] is (new <= a.start)
+                assert found["plan_window_violation"] is (new > a.start)
+        # 계획에 없는 작업: 계획된 시작이 없고, 기준 위치가 있으면 함께 보인다
+        for task_id in out.result_refs["new_task_ids"]:
+            base = get_task_base(conn, pack.site_id, task_id)
+            found = analyze_impact(conn, pack, task_id, base["start"] + 10)
+            assert (found["in_plan"], found["planned_start"]) == (False, None)
+            assert found["minutes_after_planned_start"] is None
+            assert found["no_plan_effect"] is False
+            assert found["base"]["start"] == base["start"]
+
+
+def test_impact_of_an_unplanned_task_without_a_base(with_a):
+    """계획에 없고 기준 위치도 없는 작업(폼 요청)은 계획된 시작도 기준도 없다."""
+    from app.agents.observers.event_response import analyze_impact
+
+    pack = with_a
+    with db.read() as conn:
+        found = analyze_impact(conn, pack, "A", pack.new_task.earliest_start)
+    assert (found["in_plan"], found["planned_start"], found["base"]) == (False, None, None)
+    assert found["minutes_after_planned_start"] is None and found["no_plan_effect"] is False
