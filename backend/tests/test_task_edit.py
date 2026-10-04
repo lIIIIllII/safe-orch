@@ -20,6 +20,7 @@ from test_intake import (
 )
 
 from app.agents import casefacts
+from app.api.state import build_state
 from app.commands.task_edit import EditRequest, edit_task
 from app.coordinator.dispatcher import run_until_idle
 from app.main import app
@@ -82,8 +83,10 @@ def test_owner_edits_and_confirms_decided_values_on_card(seeded):
     assert _site(pack).context_version == ctx + 1
     # 시작 범위와 요청 자원에는 정한 값이 남아 있어 Consent가 없다
     assert _consents("A") == []
+    # A는 아직 계획 밖 요청이라 사건이 남는다(자동 시작이 꺼져 있어 메인은 뜨지 않는다)
     with db.read() as conn:
-        assert [e for e in list_case_events(conn, pack.site_id) if e["kind"] == "TASK_EDITED"] == []
+        [event] = [e for e in list_case_events(conn, pack.site_id) if e["kind"] == "TASK_EDITED"]
+    assert event["ref"]["changed"] == ["duration", "latest_end"]
 
     out = _edit(pack, "planner_a", confirm=True)
     assert out.status == "APPLIED" and out.result_refs["confirmed"] is True
@@ -121,16 +124,45 @@ def test_edit_keeps_consent_of_unchanged_axis_and_drops_changed_one(seeded):
     assert _task(pack, "A").decided_values == ("duration",)  # 고치지 않은 정한 값은 남는다
 
 
-def test_edit_of_planned_task_must_keep_its_placement(seeded):
-    """계획에 있는 작업은 지금 배치가 깨지는 값으로는 고칠 수 없다. 깨지지 않는 값은 고칠 수 있다."""
-    pack = seeded
+def test_edit_that_breaks_the_placement_is_accepted_and_starts_a_main(seeded_real, main_on):
+    """계획에 있는 작업을 지금 배치가 깨지는 값으로 고쳐도 받는다. 서버의 충돌 검사에 걸리므로 사건이
+    작업 준비됨처럼 전해져 열린 메인이 없으면 메인이 뜨고, 재계획이 그 작업을 다시 놓는다."""
+    pack = seeded_real
     before = _task(pack, "C")
-    out = _edit(pack, "foreman_a2", "C", duration=before.duration + 30)
-    assert out.reason_codes == ("EDIT_BREAKS_PLAN",)
-    assert _task(pack, "C").revision == before.revision
-    out = _edit(pack, "foreman_a2", "C", latest_end=before.latest_end + 30)
+    assert _runs("MAIN") == []
+    out = _edit(pack, "foreman_a2", "C", duration=before.duration + 90)
     assert out.status == "APPLIED"
     assert (_task(pack, "C").revision, _site(pack).plan_revision) == (before.revision + 1, 0)
+    with db.read() as conn:
+        state = build_state(conn, pack, "foreman_a2")
+        [event] = [e for e in list_case_events(conn, pack.site_id) if e["kind"] == "TASK_EDITED"]
+    # 고친 값과 어긋난 기존 배정은 충돌 검사에 잡힌다
+    assert [(c["rule_id"], c["task_ids"]) for c in state["conflicts"]] == [("DURATION", ["C"])]
+    [main] = _runs("MAIN")
+    assert (main.status, event["case_id"]) == ("RUNNING", main.case_id)
+
+    run_until_idle(pack, model_factory=Router(replanning=[solve("L0"), solve("L1")]).factory())
+    [main] = _runs("MAIN")
+    [rp] = _runs("REPLANNING")
+    assert (main.status, rp.status, rp.case_id) == ("WAITING_HUMAN", "SUCCEEDED", main.case_id)
+    with db.read() as conn:
+        [cid] = list_review_queue(conn, pack.site_id)
+        placed = next(
+            a for a in get_candidate(conn, pack.site_id, cid).assignments if a.task_id == "C"
+        )
+    assert placed.end - placed.start == before.duration + 90
+
+
+def test_edit_without_conflict_goes_only_to_an_open_main(seeded_real, main_on):
+    """고친 뒤 충돌도 계획 밖 요청도 없으면 고정·직접 이동처럼 열린 메인에만 사건을 보낸다. 열린 메인이
+    없으면 사건도 메인도 생기지 않는다."""
+    pack = seeded_real
+    before = _task(pack, "C")
+    out = _edit(pack, "foreman_a2", "C", latest_end=before.latest_end - 30)
+    assert out.status == "APPLIED" and _task(pack, "C").revision == before.revision + 1
+    with db.read() as conn:
+        assert list_case_events(conn, pack.site_id) == []
+    assert _runs("MAIN") == []
 
 
 def test_edit_during_review_tells_the_open_main_and_counts_as_human_work(seeded, main_on):
@@ -157,7 +189,9 @@ def test_edit_during_review_tells_the_open_main_and_counts_as_human_work(seeded,
         assert casefacts.human_work(conn, pack.site_id, main.case_id) == 1
     assert event["case_id"] == main.case_id
     assert (event["ref"]["task_id"], event["ref"]["confirmed"]) == ("A", True)
-    assert _runs("MAIN")[0].wake_seq == main.wake_seq + 1
+    # 열린 메인이 있으면 그 메인이 받는다(새 메인을 띄우지 않는다)
+    [woke] = _runs("MAIN")
+    assert woke.wake_seq == main.wake_seq + 1
 
 
 def test_replanning_sees_decided_values_and_cannot_change_them(seeded, main_on):

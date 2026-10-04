@@ -5,9 +5,11 @@
 - 확인(confirm)하면 남은 정한 값이 모두 말한 값이 된다. 작업 유형은 고칠 수 없고 확인만 한다.
 - 동의: 바뀌지 않은 축의 Consent는 새 revision으로 복사하고, 사람이 말한 시작 범위·요청 자원에 Consent가
   없으면 만든다. 정한 값이 남아 있는 축에는 만들지 않는다.
-- 계획에 있는 작업은 지금 배치가 깨지는 값으로는 고칠 수 없다(EDIT_BREAKS_PLAN): 먼저 옮기거나 없앤다.
-- 고정·직접 이동과 같은 방식으로 다룬다: context +1, 열린 재계획·협의 Run 깨우기, 열린 메인이 있을 때만
-  사건(TASK_EDITED), 재확인 등록. 대기열(QUEUED) 작업은 아직 사실이 아니라 새 revision만 남긴다.
+- 계획에 있는 작업도 지금 배치가 깨지는 값으로 고칠 수 있다. 막지 않고 Agent가 다시 풀게 한다.
+- context +1, 열린 재계획·협의 Run 깨우기, 재확인 등록. 사건(TASK_EDITED)은 고친 뒤 충돌이 있거나 계획 밖
+  READY 작업이 남으면 작업 준비됨과 같은 방식으로 전하고(열린 메인이 없으면 메인이 뜬다), 그렇지 않으면
+  고정·직접 이동처럼 열린 메인이 있을 때만 전한다. 대기열(QUEUED) 작업은 아직 사실이 아니라 새 revision만
+  남긴다.
 """
 
 import sqlite3
@@ -22,9 +24,14 @@ from app.domain.ids import new_id
 from app.domain.models import FieldRecord, Snapshot, Task
 from app.packs.loader import FIELD_VALUES, LoadedPack, confirmed_fields
 from app.rules.engine import detect_conflicts
-from app.store.repos.cases import copy_consents, deliver_to_open_main, register_recheck, wake_run
+from app.store.repos.cases import (
+    copy_consents,
+    deliver_event,
+    deliver_to_open_main,
+    register_recheck,
+    wake_run,
+)
 from app.store.repos.consents import insert_consent, list_current_consents
-from app.store.repos.plans import get_current_plan
 from app.store.repos.runs import list_active_runs
 from app.store.repos.site import bump_context_version
 from app.store.repos.snapshots import build_snapshot_content
@@ -55,12 +62,15 @@ class EditRequest(Body):
     confirm: bool = False
 
 
-def _conflicts_of(tx: sqlite3.Connection, ctx: CommandContext, task_id: str) -> set[tuple]:
-    """지금 사실에서 그 작업이 걸린 충돌 (저장하지 않는 Snapshot으로 본다)."""
+def _needs_agent(tx: sqlite3.Connection, ctx: CommandContext) -> bool:
+    """고친 뒤 Agent가 풀 일이 남았는가: 서버의 충돌 검사에 걸린 충돌이 있거나 계획 밖 READY 작업이 있다.
+    저장하지 않는 Snapshot으로 본다."""
     content = build_snapshot_content(tx, ctx.site_id, ctx.pack)
     probe = Snapshot(snapshot_id="edit", snapshot_hash=canonical_hash(content), content=content)
-    found = detect_conflicts(probe, probe.facts().check_assignments(), ctx.pack)
-    return {(c.rule_id, c.task_ids) for c in found if task_id in c.task_ids}
+    facts = probe.facts()
+    in_plan = {a.task_id for a in facts.plan.assignments}
+    unplanned = any(t.task_id not in in_plan for t in facts.tasks)
+    return unplanned or bool(detect_conflicts(probe, facts.check_assignments(), ctx.pack))
 
 
 def _fields(
@@ -112,9 +122,6 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         return r
 
     ready = task.lifecycle == "READY"
-    plan = get_current_plan(tx, site_id)
-    in_plan = plan is not None and any(a.task_id == task.task_id for a in plan.assignments)
-    before = _conflicts_of(tx, ctx, task.task_id) if in_plan else set()
     revision = task.revision + 1
     edit_id = new_id("edit")
     source = f"card:{edit_id}"
@@ -127,10 +134,6 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         }
     )
     insert_task_revision(tx, site_id, updated)
-    # 계획에 있는 작업: 고친 값으로 지금 배치가 깨지면 받지 않는다(쓰기는 거절과 함께 되돌려진다, ST-04)
-    if in_plan and _conflicts_of(tx, ctx, task.task_id) - before:
-        r.reject("EDIT_BREAKS_PLAN")
-        return r
     context_version = bump_context_version(tx, site_id) if ready else ctx.site.context_version
 
     # 동의: 값이 바뀌지 않은 축은 복사하고, 사람이 말한 값에 동의가 없으면 만든다
@@ -162,7 +165,7 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
     }
     if not ready:
         return r
-    # 고정·직접 이동과 같은 방식: 열린 재계획·협의 Run은 다시 관찰하게 깨우고, 열린 메인에만 사건을 전한다
+    # 열린 재계획·협의 Run은 다시 관찰하게 깨운다
     for run in list_active_runs(tx, site_id):
         if run.agent_type in ("REPLANNING", "COORDINATION"):
             wake_run(tx, site_id, run.run_id)
@@ -173,7 +176,12 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         "changed": sorted(changed),
         "confirmed": body.confirm,
     }
-    deliver_to_open_main(tx, ctx.pack, "TASK_EDITED", f"TASK_EDITED:{task.task_id}:{revision}", ref)
+    key = f"TASK_EDITED:{task.task_id}:{revision}"
+    if _needs_agent(tx, ctx):
+        # 풀 일이 남았다: 작업 준비됨과 같은 방식으로 전한다(열린 메인이 없으면 메인이 뜬다)
+        deliver_event(tx, ctx.pack, "TASK_EDITED", key, ref)
+    else:
+        deliver_to_open_main(tx, ctx.pack, "TASK_EDITED", key, ref)
     register_recheck(tx, site_id, {"kind": "EDIT", "task_id": task.task_id})
     return r
 

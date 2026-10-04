@@ -543,7 +543,10 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                 calls.append({"agent": "EVENT_RESPONSE", "event_id": h["event_id"]})
 
     # 이 Case의 열린 일 (CLOSE의 사실 조건). 다른 Case가 남긴 것은 넣지 않는다
-    case_tasks = {e["ref"].get("task_id") for e in events if e["kind"] == "TASK_READY"}
+    # 이 Case가 맡은 작업: 준비된 요청과, 담당자가 카드에서 값을 고친 작업 (AG-33)
+    case_tasks = {
+        e["ref"].get("task_id") for e in events if e["kind"] in ("TASK_READY", "TASK_EDITED")
+    }
     case_events = {e["ref"].get("event_id") for e in events if e["kind"] == "EVENT_REPORTED"}
     for p in rows(conn, "SELECT payload, target_task_id FROM proposal WHERE type = 'FACT_UPDATE'"):
         if loads(p["payload"]).get("event_id") in case_events:

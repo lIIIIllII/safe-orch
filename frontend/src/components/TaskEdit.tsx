@@ -165,7 +165,7 @@ export function TaskEdit({ task, state, owner, busy, run }: Props) {
           )}
           {badTime && <p className="small bad tl-card-note">시각은 HH:MM 형식으로 적습니다.</p>}
           <p className="small muted tl-card-note">
-            고친 값은 사람이 말한 값이 됩니다. 검증은 요청 폼과 같고, 검토 중인 안은 무효가 됩니다.
+            고친 값은 사람이 말한 값이 됩니다. 검증은 요청 폼과 같고, 검토 중인 안은 무효가 됩니다. 지금 배치와 어긋나면 Agent가 다시 풉니다.
           </p>
           <div className="tl-card-actions">
             <button className="btn-small" disabled={off || badTime} onClick={save}>

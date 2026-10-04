@@ -32,7 +32,6 @@ export const REASON: Record<string, string> = {
   // 고정·희망 영역
   ALREADY_PINNED: '이미 고정된 작업',
   MOVE_NOT_VALID: '그 자리로 옮길 수 없음',
-  EDIT_BREAKS_PLAN: '계획에 있는 작업의 지금 배치가 깨짐(먼저 옮기거나 없애기)',
   REMOVE_NOT_VALID: '이 작업을 없앨 수 없음',
   REMOVE_NOT_OWNER: '없앤 사람이 담당자가 아님',
   REMOVE_NOT_SINGLE_TASK: '없애기는 작업 하나만 뺌',
