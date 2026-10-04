@@ -83,7 +83,7 @@ def _solve(pack, snap, level, conflict=None):
     """SearchSpec 저장 → Solver → 결과 등록(후보가 있으면 VALIDATE 등록)."""
     if conflict is None:
         conflict = detect_conflicts(snap, snap.facts().check_assignments(), pack)[0]
-    spec = build_search_spec(snap, conflict, "UA", level)
+    spec = build_search_spec(snap, [conflict], level)
     with db.write() as tx:
         insert_search_spec(tx, pack.site_id, spec)
     result = cpsat.solve(snap, spec, pack)

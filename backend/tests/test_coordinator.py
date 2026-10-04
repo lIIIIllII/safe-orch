@@ -80,7 +80,7 @@ def _queue(pack):
 
 def _solve(pack, snap, level):
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), pack)[0]
-    spec = build_search_spec(snap, conflict, "UA", level)
+    spec = build_search_spec(snap, [conflict], level)
     with db.write() as tx:
         insert_search_spec(tx, pack.site_id, spec)
     result = cpsat.solve(snap, spec, pack)
@@ -241,55 +241,20 @@ def test_recheck_reuses_reconfirm_candidate(gate_r1):
     assert len(_validations(pack, rc)) == 1
 
 
-def test_conflict_groups_share_tasks_and_list_units():
-    """충돌 그룹 = 작업을 공유하는 충돌의 묶음. 그룹마다 작업을 가진 Unit이 나온다."""
+def test_conflict_groups_share_tasks():
+    """충돌 그룹 = 작업을 공유하는 충돌의 묶음(엮인 충돌). 호출 단위가 아니라 설명이다 (AG-24)."""
     from app.domain.groups import conflict_groups
-    from app.domain.models import SnapshotContent
 
-    def task(tid, unit):
-        return {
-            "task_id": tid,
-            "revision": 1,
-            "unit_id": unit,
-            "owner_actor_id": "x",
-            "work_type": "LIFTING",
-            "hazard_tags": ["LIFTING"],
-            "zone_id": "B",
-            "duration": 10,
-            "earliest_start": 0,
-            "latest_start": 0,
-            "latest_end": 10,
-            "fields": {},
-            "lifecycle": "READY",
-        }
-
-    facts = SnapshotContent.model_validate(
-        {
-            "site_id": "S",
-            "pack_hash": "h",
-            "horizon_minutes": 60,
-            "work_intervals": [[0, 60]],
-            "context_version": 1,
-            "plan_revision": 0,
-            "tasks": [task("A", "UA"), task("B", "UB"), task("E", "UB")],
-            "resources": [],
-            "zones": ["B"],
-            "zone_relations": [],
-            "plan": {"plan_revision": 0, "assignments": []},
-        }
-    )
-    tasks = facts.task_map()
     c_ab = Conflict(rule_id="R1", task_ids=("A", "B"), zone_ids=("B",), interval=(0, 10))
     c_e = Conflict(rule_id="R2", task_ids=("E",), zone_ids=("B",), interval=(0, 10))
     c_be = Conflict(rule_id="R3", task_ids=("B", "E"), zone_ids=("B",), interval=(0, 10))
-    first, second = conflict_groups([c_ab, c_e], tasks)
-    assert (first.task_ids, first.units) == (("A", "B"), {"UA": ("A",), "UB": ("B",)})
-    assert (second.task_ids, second.units) == (("E",), {"UB": ("E",)})
+    first, second = conflict_groups([c_ab, c_e])
+    assert (first.task_ids, second.task_ids) == (("A", "B"), ("E",))
     assert first.group_id != second.group_id
     # 작업을 공유하는 충돌은 한 그룹이다. 그룹 ID는 작업 집합에서 나온다(탐지 순서와 무관)
-    [merged] = conflict_groups([c_ab, c_e, c_be], tasks)
-    assert (merged.task_ids, merged.units) == (("A", "B", "E"), {"UA": ("A",), "UB": ("B", "E")})
-    assert conflict_groups([c_be, c_e, c_ab], tasks)[0].group_id == merged.group_id
+    [merged] = conflict_groups([c_ab, c_e, c_be])
+    assert merged.task_ids == ("A", "B", "E")
+    assert conflict_groups([c_be, c_e, c_ab])[0].group_id == merged.group_id
 
 
 # ── VALIDATE ───────────────────────────────────────────────────

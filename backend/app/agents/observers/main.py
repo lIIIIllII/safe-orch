@@ -1,6 +1,6 @@
 """Main Observation과 Available Actions 계산.
 
-읽기 전용이다. 매 step DB 사실을 다시 관찰한다: 사건, 충돌 그룹과 그룹별 Unit·이전 결과, Hold, 후보·검증·협의,
+읽기 전용이다. 매 step DB 사실을 다시 관찰한다: 사건, 엮인 충돌과 재계획 사실(이전 결과 포함), Hold, 후보·검증·협의,
 하위 Run 결과, 이 Case의 열린 일, 지금 받아들여지는 호출. 계산은 app.agents.casefacts에 있다.
 메인의 acting_unit_id는 권한 판정에 쓰지 않으므로 관찰에도 넣지 않는다.
 """

@@ -30,15 +30,14 @@ def insert_snapshot(tx: sqlite3.Connection, site_id: str, snapshot: Snapshot) ->
 
 def insert_search_spec(tx: sqlite3.Connection, site_id: str, spec: SearchSpec) -> None:
     tx.execute(
-        "INSERT INTO search_spec (search_spec_id, site_id, hash, snapshot_id, acting_unit_id,"
+        "INSERT INTO search_spec (search_spec_id, site_id, hash, snapshot_id,"
         " scope_level, axes, resource_alternatives, conditions, objective, time_limit_s,"
-        " search_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " search_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             spec.search_spec_id,
             site_id,
             spec.hash,
             spec.snapshot_id,
-            spec.acting_unit_id,
             spec.scope_level,
             dumps({k: v.model_dump() for k, v in spec.axes.items()}),
             dumps({k: list(v) for k, v in spec.resource_alternatives.items()}),

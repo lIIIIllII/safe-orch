@@ -7,7 +7,7 @@ Pack 파일 그대로(seeded_real)에서 요청 A를 넣은 장면을 쓴다: A�
 import uuid
 
 import pytest
-from conftest import add_run, add_task, free_alternative, make_task, take_snapshot
+from conftest import add_run, add_task, free_alternative, make_task, pin_tasks, take_snapshot
 from scripted import (
     Router,
     ScriptedChatModel,
@@ -52,6 +52,8 @@ def real_a(seeded_real):
     """Pack 그대로의 R0 + 신규 작업 A. 조건의 효과를 보려고 대체 자원(공용 크레인)은 첫날에 쓸 수
     없게 둔다: 고정되지 않은 작업은 자원도 움직이므로 그대로 두면 자원을 바꿔 풀린다 (AG-34)."""
     add_task(seeded_real, make_task(seeded_real))
+    # 조건의 효과를 A·C에서 보려고 충돌 상대 B는 고정해 둔다(고정되지 않으면 B가 움직여 풀린다)
+    pin_tasks(seeded_real, ["B"])
     with db.write() as tx:
         tx.execute(
             "UPDATE resource SET available_intervals = '[[1440, 3360]]'"
@@ -63,7 +65,7 @@ def real_a(seeded_real):
 def _spec(pack, snap, level, conditions=None):
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), pack)[0]
     assert (conflict.rule_id, conflict.task_ids) == ("SEP-LIFT-BELOW", ("A", "B"))
-    return build_search_spec(snap, conflict, "UA", level, conditions)
+    return build_search_spec(snap, [conflict], level, conditions)
 
 
 def _starts(result, *task_ids):
@@ -123,8 +125,8 @@ def test_start_at_and_resource_conditions(real_a):
         ("L1", {"C": Condition()}, "CONDITION_INVALID"),
         ("L1", {"C": Condition(start_min=90, start_max=60)}, "CONDITION_INVALID"),
         ("L1", {"A": Condition(start_min=120)}, "CONDITION_OUTSIDE_WINDOW"),  # A 시작 한도 10:00
-        ("L0", {"C": Condition(start_min=60)}, "CONDITION_TASK_NOT_IN_SCOPE"),  # L0은 A만
-        ("L2", {"B": Condition(start_min=60)}, "CONDITION_TASK_NOT_IN_SCOPE"),  # 다른 Unit
+        ("L0", {"C": Condition(start_min=60)}, "CONDITION_TASK_NOT_IN_SCOPE"),  # L0은 A·B
+        ("L2", {"B": Condition(start_min=60)}, "TASK_PINNED"),  # 고정된 작업
     ],
 )
 def test_condition_validity(real_a, level, conditions, reason):
@@ -240,7 +242,7 @@ def test_preferred_window_becomes_start_range(real_a):
     with db.read() as conn:
         cand = get_candidate(conn, pack.site_id, result["candidate_id"])
     assert {a.task_id: a.start for a in cand.assignments}["C"] == 120
-    acting = {t["task_id"]: t for t in steps[0]["observation"]["acting_tasks"]}
+    acting = {t["task_id"]: t for t in steps[0]["observation"]["tasks"]}
     assert acting["C"]["clock"]["base_start"] == "2026-10-12(월) 10:00"
 
 
@@ -351,6 +353,7 @@ def test_rejected_change_marks_other_live_candidate_and_conditions_solve_again(
             "UPDATE resource SET available_intervals = '[[1440, 3360]]'"
             " WHERE resource_id = 'SITE-CR-01'"
         )
+    pin_tasks(pack, ["B"])  # C를 옮겨 푸는 안을 보려고 충돌 상대 B는 고정해 둔다
     _submit_a(pack)
     replies = [solve("L1"), solve_with("L2", cond("M", start_at=2940)), done()]
     router = Router(replanning=replies, auto_done=False)
@@ -387,11 +390,8 @@ def test_rejected_change_marks_other_live_candidate_and_conditions_solve_again(
     ]
 
     # 메인이 재계획을 다시 부르고, 재계획이 거절 사유를 보고 조건을 걸어 다시 푼다
-    [main] = _runs("MAIN")
-    with db.read() as conn:
-        group = list_steps(conn, main.run_id)[0]["action"]["args"]["group_id"]
     router = Router(
-        main=[main_call("REPLANNING", group_id=group, acting_unit_id="UA"), main_wait()],
+        main=[main_call("REPLANNING"), main_wait()],
         replanning=[solve_with("L1", cond("C", start_from=60)), done()],
         auto_done=False,
     )

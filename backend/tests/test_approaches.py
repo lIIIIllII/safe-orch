@@ -5,7 +5,7 @@ Pack 파일 그대로(seeded_real)에서 요청 A를 넣은 장면을 쓴다.
 
 import uuid
 
-from conftest import add_run, add_task, choose, make_task, take_snapshot
+from conftest import add_run, add_task, choose, make_task, pin_tasks, take_snapshot
 from scripted import (
     Router,
     ScriptedChatModel,
@@ -77,12 +77,6 @@ def _candidate_ids():
         return [r[0] for r in conn.execute("SELECT candidate_id FROM candidate ORDER BY rowid")]
 
 
-def _group_id(pack):
-    with db.read() as conn:
-        _, _, [group] = casefacts.current_groups(conn, pack)
-    return group.group_id
-
-
 def _choose(pack, actor, candidate_id):
     with db.read() as conn:
         v = list_validations(conn, pack.site_id, candidate_id)[-1]
@@ -114,11 +108,12 @@ def test_delay_first_swaps_stages_and_is_a_different_search(seeded_real):
     pack = seeded_real
     _first_day_busy()
     add_task(pack, make_task(pack))
+    pin_tasks(pack, ["B"])  # 목적 순서의 차이를 A·C에서 보려고 충돌 상대 B는 고정해 둔다
     snap = take_snapshot(pack)
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), pack)[0]
     conds = {"C": Condition(start_min=60)}
-    plain = build_search_spec(snap, conflict, "UA", "L1", conds)
-    spec = build_search_spec(snap, conflict, "UA", "L1", conds, "DELAY_FIRST")
+    plain = build_search_spec(snap, [conflict], "L1", conds)
+    spec = build_search_spec(snap, [conflict], "L1", conds, "DELAY_FIRST")
     assert (spec.objective, plain.objective) == ("DELAY_FIRST", "CHANGE_FIRST")
     assert spec.search_key != plain.search_key and spec.hash != plain.hash
 
@@ -137,6 +132,7 @@ def test_objective_argument_through_the_tool(seeded_real):
     pack = seeded_real
     _first_day_busy()
     add_task(pack, make_task(pack))
+    pin_tasks(pack, ["B"])  # 목적 순서의 차이를 A·C에서 보려고 충돌 상대 B는 고정해 둔다
     add_run(pack, "run_1", input_ref=CONFLICT)
     replies = [
         solve_with("L1"),  # 조건도 없고 목적 순서도 기본이면 범위 계산과 같다
@@ -180,16 +176,13 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
     새 후보 없이 그 후보에 접근이 더해진다. 고르기 전에는 협의가 나가지 않는다."""
     pack = seeded_real
     _submit_a(pack)
-    group = _group_id(pack)
-    assert call_key(
-        "REPLANNING", {"group_id": group, "acting_unit_id": "UA", "approach": "PREFER_WINDOW"}
-    ) == (f"REPLANNING:{group}:UA:PREFER_WINDOW")
+    # 호출 키는 접근뿐이다: 재계획은 현장의 충돌 전체를 푼다 (AG-24)
+    assert call_key("REPLANNING", {"approach": "PREFER_WINDOW"}) == "REPLANNING:PREFER_WINDOW"
 
     def replan(approach=None, note=None):
-        refs = {"group_id": group, "acting_unit_id": "UA"}
         if approach is None:  # 접근 없이
-            return call("CALL_AGENT", "부른다", agent="REPLANNING", **refs)
-        return main_call("REPLANNING", approach=approach, approach_note=note, **refs)
+            return call("CALL_AGENT", "부른다", agent="REPLANNING")
+        return main_call("REPLANNING", approach=approach, approach_note=note)
 
     def consult_unchosen():
         return main_call("COORDINATION", phase="CONSULT", candidate_id=_candidate_ids()[0])

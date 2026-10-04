@@ -25,6 +25,7 @@ from app.commands.pins import (
 )
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
+from app.domain.models import Condition
 from app.main import app
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
@@ -160,7 +161,7 @@ def test_committed_task_is_not_pinned(seeded_real):
     snap = take_snapshot(pack)
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), pack)[0]
     assert set(conflict.task_ids) == {"K", "N1"}
-    spec = build_search_spec(snap, conflict, "UB", "L0")
+    spec = build_search_spec(snap, [conflict], "L0")
     assert (spec.axes["K"].time, spec.axes["K"].resource) == (True, True)
 
 
@@ -168,12 +169,15 @@ def test_committed_task_is_not_pinned(seeded_real):
 
 
 def test_pinned_task_is_constant_for_solver_and_checked_by_validator(seeded_real):
-    """K를 고정하면 K의 Unit으로는 움직일 것이 없고, K를 옮긴 후보는 Validator가 TASK_PINNED로 막는다."""
+    """K를 고정하면 K는 상수가 되고, K를 옮긴 후보는 Validator가 TASK_PINNED로 막는다."""
     pack = seeded_real
     assert _submit(pack, "N1").status == "APPLIED"
     before = take_snapshot(pack)
     conflict = detect_conflicts(before, before.facts().check_assignments(), pack)[0]
-    spec = build_search_spec(before, conflict, "UB", "L0")
+    # N1을 제자리에 두는 조건을 걸면 K가 움직여야 풀린다
+    n1 = before.facts().base_assignments()["N1"].start
+    hold_n1 = {"N1": Condition(start_min=n1, start_max=n1)}
+    spec = build_search_spec(before, [conflict], "L0", hold_n1)
     result = cpsat.solve(before, spec, pack)
     moved_k = build_candidate(before, spec, result)  # 고정 전: K를 옮기는 해
     base = before.facts().base_assignments()["K"]
@@ -181,19 +185,19 @@ def test_pinned_task_is_constant_for_solver_and_checked_by_validator(seeded_real
 
     assert _pin(pack, "planner_b", "K").status == "APPLIED"
     snap = take_snapshot(pack)
-    pinned_spec = build_search_spec(snap, conflict, "UB", "L0")
+    pinned_spec = build_search_spec(snap, [conflict], "L0", hold_n1)
     assert (pinned_spec.axes["K"].time, pinned_spec.axes["K"].resource) == (False, False)
     pinned_result = cpsat.solve(snap, pinned_spec, pack)
-    assert pinned_result.stage1["status"] == "INFEASIBLE"  # K가 상수라 UB로는 풀 수 없다
+    assert pinned_result.stage1["status"] == "INFEASIBLE"  # K가 상수라 N1을 제자리에 두고는 못 푼다
     # 고정 전 해를 고정 뒤 사실에서 검증하면 걸린다
     stale = moved_k.model_copy(update={"snapshot_id": snap.snapshot_id})
     checks = validate(snap, stale, pinned_spec, pack).checks
     assert ("C06", "FAIL", "TASK_PINNED", ("K",)) in [
         (c.check_id, c.status, c.reason_code, c.task_ids) for c in checks
     ]
-    # 요청자 Unit(UA)은 고정되지 않은 N1을 옮겨 푼다. K는 그대로다
-    ua = build_search_spec(snap, conflict, "UA", "L0")
-    solved = cpsat.solve(snap, ua, pack)
+    # 조건 없이 풀면 고정되지 않은 N1이 움직인다. K는 그대로다
+    free = build_search_spec(snap, [conflict], "L0")
+    solved = cpsat.solve(snap, free, pack)
     placed = {a["task_id"]: a["start"] for a in solved.solution}
     assert placed["K"] == base.start and placed["N1"] != snap.facts().base_assignments()["N1"].start
 
@@ -234,13 +238,12 @@ def test_pin_wakes_open_main_and_stales_review_candidate(seeded, main_on):
     [woke] = _runs("MAIN")
     assert woke.wake_seq == main.wake_seq + 1
 
-    # 메인이 깨어나 다시 본다: N1이 고정이라 UA에는 움직일 작업이 없다
+    # 메인이 깨어나 다시 본다: N1도 K도 고정이라 움직일 작업이 없다
     run_until_idle(pack, model_factory=Router().factory())
     with db.read() as conn:
         seen = list_steps(conn, main.run_id)[-1]["observation"]
     assert [e["kind"] for e in seen["events"]][-1] == "TASK_PINNED"
-    units = {u["unit_id"]: u for u in seen["groups"][0]["units"]}
-    assert units["UA"]["movable_task_ids"] == []
+    assert seen["replanning"]["movable_task_ids"] == []
 
     assert _unpin(pack, "planner_a", "N1").status == "APPLIED"
     assert len(_events("TASK_UNPINNED")) == (1 if _runs("MAIN")[0].status == "WAITING_HUMAN" else 0)
@@ -284,7 +287,7 @@ def test_preferred_window_is_owner_only_and_is_a_fact(with_a):
     with db.read() as conn:
         obs = replanning_observer.build_observation(conn, pack, "run_test").data
         state = build_state(conn, pack, "foreman_a2")
-    acting = {t["task_id"]: t for t in obs["acting_tasks"]}
+    acting = {t["task_id"]: t for t in obs["tasks"]}
     duration = acting["C"]["duration"]
     assert acting["C"]["preferred_window"] == {
         "start": 120,
@@ -346,9 +349,11 @@ def test_replanning_observation_shows_who_pinned(with_a):
     add_run(pack)
     with db.read() as conn:
         obs = replanning_observer.build_observation(conn, pack, "run_test").data
-    acting = {t["task_id"]: t for t in obs["acting_tasks"]}
+    acting = {t["task_id"]: t for t in obs["tasks"]}
     assert "constraints" not in obs and "movable" not in acting["A"]
-    assert {tid for tid, t in acting.items() if t["pinned"]} == {"M", "Q"}  # 기준 상태의 UA 고정
+    # 작업 전체가 보인다(Unit을 가리지 않는다). 기준 상태의 고정이 그대로 보인다
+    assert {tid for tid, t in acting.items() if t["pinned"]} == set(LEGACY_PINNED)
+    assert {acting["A"]["unit_id"], acting["B"]["unit_id"]} == {"UA", "UB"}
     assert acting["Q"]["pinned"] == {"pinned_by": "foreman_a2", "by_role": "OWNER"}
     assert set(LEGACY_PINNED) >= {"M", "Q"}
 

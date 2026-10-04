@@ -238,11 +238,11 @@ def test_main_has_no_parent_and_blocked_is_terminal(seeded):
         tx.execute("UPDATE agent_run SET parent_run_id = NULL WHERE run_id = 'c'")
 
 
-def test_main_acting_unit_is_not_used_for_permission(with_a):
-    """메인의 acting unit(Supervisor Unit 관례)은 하위 Run의 권한 판정에 들어가지 않는다.
+def test_run_units_are_not_used_for_permission(with_a):
+    """Run에 적힌 acting unit은 재계획의 판정에 들어가지 않는다 (AG-24).
 
-    하위 Run의 관찰(움직일 수 있는 작업, 서버 적격성)은 부모가 있든 없든, 부모의 Unit이 무엇이든 같다.
-    메인의 관찰에는 자기 acting unit이 없다(호출의 주체 Unit 검사는 test_main_agent에 있다).
+    재계획의 관찰(움직일 수 있는 작업, 서버 적격성)은 부모가 있든 없든, Run에 어느 Unit이 적혀 있든 같다.
+    메인의 관찰에도 자기 acting unit이 없다.
     """
     pack = with_a
     with db.read() as conn:
@@ -250,16 +250,17 @@ def test_main_acting_unit_is_not_used_for_permission(with_a):
     assert supervisor_unit != "UA"
     main = add_run(pack, "main", agent_type="MAIN", acting_unit_id=supervisor_unit)
     add_run(pack, "child", parent_run_id=main, case_id="case_main")
-    add_run(pack, "alone", case_id="case_alone")
+    add_run(pack, "alone", case_id="case_alone", acting_unit_id=None, acting_actor_id=None)
+    add_run(pack, "other", case_id="case_other", acting_unit_id="UB", acting_actor_id="planner_b")
 
     def view(run_id):
         with db.read() as conn:
             obs = replanning_observer.build_observation(conn, pack, run_id)
+        assert "acting_unit_id" not in obs.data["run"]
         data = {k: v for k, v in obs.data.items() if k != "run"}
-        return obs.data["run"]["acting_unit_id"], data, obs.hidden, obs.available
+        return data, obs.hidden, obs.available
 
-    assert view("child") == view("alone")
-    assert view("child")[0] == "UA"
+    assert view("child") == view("alone") == view("other")
 
     with db.read() as conn:
         seen = main_observer.build_observation(conn, pack, main).data

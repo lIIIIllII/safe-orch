@@ -249,16 +249,16 @@ def test_er_minimal_path_to_r2(seeded, main_on):
     assert (done.status, done.end_reason) == ("SUCCEEDED", f"FACT_CONFIRMED:{fu['proposal_id']}")
     assert _hold(pack, refs["hold_id"])["status"] == "ACTIVE"  # 해제는 따로
 
-    # FACT_CONFIRMED 해제 → 재검사 → Replanning(UB) → Gamma
+    # FACT_CONFIRMED 해제 → 재검사 → Replanning → Gamma
     out = _release(pack, refs["hold_id"])
     assert out.status == "APPLIED" and out.result_refs["recheck"] is True
     assert _site(pack).context_version == ctx + 2
     run_until_idle(pack, model_factory=Router(replanning=[solve("L0")]).factory())
     gamma_run = _runs("REPLANNING")[-1]
-    assert (gamma_run.acting_unit_id, gamma_run.input_ref["conflict"]["rule_id"]) == (
-        "UB",
-        "WINDOW",
-    )
+    # 재계획은 주체 Unit 없이 지금 충돌(E의 시간창) 전체를 푼다 (AG-24)
+    assert gamma_run.acting_unit_id is None
+    [first] = _steps(gamma_run.run_id)[:1]
+    assert [c["rule_id"] for c in first["observation"]["conflicts"]] == ["WINDOW"]
     gamma = _review_candidate(pack)
     with db.read() as conn:
         cand = get_candidate(conn, pack.site_id, gamma)
@@ -347,8 +347,6 @@ def test_er_with_coordination_to_notice(seeded, main_on):
         ("CALL_AGENT", "COORDINATION", "NOTICE"),
         ("CLOSE", None, None),
     ]
-    # 신고로 바뀐 작업(E)의 Unit으로 재계획했다
-    assert _runs("REPLANNING")[-1].acting_unit_id == "UB"
 
 
 # ── 폐기 → wake, 같은 값 재제안 불가 ───────────────────────────

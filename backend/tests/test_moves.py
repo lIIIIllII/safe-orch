@@ -360,7 +360,7 @@ def test_owner_removes_planned_task_and_it_leaves_facts(seeded_real):
     assert plan.committed_context_version == state["site"]["context_version"]
     assert "D" not in take_snapshot(pack).facts().task_map()
     assert not [c for c in state["conflicts"] if "D" in c["task_ids"]]
-    assert "D" not in {t["task_id"] for t in obs["acting_tasks"]}
+    assert "D" not in {t["task_id"] for t in obs["tasks"]}
     assert "RECHECK" in jobs and _count("case_event") == 0
     # 없앤 작업은 다시 없애거나 옮길 수 없다
     assert _remove(pack, "planner_b", "D").reason_codes == ("TASK_NOT_FOUND",)

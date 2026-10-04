@@ -248,37 +248,33 @@ def test_plan_b_reject_and_pin_recalls_replanning(seeded):
             "quoted_comment": "작업발판 연계 공정 확정",
         }
     ]
-    facts = obs["rejection_facts"]
-    assert (facts["count"], facts["untried_remaining"]) == (1, False)
+    assert obs["rejection_facts"]["count"] == 1
+    # 범위는 Unit을 가리지 않는다: 고정되지 않은 다른 Unit 작업까지 여는 L2가 남아 있다 (AG-24)
+    assert obs["untried_levels"] == ["L2"]
     # 이전 계산은 Case 단위다: 앞 Run의 L0·L1이 보인다
     assert [(a["scope_level"], a["this_run"]) for a in obs["attempts"]] == [
         ("L0", False),
         ("L1", False),
     ]
     assert obs["latest_validation"]["live"] is False
-    pinned = {t["task_id"]: t["pinned"] for t in obs["acting_tasks"]}
+    pinned = {t["task_id"]: t["pinned"] for t in obs["tasks"]}
     assert pinned["C"] == {"pinned_by": "supervisor", "by_role": "SUPERVISOR"}
     assert pinned["A"] is None
-    assert obs["untried_levels"] == []
     assert _names(s3) == [  # 사람 도구는 없다
+        "SOLVE_WITH_SCOPE",
         "SOLVE_WITH_CONDITIONS",
         "LIST_ASSIGNABLE_RESOURCES",
         "RETURN_RESULT",
     ]
     assert s3["action"]["name"] == "RETURN_RESULT"
-    # 열 수 있는 것: 권한 때문에 제외된 자원과, 모든 범위에서 해가 없는 요청 작업의 시간창이 남는다
+    # 열 수 있는 것: 권한 때문에 제외된 자원. 요청 작업의 시간창은 모든 범위에서 해가 없을 때만 붙는데,
+    # 아직 시도하지 않은 범위(L2)가 남아 있다
     openers = [
         {
             "need_id": f"{second.run_id}:s:0",
             "kind": "FACT_CHANGE",
             "field": "PERMISSION",
             "resource_id": "B-CR-01",
-        },
-        {
-            "need_id": f"{second.run_id}:s:1",
-            "kind": "FACT_CHANGE",
-            "field": "WINDOW",
-            "task_id": "A",
         },
     ]
     assert (s3["tool_result"]["paths"], s3["tool_result"]["openers"]) == ([], openers)
@@ -287,8 +283,8 @@ def test_plan_b_reject_and_pin_recalls_replanning(seeded):
         r.input_ref["phase"] != "ASK" for r in _runs("COORDINATION")
     )
     woke = _steps(run.main_id)[-1]["observation"]
-    unit = next(u for u in woke["groups"][0]["units"] if u["unit_id"] == "UA")
-    assert (unit["last_result"]["paths"], unit["last_result"]["openers"]) == ([], openers)
+    last = woke["replanning"]["last_result"]
+    assert (last["paths"], last["openers"]) == ([], openers)
     assert not [c for c in woke["calls"] if c["agent"] == "COORDINATION"]
 
 
@@ -539,11 +535,7 @@ def test_form_during_open_case_is_queued_then_promoted_on_commit(seeded):
     assert last["payload"]["cause"] == {"kind": "QUEUE", "task_id": "N1", "actor_id": "planner_a"}
     n1_run, n1_main = _last(), _last("MAIN")
     assert n1_main.run_id != run.main_id and n1_main.status == "WAITING_HUMAN"
-    assert (n1_run.parent_run_id, n1_run.status, n1_run.acting_actor_id) == (
-        n1_main.run_id,
-        "SUCCEEDED",
-        "planner_a",
-    )
+    assert (n1_run.parent_run_id, n1_run.status) == (n1_main.run_id, "SUCCEEDED")
 
 
 def _queue_n1_during_alpha(pack):

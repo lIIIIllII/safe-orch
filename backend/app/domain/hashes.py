@@ -8,7 +8,6 @@ from app.domain.models import Assignment, Condition, Movable, SnapshotContent
 
 def search_spec_hash(
     snapshot_hash: str,
-    acting_unit_id: str,
     axes: Mapping[str, Movable],
     resource_alternatives: Mapping[str, Sequence[str]],
     time_limit_s: int,
@@ -19,7 +18,6 @@ def search_spec_hash(
     조건과 목적 순서는 기본값이 아닐 때만 넣는다(조건 없는 탐색의 hash는 그대로다)."""
     content = {
         "snapshot_hash": snapshot_hash,
-        "acting_unit_id": acting_unit_id,
         "axes": {tid: ax.model_dump() for tid, ax in axes.items() if ax.time or ax.resource},
         "resource_alternatives": {k: list(v) for k, v in resource_alternatives.items()},
         "time_limit_s": time_limit_s,
@@ -38,7 +36,6 @@ def _condition_input(conditions: Mapping[str, Condition]) -> dict[str, list]:
 
 def search_key(
     facts: SnapshotContent,
-    acting_unit_id: str,
     axes: Mapping[str, Movable],
     resource_alternatives: Mapping[str, Sequence[str]],
     time_limit_s: int,
@@ -120,7 +117,6 @@ def search_key(
             "pack_hash": facts.pack_hash,
             "work_intervals": [list(iv) for iv in facts.work_intervals],
             "horizon_minutes": facts.horizon_minutes,
-            "acting_unit_id": acting_unit_id,
             "axes": effective,
             "resource_alternatives": {k: list(v) for k, v in resource_alternatives.items()},
             "time_limit_s": time_limit_s,

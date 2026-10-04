@@ -30,7 +30,7 @@ def _conflict(pack, snapshot):
 
 
 def _run(pack, snapshot, level, acting="UA"):
-    spec = build_search_spec(snapshot, _conflict(pack, snapshot), acting, level)
+    spec = build_search_spec(snapshot, [_conflict(pack, snapshot)], level)
     result = cpsat.solve(snapshot, spec, pack)
     return spec, result
 
@@ -62,7 +62,8 @@ def _forbid_solver(monkeypatch):
 def test_l0_infeasible_no_candidate(with_a):
     snap = take_snapshot(with_a)
     spec, result = _run(with_a, snap, "L0")
-    assert list(spec.axes) == ["A"]
+    # 충돌에 걸린 작업이 범위다. B는 고정되어 축이 닫혀 있다
+    assert [t for t, ax in spec.axes.items() if ax.time] == ["A"]
     assert result.stage1 == {"status": "INFEASIBLE", "changed": None, "solution": None}
     assert result.stage2 is None and result.chosen_stage is None
     assert build_candidate(snap, spec, result) is None
@@ -71,7 +72,8 @@ def test_l0_infeasible_no_candidate(with_a):
 def test_l1_alpha(with_a):
     snap = take_snapshot(with_a)
     spec, result = _run(with_a, snap, "L1")
-    assert list(spec.axes) == ["A", "C"]  # C: 같은 기준 자원 A-CR-01
+    # C: 같은 기준 자원 A-CR-01. B는 고정되어 축이 닫혀 있다
+    assert [t for t, ax in spec.axes.items() if ax.time] == ["A", "C"]
     assert (result.stage1["status"], result.stage1["changed"]) == ("OPTIMAL", 2)
     assert (result.stage2["status"], result.stage2["delay"]) == ("OPTIMAL", 90)
     assert result.chosen_stage == 2
@@ -155,42 +157,43 @@ def test_alternative_filtered_by_zone_and_requirement(with_a):
 # ── SearchSpec 오류·hash ───────────────────────────────────────
 
 
-def test_no_acting_tasks(with_a):
+def test_no_conflict_tasks(with_a):
     snap = take_snapshot(with_a)
-    other = Conflict(
-        rule_id="SEP-HOT-FLAM", task_ids=("D", "E"), zone_ids=("D", "D2"), interval=(0, 75)
-    )
     with pytest.raises(SearchSpecError) as exc:
-        build_search_spec(snap, other, "UA", "L0")
-    assert exc.value.reason_code == "NO_ACTING_TASKS"
+        build_search_spec(snap, [], "L0")
+    assert exc.value.reason_code == "NO_CONFLICT_TASKS"
 
 
-def test_scope_levels(with_a):
+def test_scope_levels_do_not_depend_on_unit(with_a):
+    """범위는 Unit을 가리지 않는다: 충돌 작업 → 같은 구역·자원 → 작업 전체 (AG-24)."""
     snap = take_snapshot(with_a)
     conflict = _conflict(with_a, snap)
-    ub = build_search_spec(snap, conflict, "UB", "L2")
-    assert list(ub.axes) == ["B", "D", "E", "K", "P", "W"]  # 확장 작업은 고정
-    assert ub.axes["B"] == Movable(time=False, resource=False)
-    assert list(build_search_spec(snap, conflict, "UB", "L0").axes) == ["B"]
-    ua = build_search_spec(snap, conflict, "UA", "L2")
-    assert list(ua.axes) == ["A", "C", "M", "Q"]
-    # 두 축이 모두 고정인 확장 작업은 hash에서 빠진다: L2 = L1
-    assert ua.hash == build_search_spec(snap, conflict, "UA", "L1").hash
+    facts = snap.facts()
+    l0, l1, l2 = (build_search_spec(snap, [conflict], lvl) for lvl in ("L0", "L1", "L2"))
+    assert list(l0.axes) == ["A", "B"]  # A는 UA, B는 UB
+    assert set(l0.axes) <= set(l1.axes) <= set(l2.axes)
+    assert list(l2.axes) == sorted(t.task_id for t in facts.tasks)
+    # 고정된 작업은 범위에 들어가도 축이 닫힌다. 고정되지 않은 작업은 누구 작업이든 열린다
+    assert l2.axes["B"] == Movable(time=False, resource=False)
+    units = {t.task_id: t.unit_id for t in facts.tasks}
+    opened = [t for t, ax in l2.axes.items() if ax.time]
+    assert opened == sorted(set(units) - facts.pinned_task_ids())
+    assert {units[t] for t in opened} == {"UA", "UB"}
 
 
 def test_search_spec_hash_ignores_ids_and_scope_name(with_a):
     snap = take_snapshot(with_a)
     conflict = _conflict(with_a, snap)
-    l0a = build_search_spec(snap, conflict, "UA", "L0")
-    l0b = build_search_spec(snap, conflict, "UA", "L0")
-    l1 = build_search_spec(snap, conflict, "UA", "L1")
+    l0a = build_search_spec(snap, [conflict], "L0")
+    l0b = build_search_spec(snap, [conflict], "L0")
+    l1 = build_search_spec(snap, [conflict], "L1")
     assert l0a.search_spec_id != l0b.search_spec_id and l0a.search_spec_id.startswith("ss_")
     assert l0a.hash == l0b.hash
     assert l1.hash != l0a.hash  # C가 실제로 움직일 수 있다
 
-    # C 고정 후: L1·L2는 L0와 같은 실효 탐색 → 같은 hash
-    fixed = _fix(snap, "C")
-    h0, h1, h2 = (build_search_spec(fixed, conflict, "UA", lvl) for lvl in ("L0", "L1", "L2"))
+    # 범위가 넓어져도 새로 들어온 작업이 모두 고정이면 같은 실효 탐색 → 같은 hash
+    fixed = _fix(snap, "C", "E")
+    h0, h1, h2 = (build_search_spec(fixed, [conflict], lvl) for lvl in ("L0", "L1", "L2"))
     assert h1.axes["C"] == Movable(time=False, resource=False)
     assert h0.hash == h1.hash == h2.hash
     assert h0.scope_level != h1.scope_level
@@ -199,10 +202,10 @@ def test_search_spec_hash_ignores_ids_and_scope_name(with_a):
 def test_search_spec_hash_depends_on_snapshot_hash_not_id(with_a):
     s1, s2 = take_snapshot(with_a), take_snapshot(with_a)
     c = _conflict(with_a, s1)
-    assert build_search_spec(s1, c, "UA", "L0").hash == build_search_spec(s2, c, "UA", "L0").hash
+    assert build_search_spec(s1, [c], "L0").hash == build_search_spec(s2, [c], "L0").hash
     add_task(with_a, make_task(with_a, revision=2))  # 같은 값이라도 Context가 바뀜
     s3 = take_snapshot(with_a)
-    assert build_search_spec(s3, c, "UA", "L0").hash != build_search_spec(s1, c, "UA", "L0").hash
+    assert build_search_spec(s3, [c], "L0").hash != build_search_spec(s1, [c], "L0").hash
 
 
 # ── 마지막 단계: 자원을 바꾸는 작업 수 (CV-12) ─────────────────
@@ -215,7 +218,7 @@ def test_equal_metrics_prefer_the_solution_that_changes_fewer_resources(seeded):
     snap = _site_crane_free(take_snapshot(pack))
     conflict = Conflict(rule_id="TEST", task_ids=("B", "C"), zone_ids=(), interval=(0, 1))
     later = {"C": Condition(start_min=90)}  # C는 시각을 바꿔야 한다
-    spec = build_search_spec(snap, conflict, "UA", "L0", later)
+    spec = build_search_spec(snap, [conflict], "L0", later)
     assert spec.resource_alternatives == {"C": ("SITE-CR-01",)}  # 자원도 바꿀 수 있다
     result = cpsat.solve(snap, spec, pack)
     assert _placed(result, "C") == [("C", 90, "A-CR-01")]  # 시각만 바꾼다
@@ -224,13 +227,13 @@ def test_equal_metrics_prefer_the_solution_that_changes_fewer_resources(seeded):
 
     # 자원까지 바꾼 해도 변경 수와 지연은 같다: 마지막 단계가 없으면 둘은 구분되지 않는다
     swapped = {"C": Condition(start_min=90, resource_id="SITE-CR-01")}
-    forced = cpsat.solve(snap, build_search_spec(snap, conflict, "UA", "L0", swapped), pack)
+    forced = cpsat.solve(snap, build_search_spec(snap, [conflict], "L0", swapped), pack)
     assert _placed(forced, "C") == [("C", 90, "SITE-CR-01")]
     assert (forced.stage1["changed"], forced.stage2["delay"]) == (1, 30)
     assert forced.stage2["resource_changed"] == 1
 
     # 지연 먼저로 풀어도 마지막 단계는 같다
-    first = build_search_spec(snap, conflict, "UA", "L0", later, "DELAY_FIRST")
+    first = build_search_spec(snap, [conflict], "L0", later, "DELAY_FIRST")
     delay_first = cpsat.solve(snap, first, pack)
     assert _placed(delay_first, "C") == [("C", 90, "A-CR-01")]
     assert (delay_first.stage2["changed"], delay_first.stage2["resource_changed"]) == (1, 0)
@@ -241,7 +244,7 @@ def test_last_stage_replaces_a_solution_that_changes_more_resources(seeded, monk
     pack = seeded
     snap = _site_crane_free(take_snapshot(pack))
     conflict = Conflict(rule_id="TEST", task_ids=("B", "C"), zone_ids=(), interval=(0, 1))
-    spec = build_search_spec(snap, conflict, "UA", "L0", {"C": Condition(start_min=90)})
+    spec = build_search_spec(snap, [conflict], "L0", {"C": Condition(start_min=90)})
     real, calls = cpsat._solution, []
 
     def swapped_at_stage2(b, solver):
@@ -280,7 +283,7 @@ def test_t31_time_fixed_resource_moves(seeded):
         for c in detect_conflicts(snap, snap.facts().check_assignments(), pack)
         if c.rule_id == "CAP-RESOURCE" and "X" in c.task_ids
     )
-    spec = build_search_spec(snap, cap, "UA", "L0")
+    spec = build_search_spec(snap, [cap], "L0")
     assert spec.axes["X"] == Movable(time=True, resource=True)  # 시각은 시간창(60–60)이 묶는다
     result = cpsat.solve(snap, spec, pack)
     assert list(spec.axes) == ["C", "X"]
@@ -293,7 +296,7 @@ def test_pinned_task_closes_both_axes(with_a):
     """고정된 A는 시각·자원 모두 닫힌다. 쓸 수 있는 대체 자원이 있어도 대안에 들어가지 않는다 (AG-27)."""
     pack = with_a
     snap = _fix(_site_crane_free(take_snapshot(pack)), "A")
-    spec = build_search_spec(snap, _conflict(pack, snap), "UA", "L2")
+    spec = build_search_spec(snap, [_conflict(pack, snap)], "L2")
     assert spec.axes["A"] == Movable(time=False, resource=False)
     result = cpsat.solve(snap, spec, pack)
     assert result.stage1["status"] == "INFEASIBLE"  # A가 0–30에 묶이면 B 아래를 벗어날 수 없다
@@ -303,13 +306,14 @@ def test_pinned_task_closes_both_axes(with_a):
 def test_solver_keeps_pinned_task_and_moves_unpinned(with_a):
     """고정된 작업은 상수로 남고, 고정되지 않은 작업만 움직인다 (AG-27)."""
     snap = take_snapshot(with_a)
-    spec = build_search_spec(snap, _conflict(with_a, snap), "UA", "L1")
+    spec = build_search_spec(snap, [_conflict(with_a, snap)], "L1")
     assert spec.axes == {
         "A": Movable(time=True, resource=True),
+        "B": Movable(time=False, resource=False),
         "C": Movable(time=True, resource=True),
     }
     pinned = _fix(snap, "C")
-    spec_c = build_search_spec(pinned, _conflict(with_a, pinned), "UA", "L1")
+    spec_c = build_search_spec(pinned, [_conflict(with_a, pinned)], "L1")
     assert spec_c.axes["C"] == Movable(time=False, resource=False)
     result = cpsat.solve(pinned, spec_c, with_a)
     if result.solution is not None:
@@ -450,7 +454,7 @@ def test_register_stale_plan_discarded(with_a):
 
 
 def _key(pack, snapshot, level="L0"):
-    spec = build_search_spec(snapshot, _conflict(pack, snapshot), "UA", level)
+    spec = build_search_spec(snapshot, [_conflict(pack, snapshot)], level)
     return spec.search_key, spec.hash
 
 

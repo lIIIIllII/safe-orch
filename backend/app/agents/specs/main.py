@@ -2,7 +2,7 @@
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
 Action: CALL_AGENT, WAIT, ESCALATE, CLOSE. 승인·확정·Hold 해제·제안 확인 도구는 없다.
-전문 Agent에게는 Agent 종류와 참조만 넘긴다(AG-24). 재계획에는 접근(목록 값)과 짧은 문장(인용)을 더한다(AG-28). 순서는 지침에 있고 여기 조건은
+전문 Agent에게는 Agent 종류와 참조만 넘긴다(AG-24). 재계획에는 접근(목록 값)과 짧은 문장(인용)만 넘긴다(AG-28). 순서는 지침에 있고 여기 조건은
 사실·유효성·Budget뿐이다 (AG-01).
 """
 
@@ -33,8 +33,6 @@ RECURSION_LIMIT = (MAX_STEPS + MAX_EXTRA_ROUNDS * ROUND_STEPS) * 5 + 10
 SUMMARY_MAX_DECISION = 200
 
 CALL_ARGS = (
-    "group_id",
-    "acting_unit_id",
     "approach",
     "phase",
     "candidate_id",
@@ -59,7 +57,7 @@ class Action(BaseModel):
 
 
 class CallAgent(Action):
-    """전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다. 재계획(REPLANNING)은 충돌 그룹과 그 그룹에 작업을 가진 Unit과 접근(무엇을 우선할지), 협의(COORDINATION)는 Supervisor가 고른 후보, 통지는 확정된 후보, 신고 대응(EVENT_RESPONSE)은 신고를 가리킨다."""
+    """전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다. 재계획(REPLANNING)은 접근(무엇을 우선할지)만 넘기고 현장의 지금 충돌 전체를 푼다. 협의(COORDINATION)는 Supervisor가 고른 후보, 통지는 확정된 후보, 신고 대응(EVENT_RESPONSE)은 신고를 가리킨다."""
 
     OPENS = (
         "지금 받아들여지는 호출(calls)이 있고 전문 Agent 호출 수가 남아 있을 때. 열린 하위 Run이 있거나, "
@@ -69,10 +67,6 @@ class CallAgent(Action):
 
     agent: Literal["REPLANNING", "COORDINATION", "EVENT_RESPONSE"] = Field(
         description="부를 전문 Agent"
-    )
-    group_id: str | None = Field(default=None, description="재계획할 충돌 그룹 ID (REPLANNING)")
-    acting_unit_id: str | None = Field(
-        default=None, description="재계획의 주체 Unit. 그 그룹에 작업을 가진 Unit (REPLANNING)"
     )
     approach: Literal["MIN_CHANGE", "PREFER_WINDOW"] | None = Field(
         default=None,
@@ -157,7 +151,7 @@ def call_refs(action: CallAgent) -> dict[str, Any]:
 def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """유효한 인자 값이 있는 도구와 그 값. 사실·유효성·Budget만 본다(순서 조건 없음).
 
-    CALL_AGENT의 인자 조합(어느 그룹에 어느 Unit 등)은 실행 때 서버가 다시 검사한다.
+    CALL_AGENT의 인자 조합은 실행 때 서버가 다시 검사한다.
     """
     out: dict[str, dict[str, Any]] = {}
     calls = obs["calls"]

@@ -69,7 +69,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p23",
+        "replanning-p24",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -103,16 +103,11 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
 
 def test_same_effective_spec_is_not_retried_within_case(with_a):
     _run(with_a, [solve("L0"), solve("L1")])
-    # 같은 Case의 새 Run: L0·L1·L2 모두 같은 실효 SearchSpec을 이미 시도했다 (CV-13)
+    # 같은 Case의 새 Run: L0·L1은 앞 Run이 이미 시도했다 (CV-13)
     run, steps, model = _run(
-        with_a, [solve("L2"), escalate()], run_id="run_2", case_id="case_run_1"
+        with_a, [solve("L1"), escalate()], run_id="run_2", case_id="case_run_1"
     )
-    # 범위 계산은 없다. 조건을 걸어 풀기와 자원 조회는 남는다
-    assert model.tool_names(0) == [
-        "SOLVE_WITH_CONDITIONS",
-        "LIST_ASSIGNABLE_RESOURCES",
-        "RETURN_RESULT",
-    ]
+    assert steps[0]["observation"]["untried_levels"] == ["L2"]
     # 앞 Run이 한 같은 계산이다: Solver를 부르지 않고 그때의 결과를 돌려준다
     assert _guards(steps)[0] == ("COMPLETED", "REJECTED", "ALREADY_TRIED")
     previous = steps[0]["tool_result"]
@@ -391,8 +386,8 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
         "llm_attempts": spec.MAX_LLM_ATTEMPTS,
         "solver_calls": spec.MAX_SOLVER_CALLS,
     }
-    assert binding.prompt.PROMPT_VERSION == "replanning-p23"
-    assert runtime.exec_contract_version("REPLANNING") == "replanning-c7"
+    assert binding.prompt.PROMPT_VERSION == "replanning-p24"
+    assert runtime.exec_contract_version("REPLANNING") == "replanning-c8"
     assert runtime.exec_contract_version("COORDINATION") == "coordination-c7"
     assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c6"
     assert runtime.exec_contract_version("INTAKE") == "intake-c11"

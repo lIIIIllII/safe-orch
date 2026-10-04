@@ -173,27 +173,14 @@ def auto_main(obs: dict[str, Any]) -> AIMessage:
         return next((c for c in calls if all(c.get(k) == v for k, v in want.items())), None)
 
     # 막힌 재계획은 다시 부르지 않는다
-    failed: set[tuple[Any, Any]] = set()
-    for r in obs["child_results"]:
-        if r["call"] and r["run_status"] != "SUCCEEDED":
-            failed.add((r["call"].get("group_id"), r["call"].get("acting_unit_id")))
-    requesters = {
-        (g["group_id"], u["unit_id"])
-        for g in obs["groups"]
-        for u in g["units"]
-        if u["request_task_ids"] or not any(x["request_task_ids"] for x in g["units"])
-    } - failed
-    replanning = next(
-        (
-            c
-            for c in calls
-            # 기본 응답은 접근 하나(변경 최소)만 쓴다. 접근을 달리해 부르는 것은 스크립트로 시험한다
-            if c["agent"] == "REPLANNING"
-            and c.get("approach") == "MIN_CHANGE"
-            and (c["group_id"], c["acting_unit_id"]) in requesters
-        ),
-        None,
+    failed = any(
+        r["call"]
+        and (r["call"].get("agent_type") or r["call"].get("agent")) == "REPLANNING"
+        and r["run_status"] != "SUCCEEDED"
+        for r in obs["child_results"]
     )
+    # 기본 응답은 접근 하나(변경 최소)만 쓴다. 접근을 달리해 부르는 것은 스크립트로 시험한다
+    replanning = None if failed else first(agent="REPLANNING", approach="MIN_CHANGE")
     chosen = (
         first(agent="COORDINATION", phase="NOTICE")
         or first(agent="EVENT_RESPONSE")

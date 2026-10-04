@@ -233,7 +233,7 @@ def test_replanning_sees_decided_values_and_cannot_change_them(seeded, main_on):
     run_until_idle(pack, model_factory=router.factory())
     [rp] = _runs("REPLANNING")
     [step] = _steps(rp.run_id)
-    acting = {t["task_id"]: t for t in step["observation"]["acting_tasks"]}
+    acting = {t["task_id"]: t for t in step["observation"]["tasks"]}
     assert acting["A"]["decided_values"] == ["duration"]
     assert acting["C"]["decided_values"] == []
     # 정한 시각은 정한 희망으로 보인다. Hard가 아니라 해를 막지 않으므로 열 수 있는 것에 오르지 않는다

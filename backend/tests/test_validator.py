@@ -39,7 +39,7 @@ from app.validator.validator import BASIC_TO_CHECK, RULE_TYPE_TO_CHECK, validate
 def _solve(pack, snap, level, conflict=None):
     if conflict is None:
         conflict = detect_conflicts(snap, snap.facts().check_assignments(), pack)[0]
-    spec = build_search_spec(snap, conflict, "UA", level)
+    spec = build_search_spec(snap, [conflict], level)
     cand = build_candidate(snap, spec, cpsat.solve(snap, spec, pack))
     assert cand is not None
     return spec, cand
@@ -237,7 +237,7 @@ def test_cpsat_predecessor_missing_infeasible(with_a):
         for c in detect_conflicts(snap, snap.facts().check_assignments(), with_a)
         if c.rule_id == "SEP-LIFT-BELOW"
     )
-    r = cpsat.solve(snap, build_search_spec(snap, conflict, "UA", "L1"), with_a)
+    r = cpsat.solve(snap, build_search_spec(snap, [conflict], "L1"), with_a)
     assert (r.stage1["status"], r.chosen_stage) == ("INFEASIBLE", None)
 
 
@@ -271,7 +271,7 @@ def test_c06_task_pinned(with_a):
     """고정된 C를 옮긴 후보는 SearchSpec과 관계없이 걸린다 (AG-27)."""
     snap = _pin(take_snapshot(with_a), "C")
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), with_a)[0]
-    spec = build_search_spec(snap, conflict, "UA", "L1")
+    spec = build_search_spec(snap, [conflict], "L1")
     alpha_like = _rehash(
         Candidate(
             candidate_id="cand_x",
@@ -296,15 +296,6 @@ def test_c06_task_pinned(with_a):
     )
     bad = _bad(validate(snap, alpha_like, spec, with_a))
     assert ("C06", "TASK_PINNED", ("C",)) in bad
-
-
-def test_c06_outside_acting_unit(alpha):
-    pack, snap, spec, cand = alpha
-    forged = spec.model_copy(update={"acting_unit_id": "UB"})
-    bad = _bad(validate(snap, cand, forged, pack))
-    assert ("C06", "OUTSIDE_ACTING_UNIT", ("A",)) in bad
-    assert ("C06", "OUTSIDE_ACTING_UNIT", ("C",)) in bad
-    assert ("C01", "SEARCH_SPEC_HASH_MISMATCH", ()) in bad
 
 
 # ── T07·T09 자원 ───────────────────────────────────────────────

@@ -180,7 +180,7 @@ def test_validator_catches_pool_conflicts_through_rule_engine(seeded):
 
 
 def _solve(pack, snap, level):
-    spec = build_search_spec(snap, A_B, "UA", level)
+    spec = build_search_spec(snap, [A_B], level)
     return cpsat.solve(snap, spec, pack)
 
 
@@ -218,7 +218,7 @@ def test_search_key_includes_pools_and_demands(with_a):
     snap = take_snapshot(with_a)
 
     def key(snapshot):
-        return build_search_spec(snapshot, A_B, "UA", "L0").search_key
+        return build_search_spec(snapshot, [A_B], "L0").search_key
 
     base = key(snap)
     assert key(_pools(snap, UA_WRK=9)) != base
@@ -322,14 +322,13 @@ def test_pool_excess_becomes_conflict_and_replanning_resolves_it(seeded, main_on
         step = list_steps(conn, run_id)[0]
         cand = get_candidate(conn, pack.site_id, step["tool_result"]["candidate_id"])
     excess = {"pool_id": "UA-WRK", "kind": "WORKER", "at": 2910, "demand": 12, "quantity": 10}
-    assert run.input_ref["conflict"] == {"rule_id": "POOL_CAPACITY", "task_ids": ["M", "Q", "X"]}
+    assert run.acting_unit_id is None  # 재계획은 주체 Unit 없이 충돌 전체를 푼다 (AG-24)
     obs = step["observation"]
     # 관찰: 충돌에 풀·종류·초과 시각이 보이고, 움직일 수 있는 작업에 수요가 보인다
     assert [(c["rule_id"], c["task_ids"], c["pool"]) for c in obs["conflicts"]] == [
         ("POOL_CAPACITY", ["M", "Q", "X"], excess)
     ]
-    assert obs["primary_conflict"]["pool"] == excess
-    acting = {t["task_id"]: t["demands"] for t in obs["acting_tasks"]}
+    acting = {t["task_id"]: t["demands"] for t in obs["tasks"]}
     assert acting["X"] == {"WORKER": 5} and acting["Q"] == {"SIGNALER": 1, "WORKER": 4}
     # Q가 끝난 10:30(2970)에는 M 3 + X 5 = 8 ≤ 10
     placed = {a.task_id: a.start for a in cand.assignments}

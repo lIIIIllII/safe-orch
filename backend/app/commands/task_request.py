@@ -319,8 +319,8 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
 
     READY를 남겨 두면 기준 위치에 고정 상수로 남아 이후 모든 Solver 호출이 INFEASIBLE이 된다.
     고정된 작업은 철회할 수 없다(TASK_PINNED): 먼저 고정을 푼다.
-    - READY: 새 revision(NEEDS_INFO) + context +1 + RECHECK. 이 작업을 다루는 열린 Run은 STALE(그 Case가
-      끝나 대기열이 올라감), 다른 열린 Run은 wake(고정 충돌이 사라져 다시 풀 수 있다).
+    - READY: 새 revision(NEEDS_INFO) + context +1 + RECHECK. 열린 협의 Run은 STALE, 열린 재계획 Run은
+      wake(충돌 전체를 다시 관찰한다).
     - QUEUED: 사실에 들어간 적이 없으므로 새 revision(NEEDS_INFO)만. context·RECHECK·Run 영향 없음.
     """
     r = Result()
@@ -360,12 +360,8 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
         if run.agent_type == "COORDINATION":
             # Context가 올라 협의 중인 후보가 무효다
             end_case_run(tx, ctx.pack, run.run_id, "STALE", f"WITHDRAW:{task.task_id}")
-        elif run.agent_type != "REPLANNING":
+        elif run.agent_type == "REPLANNING":
             # 다른 작업의 철회는 Event Response·Intake Run의 판단 근거가 아니다(깨우지 않는다)
-            continue
-        elif task.task_id in (run.input_ref.get("conflict") or {}).get("task_ids", []):
-            end_case_run(tx, ctx.pack, run.run_id, "STALE", f"WITHDRAW:{task.task_id}")
-        else:
             wake_run(tx, site_id, run.run_id)
     cause = {"kind": "WITHDRAW", "task_id": task.task_id, "actor_id": ctx.actor_id}
     key = f"TASK_REQUEST_WITHDRAWN:{task.task_id}:{revision}"

@@ -237,7 +237,7 @@ def test_plan_a_full_e2e(seeded, main_on):
     assert [(s["action"] or {}).get("name") for s in steps] == ["SOLVE_WITH_SCOPE", "RETURN_RESULT"]
     assert (second.steps_used, second.solver_calls_used, second.human_rounds_used) == (2, 1, 0)
     assert steps[0]["observation"]["rejections"] == []  # 고정은 거절이 아니라 사람이 직접 걸었다
-    acting = {t["task_id"]: t for t in steps[0]["observation"]["acting_tasks"]}
+    acting = {t["task_id"]: t for t in steps[0]["observation"]["tasks"]}
     assert acting["C"]["pinned"] == {"pinned_by": "foreman_a2", "by_role": "OWNER"}
     assert acting["A"]["pinned"] is None
     with db.read() as conn:

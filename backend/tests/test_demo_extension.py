@@ -11,7 +11,6 @@ from conftest import take_snapshot, with_facts
 from fastapi.testclient import TestClient
 from scripted import Router, escalate, solve
 
-from app.agents import casefacts
 from app.commands.approval import ApproveRequest, WaiveRequest, approve_and_commit, waive
 from app.commands.pins import TaskRef, pin_task, unpin_task
 from app.commands.task_request import (
@@ -55,7 +54,7 @@ FORM_FIELDS = (
     "requested_resource_id",
 )
 
-# 시연 요청 표: 충돌, acting unit, L0 결과 (상태, 변경 수, 달력 지연, 근무 지연, 새 시작, 자원)
+# 시연 요청 표: 충돌, 요청자의 Unit(참고), L0 결과 (상태, 변경 수, 달력 지연, 근무 지연, 새 시작, 자원)
 EXPECTED = {
     "N1": ([("CAP-RESOURCE", ("K", "N1"))], "UA", ("OPTIMAL", 1, 60, 60, 1560, "SITE-GC-01")),
     "N2": ([("SEP-HOT-FLAM", ("N2", "P"))], "UA", ("OPTIMAL", 1, 45, 45, 1575, None)),
@@ -140,9 +139,9 @@ def test_section15_values_on_extended_fixture(with_a):
     """L0 INFEASIBLE, Alpha 변경 2·지연 90, Beta 변경 1·지연 60 (test_solver와 같은 값, 확장 fixture)."""
     snap = take_snapshot(with_a)
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), with_a)[0]
-    l0 = cpsat.solve(snap, build_search_spec(snap, conflict, "UA", "L0"), with_a)
+    l0 = cpsat.solve(snap, build_search_spec(snap, [conflict], "L0"), with_a)
     assert l0.stage1["status"] == "INFEASIBLE"
-    l1 = cpsat.solve(snap, build_search_spec(snap, conflict, "UA", "L1"), with_a)
+    l1 = cpsat.solve(snap, build_search_spec(snap, [conflict], "L1"), with_a)
     assert (l1.stage1["changed"], l1.stage2["delay"]) == (2, 90)
     placed = {a["task_id"]: (a["start"], a["resource_id"]) for a in l1.solution}
     assert (placed["A"], placed["C"]) == ((60, "A-CR-01"), (90, "A-CR-01"))
@@ -156,7 +155,7 @@ def test_section15_values_on_extended_fixture(with_a):
             for r in snap.facts().resources
         ),
     )
-    spec = build_search_spec(beta, conflict, "UA", "L0")
+    spec = build_search_spec(beta, [conflict], "L0")
     r = cpsat.solve(beta, spec, with_a)
     assert (r.stage1["changed"], r.stage2["delay"]) == (1, 60)
     assert {a["task_id"]: (a["start"], a["resource_id"]) for a in r.solution}["A"] == (
@@ -172,21 +171,16 @@ def test_section15_values_on_extended_fixture(with_a):
 def test_demo_request_expected_values(seeded, task_id):
     pack = seeded
     d = _submit(pack, task_id)
-    conflicts_exp, unit_exp, (status, changed, delay, wdelay, start, res) = EXPECTED[task_id]
+    conflicts_exp, _unit, (status, changed, delay, wdelay, start, res) = EXPECTED[task_id]
     snap = take_snapshot(pack)
     facts = snap.facts()
     conflicts = detect_conflicts(snap, facts.check_assignments(), pack)
     assert [(c.rule_id, c.task_ids) for c in conflicts] == conflicts_exp
-    # 요청 작업의 Unit이 주체이고, 주 충돌은 그 Unit의 작업을 포함한 그룹의 첫 충돌이다
-    with db.read() as conn:
-        _, _, [group] = casefacts.current_groups(conn, pack)
-    unit = facts.task_map()[d.task_id].unit_id
-    primary = casefacts.primary_for(group, facts, unit)
-    assert (unit, (primary.rule_id, primary.task_ids)) == (unit_exp, conflicts_exp[0])
+    assert d.task_id == task_id
     base = facts.base_assignments()[task_id].start
-    # 상대 작업이 모두 다른 Unit의 고정 작업이라 L1·L2로 넓혀도 같은 결과다
+    # 충돌 전체를 한 번에 푼다. 상대 작업이 모두 고정이라 L1·L2로 넓혀도 같은 결과다
     for level in ("L0", "L1", "L2"):
-        r = cpsat.solve(snap, build_search_spec(snap, primary, unit, level), pack)
+        r = cpsat.solve(snap, build_search_spec(snap, conflicts, level), pack)
         assert r.stage1["status"] == status, level
         if status != "OPTIMAL":
             assert r.solution is None
@@ -209,7 +203,7 @@ def test_n4_without_calendar_would_be_night(seeded):
     snap = take_snapshot(seeded)
     no_cal = with_facts(snap, work_intervals=((0, 3360),))
     conflict = detect_conflicts(no_cal, no_cal.facts().check_assignments(), seeded)[0]
-    r = cpsat.solve(no_cal, build_search_spec(no_cal, conflict, "UA", "L0"), seeded)
+    r = cpsat.solve(no_cal, build_search_spec(no_cal, [conflict], "L0"), seeded)
     assert {a["task_id"]: a["start"] for a in r.solution}["N4"] == 1935
 
 
@@ -220,7 +214,7 @@ def test_cpsat_fixed_task_outside_calendar_infeasible(with_a):
     found = detect_conflicts(shifted, shifted.facts().check_assignments(), with_a)
     assert {("CALENDAR", ("B",)), ("CALENDAR", ("D",))} <= {(c.rule_id, c.task_ids) for c in found}
     conflict = next(c for c in found if c.rule_id == "SEP-LIFT-BELOW")
-    r = cpsat.solve(shifted, build_search_spec(shifted, conflict, "UA", "L1"), with_a)
+    r = cpsat.solve(shifted, build_search_spec(shifted, [conflict], "L1"), with_a)
     assert r.stage1["status"] == "INFEASIBLE"
 
 
@@ -323,14 +317,15 @@ def test_withdraw_unblocks_later_requests(seeded):
     _submit(pack, "N5")
     run_until_idle(pack, model_factory=_factory(solve("L0"), solve("L2"), escalate()))
     [n5_run] = _runs()
-    assert (n5_run.status, n5_run.acting_unit_id) == ("BLOCKED", "UB")
+    assert (n5_run.status, n5_run.acting_unit_id) == ("BLOCKED", None)
     assert _runs("MAIN")[0].status == "ESCALATED"  # 메인이 이관했다. N5는 READY로 남는다
 
-    # 새 메인: N1과 남은 N5가 K로 엮여 한 그룹이다. UA로 재계획해도 해가 없다
+    # 새 메인: N1과 남은 N5가 K로 엮인다. 충돌 전체를 풀어도 해가 없다
     _submit(pack, "N1")
     replies = (solve("L0"), solve("L2"), escalate(), escalate())
     run_until_idle(pack, model_factory=_factory(*replies))
-    n1_run = next(r for r in _runs() if r.acting_unit_id == "UA")
+    n1_run = _runs()[-1]
+    assert n1_run.run_id != n5_run.run_id
     assert n1_run.status == "BLOCKED"
     with db.read() as conn:
         statuses = [
@@ -353,11 +348,10 @@ def test_withdraw_unblocks_later_requests(seeded):
         audit = conn.execute("SELECT command FROM audit ORDER BY rowid DESC LIMIT 1").fetchone()[0]
     assert (n5.revision, n5.lifecycle, audit) == (2, "NEEDS_INFO", "WITHDRAW_TASK_REQUEST")
 
-    # 철회는 사건이다. 새 메인이 남은 요청 N1의 Unit(UA)으로 재계획을 부른다(그룹이 달라졌다)
+    # 철회는 사건이다. 새 메인이 재계획을 다시 부른다(충돌이 달라졌다)
     run_until_idle(pack, model_factory=_factory(solve("L0")))
     run = _runs()[-1]
-    assert (run.status, run.acting_unit_id) == ("SUCCEEDED", "UA")
-    assert run.input_ref["group_task_ids"] == ["K", "N1"]
+    assert run.status == "SUCCEEDED"
     asg = _last_candidate()[1]
     assert '{"end":1620,"resource_id":"SITE-GC-01","start":1560,"task_id":"N1"}' in asg.replace(
         " ", ""

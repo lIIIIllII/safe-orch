@@ -33,14 +33,14 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=main_prompt,
         observer=main_observer,
         executor=MainExecutor,
-        exec_contract_version="main-c3",  # 기록만. 사전 확인 호출 삭제 (AG-34)
+        exec_contract_version="main-c4",  # 기록만. 재계획 호출은 접근만 넘긴다 (AG-24)
     ),
     replanning_spec.AGENT_TYPE: AgentBinding(
         spec=replanning_spec.SPEC,
         prompt=replanning_prompt,
         observer=replanning_observer,
         executor=ReplanningExecutor,
-        exec_contract_version="replanning-c7",  # 기록만. 대체 자원 시도 삭제, 자원 축은 서버가 채운다 (AG-34)
+        exec_contract_version="replanning-c8",  # 기록만. 주체 Unit 없이 충돌 전체를 푼다 (AG-24)
     ),
     coordination_spec.AGENT_TYPE: AgentBinding(
         spec=coordination_spec.SPEC,

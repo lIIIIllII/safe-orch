@@ -234,8 +234,6 @@ def _start_allowed(tx: sqlite3.Connection, pack: LoadedPack, payload: dict[str, 
 
 CALL_REFS = (
     "agent_type",
-    "group_id",
-    "acting_unit_id",
     "approach",
     "phase",
     "candidate_id",
@@ -280,7 +278,7 @@ def start_run(pack: LoadedPack, job: Job, model_factory: runtime.ModelFactory) -
                     # 하위 Run은 부른 메인의 Case를 쓴다
                     case_id=payload.get("case_id") or new_id("case"),
                     acting_actor_id=payload.get("acting_actor_id"),
-                    acting_unit_id=payload["acting_unit_id"],
+                    acting_unit_id=payload.get("acting_unit_id"),
                     input_ref={**payload, "job_id": job["job_id"]},
                     exec_contract_version=runtime.exec_contract_version(payload["agent_type"]),
                     status="RUNNING",

@@ -1,7 +1,8 @@
 """메인이 보는 Case 사실 (읽기 전용). 메인 관찰과 메인 도구의 유효성이 같이 쓴다.
 
-충돌 그룹(공유 작업으로 묶은 최소 계산), 그룹별 Unit과 미시도 범위, 이 Case의 후보·검증·협의·통지 상태,
-Hold, 하위 Run 결과, 이 Case의 열린 일, 지금 받아들여지는 호출. 판정은 모두 사실 조건이다(순서 없음).
+엮인 충돌(공유 작업으로 묶은 충돌 그룹), 재계획에 쓰는 사실(움직일 수 있는 작업·미시도 범위·이전 결과),
+이 Case의 후보·검증·협의·통지 상태, Hold, 하위 Run 결과, 이 Case의 열린 일, 지금 받아들여지는 호출.
+판정은 모두 사실 조건이다(순서 없음).
 """
 
 import sqlite3
@@ -31,7 +32,7 @@ from app.store.repos.pins import preferred_windows
 from app.store.repos.plans import get_plan, get_plan_by_candidate
 from app.store.repos.records import find_reconfirm_candidate, get_candidate, list_validations
 from app.store.repos.runs import approach_attempts, get_run, list_steps, tried_search_keys
-from app.store.repos.site import get_site, list_actors
+from app.store.repos.site import get_site
 from app.store.repos.snapshots import build_snapshot_content
 from app.store.repos.tasks import list_current_tasks
 
@@ -62,36 +63,7 @@ def current_groups(
     snapshot = current_snapshot(conn, pack)
     facts = snapshot.facts()
     conflicts = detect_conflicts(snapshot, facts.check_assignments(), pack)
-    return snapshot, facts, conflict_groups(conflicts, facts.task_map())
-
-
-def primary_for(group: ConflictGroup, facts: SnapshotContent, unit_id: str) -> Conflict | None:
-    """그 Unit의 작업을 포함한 그룹의 첫 충돌 (그 Unit이 재계획할 때의 주 충돌)."""
-    tasks = facts.task_map()
-    return next(
-        (c for c in group.conflicts if any(tasks[t].unit_id == unit_id for t in c.task_ids)), None
-    )
-
-
-def acting_actor(
-    conn: sqlite3.Connection,
-    pack: LoadedPack,
-    group: ConflictGroup,
-    facts: SnapshotContent,
-    unit: str,
-) -> str | None:
-    """대신 움직이는 Actor(서버가 정한다): 그 Unit의 요청 작업(Plan 밖) 담당자, 없으면 그 Unit의 계획자."""
-    tasks = facts.task_map()
-    in_plan = {a.task_id for a in facts.plan.assignments}
-    requests = [t for t in group.units.get(unit, ()) if t not in in_plan]
-    if requests:
-        return tasks[requests[0]].owner_actor_id
-    planners = [
-        a.actor_id
-        for a in list_actors(conn, pack.site_id)
-        if a.unit_id == unit and "UNIT_PLANNER" in a.roles
-    ]
-    return planners[0] if planners else None
+    return snapshot, facts, conflict_groups(conflicts)
 
 
 # ── 통지 대상 ──────────────────────────────────────────────────
@@ -368,8 +340,6 @@ def child_results(
 
 CALL_REFS = (
     "agent_type",
-    "group_id",
-    "acting_unit_id",
     "approach",
     "phase",
     "candidate_id",
@@ -412,14 +382,12 @@ def same_facts(
     return last["end_fingerprint"] == fingerprint(conn, site_id, key, candidate_id)
 
 
-def untried_levels(
-    snapshot: Snapshot, primary: Conflict | None, unit_id: str, tried: set[str]
-) -> list[str]:
-    """그 Unit으로 재계획할 때 이 Case에서 아직 시도하지 않은 탐색 범위."""
+def untried_levels(snapshot: Snapshot, conflicts: list[Conflict], tried: set[str]) -> list[str]:
+    """이 Case에서 아직 시도하지 않은 탐색 범위."""
     out = []
-    for level in LEVELS if primary is not None else ():
+    for level in LEVELS if conflicts else ():
         try:
-            key = build_search_spec(snapshot, primary, unit_id, level).search_key
+            key = build_search_spec(snapshot, conflicts, level).search_key
         except SearchSpecError:
             continue
         if key not in tried:
@@ -465,64 +433,55 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
 
     wanted = preferred_windows(conn, site_id)
     calls: list[dict[str, Any]] = []
-    group_views = []
-    for g in groups:
-        units = []
-        for unit, task_ids in g.units.items():
-            refs = {"group_id": g.group_id, "acting_unit_id": unit}
-            # 마지막 결과는 어느 접근이든 그 그룹·Unit으로 마지막에 부른 재계획의 것이다
-            last = last_result(conn, site_id, call_key("REPLANNING", refs), any_approach=True)
-            unchanged = last is not None and same_facts(conn, site_id, last["call_key"])
-            # 접근마다 호출 키가 다르다: 같은 접근·같은 사실의 재호출만 거절된다 (AG-24)
-            open_approaches = [
-                a
-                for a in APPROACHES
-                if not same_facts(conn, site_id, call_key("REPLANNING", {**refs, "approach": a}))
-            ]
-            movable = movable_task_ids(g, unit, facts.pins)
-            last_view = None
-            if last is not None:
-                run = get_run(conn, last["run_id"])
-                assert run is not None
-                result = run_result(conn, run)
-                last_view = {
-                    "approach": run.input_ref.get("approach"),
-                    "run_status": last["status"],
-                    "end_reason": last["end_reason"],
-                    "result_status": result["status"],
-                    # 전문 Agent가 엮은 길과 서버가 붙인 열 수 있는 것. need마다 need_id가 있다
-                    "paths": result["paths"],
-                    "openers": result.get("openers", []),
-                    # 그 Run이 끝난 뒤 관련 사실이 바뀌었는가 (바뀌지 않았으면 같은 호출은 거절된다)
-                    "facts_changed": not unchanged,
-                }
-            units.append(
-                {
-                    "unit_id": unit,
-                    "task_ids": list(task_ids),
-                    # 고정되지 않아 움직일 수 있는 작업 (재계획은 이것만 옮긴다)
-                    "movable_task_ids": movable,
-                    "request_task_ids": [t for t in task_ids if t not in in_plan],
-                    # 희망 영역이 있는 작업 (지연의 기준이다. 희망 우선 접근이 먼저 줄이는 것, ST-22)
-                    "preferred_task_ids": [t for t in task_ids if t in wanted],
-                    "untried_levels": untried_levels(
-                        snapshot, primary_for(g, facts, unit), unit, tried
-                    ),
-                    "last_result": last_view,
-                }
-            )
-            # 움직일 수 있는 작업이 없는 Unit은 유효한 주체가 아니다 (AG-02)
-            if not hold_active and movable:
-                calls += [{"agent": "REPLANNING", **refs, "approach": a} for a in open_approaches]
-        group_views.append(
-            {
-                "group_id": g.group_id,
-                "task_ids": list(g.task_ids),
-                "rule_ids": sorted({c.rule_id for c in g.conflicts}),
-                "held_task_ids": sorted(set(g.task_ids) & held_tasks),
-                "units": units,
-            }
-        )
+    # 엮인 충돌: 설명이다. 재계획은 그룹이 아니라 현장의 충돌 전체를 한 번에 푼다 (AG-24)
+    group_views = [
+        {
+            "group_id": g.group_id,
+            "task_ids": list(g.task_ids),
+            "rule_ids": sorted({c.rule_id for c in g.conflicts}),
+            "held_task_ids": sorted(set(g.task_ids) & held_tasks),
+        }
+        for g in groups
+    ]
+    conflicts = [c for g in groups for c in g.conflicts]
+    involved = sorted({tid for g in groups for tid in g.task_ids})
+    # 마지막 결과는 어느 접근이든 마지막에 부른 재계획의 것이다
+    last = last_result(conn, site_id, "REPLANNING", any_approach=True)
+    unchanged = last is not None and same_facts(conn, site_id, last["call_key"])
+    last_view = None
+    if last is not None:
+        run = get_run(conn, last["run_id"])
+        assert run is not None
+        result = run_result(conn, run)
+        last_view = {
+            "approach": run.input_ref.get("approach"),
+            "run_status": last["status"],
+            "end_reason": last["end_reason"],
+            "result_status": result["status"],
+            # 전문 Agent가 엮은 길과 서버가 붙인 열 수 있는 것. need마다 need_id가 있다
+            "paths": result["paths"],
+            "openers": result.get("openers", []),
+            # 그 Run이 끝난 뒤 관련 사실이 바뀌었는가 (바뀌지 않았으면 같은 호출은 거절된다)
+            "facts_changed": not unchanged,
+        }
+    movable = movable_task_ids(groups, facts.pins)
+    replanning = {
+        # 충돌에 걸린 작업 가운데 고정되지 않아 움직일 수 있는 것. 재계획은 고정되지 않은 작업만 옮긴다
+        "movable_task_ids": movable,
+        "request_task_ids": [t for t in involved if t not in in_plan],
+        # 희망 영역이 있는 작업 (지연의 기준이다. 희망 우선 접근이 먼저 줄이는 것, ST-22)
+        "preferred_task_ids": [t for t in involved if t in wanted],
+        "untried_levels": untried_levels(snapshot, conflicts, tried),
+        "last_result": last_view,
+    }
+    # 움직일 수 있는 작업이 없으면 재계획으로 바뀌는 것이 없다 (AG-02). 접근마다 호출 키가 다르다:
+    # 같은 접근·같은 사실의 재호출만 거절된다 (AG-24)
+    if not hold_active and movable:
+        calls += [
+            {"agent": "REPLANNING", "approach": a}
+            for a in APPROACHES
+            if not same_facts(conn, site_id, call_key("REPLANNING", {"approach": a}))
+        ]
 
     candidates = [
         candidate_view(conn, pack, cid, facts) for cid in case_candidate_ids(conn, pack, case_id)
@@ -588,6 +547,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
     return {
         "events": events,
         "groups": group_views,
+        "replanning": replanning,
         "holds": holds,
         "candidates": candidates,
         "rejections": rejection_facts(conn, case_id),

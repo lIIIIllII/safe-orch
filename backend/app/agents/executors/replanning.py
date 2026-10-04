@@ -100,9 +100,7 @@ class ReplanningExecutor:
             tasks = {t.task_id: t for t in list_current_tasks(tx, self.pack.site_id, self.pack)}
             assert isinstance(action, spec.ListAssignableResources)
             facts = self.observer.current_snapshot(tx, self.pack).facts()
-            result = self.observer.assignable_resources(
-                facts, tasks[action.task_id], obs.run.acting_unit_id
-            )
+            result = self.observer.assignable_resources(facts, tasks[action.task_id])
             self._complete(
                 tx,
                 run_id,
@@ -158,9 +156,9 @@ class ReplanningExecutor:
         def permitted(o: Observation) -> bool | str:
             verdict = self._permitted(o, action)
             if verdict is True:
-                verdict = o.primary is not None
+                verdict = bool(o.conflicts)
             verdicts.append(verdict)
-            return o.primary is not None
+            return bool(o.conflicts)
 
         # 1. 예약 tx: 관찰 버전 확인 → Available 재계산 → Snapshot·SearchSpec·SolverJob, Solver Budget
         with db.write() as tx:
@@ -176,13 +174,7 @@ class ReplanningExecutor:
             if isinstance(action, spec.SolveWithConditions) and not narrowed:
                 # 조건도 없고 목적 순서도 기본이면 범위 계산(SOLVE_WITH_SCOPE)과 같다
                 return self._reject(tx, run_id, step_no, meta, parsed, "CONDITION_INVALID")
-            args = (
-                obs.primary,
-                obs.run.acting_unit_id,
-                level,
-                conditions,
-                objective,
-            )
+            args = (obs.conflicts, level, conditions, objective)
             try:
                 # 저장하지 않는 Snapshot으로 탐색 키부터 본다(이미 한 탐색이면 아무것도 남기지 않는다)
                 probe = build_search_spec(self.observer.current_snapshot(tx, self.pack), *args)
@@ -346,7 +338,7 @@ def _resolve_conditions(
     시간창·고정·범위·자원 적격성은 SearchSpec이 본다. 희망 영역은 시작 범위 [start, end − duration]로
     바꾸고 시간창과 겹치는 부분만 쓴다(좁히기).
     """
-    tasks = {t["task_id"]: t for t in obs.data["acting_tasks"]}
+    tasks = {t["task_id"]: t for t in obs.data["tasks"]}
     out: dict[str, Condition] = {}
     for c in asked:
         task = tasks.get(c.task_id)

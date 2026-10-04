@@ -187,7 +187,7 @@ def test_resource_eligibility_type_permission_and_availability(with_a):
     snapshot = take_snapshot(with_a)
     facts = snapshot.facts()
     a = facts.task_map()["A"]
-    listed = assignable_resources(facts, a, "UA")
+    listed = assignable_resources(facts, a)
     assert [r["resource_id"] for r in listed["assignable"]] == ["A-CR-01", "SITE-CR-01"]
     assert listed["excluded"] == [
         {"resource_id": "B-CR-01", "reasons": [{"reason": "NOT_ALLOWED"}]}  # 권한
@@ -197,7 +197,7 @@ def test_resource_eligibility_type_permission_and_availability(with_a):
         r.model_copy(update={"available_intervals": ()}) if r.resource_id == "SITE-CR-01" else r
         for r in facts.resources
     ]
-    no_slot = assignable_resources(with_facts(snapshot, resources=tuple(closed)).facts(), a, "UA")
+    no_slot = assignable_resources(with_facts(snapshot, resources=tuple(closed)).facts(), a)
     assert {"resource_id": "SITE-CR-01", "reasons": [{"reason": "NO_AVAILABILITY"}]} in no_slot[
         "excluded"
     ]  # 가용
@@ -212,7 +212,7 @@ def test_listing_reports_zone_and_requirement_reasons(with_a):
             t.model_copy(update=changes) if t.task_id == "A" else t for t in snapshot.facts().tasks
         )
         facts = with_facts(snapshot, tasks=tasks).facts()
-        return assignable_resources(facts, facts.task_map()["A"], "UA")
+        return assignable_resources(facts, facts.task_map()["A"])
 
     in_d = listed(zone_id="D")  # A-CR-01은 B·C, SITE-CR-01은 B·C·D, B-CR-01은 B·D
     assert in_d["assignable"] == [{"resource_id": "SITE-CR-01"}]

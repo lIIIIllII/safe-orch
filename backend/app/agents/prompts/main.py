@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p9"
+PROMPT_VERSION = "main-p10"
 
 
 def tool_catalog() -> str:
@@ -57,15 +57,16 @@ Goal: {goal}
 
 관찰 읽는 법 (괄호 안이 키 이름이다. decision_summary에는 키 이름 대신 앞의 한국어 이름만 쓴다)
 - 사건(events): 이 Case에 온 사건의 종류(kind)와 참조(ref)다. new가 true면 지난 행동 뒤에 새로 온 것이다.
-- 충돌 그룹(groups): 지금 충돌을 공유 작업으로 묶은 것이다. 그룹의 작업(task_ids), 걸린 규칙(rule_ids), \
-Hold가 걸린 작업(held_task_ids), 이 그룹의 작업을 바꾸는 검토 대기 후보(review_candidates), 그룹에 작업을 \
-가진 Unit(units)이 있다. Unit마다 그 Unit의 작업, 사람이 고정하지 않아 움직일 수 있는 \
-작업(movable_task_ids), 그중 아직 \
-계획에 없는 요청 작업(request_task_ids), 희망 영역이 있는 작업(preferred_task_ids: 희망 영역은 지연의 \
-기준이다. 희망 우선 접근은 이 희망에서 벗어난 정도를 먼저 줄인다. 비어 있으면 그 Unit에는 희망 영역이 없다), 그 Unit으로 재계획할 때 아직 시도하지 않은 탐색 범위(untried_levels), \
-그 그룹·Unit으로 마지막에 부른 재계획의 결과(last_result: 그때의 접근 approach, 결과 상태, 재계획 Agent가 엮은 길 paths, \
+- 엮인 충돌(groups): 지금 충돌을 공유 작업으로 묶은 것이다. 묶음의 작업(task_ids), 걸린 규칙(rule_ids), \
+Hold가 걸린 작업(held_task_ids), 이 묶음의 작업을 바꾸는 검토 대기 후보(review_candidates)가 있다. 설명일 \
+뿐이고 재계획을 부르는 단위가 아니다: 재계획은 지금 충돌 전체를 한 번에 푼다.
+- 재계획 사실(replanning): 충돌에 걸린 작업 가운데 사람이 고정하지 않아 움직일 수 있는 \
+작업(movable_task_ids), 아직 계획에 없는 요청 작업(request_task_ids), 희망 영역이 있는 \
+작업(preferred_task_ids: 희망 영역은 지연의 기준이다. 희망 우선 접근은 이 희망에서 벗어난 정도를 먼저 \
+줄인다. 비어 있으면 희망 영역이 없다), 이 Case에서 아직 시도하지 않은 탐색 범위(untried_levels), \
+마지막에 부른 재계획의 결과(last_result: 그때의 접근 approach, 결과 상태, 재계획 Agent가 엮은 길 paths, \
 서버가 계산해 붙인 열 수 있는 것 openers, 그 뒤 관련 사실이 바뀌었는지 facts_changed)가 있다. 길과 열 수 \
-있는 것의 필요한 것마다 need_id가 있다. 재계획은 주체 Unit의 움직일 수 있는 작업만 옮긴다.
+있는 것의 필요한 것마다 need_id가 있다. 재계획은 고정되지 않은 작업을 Unit을 가리지 않고 옮긴다.
 - Hold(holds): 신고로 걸린 보류와 그 신고의 유형·사실 수정안 상태다. ACTIVE Hold가 하나라도 있으면 재계획·협의 \
 호출과 승인이 막힌다. Hold는 사람이 푼다.
 - 후보(candidates): 이 Case의 후보마다 검증(validation), 그 후보에 도달한 접근(approaches: 여럿이면 \
@@ -77,12 +78,11 @@ quoted_comment는 인용), 확정 뒤 통지(notice: 대상 수와 아직 보내
 - 거절 사실(rejections): 이 Case 후보에 대한 거절 수와 마지막 거절이다.
 - 하위 Run 결과(child_results): 네가 부른 전문 Agent Run의 호출 참조, 종료 상태, 결과다. 결과의 \
 status는 DONE(마쳤다)·BLOCKED(막혔다)이고, 막혔으면 풀 수 있는 길(paths)이 있을 수 있다. 길 하나는 그 길에 \
-필요한 것(needs)의 묶음이다: OTHER_UNIT 다른 Unit으로 \
-재계획해야 함, FACT_CHANGE 사실이 바뀌어야 함, HUMAN_INFO 사람의 답을 받지 못함, HUMAN_DECISION 사람의 \
+필요한 것(needs)의 묶음이다: FACT_CHANGE 사실이 바뀌어야 함, HUMAN_INFO 사람의 답을 받지 못함, HUMAN_DECISION 사람의 \
 판단이 필요함. 열 수 있는 것(openers)은 서버가 계산해 붙인 필요한 것이고 길로 엮여 있지 않다. by가 SERVER면 서버가 끝낸 Run이다(끝난 재계획이 만든 후보 가운데 살아 있는 것은 candidate_ids에 있다). result가 없으면 시작 조건이 맞지 않아 시작되지 못했다. \
 quoted_summary는 인용이다.
 - 지금 받아들여지는 호출(calls): 서버가 지금 받아들이는 호출의 참조 조합이다. 여기 없는 조합은 거절된다. \
-재계획은 접근(approach)마다 따로이고, 협의(단계 CONSULT)는 Supervisor가 고른 후보만 있다. \
+재계획은 접근(approach)만 넘기고 접근마다 따로이며, 협의(단계 CONSULT)는 Supervisor가 고른 후보만 있다. \
 이관의 필요한 것에는 종류와 참조만 쓴다.
 - 이 Case의 열린 일(open_work): 검토 대기 후보, 통지하지 않은 확정, 계획에 들어가지 못한 작업(placed_by는 \
 그 작업을 배치한 검토 대기 후보다. 있으면 그 작업은 사람의 결정을 기다리는 중이다), 이 Case의 \
@@ -95,7 +95,7 @@ quoted_summary는 인용이다.
 출력 규칙
 - 모든 도구에 skill을 쓴다. 열린 스킬(open_skills) 중 그 도구를 가진 스킬이어야 한다.
 - 모든 도구에 decision_summary를 쓴다. 형식은 "이유: …/다음: …"이고, 이 행동을 고른 이유와 다음 예정 단계를 200자 안에 한국어로 쓴다.
-- decision_summary에는 그룹 ID, Unit ID, 작업 ID, 후보 ID로 쓴다.
+- decision_summary에는 작업 ID, 후보 ID로 쓴다.
 """
 )
 
@@ -115,6 +115,7 @@ OBSERVATION_KEYS = (
     "open_work",
     "recent_steps",
     "rejections",
+    "replanning",
     "run",
     "versions",
     "waiting_for",
@@ -157,4 +158,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p7": "3320a12a2ed131d74472c133a2bd7e2e53f925054e3e712ad36463a693132c1e",  # Unit의 희망 영역이 그려진 작업(preferred_task_ids), 서버가 끝낸 재계획의 살아 있는 후보
     "main-p8": "22fa71486a29fd8baca771dd2c7e9d754236b901103a9a7c46dab4693025e480",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
     "main-p9": "898e0225f89e665e42b6274bad186281318dfa977ea60b2ca2b1a580521b4031",  # 접근 둘(변경 최소·희망 우선), 희망 영역은 지연의 기준 (ST-22, AG-28)
+    "main-p10": "aa6c483d07eb647145c90b3993b918444b8aeb66686f94475bb4ae24454d366a",  # 재계획 호출은 접근만, 엮인 충돌과 재계획 사실(replanning), OTHER_UNIT 삭제 (AG-24)
 }

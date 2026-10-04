@@ -88,7 +88,6 @@ def _c01(
             out.append("SEARCH_SPEC_REF_MISMATCH")
         recomputed = search_spec_hash(
             snapshot.snapshot_hash,
-            spec.acting_unit_id,
             spec.axes,
             spec.resource_alternatives,
             spec.time_limit_s,
@@ -178,10 +177,6 @@ def _c06(
         ref = base[tid]
         if a.start != ref.start or a.resource_id != ref.resource_id:
             out.append(("C06", (tid,), "TASK_PINNED"))
-    for tid in sorted(axes):
-        task = tasks.get(tid)
-        if task is not None and task.unit_id != spec.acting_unit_id:
-            out.append(("C06", (tid,), "OUTSIDE_ACTING_UNIT"))
     return out
 
 

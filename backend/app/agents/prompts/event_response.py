@@ -19,7 +19,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p17"
+PROMPT_VERSION = "event-response-p18"
 
 
 def tool_catalog() -> str:
@@ -152,4 +152,5 @@ PROMPT_FINGERPRINTS = {
     "event-response-p15": "07cca8c45e301930dd505b4463da05959d12b056888d2a2bd76f4d389b4540da",  # 조회 결과에 고정·희망 영역, 스킬 지침의 제약 문구 정리 (AG-27)
     "event-response-p16": "d535abf2764d19d04bed726153f81208a60f2aff8f31c9ac42f7d69845f6bb56",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
     "event-response-p17": "7a9027b1ae95db67286a0a02898eb0198b094f91be15cda9fe6edc02ea9b09ac",  # 희망 영역은 재계획에서 지연의 기준 (ST-22)
+    "event-response-p18": "d16d7d79f193b74d0623de3639c51247ecfe42013ca9d5367dc05a8fd8be1a1f",  # 결과의 OTHER_UNIT 삭제 (AG-24)
 }

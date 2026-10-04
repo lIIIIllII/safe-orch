@@ -212,7 +212,7 @@ def test_clear_request_completes_without_asking_and_time_becomes_hope(seeded, ma
     [rp] = _runs("REPLANNING")
     first = _steps(rp.run_id)[0]
     assert first["tool_result"]["stage1"]["status"] == "OPTIMAL"
-    acting = {t["task_id"]: t for t in first["observation"]["acting_tasks"]}
+    acting = {t["task_id"]: t for t in first["observation"]["tasks"]}
     assert acting["A"]["preferred_window"] == {
         "start": 0,
         "end": 90,
@@ -226,8 +226,8 @@ def test_clear_request_completes_without_asking_and_time_becomes_hope(seeded, ma
             "SELECT json_extract(ref, '$.kind') FROM case_event WHERE kind = 'TASK_READY'"
         ).fetchall()
     assert "A" in {x.task_id for x in cand.assignments}
-    # 접수 완료는 "작업 준비됨" 사건이 되어 메인에게 가고, 메인이 요청자의 Unit으로 재계획을 부른다
-    assert ready[0] == "INTAKE" and rp.acting_actor_id == "planner_a"
+    # 접수 완료는 "작업 준비됨" 사건이 되어 메인에게 가고, 메인이 재계획을 부른다
+    assert ready[0] == "INTAKE" and rp.parent_run_id is not None
 
 
 def test_form_window_stays_hard_and_intake_time_becomes_hope(seeded):

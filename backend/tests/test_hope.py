@@ -117,7 +117,7 @@ def test_unplanned_task_base_is_the_hope_start_and_hope_is_in_the_search_key(wit
     wide = _wide(snap)
     conflict = _first_conflict(pack, wide)
     keys = [
-        build_search_spec(s, conflict, "UA", "L1").search_key
+        build_search_spec(s, [conflict], "L1").search_key
         for s in (
             wide,
             _hoped(wide, "A", 0, 90),
@@ -140,13 +140,13 @@ def test_unplanned_task_inside_its_hope_is_not_a_change(with_a):
     wide = _wide(take_snapshot(pack))
 
     narrow = _hoped(wide, "A", 0, 90)  # 희망 시작 09:00–10:00
-    spec = build_search_spec(narrow, _first_conflict(pack, narrow), "UA", "L0")
-    assert list(spec.axes) == ["A"]
+    spec = build_search_spec(narrow, [_first_conflict(pack, narrow)], "L0")
+    assert [t for t, ax in spec.axes.items() if ax.time] == ["A"]
     result = cpsat.solve(narrow, spec, pack)
     assert (_start(result, "A"), result.stage1["changed"], result.stage2["delay"]) == (90, 1, 30)
 
     roomy = _hoped(wide, "A", 0, 150)  # 희망 시작 09:00–11:00
-    spec = build_search_spec(roomy, _first_conflict(pack, roomy), "UA", "L0")
+    spec = build_search_spec(roomy, [_first_conflict(pack, roomy)], "L0")
     result = cpsat.solve(roomy, spec, pack)
     assert (result.stage1["changed"], result.stage2["delay"]) == (0, 0)
     assert 90 <= _start(result, "A") <= 120
@@ -157,9 +157,9 @@ def test_placing_a_task_before_its_hope_costs_as_much_as_after(with_a):
     pack = with_a
     snap = _hoped(_wide(take_snapshot(pack)), "A", 120, 180)  # 희망 시작 11:00–11:30
     conflict = Conflict(rule_id="TEST", task_ids=("A", "B"), zone_ids=(), interval=(0, 1))
-    free = cpsat.solve(snap, build_search_spec(snap, conflict, "UA", "L0"), pack)
+    free = cpsat.solve(snap, build_search_spec(snap, [conflict], "L0"), pack)
     assert (free.stage2["delay"], _start(free, "A")) == (0, 120)  # 기준 위치가 희망 시작이다
-    early = build_search_spec(snap, conflict, "UA", "L0", {"A": Condition(start_max=90)})
+    early = build_search_spec(snap, [conflict], "L0", {"A": Condition(start_max=90)})
     result = cpsat.solve(snap, early, pack)
     assert (_start(result, "A"), result.stage2["delay"]) == (90, 30)
 
@@ -168,13 +168,13 @@ def test_planned_task_counts_change_against_the_plan_and_delay_against_its_hope(
     """계획에 있는 작업은 변경을 지금 배치와 비교해 세고, 지연은 희망 영역과 비교해 잰다."""
     pack = with_a
     plain = take_snapshot(pack)
-    spec = build_search_spec(plain, _first_conflict(pack, plain), "UA", "L1")
+    spec = build_search_spec(plain, [_first_conflict(pack, plain)], "L1")
     before = cpsat.solve(plain, spec, pack)
     # 희망이 없으면 둘 다 늦어진 만큼이다: A 09:00→10:00, C 10:00→10:30
     assert (before.stage1["changed"], before.stage2["delay"]) == (2, 90)
 
     snap = _hoped(plain, "C", 90, 150)  # C의 희망 시작 10:30–11:00
-    spec = build_search_spec(snap, _first_conflict(pack, snap), "UA", "L1")
+    spec = build_search_spec(snap, [_first_conflict(pack, snap)], "L1")
     result = cpsat.solve(snap, spec, pack)
     # 같은 배치지만 C는 희망 범위 안이라 지연이 0이다. 지금 자리에서 옮겼으므로 변경으로는 센다
     assert (_start(result, "A"), _start(result, "C")) == (60, 90)

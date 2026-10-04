@@ -3,7 +3,7 @@
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 모든 Action은 tx 하나다:
 begin_step(활성·차감·STALE_OBSERVATION·재관찰·스킬) → 유효성(사실 조건) → 효과 → step 완료.
 CALL_AGENT는 하위 Run의 START_RUN을 등록하고 대기한다(Run은 Coordinator가 만든다, AG-05). 넘기는 것은
-Agent 종류와 참조뿐이고, 대신 움직이는 Actor와 주 충돌은 서버가 정한다 (AG-24).
+Agent 종류와 참조뿐이다. 재계획은 접근만 받고 현장의 충돌 전체를 푼다 (AG-24).
 메인 Run의 acting_unit_id는 어떤 판정에도 쓰지 않는다.
 승인·확정·Hold 해제·Proposal 확인 함수는 없다.
 """
@@ -105,16 +105,10 @@ class MainExecutor:
         if refs in data["calls"]:
             return None
         if refs["agent"] == "REPLANNING":
-            group = next((g for g in data["groups"] if g["group_id"] == refs.get("group_id")), None)
-            if group is None:
-                return "GROUP_NOT_FOUND"
-            unit = next(
-                (u for u in group["units"] if u["unit_id"] == refs.get("acting_unit_id")), None
-            )
-            if unit is None:
-                return "UNIT_NOT_IN_GROUP"  # 권한 주체는 그 그룹에 작업을 가진 Unit뿐이다
-            if not unit["movable_task_ids"]:
-                return "UNIT_HAS_NO_MOVABLE_TASK"
+            if not data["groups"]:
+                return "NO_CONFLICT"
+            if not data["replanning"]["movable_task_ids"]:
+                return "NO_MOVABLE_TASK"  # 충돌에 걸린 작업이 모두 고정되어 있다
             if refs.get("approach") is None:
                 return "APPROACH_REQUIRED"
             return "HOLD_ACTIVE" if holds else "SAME_FACTS"
@@ -217,26 +211,16 @@ class MainExecutor:
     def _payload(
         self, tx: sqlite3.Connection, obs: Observation, action: spec.CallAgent
     ) -> dict[str, Any] | None:
-        """START_RUN payload의 참조 부분. 주 충돌과 대신 움직이는 Actor는 서버가 정한다."""
+        """START_RUN payload의 참조 부분."""
         if action.agent == "REPLANNING":
-            _, facts, groups = casefacts.current_groups(tx, self.pack)
-            group = next((g for g in groups if g.group_id == action.group_id), None)
-            unit = action.acting_unit_id
-            primary = (
-                None if group is None or unit is None else casefacts.primary_for(group, facts, unit)
-            )
-            if group is None or unit is None or primary is None:
-                return None
+            # 재계획은 현장의 충돌 전체를 푼다. 주체 Unit과 대신 움직이는 Actor는 없다 (AG-24)
             return {
                 "agent_type": "REPLANNING",
-                "acting_unit_id": unit,
-                "acting_actor_id": casefacts.acting_actor(tx, self.pack, group, facts, unit),
-                "group_id": group.group_id,
+                "acting_unit_id": None,
+                "acting_actor_id": None,
                 # 접근은 호출 키에 들어가고, 문장은 재계획 관찰에 인용으로만 간다
                 "approach": action.approach,
                 "approach_note": action.approach_note,
-                "group_task_ids": list(group.task_ids),
-                "conflict": {"rule_id": primary.rule_id, "task_ids": list(primary.task_ids)},
             }
         supervisor = supervisor_actor(tx, self.pack)
         if supervisor is None:

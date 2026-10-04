@@ -483,7 +483,6 @@ class SearchSpec(Frozen):
     search_spec_id: str
     hash: str
     snapshot_id: str
-    acting_unit_id: str
     scope_level: ScopeLevel
     axes: dict[str, Movable]
     resource_alternatives: dict[str, tuple[str, ...]]
@@ -574,7 +573,7 @@ class AgentRun(Frozen):
     case_id: str
     parent_run_id: str | None = None
     acting_actor_id: str | None
-    acting_unit_id: str
+    acting_unit_id: str | None  # 재계획 Run은 비운다: 현장의 충돌 전체를 푼다 (AG-24)
     input_ref: dict[str, Any]
     exec_contract_version: str
     status: RunStatus

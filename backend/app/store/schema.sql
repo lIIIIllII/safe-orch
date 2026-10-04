@@ -145,7 +145,6 @@ CREATE TABLE search_spec (
     site_id               TEXT NOT NULL REFERENCES site (site_id),
     hash                  TEXT NOT NULL,
     snapshot_id           TEXT NOT NULL REFERENCES snapshot (snapshot_id),
-    acting_unit_id        TEXT NOT NULL,
     scope_level           TEXT NOT NULL CHECK (scope_level IN ('L0', 'L1', 'L2')),
     axes                  TEXT NOT NULL CHECK (json_valid(axes)),
     resource_alternatives TEXT NOT NULL CHECK (json_valid(resource_alternatives)),
@@ -156,8 +155,7 @@ CREATE TABLE search_spec (
                               CHECK (objective IN ('CHANGE_FIRST', 'DELAY_FIRST')),
     time_limit_s          INTEGER NOT NULL CHECK (time_limit_s > 0),
     -- 실효 탐색 키(미시도 판정용, Solver 입력만). hash는 무결성용
-    search_key            TEXT NOT NULL,
-    FOREIGN KEY (site_id, acting_unit_id) REFERENCES work_unit (site_id, unit_id)
+    search_key            TEXT NOT NULL
 );
 
 -- stage2는 1단계가 OPTIMAL이 아니면 실행하지 않으므로 NULL 허용.
@@ -425,7 +423,8 @@ CREATE TABLE agent_run (
     -- 부른 Run. MAIN은 부모가 없다
     parent_run_id         TEXT REFERENCES agent_run (run_id),
     acting_actor_id       TEXT,
-    acting_unit_id        TEXT NOT NULL,
+    -- 재계획 Run은 비운다: 현장의 충돌 전체를 푼다 (AG-24)
+    acting_unit_id        TEXT,
     input_ref             TEXT NOT NULL CHECK (json_valid(input_ref)),
     exec_contract_version TEXT NOT NULL,
     status                TEXT NOT NULL CHECK (status IN ('RUNNING', 'WAITING_HUMAN', 'SUCCEEDED',

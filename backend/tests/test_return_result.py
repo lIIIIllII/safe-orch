@@ -8,7 +8,6 @@ from scripted import Router, ScriptedChatModel, blocked, call, done, solve
 from test_intake import VALUES_A, _complete, _intake, _messages, _runs, _steps, _task
 
 from app.agents import runtime
-from app.agents.observers import replanning as replanning_observer
 from app.agents.specs import intake as intake_spec
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.needs import Need, Path, ResultFields
@@ -22,7 +21,6 @@ from app.store.repos.runs import list_steps
 @pytest.mark.parametrize(
     "need",
     [
-        {"kind": "OTHER_UNIT", "group_id": "grp_1", "unit_id": "UB"},
         {"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": "A"},
         {"kind": "FACT_CHANGE", "field": "QUANTITY", "pool_id": "P"},
         {"kind": "HUMAN_INFO", "actor_id": "reporter", "event_id": "evt_1"},
@@ -38,13 +36,8 @@ def test_need_takes_the_references_of_its_kind(need):
     [
         {"kind": "BUDGET"},  # Budget 소진은 need가 아니다
         {"kind": "OWNER_CONSENT", "task_id": "A"},  # 담당자 확인은 need가 아니다(협의에서 받는다)
-        {"kind": "OTHER_UNIT", "unit_id": "UB"},  # 충돌 그룹이 없다
-        {
-            "kind": "OTHER_UNIT",
-            "group_id": "g",
-            "unit_id": "UB",
-            "task_id": "A",
-        },  # 다른 종류의 참조
+        {"kind": "OTHER_UNIT", "unit_id": "UB"},  # 다른 Unit은 need가 아니다 (AG-24)
+        {"kind": "HUMAN_DECISION", "candidate_id": "c", "task_id": "A"},  # 다른 종류의 참조
         {"kind": "FACT_CHANGE", "field": "WINDOW", "resource_id": "R1"},  # 필드와 대상이 다르다
         {"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": "A", "pool_id": "P"},
         {"kind": "HUMAN_INFO", "actor_id": "reporter"},
@@ -58,7 +51,7 @@ def test_need_rejects_wrong_references(need):
 
 
 def test_result_shape_paths_may_be_empty_and_done_has_none():
-    path = Path(needs=[Need(kind="OTHER_UNIT", group_id="grp_1", unit_id="UB")])
+    path = Path(needs=[Need(kind="FACT_CHANGE", field="WINDOW", task_id="A")])
     assert ResultFields(status="BLOCKED", summary="해 없음").paths == []
     assert len(ResultFields(status="BLOCKED", summary="길 둘", paths=[path, path]).paths) == 2
     with pytest.raises(ValidationError):
@@ -126,30 +119,15 @@ def test_blocked_result_keeps_paths_and_server_fills_the_rest(with_a):
 
 
 def test_needs_are_checked_against_facts(with_a):
-    with db.read() as conn:
-        obs = replanning_observer.build_observation(conn, with_a, add_run(with_a, "probe"))
-    gid = obs.data["group"]["group_id"]
-    assert obs.data["group"]["unit_ids"] == ["UA", "UB"]
     bad = [
         {"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": "NOPE"},
         {"kind": "FACT_CHANGE", "field": "PERMISSION", "resource_id": "NOPE"},
-        {"kind": "OTHER_UNIT", "group_id": gid, "unit_id": "UA"},
-        {"kind": "OTHER_UNIT", "group_id": gid, "unit_id": "SITE"},
-        {"kind": "OTHER_UNIT", "group_id": "grp_none", "unit_id": "UB"},
         {"kind": "FACT_CHANGE", "field": "QUANTITY", "pool_id": "NOPE"},
         {"kind": "HUMAN_INFO", "actor_id": "nobody", "task_id": "A"},
         {"kind": "HUMAN_DECISION", "candidate_id": "cand_none"},
     ]
     replies = [
-        # UB는 이 그룹에 작업(B)이 있지만 움직일 수 있는 작업이 없다
-        blocked(
-            "틀린 참조",
-            [
-                {"needs": bad[:4]},
-                {"needs": bad[4:]},
-                {"needs": [{"kind": "OTHER_UNIT", "group_id": gid, "unit_id": "UB"}]},
-            ],
-        ),
+        blocked("틀린 참조", [{"needs": bad[:2]}, {"needs": bad[2:]}]),
         blocked("풀 길 없음"),
     ]
     run, steps, _ = _invoke(with_a, replies)
@@ -159,13 +137,9 @@ def test_needs_are_checked_against_facts(with_a):
     ] == [
         (0, 0, "TARGET_NOT_FOUND"),
         (0, 1, "TARGET_NOT_FOUND"),
-        (0, 2, "SAME_UNIT"),
-        (0, 3, "UNIT_NOT_IN_GROUP"),
-        (1, 0, "GROUP_NOT_FOUND"),
-        (1, 1, "TARGET_NOT_FOUND"),
-        (1, 2, "ACTOR_NOT_FOUND"),
-        (1, 3, "TARGET_NOT_FOUND"),
-        (2, 0, "UNIT_HAS_NO_MOVABLE_TASK"),
+        (1, 0, "TARGET_NOT_FOUND"),
+        (1, 1, "ACTOR_NOT_FOUND"),
+        (1, 2, "TARGET_NOT_FOUND"),
     ]
     # 거절은 형식 오류가 아니다. Run은 계속되고 다음 결과로 끝난다
     assert (steps[1]["result_kind"], run.status) == ("DONE", "BLOCKED")

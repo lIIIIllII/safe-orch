@@ -17,8 +17,7 @@ from app.agents.specs import replanning as spec
 from app.domain.calendar import site_time
 from app.domain.canonical import canonical_hash
 from app.domain.eligibility import exclusion_reasons
-from app.domain.groups import ConflictGroup, conflict_groups, movable_task_ids
-from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent, Task
+from app.domain.models import Conflict, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.solver.search_spec import SearchSpecError, build_search_spec
@@ -40,24 +39,9 @@ RECENT_STEPS = 5
 
 @dataclass(frozen=True)
 class Observation(common.Observation):
-    """Replanning 관찰. 공통 Observation에 이 Run이 맡은 주 충돌을 더한다."""
+    """Replanning 관찰. 공통 Observation에 지금 충돌 전체를 더한다(탐색 범위의 기준, AG-24)."""
 
-    primary: Conflict | None = None
-
-
-def primary_conflict(
-    facts: SnapshotContent, conflicts: list[Conflict], run: AgentRun
-) -> Conflict | None:
-    """input_ref.conflict와 같은 충돌, 없으면 acting_unit 작업을 포함한 첫 충돌."""
-    ref = run.input_ref.get("conflict") or {}
-    for c in conflicts:
-        if c.rule_id == ref.get("rule_id") and list(c.task_ids) == list(ref.get("task_ids", [])):
-            return c
-    tasks = facts.task_map()
-    for c in conflicts:
-        if any(tasks[t].unit_id == run.acting_unit_id for t in c.task_ids if t in tasks):
-            return c
-    return None
+    conflicts: tuple[Conflict, ...] = ()
 
 
 def current_snapshot(conn: sqlite3.Connection, pack: LoadedPack) -> Snapshot:
@@ -65,12 +49,12 @@ def current_snapshot(conn: sqlite3.Connection, pack: LoadedPack) -> Snapshot:
     return Snapshot(snapshot_id="observe", snapshot_hash=canonical_hash(content), content=content)
 
 
-def level_keys(snapshot: Snapshot, primary: Conflict, acting_unit_id: str) -> dict[str, str]:
-    """level별 실효 탐색 키. 만들 수 없는 level(NO_ACTING_TASKS 등)은 뺀다."""
+def level_keys(snapshot: Snapshot, conflicts: list[Conflict]) -> dict[str, str]:
+    """level별 실효 탐색 키. 만들 수 없는 level은 뺀다."""
     out = {}
     for level in spec.LEVELS:
         try:
-            out[level] = build_search_spec(snapshot, primary, acting_unit_id, level).search_key
+            out[level] = build_search_spec(snapshot, conflicts, level).search_key
         except SearchSpecError:
             continue
     return out
@@ -81,8 +65,9 @@ def resources_hash(facts: SnapshotContent) -> str:
     return canonical_hash([r.model_dump(mode="json") for r in facts.resources])
 
 
-def assignable_resources(facts: SnapshotContent, task: Task, acting_unit_id: str) -> dict[str, Any]:
-    """LIST_ASSIGNABLE_RESOURCES 결과. 탐색 범위·실행 검사와 같은 적격성 함수로 판정한다 (CV-20).
+def assignable_resources(facts: SnapshotContent, task: Task) -> dict[str, Any]:
+    """LIST_ASSIGNABLE_RESOURCES 결과. 탐색 범위·실행 검사와 같은 적격성 함수로, 그 작업의 Unit으로
+    판정한다 (CV-20).
 
     유형이 다른 자원은 대상이 아니므로 목록에 넣지 않는다(excluded는 같은 유형만).
     excluded의 reasons는 제외 사유 전부다. 요구 조건 사유에는 어느 속성인지(attribute)가 붙는다.
@@ -90,7 +75,7 @@ def assignable_resources(facts: SnapshotContent, task: Task, acting_unit_id: str
     current = facts.base_assignments()[task.task_id].resource_id
     assignable, excluded = [], []
     for r in sorted(facts.resources, key=lambda r: r.resource_id):
-        reasons = exclusion_reasons(task, r, acting_unit_id)
+        reasons = exclusion_reasons(task, r, task.unit_id)
         if any(e.reason == "TYPE_MISMATCH" for e in reasons):
             continue
         if reasons:
@@ -139,39 +124,28 @@ DECIDED_FACTS = {
 
 
 def openers(
-    conn: sqlite3.Connection,
-    pack: LoadedPack,
-    run: AgentRun,
-    facts: SnapshotContent,
-    group: ConflictGroup | None,
-    all_infeasible: bool,
+    facts: SnapshotContent, conflicts: list[Conflict], all_infeasible: bool
 ) -> list[dict[str, Any]]:
     """열 수 있는 것 (서버가 계산한 사실, need 모양). 길은 모델이 엮는다 (AG-23).
 
-    - 다른 Unit(OTHER_UNIT): 이 그룹에 움직일 수 있는 작업을 가진 다른 Unit.
-    - 사실(FACT_CHANGE): 풀 초과 충돌의 풀(QUANTITY), 그룹 안 주체 작업의 자원 제외 사유(권한 없음 →
-      PERMISSION, 가용 없음 → AVAILABILITY), 모든 범위가 INFEASIBLE인 요청 작업의 시간창(WINDOW),
-      접수 Agent가 정한 작업 시간(decided 표시: 요청자가 작업 카드에서 고치면 열림, AG-32). 정한 희망
-      영역은 Hard가 아니라 해를 막지 않으므로 넣지 않는다 (ST-22).
+    사실(FACT_CHANGE)뿐이고, 대상은 충돌에 걸린 작업 전체다: 풀 초과 충돌의 풀(QUANTITY), 충돌 작업의
+    자원 제외 사유(권한 없음 → PERMISSION, 가용 없음 → AVAILABILITY), 모든 범위가 INFEASIBLE인 요청
+    작업의 시간창(WINDOW), 접수 Agent가 정한 작업 시간(decided 표시: 요청자가 작업 카드에서 고치면 열림,
+    AG-32). 정한 희망 영역은 Hard가 아니라 해를 막지 않으므로 넣지 않는다 (ST-22).
     """
-    unit = run.acting_unit_id
     tasks = facts.task_map()
     pinned = facts.pinned_task_ids()
     out: list[dict[str, Any]] = []
-    if group is None:
-        return out
-    for other in sorted(group.units):
-        if other != unit and movable_task_ids(group, other, facts.pins):
-            out.append({"kind": "OTHER_UNIT", "group_id": group.group_id, "unit_id": other})
+    involved = sorted({tid for c in conflicts for tid in c.task_ids if tid in tasks})
     changes: list[dict[str, Any]] = []
-    for c in group.conflicts:
+    for c in conflicts:
         if c.pool is not None:
             changes.append({"kind": "FACT_CHANGE", "field": "QUANTITY", "pool_id": c.pool.pool_id})
     in_plan = {a.task_id for a in facts.plan.assignments}
-    for tid in sorted(group.units.get(unit, ())):
+    for tid in involved:
         t = tasks[tid]
         if t.required_resource_type and tid not in pinned:
-            for r in assignable_resources(facts, t, unit)["excluded"]:
+            for r in assignable_resources(facts, t)["excluded"]:
                 for e in r["reasons"]:
                     field = FACT_BY_EXCLUSION.get(e["reason"])
                     if field is not None:
@@ -182,7 +156,7 @@ def openers(
             changes.append({"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": tid})
     # 접수 Agent가 정한 값: 요청자가 작업 카드에서 고치면 열릴 수 있다. 재계획은 바꾸지 못한다 (CV-24)
     decided: list[dict[str, Any]] = []
-    for tid in sorted(group.units.get(unit, ())):
+    for tid in involved:
         names = set(tasks[tid].decided_values)
         for field, values in DECIDED_FACTS.items():
             if names & values:
@@ -246,10 +220,9 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     snapshot = current_snapshot(conn, pack)
     facts = snapshot.facts()
     conflicts = detect_conflicts(snapshot, facts.check_assignments(), pack)
-    primary = primary_conflict(facts, conflicts, run)
     # 미시도 판정은 실효 탐색 키(Solver 입력)로 한다. 무결성 hash가 아니다
     tried = tried_search_keys(conn, pack.site_id, run.case_id)
-    keys = level_keys(snapshot, primary, run.acting_unit_id) if primary else {}
+    keys = level_keys(snapshot, conflicts) if conflicts else {}
     untried = [lv for lv, k in keys.items() if k not in tried]
 
     base = facts.base_assignments()
@@ -259,9 +232,13 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
 
     pins = {p.task_id: p for p in facts.pins}
     windows = facts.preferred_map()
-    acting_tasks = [
+    involved = {tid for c in conflicts for tid in c.task_ids}
+    tasks = [
         {
             "task_id": t.task_id,
+            "unit_id": t.unit_id,
+            # 지금 충돌에 걸린 작업인가
+            "in_conflict": t.task_id in involved,
             "zone_id": t.zone_id,
             "duration": t.duration,
             "window": {
@@ -298,9 +275,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             },
         }
         for t in sorted(facts.tasks, key=lambda t: t.task_id)
-        if t.unit_id == run.acting_unit_id
     ]
-    acting_ids = {t["task_id"] for t in acting_tasks}
     # 이전 계산과 마지막 검증은 Case 단위다: 메인이 다시 부른 Run도 앞 Run의 결과를 본다 (CV-13)
     attempts = list_attempts(conn, run_id)
     # 기존 후보와 같은 배치에 도달한 시도는 그 후보를 가리킨다 (CV-25)
@@ -331,8 +306,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                         c.model_dump(mode="json") for c in v.checks if c.status != "PASS"
                     ],
                 }
-    groups = conflict_groups(conflicts, facts.task_map())
-    group = next((g for g in groups if primary is not None and primary in g.conflicts), None)
     steps = [s for s in list_steps(conn, run_id) if s["status"] == "COMPLETED"]
     recent = [
         {
@@ -370,23 +343,14 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "run_id": run.run_id,
             "agent_type": run.agent_type,
             "goal": spec.GOAL,
-            "acting_unit_id": run.acting_unit_id,
         },
         "versions": {
             "context_version": site.context_version,
             "plan_revision": site.plan_revision,
             "wake_seq": run.wake_seq,
         },
+        # 지금 충돌 전체. 이 Run은 이것을 한 번에 푼다 (AG-24)
         "conflicts": [c.model_dump(mode="json") for c in conflicts],
-        "primary_conflict": None if primary is None else primary.model_dump(mode="json"),
-        # 맡은 충돌이 속한 충돌 그룹(공유 작업으로 묶은 것)과 그 그룹에 작업을 가진 Unit
-        "group": None
-        if group is None
-        else {
-            "group_id": group.group_id,
-            "task_ids": list(group.task_ids),
-            "unit_ids": sorted(group.units),
-        },
         # 메인이 이번 호출에 준 접근(무엇을 우선할지)과 짧은 문장(인용). 방식은 이 Agent가 고른다 (AG-28)
         "approach": {
             "approach": run.input_ref.get("approach"),
@@ -397,8 +361,9 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             {k: a[k] for k in ("no", "approach", "candidate_id", "same")}
             for a in approach_attempts(conn, case_id=run.case_id)
         ],
-        "acting_tasks": acting_tasks,
-        "consents": [c.model_dump(mode="json") for c in facts.consents if c.task_id in acting_ids],
+        # 작업 전체(Unit을 가리지 않는다). 고정되지 않은 작업은 범위에 들어가면 움직인다
+        "tasks": tasks,
+        "consents": [c.model_dump(mode="json") for c in facts.consents],
         "untried_levels": untried,
         # search_key는 내부 계산(시도 여부)에만 쓰고 모델에는 보이지 않는다
         "attempts": [
@@ -423,7 +388,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         },
         "assignable_resources": listings,
         # 열 수 있는 것: 지금 계산으로는 열 수 없지만 충족되면 해가 열릴 수 있는 것 (서버 계산)
-        "openers": openers(conn, pack, run, facts, group, all_infeasible),
+        "openers": openers(facts, conflicts, all_infeasible),
         "last_guard": last_guard,
         "recent_steps": recent,
         "budget_remaining": budget_remaining(run, spec.SPEC),
@@ -437,5 +402,5 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         available=spec.available_actions(data, hidden),
         spec=spec.SPEC,
         hidden=hidden,
-        primary=primary,
+        conflicts=tuple(conflicts),
     )

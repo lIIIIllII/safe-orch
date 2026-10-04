@@ -11,15 +11,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-NeedKind = Literal["OTHER_UNIT", "FACT_CHANGE", "HUMAN_INFO", "HUMAN_DECISION"]
+NeedKind = Literal["FACT_CHANGE", "HUMAN_INFO", "HUMAN_DECISION"]
 ResultStatus = Literal["DONE", "BLOCKED"]
 # 바뀌어야 하는 사실. 작업: WINDOW·DURATION·WITHDRAWAL, 자원: AVAILABILITY·PERMISSION, 풀: QUANTITY
 FactField = Literal["WINDOW", "DURATION", "WITHDRAWAL", "AVAILABILITY", "PERMISSION", "QUANTITY"]
 
 REF_FIELDS = (
     "task_id",
-    "unit_id",
-    "group_id",
     "field",
     "resource_id",
     "pool_id",
@@ -30,7 +28,6 @@ REF_FIELDS = (
 )
 # 종류 → (반드시 있어야 하는 참조, 그중 정확히 하나가 있어야 하는 참조, 있어도 되는 참조)
 NEED_REFS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {
-    "OTHER_UNIT": (("group_id", "unit_id"), (), ()),
     "FACT_CHANGE": (("field",), ("task_id", "resource_id", "pool_id"), ()),
     "HUMAN_INFO": (("actor_id",), ("event_id", "task_id"), ()),
     "HUMAN_DECISION": ((), ("candidate_id", "event_id", "message_id"), ()),
@@ -56,15 +53,12 @@ class Need(BaseModel):
 
     kind: NeedKind = Field(
         description=(
-            "OTHER_UNIT 그 충돌 그룹을 다른 Unit으로 재계획해야 한다(group_id, unit_id). "
             "FACT_CHANGE 사실이 바뀌어야 한다(field와 대상 하나: task_id·resource_id·pool_id). "
             "HUMAN_INFO 사람에게서 답을 받지 못했다(actor_id와 event_id 또는 task_id). "
             "HUMAN_DECISION 사람의 판단이 필요하다(candidate_id·event_id·message_id 중 하나)"
         )
     )
     task_id: str | None = Field(default=None, description="작업 ID")
-    unit_id: str | None = Field(default=None, description="Unit ID")
-    group_id: str | None = Field(default=None, description="충돌 그룹 ID")
     field: FactField | None = Field(
         default=None,
         description=(

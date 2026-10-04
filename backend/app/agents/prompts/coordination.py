@@ -18,7 +18,7 @@ from app.agents.specs import coordination as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "coordination-p10"
+PROMPT_VERSION = "coordination-p11"
 
 
 def tool_catalog() -> str:
@@ -132,4 +132,5 @@ PROMPT_FINGERPRINTS = {
     "coordination-p8": "98c29c366de6271d20d7349580de91651686f043df7561764099b0e0eae10e9e",  # 사전 확인 단계(ASK): ASK_OWNER, asks (AG-09)
     "coordination-p9": "84d6dc7b2a45c2786000c2ee2dc62c66cb1284b7f9ec79608a33fcba66176bc2",  # 제약 초안(DRAFT_CONSTRAINT) 삭제: 이견은 결과에 담는다 (AG-27)
     "coordination-p10": "2f5de4a8c1fa1fc15e0a1ba43d6249856b3e98e7f7f0d0b3cd151dd4395c529c",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
+    "coordination-p11": "59d37970afee4f2a33f931de06b1b19cd49917d141c4eba83a90591837fee557",  # 결과의 OTHER_UNIT 삭제 (AG-24)
 }

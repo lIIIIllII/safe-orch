@@ -1,25 +1,21 @@
 """결과에 담긴 needs의 서버 검증 (AG-23). 참조가 가리키는 대상이 지금 사실에 있는지만 본다.
 
-모양(종류별 참조)은 app.domain.needs가 검사한다. 여기서는 DB 사실과 대조한다: 작업·자원·풀·Unit·사람·
-신고·후보·메시지가 있는지, Unit이 그 충돌 그룹에 작업을 가졌는지, 물은 상대가 그 Run의 상대인지.
+모양(종류별 참조)은 app.domain.needs가 검사한다. 여기서는 DB 사실과 대조한다: 작업·자원·풀·사람·
+신고·후보·메시지가 있는지, 물은 상대가 그 Run의 상대인지.
 순서는 보지 않는다.
 """
 
 import sqlite3
 from typing import Any
 
-from app.domain.canonical import canonical_hash
-from app.domain.groups import conflict_groups, movable_task_ids
-from app.domain.models import AgentRun, Snapshot
+from app.domain.models import AgentRun
 from app.domain.needs import FACT_TARGET, Need, Path
 from app.packs.loader import LoadedPack
-from app.rules.engine import detect_conflicts
 from app.store.repos.events import get_event
 from app.store.repos.messages import get_message
 from app.store.repos.records import get_candidate
 from app.store.repos.resources import list_pools, list_resources
 from app.store.repos.site import list_actors
-from app.store.repos.snapshots import build_snapshot_content
 from app.store.repos.tasks import list_current_tasks
 
 NEED_INVALID = "NEED_INVALID"
@@ -37,23 +33,6 @@ class _Facts:
         self.resources = {r.resource_id: r for r in list_resources(conn, site_id)}
         self.pools = {p.pool_id for p in list_pools(conn, site_id)}
         self.actors = {a.actor_id for a in list_actors(conn, site_id)}
-        self._group_units: dict[str, dict[str, bool]] | None = None
-
-    def group_units(self) -> dict[str, dict[str, bool]]:
-        """지금 충돌 그룹 → {그 그룹에 작업을 가진 Unit: 움직일 수 있는 작업이 있는가}."""
-        if self._group_units is None:
-            content = build_snapshot_content(self.conn, self.pack.site_id, self.pack)
-            snapshot = Snapshot(
-                snapshot_id="needs", snapshot_hash=canonical_hash(content), content=content
-            )
-            facts = snapshot.facts()
-            conflicts = detect_conflicts(snapshot, facts.check_assignments(), self.pack)
-            groups = conflict_groups(conflicts, facts.task_map())
-            self._group_units = {
-                g.group_id: {u: bool(movable_task_ids(g, u, facts.pins)) for u in g.units}
-                for g in groups
-            }
-        return self._group_units
 
     def has_task(self, task_id: str) -> bool:
         """현재 계산 대상 작업, 또는 이 Intake Run이 접수 중인 작업."""
@@ -64,16 +43,6 @@ class _Facts:
 def _check(f: _Facts, need: Need) -> str | None:
     """need 하나의 거절 사유. 없으면 None."""
     run = f.run
-    if need.kind == "OTHER_UNIT":
-        units = f.group_units().get(need.group_id or "")
-        if units is None:
-            return "GROUP_NOT_FOUND"
-        if need.unit_id == run.acting_unit_id:
-            return "SAME_UNIT"
-        if need.unit_id not in units:
-            return "UNIT_NOT_IN_GROUP"
-        # 움직일 수 있는 작업이 없는 Unit으로는 재계획해도 바뀌는 것이 없다
-        return None if units[need.unit_id] else "UNIT_HAS_NO_MOVABLE_TASK"
     if need.kind == "FACT_CHANGE":
         target = FACT_TARGET[need.field or "WINDOW"]
         value = getattr(need, target)
