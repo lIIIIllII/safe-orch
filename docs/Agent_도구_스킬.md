@@ -32,7 +32,7 @@
 
 - LLM 시도 Budget은 모든 Agent가 step × 2다.
 - 전문 Agent는 다른 Agent를 부르지 않고 사람에게 이관하지도 않는다. 막히면 `RETURN_RESULT(BLOCKED)`에 요약과 풀 수 있는 길을 담아 메인에게 돌려준다. Supervisor 이관은 메인만 한다.
-- 작업 담당자 확인은 Coordination 한 창구이고, Supervisor가 고른 안의 협의에서만 묻는다. 협의에서 묻는 것은 기준에서 바뀐 작업이고, 협의 항목은 Solver의 변경 정의와 같은 기준이다(AG-33·CV-29). 묻지 않는 범위는 따로 없다. Replanning은 사람에게 묻지 않는다. 고정되지 않은 작업은 시각도 자원도 움직이고(AG-34), 범위 안 작업마다 서버가 채운 적격 자원 가운데서 Solver가 고른다. 요청 자원은 기준 자원이다: 그 자원이면 변경이 아니고, 다른 자원으로 바뀐 안은 협의 항목이 된다.
+- 작업 담당자 확인은 Coordination 한 창구이고, Supervisor가 고른 안의 협의에서만 묻는다. 협의에서 묻는 것은 기준에서 바뀐 작업이고, 협의 항목은 Solver의 변경 정의와 같은 기준이다(AG-33·CV-29). 묻지 않는 범위는 따로 없다. 변경 요청은 담당자 한 명에게 한 통이고(관찰에 담당자별 묶음 `owners`), 고른 안이 무효가 되면 협의 Run은 서버가 바로 끝낸다(ST-22). 승인과 협의 항목 수용은 고른 안에만 된다(AG-29). Replanning은 사람에게 묻지 않는다. 고정되지 않은 작업은 시각도 자원도 움직이고(AG-34), 범위 안 작업마다 서버가 채운 적격 자원 가운데서 Solver가 고른다. 요청 자원은 기준 자원이다: 그 자원이면 변경이 아니고, 다른 자원으로 바뀐 안은 협의 항목이 된다.
 - 재계획은 주체 Unit 없이 현장의 지금 충돌 전체를 한 번에 푼다(AG-24). 범위는 L0 충돌에 걸린 작업, L1 그 작업과 같은 구역·같은 기준 자원의 작업까지, L2 작업 전체이고 Unit을 가리지 않는다. 어느 범위로 풀지는 재계획이 고른다. 자원 적격성은 작업 자기 Unit으로 판정한다(CV-20). 다른 Unit의 작업이 바뀐 안은 그 담당자의 협의 항목이 되고, 그 답 없이는 승인되지 않는다.
 - 작업 고정·고정 해제, 직접 이동·자원 바꾸기·작업 없애기(담당자가 자기 작업의 시각을 옮기거나 작업 카드에서 자원을 바꾸거나 자기 작업을 없애고 바로 확정, AG-31)는 사람만 타임라인에서 한다. 없앤 작업(취소됨)은 관찰에 들어가지 않는다. Agent 도구에 없다(AG-27). 작업을 관찰에 넣는 Agent(Replanning, Event Response)의 관찰에는 고정 여부(누가)가 들어가고, 메인의 "움직일 수 있는 작업"은 충돌에 걸린 작업 가운데 고정되지 않은 작업이다. Replanning 관찰의 작업에는 기준 배정과 그 출처(계획 / 요청한 자리·범위 / 없음), 기준 시작 범위, 정함 여부가 붙는다: 변경과 지연을 이 범위에서 재고(CV-29), 기준에서 바뀐 작업은 고른 안의 협의에서 담당자에게 간다.
 - 사람이 남긴 사유(Supervisor 거절 문장, 담당자 이견)는 Case가 닫힐 때까지 Replanning 관찰에 인용으로 전부 쌓인다. Supervisor가 살아 있는 안을 모두 거절하면 사유는 한 줄로 쌓이고(그 사유로 거절된 안이 모두 붙는다) 메인에게는 후보 거절 사건 하나로 간다(AG-29). Replanning은 사유가 시각·자원 조건으로 읽히면 조건을 걸어 다시 풀고, 서버는 사유를 해석하지 않는다(CV-26).
@@ -99,8 +99,8 @@
 **사람** (수신자는 Agent별로 서버가 고정)
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `ASK_OWNER(owner, items)` | 담당자에게 변경 확인·조건 확인을 묶어서 묻는다 | C |
-| `WAIT_FOR_REPLIES()` | 보낸 질문의 답을 기다린다 | W |
+| `ASK_OWNER(owner, message)` | 담당자 한 명에게 변경 확인을 한 통으로 묻는다. 항목은 서버가 채운다: 그 담당자의 확인 대기 항목 가운데 이 Run이 아직 묻지 않은 것 전부(시각순). Agent는 담당자와 설명 문장만 정하고 항목을 고르거나 빼지 못한다. 허용 값은 보낼 항목이 남은 담당자다(ST-26) | C |
+| `WAIT_FOR_REPLIES()` | 보낸 요청의 답을 기다린다. 담당자는 한 통의 항목 전부를 한 번에 답하고, 한 통의 답마다 한 번 깨어난다 | W |
 | `SEND_NOTICE(actor, tasks, message)` | 확정 뒤 통지(시간·구역·위험·조치) | C |
 
 **제안** (사람 확인이 있어야 효력)
@@ -165,8 +165,7 @@
 
 - Replanning `SOLVE_WITH_SCOPE`·`SOLVE_WITH_CONDITIONS`(조건) → `SOLVE`
 - Replanning `LIST_ASSIGNABLE_RESOURCES`, Intake `LOOKUP_RESOURCE` → `LOOKUP_RESOURCES`
-- Coordination `SEND_CHANGE_REQUEST`(후보의 변경 확인) → Coordination `ASK_OWNER`
-- 담당자별 묶음 메시지(`ASK_OWNER(owner, items)`)는 3단계 묶음 등록 때 한다.
+- Coordination `SEND_CHANGE_REQUEST(actor_id, message)`(후보의 변경 확인. 담당자 한 통이고 항목은 서버가 채운다, ST-26) → Coordination `ASK_OWNER`. 이름만 다르다.
 - Intake `COMPLETE_TASKSPEC(values, origins)` → `COMPLETE_TASK_BATCH`
 
 ## 7. 열린 값
