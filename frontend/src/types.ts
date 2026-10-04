@@ -551,3 +551,21 @@ export interface ResourceCheck {
   reason_codes: string[]
   invalidates: string[]
 }
+
+/** POST /sites/{id}/schedules/preview. 일정 넣기의 작업별 판정(서버 계산). */
+export interface SchedulePreview {
+  acceptable: boolean
+  authorized: boolean
+  reasons: string[]
+  details: string[]
+  pack_mismatch: boolean
+  tasks: {
+    task_id: string
+    verdict: 'NEW' | 'UNCHANGED' | 'HOPE_CHANGED' | 'VALUE_CHANGED' | 'REJECTED'
+    excluded: boolean
+    reasons: string[]
+    details: string[]
+    changed: string[]
+    hope_changed: boolean
+  }[]
+}

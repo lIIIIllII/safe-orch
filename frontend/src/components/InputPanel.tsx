@@ -1,4 +1,4 @@
-// 입력: 작업 요청 폼, 지연 신고, 받은 요청(Inbox), 요청·대기열·Hold 목록.
+// 입력: 작업 요청 폼, 일정 넣기, 지연 신고, 받은 요청(Inbox), 요청·대기열·Hold 목록.
 // 클라이언트는 형식(시각·숫자 변환)만 확인하고 업무 규칙은 서버 판정을 보여 준다.
 
 import { useState } from 'react'
@@ -7,6 +7,7 @@ import type { Demand, Requirement, SiteState } from '../types'
 import { attributeText, demandText, requirementText, usableInZone, useEnv, workTypeName } from '../context'
 import type { Run } from './ReviewPanel'
 import { Inbox } from './Inbox'
+import { ScheduleImport } from './ScheduleImport'
 import { openInbox } from '../inbox'
 import { FACT_FIELD, PROPOSAL_STATUS } from '../labels'
 
@@ -19,7 +20,7 @@ interface Props {
 }
 
 export function InputPanel(props: Props) {
-  const [tab, setTab] = useState<'task' | 'intake' | 'event' | 'inbox'>('task')
+  const [tab, setTab] = useState<'task' | 'intake' | 'schedule' | 'event' | 'inbox'>('task')
   const unread = openInbox(props.state)
   return (
     <section className="panel inputs">
@@ -29,6 +30,9 @@ export function InputPanel(props: Props) {
         </button>
         <button className={tab === 'intake' ? 'tab-on' : ''} onClick={() => setTab('intake')}>
           자연어 요청
+        </button>
+        <button className={tab === 'schedule' ? 'tab-on' : ''} onClick={() => setTab('schedule')}>
+          일정 넣기
         </button>
         <button className={tab === 'event' ? 'tab-on' : ''} onClick={() => setTab('event')}>
           지연 신고
@@ -44,6 +48,9 @@ export function InputPanel(props: Props) {
         </div>
         <div hidden={tab !== 'intake'}>
           <IntakeForm {...props} />
+        </div>
+        <div hidden={tab !== 'schedule'}>
+          <ScheduleImport {...props} />
         </div>
         <div hidden={tab !== 'event'}>
           <EventForm {...props} />

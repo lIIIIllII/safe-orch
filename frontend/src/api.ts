@@ -10,6 +10,7 @@ import type {
   RemoveCheck,
   ResourceCheck,
   Scenario,
+  SchedulePreview,
   SiteEntry,
   SiteState,
 } from './types'
@@ -89,6 +90,26 @@ export function fetchResourceCheck(actor: string, taskId: string, resourceId: st
 /** 기록에 남은 일정 문서 원문. 꺼내기 명령이 돌려준 schedule_id로 받는다. */
 export function fetchSchedule(actor: string, scheduleId: string): Promise<unknown> {
   return getJson<unknown>(`/schedules/${encodeURIComponent(scheduleId)}`, actor)
+}
+
+/** 일정 넣기 미리보기: 작업별 판정(서버 계산). 읽기 전용이라 Idempotency-Key가 없다. */
+export async function fetchSchedulePreview(
+  siteId: string,
+  actor: string,
+  document: unknown,
+  exclude: string[],
+): Promise<SchedulePreview> {
+  const res = await fetch(`/api/sites/${siteId}/schedules/preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Actor': actor },
+    body: JSON.stringify({ document, exclude }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    const codes: string[] = body?.reason_codes ?? []
+    throw new HttpError(res.status, `${res.status} ${codes.join(', ')}`.trim())
+  }
+  return (await res.json()) as SchedulePreview
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

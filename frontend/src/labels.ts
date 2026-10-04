@@ -117,6 +117,21 @@ export const REASON: Record<string, string> = {
   TIME_AXIS_NOT_ALLOWED: '시간 축 이동 불가',
   // 메인 도구의 거절 사유
   CHILD_RUN_OPEN: '부른 하위 Run이 아직 열려 있음',
+  // 일정 넣기
+  TASKS_NOT_IMPORTABLE: '넣을 수 없는 작업이 있음(빼기로 고르면 나머지만 넣는다)',
+  SCHEDULE_MALFORMED: '일정 문서의 모양이 맞지 않음',
+  SITE_MISMATCH: '다른 현장의 일정 문서',
+  OTHER_UNIT_TASK: '다른 Unit의 작업',
+  NOT_OWNER: '담당자가 아닌 작업',
+  TASK_ID_RETIRED: '취소·철회된 작업 ID',
+  VALUE_NOT_EDITABLE: '고칠 수 없는 값이 다름(작업 유형·요구 조건·수요·선행)',
+  OUTSIDE_HORIZON: '계획 기간 밖의 시각',
+  TIME_INVALID: '시각 형식이 맞지 않음',
+  INVALID_VALUE: '값의 모양이 맞지 않음',
+  NO_ASSIGNMENT: '배정이 없는 작업',
+  DUPLICATE_TASK_ID: '문서 안에서 작업 ID가 겹침',
+  DURATION_MISMATCH: '작업 시간이 배정의 끝 − 시작과 다름',
+  PREDECESSOR_INVALID: '선행 작업 지정이 맞지 않음',
   NO_CONFLICT: '지금 풀 충돌이 없음',
   NO_MOVABLE_TASK: '충돌에 걸린 작업이 모두 고정되어 움직일 수 있는 작업이 없음',
   SAME_FACTS: '마지막 결과 뒤로 관련 사실이 바뀌지 않음',
@@ -447,4 +462,13 @@ export const EXCLUDE_REASON: Record<string, string> = {
   ZONE_NOT_ALLOWED: '작업 구역에서 쓸 수 없음',
   REQUIREMENT_NOT_MET: '요구 조건 미달',
   TYPE_MISMATCH: '자원 유형 다름',
+}
+
+/** 일정 넣기의 작업별 판정 */
+export const IMPORT_VERDICT: Record<string, string> = {
+  NEW: '새 작업',
+  UNCHANGED: '바뀌는 것 없음',
+  HOPE_CHANGED: '희망이 바뀜',
+  VALUE_CHANGED: '값이 바뀜',
+  REJECTED: '넣을 수 없음',
 }
