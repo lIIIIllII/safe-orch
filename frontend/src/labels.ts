@@ -71,7 +71,7 @@ export const REASON: Record<string, string> = {
   INVALID_REQUIREMENT: '요구 조건이 속성 선언과 맞지 않음',
   INVALID_DEMAND: '수요가 풀 종류 선언과 맞지 않음',
   REQUIRED_POOL_MISSING: '필수 직종의 풀이 이 Unit에 없음',
-  INVALID_WINDOW: '시간창 모순',
+  INVALID_WINDOW: '시각 범위 모순',
   WINDOW_OUTSIDE_WORK_HOURS: '시간창 안에 근무시간 시작 자리가 없음',
   PREDECESSOR_NOT_FOUND: '선행 작업 없음',
   // 답변·확인
@@ -353,13 +353,12 @@ export const ACTION_NAME: Record<string, string> = {
 /** 메인이 재계획에 준 접근(무엇을 우선할지) */
 export const APPROACH: Record<string, string> = {
   MIN_CHANGE: '변경 최소',
-  MIN_DELAY: '지연 최소',
-  PREFER_WINDOW: '희망 영역 우선',
+  PREFER_WINDOW: '희망 우선',
 }
 
 export const OBJECTIVE: Record<string, string> = {
   CHANGE_FIRST: '변경 먼저',
-  DELAY_FIRST: '지연 먼저',
+  DELAY_FIRST: '희망에서 덜 벗어나기 먼저',
 }
 
 /** 후보가 담은 거절·이견된 변경의 출처 (서버 계산) */
@@ -427,9 +426,9 @@ export const VALUE_NAME: Record<string, string> = {
   work_type: '작업 유형',
   zone_id: '구역',
   duration: '작업 시간',
-  earliest_start: '가장 이른 시작',
-  latest_start: '가장 늦은 시작',
-  latest_end: '종료 한도',
+  earliest_start: '가능 범위: 가장 이른 시작',
+  latest_start: '가능 범위: 가장 늦은 시작',
+  latest_end: '가능 범위: 종료 한도',
   required_resource_type: '자원 유형',
   requested_resource_id: '요청 자원',
 }

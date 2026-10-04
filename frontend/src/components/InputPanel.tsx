@@ -445,7 +445,7 @@ function RequestList({ state, actorId, roles, busy, run }: Props) {
 }
 
 function IntakeForm({ actorId, roles, busy, run }: Props) {
-  // 자연어 작업 요청 → Work Intake Agent. 값은 Agent가 묻고 요청자가 확인해야 확정된다.
+  // 자연어 작업 요청 → Work Intake Agent. 묻지 않고 완료한다. 문장의 시각은 희망 영역이 된다(가능 범위는 폼·카드로).
   const { siteId, scenario } = useEnv()
   const [taskId, setTaskId] = useState('')
   const [text, setText] = useState('')
@@ -457,7 +457,10 @@ function IntakeForm({ actorId, roles, busy, run }: Props) {
         작업 ID
         <input value={taskId} onChange={(e) => setTaskId(e.target.value)} />
       </label>
-      <p className="muted small">값은 작업 접수 Agent가 확인 질문과 값 확인으로 받습니다. 폼 탭은 그대로 쓸 수 있습니다.</p>
+      <p className="muted small">
+        문장의 시각은 희망 영역이 됩니다(벗어난 안도 나올 수 있고, 말한 범위 밖이면 물어봅니다). 반드시 지켜야 하는
+        범위는 폼 탭이나 작업 카드의 값 고치기로 넣습니다.
+      </p>
       <label className="span2">
         요청 문장
         <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} />

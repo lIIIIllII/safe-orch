@@ -2,7 +2,7 @@
 // 승인 버튼은 권한만 보고 켠다. STALE·Hold여도 막지 않고 서버의 거절 사유를 보여 준다.
 
 import { useState } from 'react'
-import type { CandidateView, CommandOutcome, CommandResponse, SiteState } from '../types'
+import type { CandidateView, CommandOutcome, CommandResponse, FactChange, SiteState } from '../types'
 import {
   APPROACH,
   CANDIDATE_KIND,
@@ -91,6 +91,58 @@ export function ReviewPanel(props: Props) {
   )
 }
 
+/** 사실 변경 표시: 기준 계획을 확정한 뒤 사람이 바꾼 사실. 차이는 서버가 계산하고 화면은 풀어 쓰기만 한다. */
+function FactChanges({ changes, base, state }: { changes: FactChange[]; base: number; state: SiteState }) {
+  const { clock } = useEnv()
+  const actorName = new Map(state.actors.map((a) => [a.actor_id, a.name]))
+  if (changes.length === 0) return null
+  const TIMES = ['earliest_start', 'latest_start', 'latest_end']
+  const value = (field: string, v: number | string | null) =>
+    v === null
+      ? '없음'
+      : typeof v === 'number'
+        ? TIMES.includes(field)
+          ? clock.format(v)
+          : `${v}분`
+        : String(v)
+  const hope = (h: { start: number; end: number; origin: string }) =>
+    `${clock.span(h.start, h.end)}${h.origin === 'DECIDED' ? ' (Agent가 정함)' : ''}`
+  const line = (x: FactChange): string => {
+    switch (x.kind) {
+      case 'TASK_ADDED':
+        return `${x.task_id} 새로 들어온 작업`
+      case 'TASK_REMOVED':
+        return `${x.task_id} 없앤 작업(없애기·철회)`
+      case 'PINNED':
+        return `${x.task_id} 고정 · ${actorName.get(x.pinned_by) ?? x.pinned_by}${x.by_role === 'SUPERVISOR' ? ' (Supervisor)' : ''}`
+      case 'UNPINNED':
+        return `${x.task_id} 고정 해제`
+      case 'VALUE_CHANGED':
+        return `${x.task_id} ${VALUE_NAME[x.field] ?? x.field}: ${value(x.field, x.before)} → ${value(x.field, x.after)}`
+      case 'PREFERRED_WINDOW_CHANGED':
+        if (!x.before && x.after) return `${x.task_id} 희망 영역 그림: ${hope(x.after)}`
+        if (x.before && !x.after) return `${x.task_id} 희망 영역 지움 (전: ${hope(x.before)})`
+        if (x.before && x.after && x.before.start === x.after.start && x.before.end === x.after.end)
+          return `${x.task_id} 희망 영역 확인: ${hope(x.after)}`
+        return x.before && x.after ? `${x.task_id} 희망 영역: ${hope(x.before)} → ${hope(x.after)}` : x.task_id
+    }
+  }
+  return (
+    <div className="fact-changes">
+      <b>기준 계획 R{base} 확정 뒤 바뀐 사실</b> <span className="muted small">서버 계산</span>
+      <ul>
+        {changes.map((x, i) => (
+          <li key={`${x.kind}:${x.task_id}:${i}`}>{line(x)}</li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** 희망에서 벗어난 작업 한 줄: "A 30분 늦음". 정도는 서버 계산이다. */
+const offHopeText = (x: CandidateView['off_hope'][number]) =>
+  `${x.task_id} ${delayText(x.delay, x.work_delay)} ${x.direction === 'EARLY' ? '이름' : '늦음'}`
+
 /** 안 번호: 그 후보에 도달한 접근의 호출 순번. 여럿이면 다른 접근이 같은 배치를 낸 것이다. */
 function planLabel(c: CandidateView): string {
   const nos = [...new Set(c.approaches.map((a) => a.no))].sort((a, b) => a - b)
@@ -120,6 +172,8 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
       <h3>
         안 비교 <span className="muted small">지표·필요한 동의는 서버 계산 · 이유는 Agent 문장</span>
       </h3>
+      {/* 같은 Case의 안은 같은 사실 위에 있다: 사실 변경은 한 번만 보인다 */}
+      <FactChanges changes={plans[0].fact_changes} base={plans[0].base_plan_revision} state={state} />
       <table className="tbl small">
         <thead>
           <tr>
@@ -161,7 +215,12 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                 <td>
                   변경 {c.changes.length}건
                   <br />
-                  지연 {delayText(delay, workDelay)}
+                  희망에서 벗어남 {delayText(delay, workDelay)}
+                  {c.off_hope.map((x) => (
+                    <div key={`o:${x.task_id}`} className="muted" title="희망 영역 밖에 놓인 작업">
+                      희망 밖: {offHopeText(x)}
+                    </div>
+                  ))}
                 </td>
                 <td>
                   {need.length === 0 && objected.length === 0 && <span className="muted">없음</span>}
@@ -318,9 +377,14 @@ function CandidateDetail({
         </div>
       )}
 
+      <FactChanges changes={c.fact_changes} base={c.base_plan_revision} state={state} />
+
       <h3>변경점</h3>
       {c.changes.length === 0 ? (
-        <p className="muted">변경 없음</p>
+        <p className="muted">
+          변경 없음
+          {c.fact_changes.length > 0 && ' — 배치는 그대로이고, 위의 바뀐 사실 때문에 다시 확정합니다.'}
+        </p>
       ) : (
         <table className="tbl">
           <tbody>
@@ -330,11 +394,18 @@ function CandidateDetail({
                 <td>{assign(ch.before)}</td>
                 <td>→</td>
                 <td className="strong">{assign(ch.after)}</td>
-                <td className="small">{ch.delay > 0 ? `지연 ${delayText(ch.delay, ch.work_delay)}` : ''}</td>
+                <td className="small">
+                  {ch.delay > 0 ? `희망에서 벗어남 ${delayText(ch.delay, ch.work_delay)}` : ''}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+      {c.off_hope.length > 0 && (
+        <p className="small">
+          <b>희망 영역 밖에 놓인 작업</b> <span className="muted">서버 계산</span>: {c.off_hope.map(offHopeText).join(', ')}
+        </p>
       )}
 
       {c.solver && (
@@ -353,9 +424,9 @@ function CandidateDetail({
               {c.solver.objective === 'DELAY_FIRST' ? (
                 <>
                   <tr>
-                    <th>1단계 (지연)</th>
+                    <th>1단계 (희망에서 벗어난 정도)</th>
                     <td>
-                      {SOLVER_STATUS[c.solver.stage1.status] ?? c.solver.stage1.status} · 총 지연{' '}
+                      {SOLVER_STATUS[c.solver.stage1.status] ?? c.solver.stage1.status} · 벗어난 정도 합{' '}
                       {c.solver.stage1.delay ?? '—'}분 <code>{c.solver.stage1.status}</code>
                     </td>
                   </tr>
@@ -365,7 +436,7 @@ function CandidateDetail({
                       {c.solver.stage2 ? (
                         <>
                           {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 변경{' '}
-                          {c.solver.stage2.changed ?? '—'} · 근무시간 기준 지연{' '}
+                          {c.solver.stage2.changed ?? '—'} · 근무시간 기준 벗어난 정도{' '}
                           {c.solver.stage2.work_delay ?? '—'}분 <code>{c.solver.stage2.status}</code>
                         </>
                       ) : (
@@ -384,11 +455,11 @@ function CandidateDetail({
                     </td>
                   </tr>
                   <tr>
-                    <th>2단계 (지연)</th>
+                    <th>2단계 (희망에서 벗어난 정도)</th>
                     <td>
                       {c.solver.stage2 ? (
                         <>
-                          {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 총 지연{' '}
+                          {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 벗어난 정도 합{' '}
                           {delayText(c.solver.stage2.delay, c.solver.stage2.work_delay)}{' '}
                           <code>{c.solver.stage2.status}</code>
                         </>
@@ -403,10 +474,10 @@ function CandidateDetail({
           </table>
           <p className="small">
             {c.solver.minimal_change && <span className="tag">최소 변경(이 탐색 범위 안)</span>}
-            {c.solver.minimal_delay && <span className="tag">최소 지연(이 탐색 범위 안)</span>}
+            {c.solver.minimal_delay && <span className="tag">희망에서 가장 덜 벗어남(이 탐색 범위 안)</span>}
             {c.solver.delay_optimality_unconfirmed && (
               <span className="tag tag-warn">
-                {c.solver.objective === 'DELAY_FIRST' ? '변경 수 최적성 미확정' : '지연 최적성 미확정'}
+                {c.solver.objective === 'DELAY_FIRST' ? '변경 수 최적성 미확정' : '벗어난 정도 최적성 미확정'}
               </span>
             )}
           </p>

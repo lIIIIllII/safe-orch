@@ -1,7 +1,9 @@
 // 타임라인. 행은 구역 + 자원. 위치는 분 → x(px)로 그린다(scale.ts).
 // 현재 Plan(실선), Plan 밖 READY 작업(점선 "요청"), 선택한 후보의 변경(굵은 테두리)을 겹쳐 그린다.
 // 막대를 누르면 작업이 선택되고 카드가 고정되어 열린다: 고정·고정 해제, 희망 영역 그리기·지우기(AG-27).
-// 고정은 자물쇠와 굵은 테두리, 희망 영역은 막대 뒤 Unit 색의 옅은 띠, 시간창은 선택했을 때만 가는 괄호다.
+// 고정은 자물쇠와 굵은 테두리, 희망 영역은 막대 뒤 Unit 색의 옅은 띠(늘 보임, 접수 Agent가 정했고 아직 확인하지
+// 않은 희망은 점선 테두리), 가능 범위(시간창)는 막대 아래 가는 괄호다. 괄호는 사람이 좁힌 작업은 늘 보이고,
+// Horizon 전체인 작업은 선택했을 때만 보인다. 후보 겹쳐 보기에서는 후보가 옮긴 자리에도 둘을 같이 그린다.
 // 담당자는 자기 작업의 Plan 막대를 끌어 시각을 옮긴다(AG-31): 놓을 수 있는 구간은 서버가 계산해 주고 화면은 칠하기만
 // 한다. 놓으면 미리보기와 [확정]/[취소]가 뜬다. 조금만 움직이면 선택이다. 희망 영역은 [희망 영역 그리기]를 누른 뒤
 // 그 작업의 행에서 끈다. 작업 카드의 [작업 없애기]는 서버 확인을 거쳐 [확정]해야 없어진다(계획 밖 요청은 요청 철회).
@@ -221,11 +223,13 @@ export function Timeline(props: Props) {
   }
   for (const t of tasks) {
     if (inPlan.has(t.task_id) || t.lifecycle !== 'READY') continue
+    // 계획 밖 요청의 자리는 서버가 준 기준 시작이다(희망 시작, 희망 영역이 없으면 가장 이른 시작)
+    const at = t.base_start ?? t.earliest_start
     bars.push({
       key: `r:${t.task_id}`,
       taskId: t.task_id,
-      start: t.earliest_start,
-      end: t.earliest_start + t.duration,
+      start: at,
+      end: at + t.duration,
       resourceId: t.requested_resource_id,
       zoneId: t.zone_id,
       kind: changed.has(t.task_id) ? 'before' : 'request',
@@ -603,7 +607,7 @@ export function Timeline(props: Props) {
           <button
             className="btn-small"
             disabled={off || hopeDenied !== null || !t.preferred_window}
-            title={hopeDenied ?? (t.preferred_window ? undefined : '그린 희망 영역이 없습니다')}
+            title={hopeDenied ?? (t.preferred_window ? undefined : '희망 영역이 없습니다')}
             onClick={() => void run('희망 영역 지우기', `/tasks/${t.task_id}/preferred-window/clear`, undefined)}
           >
             희망 영역 지우기
@@ -714,8 +718,14 @@ export function Timeline(props: Props) {
           <span className="lg lg-pinned" title="사람이 고정한 작업. 재계획이 움직이지 않는다">
             {PIN_MARK} 고정
           </span>
-          <span className="lg lg-hope" title="담당자가 그린 희망 영역. 서버는 강제하지 않는다">
+          <span
+            className="lg lg-hope"
+            title="희망 영역. 강제하지 않지만 벗어난 만큼이 지연으로 계산되고, 말한 희망의 범위 안이면 묻지 않는다. 점선 테두리는 Agent가 정했고 아직 확인하지 않은 희망"
+          >
             희망 영역
+          </span>
+          <span className="lg lg-window" title="가능 범위(반드시 지켜야 하는 시간창). 사람이 좁힌 작업은 늘, 나머지는 눌렀을 때 보인다">
+            가능 범위
           </span>
           <span className="lg lg-conflict">충돌</span>
           <span className="lg lg-off">비근무</span>
@@ -763,8 +773,11 @@ export function Timeline(props: Props) {
             const sep = i > 0 && row.group === 'resource' && rows[i - 1].row.group === 'zone'
             const strip = rowConflicts.length > 0 ? CONFLICT_STRIP_PX : 0
             const rowKey = `${row.group}:${row.id}`
-            // 이 행에 있는 작업의 기준 막대(후보 변경 후가 아닌 것): 희망 영역·시간창·그리기의 자리
+            // 이 행에 있는 작업의 기준 막대(후보 변경 후가 아닌 것): 그리기·직접 이동의 자리
             const baseBars = rowBars.filter((d) => d.b.kind !== 'after' && d.t)
+            // 희망 영역·가능 범위는 후보가 옮긴 자리(변경 후 막대)에도 같이 그린다
+            const rangeBars = rowBars.filter((d) => d.t)
+            const horizon = state.site.horizon_minutes
             const laneTop = (key: string) => strip + 2 + (laneOf.get(key) ?? 0) * LANE_PX
             const drawable = drawing !== null && baseBars.some((d) => d.b.taskId === drawing)
             return (
@@ -778,21 +791,25 @@ export function Timeline(props: Props) {
                   onPointerDown={drawable && drawing ? startDraw(rowKey, drawing) : undefined}
                 >
                   {background}
-                  {baseBars.map((d) => {
+                  {rangeBars.map((d) => {
                     const w = d.t?.preferred_window
                     const box = w ? scale.box(w.start, w.end) : null
                     if (!w || !box) return null
+                    const decided = w.origin === 'DECIDED'
                     return (
                       <div
                         key={`hope:${d.b.key}`}
-                        className={`tl-hope unit-${unitIndex.get(d.t?.unit_id ?? '') ?? UNIT_COLORS - 1}`}
+                        className={`tl-hope ${decided ? 'tl-hope-decided' : ''} unit-${unitIndex.get(d.t?.unit_id ?? '') ?? UNIT_COLORS - 1}`}
                         style={{ left: box.left, width: box.width, top: laneTop(d.b.key) - 1, height: BAR_H + 2 }}
-                        title={`${d.b.taskId} 희망 영역 ${clock.span(w.start, w.end)}`}
+                        title={`${d.b.taskId} 희망 영역 ${clock.span(w.start, w.end)}${decided ? ' · Agent가 정함(확인 전)' : ''}`}
                       />
                     )
                   })}
-                  {baseBars.map((d) => {
-                    if (!d.t || selected?.taskId !== d.b.taskId) return null
+                  {rangeBars.map((d) => {
+                    if (!d.t) return null
+                    // 사람이 좁힌 가능 범위는 늘, Horizon 전체는 눌렀을 때만. 후보가 옮긴 자리에는 늘 그린다
+                    const narrowed = d.t.earliest_start > 0 || d.t.latest_end < horizon
+                    if (!narrowed && selected?.taskId !== d.b.taskId) return null
                     const box = scale.box(d.t.earliest_start, d.t.latest_end)
                     if (!box) return null
                     return (
@@ -800,7 +817,7 @@ export function Timeline(props: Props) {
                         key={`win:${d.b.key}`}
                         className={`tl-window ${box.clipL ? 'tl-window-clip-l' : ''} ${box.clipR ? 'tl-window-clip-r' : ''}`}
                         style={{ left: box.left, width: box.width, top: laneTop(d.b.key) + BAR_H - 3 }}
-                        title={`${d.b.taskId} 시간창 ${clock.span(d.t.earliest_start, d.t.latest_end)}`}
+                        title={`${d.b.taskId} 가능 범위 ${clock.span(d.t.earliest_start, d.t.latest_end)}`}
                       />
                     )
                   })}
@@ -943,6 +960,7 @@ export function Timeline(props: Props) {
           conflicts={conflicts.filter((c) => c.task_ids.includes(hovered.b.taskId))}
           ruleLabel={ruleLabel}
           actorName={actorName}
+          horizon={state.site.horizon_minutes}
         />
       )}
       {selected && selectedTask && selectedBar && (
@@ -955,6 +973,7 @@ export function Timeline(props: Props) {
           conflicts={conflicts.filter((c) => c.task_ids.includes(selected.taskId))}
           ruleLabel={ruleLabel}
           actorName={actorName}
+          horizon={state.site.horizon_minutes}
           onClose={() => {
             setSelected(null)
             setDrawing(null)
@@ -1068,6 +1087,7 @@ function BarCard({
   conflicts,
   ruleLabel,
   actorName,
+  horizon,
   onClose,
   children,
 }: {
@@ -1079,6 +1099,7 @@ function BarCard({
   conflicts: Conflict[]
   ruleLabel: (id: string) => string
   actorName: Map<string, string>
+  horizon: number
   onClose?: () => void
   children?: ReactNode
 }) {
@@ -1126,8 +1147,14 @@ function BarCard({
             </td>
           </tr>
           <tr>
-            <th>시간창</th>
-            <td>{t ? clock.span(t.earliest_start, t.latest_end) : '—'}</td>
+            <th>가능 범위</th>
+            <td>
+              {!t
+                ? '—'
+                : t.earliest_start <= 0 && t.latest_end >= horizon
+                  ? '전체 기간(좁히지 않음)'
+                  : clock.span(t.earliest_start, t.latest_end)}
+            </td>
           </tr>
           <tr>
             <th>고정</th>
@@ -1139,7 +1166,13 @@ function BarCard({
           </tr>
           <tr>
             <th>희망 영역</th>
-            <td>{t?.preferred_window ? clock.span(t.preferred_window.start, t.preferred_window.end) : '없음'}</td>
+            <td>
+              {t?.preferred_window ? clock.span(t.preferred_window.start, t.preferred_window.end) : '없음'}
+              {t?.preferred_window?.origin === 'DECIDED' && <span className="tag tag-warn"> 정함(확인 전)</span>}
+              {t?.preferred_window?.origin === 'STATED' && t.preferred_window.made_by === 'INTAKE' && (
+                <span className="muted"> · 요청 문장에서</span>
+              )}
+            </td>
           </tr>
           {t && decidedValues(t).length > 0 && (
             <tr>

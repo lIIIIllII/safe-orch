@@ -106,8 +106,20 @@ export interface Task {
   pool_demands: Demand[]
   /** 사람이 건 고정(누가·언제). 없으면 고정되지 않았다 */
   pin: { pin_id: string; pinned_by: string; by_role: 'OWNER' | 'SUPERVISOR'; pinned_at: string } | null
-  /** 담당자가 그린 희망 영역 [start, end) (분). 서버는 강제하지 않는다 */
-  preferred_window: { start: number; end: number; set_by: string; set_at: string } | null
+  /** 희망 영역 [start, end) (분). 서버는 강제하지 않지만 지연의 기준이고 동의 범위다.
+   *  origin: STATED 사람이 말한(그리거나 확인한) 희망, DECIDED 접수 Agent가 정했고 아직 확인하지 않은 희망.
+   *  made_by: OWNER 담당자가 그림, INTAKE 접수 Agent가 요청 문장에서 만듦 */
+  preferred_window: {
+    start: number
+    end: number
+    origin: 'STATED' | 'DECIDED'
+    made_by: 'OWNER' | 'INTAKE'
+    set_by: string
+    set_at: string
+  } | null
+  /** 기준 시작(분, 서버 계산). 계획에 있으면 지금 배치, 없으면 희망 시작(희망 영역이 없으면 가장 이른 시작).
+   *  계산 대상(READY)이 아니면 null */
+  base_start: number | null
   /** critical field별 확인 기록. origins는 값 이름 → 출처이고 Agent가 정한 값(DECIDED)만 적힌다 */
   fields: Record<string, { value: unknown; status: string; source_ref: string; origins: Record<string, string> }>
   lifecycle: string
@@ -141,7 +153,7 @@ export interface Conflict {
 
 export interface SolverView {
   scope_level: string
-  /** 목적 순서. DELAY_FIRST면 1단계가 총 지연, 2단계가 변경 작업 수다 */
+  /** 목적 순서. DELAY_FIRST면 1단계가 희망에서 벗어난 정도, 2단계가 변경 작업 수다 */
   objective: 'CHANGE_FIRST' | 'DELAY_FIRST'
   stage1: { status: string; changed: number | null; delay?: number | null }
   stage2: { status: string; delay: number | null; changed?: number | null; work_delay: number | null } | null
@@ -218,7 +230,8 @@ export interface CandidateView {
   base_plan_revision: number
   display_status: 'COMMITTED' | 'REJECTED' | 'STALE' | 'OPEN'
   assignments: Assignment[]
-  /** delay = 달력 분, work_delay = 근무 분. 서버가 조회 시 계산한다. */
+  /** delay = 희망에서 벗어난 정도(달력 분), work_delay = 같은 값의 근무 분. 서버가 조회 시 계산한다.
+   *  희망 영역이 있는 작업은 희망 범위 밖으로 벗어난 거리(앞뒤 모두), 없는 작업은 기준보다 늦어진 만큼이다. */
   changes: {
     task_id: string
     before: Assignment
@@ -226,6 +239,10 @@ export interface CandidateView {
     delay: number
     work_delay: number
   }[]
+  /** 이 안에서 희망 영역 밖에 놓인 작업과 정도 (서버 계산). EARLY 희망보다 이름, LATE 늦음 */
+  off_hope: { task_id: string; delay: number; work_delay: number; direction: 'EARLY' | 'LATE' }[]
+  /** 기준 계획을 확정한 뒤 사람이 바꾼 사실 (서버 계산): 무엇 때문에 다시 계획·확정하는가 */
+  fact_changes: FactChange[]
   solver: SolverView | null
   /** Agent가 그 탐색에 건 조건(서버가 받은 값, 시각은 분). 없으면 빈 목록 */
   conditions: {
@@ -246,6 +263,21 @@ export interface CandidateView {
   } | null
   consultation: { status: string; items: ConsultationItem[] } | null
 }
+
+type HopeRef = { start: number; end: number; origin: 'STATED' | 'DECIDED' }
+
+/** 사실 변경 하나. 값은 분·ID 그대로다(화면이 풀어 쓴다) */
+export type FactChange =
+  | { kind: 'TASK_ADDED' | 'TASK_REMOVED' | 'UNPINNED'; task_id: string }
+  | { kind: 'PINNED'; task_id: string; pinned_by: string; by_role: 'OWNER' | 'SUPERVISOR' }
+  | {
+      kind: 'VALUE_CHANGED'
+      task_id: string
+      field: string
+      before: number | string | null
+      after: number | string | null
+    }
+  | { kind: 'PREFERRED_WINDOW_CHANGED'; task_id: string; before: HopeRef | null; after: HopeRef | null }
 
 export interface HoldView {
   hold_id: string
