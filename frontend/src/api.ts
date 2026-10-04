@@ -1,7 +1,16 @@
 // API 호출. X-Actor는 Actor 전환 값, Idempotency-Key는 사용자 조작마다 새로 만든다.
 // 503과 응답을 받지 못한 네트워크 오류는 같은 키로 재시도한다.
 
-import type { AgentStep, CommandResponse, Meta, Scenario, SiteEntry, SiteState } from './types'
+import type {
+  AgentStep,
+  CommandResponse,
+  Meta,
+  MoveCheck,
+  MoveOptions,
+  Scenario,
+  SiteEntry,
+  SiteState,
+} from './types'
 
 const MAX_RETRIES = 3
 
@@ -52,6 +61,16 @@ export function fetchState(siteId: string, actor: string): Promise<SiteState> {
 
 export function fetchSteps(actor: string, runId: string): Promise<AgentStep[]> {
   return getJson<AgentStep[]>(`/runs/${runId}/steps`, actor)
+}
+
+/** 직접 이동: 그 작업을 놓을 수 있는 시작 구간(서버 계산). 끌기를 시작할 때 한 번 받는다. */
+export function fetchMoveRange(actor: string, taskId: string): Promise<MoveOptions> {
+  return getJson<MoveOptions>(`/tasks/${encodeURIComponent(taskId)}/move-range`, actor)
+}
+
+/** 직접 이동: 놓은 자리의 서버 판정. 확정과 같은 판정이다. */
+export function fetchMoveCheck(actor: string, taskId: string, start: number): Promise<MoveCheck> {
+  return getJson<MoveCheck>(`/tasks/${encodeURIComponent(taskId)}/move-check?start=${start}`, actor)
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

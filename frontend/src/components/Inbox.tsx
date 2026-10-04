@@ -138,7 +138,14 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
           <tr>
             <th>보낸 Run</th>
             <td>
-              <code>{m.run_id}</code> · step {m.step_no} · Context v{m.created_context_version}
+              {m.run_id ? (
+                <>
+                  <code>{m.run_id}</code> · step {m.step_no}
+                </>
+              ) : (
+                '서버'
+              )}{' '}
+              · Context v{m.created_context_version}
             </td>
           </tr>
           {answerable && (

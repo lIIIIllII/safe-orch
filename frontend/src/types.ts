@@ -197,7 +197,7 @@ export interface RejectionView {
 
 export interface CandidateView {
   candidate_id: string
-  kind: 'REPLAN' | 'RECONFIRM'
+  kind: 'REPLAN' | 'RECONFIRM' | 'MOVE'
   rejection: RejectionView | null
   run_id: string | null
   /** 이 후보를 만든 Case. 같은 Case의 안끼리 나란히 본다 */
@@ -326,8 +326,9 @@ export interface SiteState {
 /** 받은 요청 항목. body = 서버 문구(동의 내용의 기준), agent_text = 모델 작성 설명. */
 export interface InboxItem {
   message_id: string
-  run_id: string
-  step_no: number
+  /** 보낸 Run과 step. 서버가 Run 없이 보낸 통지(직접 이동)는 null */
+  run_id: string | null
+  step_no: number | null
   to_actor_id: string
   type: string
   status: 'OPEN' | 'ANSWERED' | 'CANCELLED' | 'LATE'
@@ -469,4 +470,24 @@ export interface Scenario {
   }[]
   /** 자연어 작업 요청 시연값 */
   intake_requests?: { label: string; requester: string; body: { task_id: string; text: string }; answer: string }[]
+}
+
+/** 직접 이동: 서버가 계산한 놓을 수 있는 시작 구간(분, 양 끝 포함)과 맞춤 단위 */
+export interface MoveOptions {
+  task_id: string
+  snap: number
+  /** 있으면 어디에도 놓을 수 없다 */
+  reason_codes: string[]
+  ranges: { start_min: number; start_max: number }[]
+  /** 확정하면 무효가 될 검토 중인 안 */
+  invalidates: string[]
+}
+
+/** 직접 이동: 놓은 자리의 서버 판정 */
+export interface MoveCheck {
+  task_id: string
+  start: number
+  ok: boolean
+  reason_codes: string[]
+  invalidates: string[]
 }

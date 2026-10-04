@@ -31,6 +31,11 @@ export const REASON: Record<string, string> = {
   TASK_NOT_FOUND: '대상 작업 없음',
   // 고정·희망 영역
   ALREADY_PINNED: '이미 고정된 작업',
+  MOVE_NOT_VALID: '그 자리로 옮길 수 없음',
+  NO_CHANGE: '바뀐 것이 없음',
+  TASK_NOT_IN_PLAN: '계획에 없는 작업',
+  MOVE_NOT_OWNER: '옮긴 사람이 담당자가 아님',
+  MOVE_NOT_SINGLE_TASK: '직접 이동은 작업 하나만 바꿈',
   PIN_NOT_FOUND: '고정되지 않은 작업',
   PREFERRED_WINDOW_NOT_FOUND: '희망 영역이 없는 작업',
   // 요청 철회
@@ -234,6 +239,7 @@ export const CANDIDATE_STATUS: Record<string, string> = {
 export const CANDIDATE_KIND: Record<string, string> = {
   REPLAN: '재계획',
   RECONFIRM: '재확정',
+  MOVE: '직접 이동',
 }
 
 /** Validation 대표 상태 배지. PASS 문구는 "정의된 규칙 검사 통과". */

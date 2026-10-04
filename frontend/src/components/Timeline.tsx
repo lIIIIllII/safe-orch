@@ -2,12 +2,15 @@
 // 현재 Plan(실선), Plan 밖 READY 작업(점선 "요청"), 선택한 후보의 변경(굵은 테두리)을 겹쳐 그린다.
 // 막대를 누르면 작업이 선택되고 카드가 고정되어 열린다: 고정·고정 해제, 희망 영역 그리기·지우기(AG-27).
 // 고정은 자물쇠와 굵은 테두리, 희망 영역은 막대 뒤 Unit 색의 옅은 띠, 시간창은 선택했을 때만 가는 괄호다.
-// 막대 자체는 끌리지 않는다. 끌기는 [희망 영역 그리기]를 누른 뒤 그 작업의 행에서만 한다.
+// 담당자는 자기 작업의 Plan 막대를 끌어 시각을 옮긴다(AG-31): 놓을 수 있는 구간은 서버가 계산해 주고 화면은 칠하기만
+// 한다. 놓으면 미리보기와 [확정]/[취소]가 뜬다. 조금만 움직이면 선택이다. 희망 영역은 [희망 영역 그리기]를 누른 뒤
+// 그 작업의 행에서 끈다.
 // [하루 | 전체] 보기와 날짜 탭. 분당 픽셀로 그려 넘치면 가로 스크롤(시간 머리줄·행 이름 고정). 비근무는 회색 사선,
 // 전체 보기의 밤은 접힌 띠다. 자동으로 날짜를 옮기지 않고, 가로 자동 스크롤은 사용자가 직접 스크롤하기 전까지만 한다.
 
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { CandidateView, Conflict, SiteState, Task } from '../types'
+import { fetchMoveCheck, fetchMoveRange } from '../api'
+import type { CandidateView, Conflict, MoveCheck, MoveOptions, SiteState, Task } from '../types'
 import { CANDIDATE_KIND, CANDIDATE_STATUS, GATE, REASON, gateReason } from '../labels'
 import { poolExcessText, ruleName, useEnv, workTypeName } from '../context'
 import {
@@ -61,7 +64,24 @@ const AUTO_MARGIN_PX = 80 // 자동 스크롤 시 대상 왼쪽 여백
 const MIN_PANEL_PX = 160
 const CONFLICT_STRIP_PX = 18 // 충돌이 있는 행 위쪽의 충돌 이름 띠(막대 라벨과 겹치지 않게)
 const DRAW_SNAP_MIN = 5 // 희망 영역을 그릴 때 맞추는 분 단위
+const DRAG_START_PX = 6 // 이만큼 끌어야 이동이다. 덜 움직이면 선택
 const PIN_MARK = '🔒'
+
+/** 직접 이동의 미리보기. 놓을 수 있는 구간(options)과 놓은 자리의 판정(check)은 서버가 준다. */
+interface Move {
+  taskId: string
+  origin: number
+  duration: number
+  start: number
+  dropped: boolean
+  x: number
+  y: number
+  options: MoveOptions | null
+  check: MoveCheck | null
+  error: string | null
+}
+
+const inRanges = (o: MoveOptions, start: number) => o.ranges.some((r) => r.start_min <= start && start <= r.start_max)
 
 /** 라벨 폭 측정(막대 안에 들어가는지 판단). 화면 글꼴로 canvas에서 잰다. */
 let measure: { ctx: CanvasRenderingContext2D; family: string } | null = null
@@ -134,6 +154,9 @@ export function Timeline(props: Props) {
   const [selected, setSelected] = useState<{ taskId: string; x: number; y: number } | null>(null)
   const [drawing, setDrawing] = useState<string | null>(null)
   const [drag, setDrag] = useState<{ rowKey: string; x0: number; x1: number } | null>(null)
+  // 직접 이동: 끄는 중이거나 놓은 뒤 [확정]을 기다리는 미리보기
+  const [move, setMove] = useState<Move | null>(null)
+  const dragged = useRef(false)
   const [avail, setAvail] = useState(0)
   // 가로 스크롤 위치: 행 이름 열 뒤로 들어간 막대의 라벨을 보이는 쪽으로 민다
   const [scrollX, setScrollX] = useState(0)
@@ -379,6 +402,7 @@ export function Timeline(props: Props) {
 
   // 누르면 선택(같은 작업을 다시 누르면 닫는다). 선택 카드는 그 작업의 기준 막대(후보 변경 후가 아닌 것)로 그린다.
   const select = (taskId: string) => (e: React.MouseEvent) => {
+    if (dragged.current) return // 끌어 옮긴 뒤의 click은 선택이 아니다
     setHover(null)
     setDrawing(null)
     setSelected((cur) => (cur?.taskId === taskId ? null : { taskId, x: e.clientX, y: e.clientY }))
@@ -412,6 +436,86 @@ export function Timeline(props: Props) {
     window.addEventListener('pointerup', up)
   }
 
+  // 직접 이동: 담당자가 자기 작업의 Plan 막대를 끈다. 끌기를 시작할 때 서버에서 놓을 수 있는 구간을 한 번 받고
+  // 끄는 동안에는 부르지 않는다. 놓으면 서버가 그 자리를 다시 판정하고, [확정]은 명령이 한 번 더 판정한다.
+  const movable = (t: Task | undefined, b: Bar): t is Task =>
+    !!t && (b.kind === 'plan' || b.kind === 'before') && t.owner_actor_id === actorId && !t.pin
+  const startMove = (t: Task, b: Bar) => (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || busy !== null || drawing !== null) return
+    const track = e.currentTarget.closest<HTMLElement>('.tl-track')
+    if (!track) return
+    const taskId = t.task_id
+    const x0 = e.clientX
+    const grab = x0 - track.getBoundingClientRect().left - scale.x(b.start)
+    let started = false
+    let start = b.start
+    let options: MoveOptions | null = null
+    const at = (clientX: number) => {
+      const snap = options?.snap ?? DRAW_SNAP_MIN
+      return Math.round(scale.minute(clientX - track.getBoundingClientRect().left - grab) / snap) * snap
+    }
+    const failed = (err: unknown) =>
+      setMove((cur) => (cur?.taskId === taskId ? { ...cur, error: err instanceof Error ? err.message : String(err) } : cur))
+    const onMove = (ev: PointerEvent) => {
+      if (!started) {
+        if (Math.abs(ev.clientX - x0) < DRAG_START_PX) return
+        started = true
+        dragged.current = true
+        setHover(null)
+        setSelected(null)
+        setMove({
+          taskId,
+          origin: b.start,
+          duration: b.end - b.start,
+          start: b.start,
+          dropped: false,
+          x: ev.clientX,
+          y: ev.clientY,
+          options: null,
+          check: null,
+          error: null,
+        })
+        fetchMoveRange(actorId, taskId)
+          .then((o) => {
+            options = o
+            setMove((cur) => (cur?.taskId === taskId ? { ...cur, options: o } : cur))
+          })
+          .catch(failed)
+      }
+      start = at(ev.clientX)
+      setMove((cur) => (cur?.taskId === taskId ? { ...cur, start, x: ev.clientX, y: ev.clientY } : cur))
+    }
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      if (!started) return
+      // 이 pointerup 뒤의 click이 지나간 다음에 푼다
+      setTimeout(() => {
+        dragged.current = false
+      }, 0)
+      // 옮길 수 없는 작업이면 사유를 보여 주고, 제자리나 서버가 준 구간 밖에 놓으면 그만둔다
+      const refused = options !== null && options.reason_codes.length > 0
+      if (!refused && (start === b.start || (options !== null && !inRanges(options, start)))) {
+        setMove(null)
+        return
+      }
+      setMove((cur) => (cur?.taskId === taskId ? { ...cur, start, dropped: true, x: ev.clientX, y: ev.clientY } : cur))
+      fetchMoveCheck(actorId, taskId, start)
+        .then((check) =>
+          setMove((cur) => (cur?.taskId === taskId && cur.dropped && cur.start === start ? { ...cur, check } : cur)),
+        )
+        .catch(failed)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+  const confirmMove = () => {
+    if (!move) return
+    const { taskId, start } = move
+    setMove(null)
+    void run('직접 이동', `/tasks/${taskId}/move`, { start })
+  }
+
   // 권한 안내(UI-04). 버튼은 역할·담당 관계만 보고 켜고, 판정은 서버가 한다(UI-01).
   const actions = (t: Task): ReactNode => {
     const owner = t.owner_actor_id === actorId
@@ -425,6 +529,11 @@ export function Timeline(props: Props) {
         ? null
         : '담당자 또는 Supervisor만 고정할 수 있습니다'
     const hopeDenied = owner ? null : '희망 영역은 담당자만 그리고 지울 수 있습니다'
+    const moveNote = !owner
+      ? '담당자만 막대를 끌어 옮길 수 있습니다'
+      : t.pin
+        ? '고정된 작업은 끌어 옮길 수 없습니다'
+        : '막대를 끌어 시각을 옮길 수 있습니다(놓은 뒤 [확정])'
     const off = busy !== null
     return (
       <>
@@ -467,6 +576,7 @@ export function Timeline(props: Props) {
         )}
         {pinDenied && <p className="small muted tl-card-note">고정: {pinDenied}</p>}
         {hopeDenied && <p className="small muted tl-card-note">{hopeDenied}</p>}
+        <p className="small muted tl-card-note">{moveNote}</p>
       </>
     )
   }
@@ -637,6 +747,38 @@ export function Timeline(props: Props) {
                       />
                     )
                   })}
+                  {move &&
+                    baseBars
+                      .filter((d) => d.b.taskId === move.taskId && d.b.kind !== 'request')
+                      .map((d) => {
+                        const top = laneTop(d.b.key)
+                        const ghost = scale.box(move.start, move.start + move.duration)
+                        const bad = move.check
+                          ? !move.check.ok
+                          : move.options !== null && !inRanges(move.options, move.start)
+                        return (
+                          <div key={`move:${d.b.key}`}>
+                            {move.options?.ranges.map((r) => {
+                              const box = scale.box(r.start_min, r.start_max + move.duration)
+                              return box ? (
+                                <div
+                                  key={r.start_min}
+                                  className="tl-drop"
+                                  style={{ left: box.left, width: box.width, top: top - 1, height: BAR_H + 2 }}
+                                />
+                              ) : null
+                            })}
+                            {ghost && (
+                              <div
+                                className={`tl-ghost ${bad ? 'tl-ghost-bad' : ''}`}
+                                style={{ left: ghost.left, width: ghost.width, top, height: BAR_H }}
+                              >
+                                {clock.hm(move.start)}–{clock.hm(move.start + move.duration)}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
                   {drag && drag.rowKey === rowKey && (
                     <div
                       className="tl-drag"
@@ -682,6 +824,8 @@ export function Timeline(props: Props) {
                             unit,
                             t?.gate === 'HOLD' ? 'bar-held' : '',
                             t?.pin ? 'bar-pinned' : '',
+                            movable(t, b) ? 'bar-movable' : '',
+                            move?.taskId === b.taskId && b.kind !== 'after' ? 'bar-moving' : '',
                             selected?.taskId === b.taskId ? 'bar-selected' : '',
                             d.gated && !d.showGate && t ? `bar-gate bar-gate-${t.gate.toLowerCase()}` : '',
                             night ? 'bar-night' : '',
@@ -702,6 +846,7 @@ export function Timeline(props: Props) {
                           onMouseMove={enter(b.key)}
                           onMouseLeave={leave}
                           onClick={select(b.taskId)}
+                          onPointerDown={movable(t, b) ? startMove(t, b) : undefined}
                         >
                           {where.edge ? (
                             <span className="bar-line1">{where.edge === 'left' ? '◀' : '▶'}</span>
@@ -731,7 +876,7 @@ export function Timeline(props: Props) {
         </div>
       </div>
       <div className="tl-resize" onPointerDown={startDrag} title="끌어서 타임라인 높이 조절" />
-      {hovered && hover && hovered.b.taskId !== selected?.taskId && drawing === null && (
+      {hovered && hover && hovered.b.taskId !== selected?.taskId && drawing === null && move === null && (
         <BarCard
           d={hovered}
           x={hover.x}
@@ -760,6 +905,51 @@ export function Timeline(props: Props) {
         >
           {actions(selectedTask)}
         </BarCard>
+      )}
+      {move?.dropped && (
+        <div
+          className="tl-card tl-card-fixed"
+          style={{
+            width: 340,
+            left: move.x + 14 + 340 > window.innerWidth ? move.x - 14 - 340 : move.x + 14,
+            top: Math.max(8, Math.min(move.y + 14, window.innerHeight - 220)),
+          }}
+        >
+          <div className="tl-card-head">
+            <span className="strong">{move.taskId} 직접 이동</span>
+          </div>
+          <p className="small tl-card-note">
+            시작 {clock.format(move.origin)} → {clock.format(move.start)}
+          </p>
+          {!move.check && !move.error && <p className="small muted tl-card-note">서버가 이 자리를 확인하는 중…</p>}
+          {move.error && <p className="small tl-card-note">확인하지 못했습니다: {move.error}</p>}
+          {move.check && !move.check.ok && (
+            <p className="small tl-card-note">
+              옮길 수 없습니다: {move.check.reason_codes.map((c) => ruleLabel(c)).join(', ')}
+            </p>
+          )}
+          {move.check?.ok && (
+            <>
+              {move.check.invalidates.length > 0 && (
+                <p className="small tl-card-note">
+                  확정하면 검토 중인 안 {move.check.invalidates.length}개가 무효가 됩니다:{' '}
+                  {move.check.invalidates.map((id) => id.slice(0, 13)).join(', ')}
+                </p>
+              )}
+              <p className="small muted tl-card-note">
+                자기 작업의 시각만 바뀌므로 Supervisor 승인 없이 확정됩니다. 작업은 고정되지 않습니다.
+              </p>
+            </>
+          )}
+          <div className="tl-card-actions">
+            <button className="btn-small" disabled={!move.check?.ok || busy !== null} onClick={confirmMove}>
+              확정
+            </button>
+            <button className="btn-small" onClick={() => setMove(null)}>
+              취소
+            </button>
+          </div>
+        </div>
       )}
     </section>
   )
