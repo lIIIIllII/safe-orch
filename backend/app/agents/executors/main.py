@@ -111,6 +111,8 @@ class MainExecutor:
                 return "NO_MOVABLE_TASK"  # 충돌에 걸린 작업이 모두 고정되어 있다
             if refs.get("approach") is None:
                 return "APPROACH_REQUIRED"
+            if refs["approach"] not in data["replanning"]["approaches"]:
+                return "APPROACH_NOT_OPEN"  # 접근 목록은 Case 종류로 나뉜다 (AG-28)
             return "HOLD_ACTIVE" if holds else "SAME_FACTS"
         if refs["agent"] == "SCHEDULE_REVIEW":
             if not data["schedule_review"]["schedule_case"]:

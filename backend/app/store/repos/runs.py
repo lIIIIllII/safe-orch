@@ -313,6 +313,8 @@ def _stage(stage: dict[str, Any], key: str, objective: str) -> dict[str, Any]:
     extra = {"resource_changed": stage["resource_changed"]} if "resource_changed" in stage else {}
     if objective == "DELAY_FIRST":
         return {**{k: stage.get(k) for k in ("status", "changed", "delay")}, **extra}
+    # 기존 먼저·추가 먼저로 푼 1단계는 변경 수를 기존·추가로 나눠 가진다 (CV-27)
+    extra |= {k: stage[k] for k in ("changed_existing", "changed_added") if k in stage}
     return {"status": stage["status"], key: stage[key], **extra}
 
 

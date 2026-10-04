@@ -14,6 +14,7 @@ from app.agents import casefacts
 from app.agents import observe as common
 from app.agents.observe import budget_remaining
 from app.agents.specs import replanning as spec
+from app.agents.types import objective_of, scope_of
 from app.domain.calendar import site_time
 from app.domain.canonical import canonical_hash
 from app.domain.eligibility import exclusion_reasons
@@ -49,12 +50,19 @@ def current_snapshot(conn: sqlite3.Connection, pack: LoadedPack) -> Snapshot:
     return Snapshot(snapshot_id="observe", snapshot_hash=canonical_hash(content), content=content)
 
 
-def level_keys(snapshot: Snapshot, conflicts: list[Conflict]) -> dict[str, str]:
-    """level별 실효 탐색 키. 만들 수 없는 level은 뺀다."""
+def level_keys(
+    snapshot: Snapshot, conflicts: list[Conflict], approach: str | None = None
+) -> dict[str, str]:
+    """level별 실효 탐색 키. 만들 수 없는 level은 뺀다. 목적 순서는 접근이 정하고, 접근이 범위를 정한
+    호출이면 그 범위만 본다 (AG-28)."""
     out = {}
-    for level in spec.LEVELS:
+    fixed = scope_of(approach)
+    for level in (fixed,) if fixed else spec.LEVELS:
         try:
-            out[level] = build_search_spec(snapshot, conflicts, level).search_key
+            key = build_search_spec(
+                snapshot, conflicts, level, objective=objective_of(approach)
+            ).search_key
+            out[level] = key
         except SearchSpecError:
             continue
     return out
@@ -220,7 +228,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     conflicts = detect_conflicts(snapshot, facts.check_assignments(), pack)
     # 미시도 판정은 실효 탐색 키(Solver 입력)로 한다. 무결성 hash가 아니다
     tried = tried_search_keys(conn, pack.site_id, run.case_id)
-    keys = level_keys(snapshot, conflicts) if conflicts else {}
+    approach = run.input_ref.get("approach")
+    keys = level_keys(snapshot, conflicts, approach) if conflicts else {}
     untried = [lv for lv, k in keys.items() if k not in tried]
 
     base = facts.base_assignments()
@@ -352,10 +361,13 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         },
         # 지금 충돌 전체. 이 Run은 이것을 한 번에 푼다 (AG-24)
         "conflicts": [c.model_dump(mode="json") for c in conflicts],
-        # 메인이 이번 호출에 준 접근(무엇을 우선할지)과 짧은 문장(인용). 방식은 이 Agent가 고른다 (AG-28)
+        # 메인이 이번 호출에 준 접근(무엇을 우선할지)과 짧은 문장(인용). 목적 순서는 접근에서 서버가
+        # 채우고, 접근이 범위를 정한 호출(일정의 방향)이면 범위도 서버가 채운다 (AG-28·CV-27)
         "approach": {
-            "approach": run.input_ref.get("approach"),
+            "approach": approach,
             "quoted_note": run.input_ref.get("approach_note"),
+            "objective": objective_of(approach),
+            "scope_level": scope_of(approach),
         },
         # 이 Case에서 접근별로 나온 후보(앞 Run 포함). same이면 기존 후보와 같은 배치에 도달한 것이다
         "approach_candidates": [

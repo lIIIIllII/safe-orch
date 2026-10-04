@@ -51,7 +51,7 @@ from app.store import db
 from app.store.repos.calls import call_key
 from app.store.repos.consultations import case_objections, consultation_view
 from app.store.repos.decisions import case_rejection_reasons
-from app.store.repos.records import list_validations
+from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
 from app.validator.validator import validate
@@ -145,17 +145,19 @@ def test_delay_first_swaps_stages_and_is_a_different_search(seeded_real):
     assert validate(snap, candidate, spec, pack).status == "PASS"
 
 
-def test_objective_argument_through_the_tool(seeded_real):
+def test_objective_comes_from_the_approach(seeded_real):
+    """목적 순서는 메인이 준 접근에서 서버가 채운다. 덜 옮기기 호출의 계산은 범위 계산이든 조건 계산이든
+    지연 먼저로 풀리고, 조건 없이 조건 도구를 쓰는 것은 범위 계산과 같아 받지 않는다 (CV-27)."""
     pack = seeded_real
     _first_day_busy()
     add_task(pack, make_task(pack))
     pin_tasks(pack, ["B"])  # 목적 순서의 차이를 A·C에서 보려고 충돌 상대 B는 고정해 둔다
-    add_run(pack, "run_1", input_ref=CONFLICT)
+    add_run(pack, "run_1", input_ref={**CONFLICT, "approach": "MIN_DELAY"})
     replies = [
-        solve_with("L1"),  # 조건도 없고 목적 순서도 기본이면 범위 계산과 같다
-        solve_with("L0", objective="DELAY_FIRST"),  # L0은 해가 없다
-        solve_with("L0", objective="DELAY_FIRST"),
-        solve_with("L1", cond("C", start_from=60), objective="DELAY_FIRST"),
+        solve_with("L1"),  # 조건 없이 푸는 것은 범위 계산과 같다
+        solve("L0"),  # L0은 해가 없다
+        solve("L0"),
+        solve_with("L1", cond("C", start_from=60)),
     ]
     run = runtime.invoke(pack, {"run_id": "run_1"}, ScriptedChatModel(replies))
     steps = _steps("run_1")
@@ -165,6 +167,12 @@ def test_objective_argument_through_the_tool(seeded_real):
         ("REJECTED", "ALREADY_TRIED"),
         ("WAIT", None),
     ]
+    assert steps[0]["observation"]["approach"] == {
+        "approach": "MIN_DELAY",
+        "quoted_note": None,
+        "objective": "DELAY_FIRST",
+        "scope_level": None,
+    }
     result = steps[3]["tool_result"]
     assert (result["objective"], result["stage1"]["delay"], result["stage2"]["changed"]) == (
         "DELAY_FIRST",
@@ -173,7 +181,7 @@ def test_objective_argument_through_the_tool(seeded_real):
     )
     assert run.solver_calls_used == 2
     # 이전 계산에 목적 순서와, 건 조건이 도구 인자와 같은 모양(현장 날짜·시각 문자열)으로 보인다
-    add_run(pack, "run_2", case_id="case_run_1", input_ref=CONFLICT)
+    add_run(pack, "run_2", case_id="case_run_1", input_ref={**CONFLICT, "approach": "MIN_DELAY"})
     with db.read() as conn:
         from app.agents.observers import replanning as observer
 
@@ -183,6 +191,30 @@ def test_objective_argument_through_the_tool(seeded_real):
         ("DELAY_FIRST", [{"task_id": "C", "start_from": "2026-10-12(월) 10:00"}]),
     ]
     assert attempts[1]["stage1"] == {"status": "OPTIMAL", "changed": None, "delay": 30}
+
+
+def test_replanning_cannot_choose_the_objective(seeded_real):
+    """변경 최소 호출은 지연 먼저로 풀 수 없다: 도구에 목적 순서 인자가 없고, 계산은 변경 먼저다."""
+    pack = seeded_real
+    _first_day_busy()
+    add_task(pack, make_task(pack))
+    pin_tasks(pack, ["B"])
+    add_run(pack, "run_1", input_ref={**CONFLICT, "approach": "MIN_CHANGE"})
+    replies = [
+        solve_with("L1", cond("C", start_from=60), objective="DELAY_FIRST"),
+        solve_with("L1", cond("C", start_from=60)),
+    ]
+    runtime.invoke(pack, {"run_id": "run_1"}, ScriptedChatModel(replies))
+    refused, solved = _steps("run_1")
+    assert (refused["result_kind"], refused["guard"]["reason_code"]) == ("REJECTED", "MALFORMED")
+    for tool in refused["available_actions"]:
+        assert "objective" not in tool["function"]["parameters"]["properties"]
+    assert refused["observation"]["approach"]["objective"] == "CHANGE_FIRST"
+    result = solved["tool_result"]
+    assert "objective" not in result and "delay" not in result["stage1"]  # 변경 먼저로 풀렸다
+    assert (result["stage1"]["changed"], result["stage2"]["delay"]) == (1, 30)
+    # 서버가 남기는 숫자: 기존 작업 변경 1(C), 추가 작업 변경 0(기준 없는 A는 세지 않는다), 옮긴 거리 30
+    assert result["change_counts"] == {"existing": 1, "added": 0, "delay": 30}
 
 
 # ── 접근을 달리한 재계획과 같은 안 ─────────────────────────────
@@ -212,7 +244,8 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
             replan("MIN_CHANGE"),
             replan("MIN_CHANGE"),
             replan("MIN_DELAY", "늦어지는 작업이 없게"),
-            replan("MIN_COST"),  # 접근은 둘뿐이다 (AG-28)
+            replan("MIN_COST"),  # 목록에 없는 접근
+            replan("KEEP_EXISTING"),  # 방향은 일정 넣기 사건이 있는 Case에서만 열린다 (AG-28)
             replan(),
             consult_unchosen,
             main_wait(),
@@ -220,9 +253,7 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
         replanning=[
             solve("L1"),
             done(),
-            solve_with(
-                "L1", objective="DELAY_FIRST", summary="이유: 지연을 먼저 줄인다/다음: 검증"
-            ),
+            solve("L1", "이유: 지연을 먼저 줄인다/다음: 검증"),
             done(),
         ],
         auto_done=False,
@@ -234,6 +265,7 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
         ("CALL_AGENT", "SAME_FACTS"),  # 같은 접근, 사실이 그대로
         ("CALL_AGENT", None),  # 접근이 다르면 받아들여진다
         ("CALL_AGENT", "MALFORMED"),
+        ("CALL_AGENT", "APPROACH_NOT_OPEN"),
         ("CALL_AGENT", "APPROACH_REQUIRED"),
         ("CALL_AGENT", "CANDIDATE_NOT_CHOSEN"),
         ("WAIT", None),
@@ -251,7 +283,12 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
     [cid] = _candidate_ids()  # 두 접근이 같은 배치를 냈다
     s1 = _steps(second.run_id)[0]
     obs = s1["observation"]
-    assert obs["approach"] == {"approach": "MIN_DELAY", "quoted_note": "늦어지는 작업이 없게"}
+    assert obs["approach"] == {
+        "approach": "MIN_DELAY",
+        "quoted_note": "늦어지는 작업이 없게",
+        "objective": "DELAY_FIRST",  # 목적 순서는 접근에서 서버가 채운다 (CV-27)
+        "scope_level": None,
+    }
     assert obs["approach_candidates"] == [
         {"no": 1, "approach": "MIN_CHANGE", "candidate_id": cid, "same": False}
     ]
@@ -459,12 +496,20 @@ def test_plan_numbers_follow_result_order_and_join_the_same_placement(seeded_rea
     낸 결과도 번호를 받아 그 안에 "1안 + 3안"으로 이어 보인다. 거절 뒤에도 번호는 그대로다."""
     pack = seeded_real
     _submit_a(pack)
+
+    def same_as_first():
+        # 1안이 A를 놓은 자리를 조건으로 걸어 다시 푼다: 1안과 같은 배치가 나온다
+        with db.read() as conn:
+            first = get_candidate(conn, pack.site_id, _candidate_ids()[0])
+        start = next(a.start for a in first.assignments if a.task_id == "A")
+        return solve_with("L0", cond("A", start_at=start))
+
     replies = [
         # A·B를 지금 자리에 못 박으면 해가 없다: 번호를 받지 않는다
         solve_with("L0", cond("A", start_at=0), cond("B", start_at=0)),
         solve("L0"),  # 1안
         solve("L1"),  # 2안
-        solve_with("L1", objective="DELAY_FIRST"),  # 1안과 같은 배치: 3안
+        same_as_first,  # 1안과 같은 배치: 3안
         done(),
     ]
     run_until_idle(pack, model_factory=Router(replanning=replies, auto_done=False).factory())

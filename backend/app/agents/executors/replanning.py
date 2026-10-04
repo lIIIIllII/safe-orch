@@ -2,7 +2,8 @@
 
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 공통 판정(MALFORMED·LLM 오류·
 STALE_OBSERVATION·연속 2회·step 완료 기록)은 ToolGateway에 있고, 이 클래스는 그 도우미를 받아 쓴다.
-SOLVE_WITH_SCOPE·SOLVE_WITH_CONDITIONS는 예약 tx → tx 밖 Solver → 등록 tx,
+SOLVE_WITH_SCOPE·SOLVE_WITH_CONDITIONS는 예약 tx → tx 밖 Solver → 등록 tx이고 목적 순서는 접근에서
+서버가 채운다(CV-27),
 나머지는 tx 하나다. 조건은 좁히기만 하고 서버는 유효성만 본다(CV-24). 해가 살아 있는 기존 후보와 같은
 배치면 새 후보를 만들지 않는다(CV-25). 같은 사실에서 이미 한 탐색(같은 범위·조건·목적 순서)이면 Solver를
 부르지 않고 그때의 결과를 돌려준다(CV-13).
@@ -143,9 +144,8 @@ class ReplanningExecutor:
         """SOLVE_WITH_SCOPE(level), SOLVE_WITH_CONDITIONS(level + 작업별 조건)."""
         action = parsed.action
         asked: list[spec.TaskCondition] = []
-        objective = "CHANGE_FIRST"
         if isinstance(action, spec.SolveWithConditions):
-            level, asked, objective = action.level, action.conditions, action.objective
+            level, asked = action.level, action.conditions
         else:
             assert isinstance(action, spec.SolveWithScope)
             level = action.level
@@ -170,10 +170,11 @@ class ReplanningExecutor:
             conditions = _resolve_conditions(self.pack, obs, asked)
             if isinstance(conditions, str):
                 return self._reject(tx, run_id, step_no, meta, parsed, conditions)
-            narrowed = bool(conditions) or objective != "CHANGE_FIRST"
-            if isinstance(action, spec.SolveWithConditions) and not narrowed:
-                # 조건도 없고 목적 순서도 기본이면 범위 계산(SOLVE_WITH_SCOPE)과 같다
+            if isinstance(action, spec.SolveWithConditions) and not conditions:
+                # 조건 없이 푸는 것은 범위 계산(SOLVE_WITH_SCOPE)과 같다
                 return self._reject(tx, run_id, step_no, meta, parsed, "CONDITION_INVALID")
+            # 목적 순서는 메인이 준 접근에서 서버가 채운다. Agent는 고르지 않는다 (CV-27)
+            objective = obs.data["approach"]["objective"]
             args = (obs.conflicts, level, conditions, objective)
             try:
                 # 저장하지 않는 Snapshot으로 탐색 키부터 본다(이미 한 탐색이면 아무것도 남기지 않는다)
@@ -435,6 +436,10 @@ def _solver_summary(
         "chosen_stage": result.chosen_stage,
         "minimal_change": result.minimal_change,
         "delay_optimality_unconfirmed": result.delay_optimality_unconfirmed,
+        # 이 해가 기준에서 바꾸는 것: 기존 작업 변경 수, 추가 작업 변경 수, 옮긴 거리 (서버 계산)
+        "change_counts": None
+        if candidate is None
+        else snapshot.facts().change_counts(candidate.assignments),
         "candidate_id": None if candidate is None else candidate.candidate_id,
     }
 

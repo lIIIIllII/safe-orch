@@ -9,7 +9,7 @@ import sqlite3
 from typing import Any
 
 from app.agents.specs import main as main_spec
-from app.agents.types import APPROACHES
+from app.agents.types import DIRECTION_SCOPE, approaches_for, objective_of
 from app.domain.canonical import canonical_hash
 from app.domain.groups import ConflictGroup, conflict_groups, movable_task_ids
 from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent
@@ -392,15 +392,26 @@ def same_facts(
     return last["end_fingerprint"] == fingerprint(conn, site_id, key, candidate_id)
 
 
-def untried_levels(snapshot: Snapshot, conflicts: list[Conflict], tried: set[str]) -> list[str]:
-    """이 Case에서 아직 시도하지 않은 탐색 범위."""
+def untried_levels(
+    snapshot: Snapshot, conflicts: list[Conflict], tried: set[str], schedule_case: bool = False
+) -> list[str]:
+    """이 Case에서 아직 시도하지 않은 탐색 범위.
+
+    일정 Case의 방향 호출은 범위가 작업 전체 하나다(AG-28): 아직 풀지 않은 방향이 있으면 그 범위가
+    남은 것이다."""
     out = []
     for level in LEVELS if conflicts else ():
+        if schedule_case and level != DIRECTION_SCOPE:
+            continue
+        objectives = {objective_of(a) for a in approaches_for(schedule_case)}
         try:
-            key = build_search_spec(snapshot, conflicts, level).search_key
+            keys = {
+                build_search_spec(snapshot, conflicts, level, objective=o).search_key
+                for o in (objectives if schedule_case else {"CHANGE_FIRST"})
+            }
         except SearchSpecError:
             continue
-        if key not in tried:
+        if keys - tried:
             out.append(level)
     return out
 
@@ -474,11 +485,17 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
             "facts_changed": not unchanged,
         }
     movable = movable_task_ids(groups, facts.pins)
+    # 접근 목록은 Case 종류로 나뉜다: 일정 넣기 사건이 있는 Case는 세 방향, 아니면 변경 최소·덜 옮기기
+    # (사실 조건, AG-28)
+    schedule_case = any(e["kind"] == "SCHEDULE_IMPORTED" for e in events)
+    approaches = approaches_for(schedule_case)
     replanning = {
         # 충돌에 걸린 작업 가운데 고정되지 않아 움직일 수 있는 것. 재계획은 고정되지 않은 작업만 옮긴다
         "movable_task_ids": movable,
         "request_task_ids": [t for t in involved if t not in in_plan],
-        "untried_levels": untried_levels(snapshot, conflicts, tried),
+        "untried_levels": untried_levels(snapshot, conflicts, tried, schedule_case),
+        # 이 Case에서 열리는 접근
+        "approaches": list(approaches),
         "last_result": last_view,
     }
     # 움직일 수 있는 작업이 없으면 재계획으로 바뀌는 것이 없다 (AG-02). 접근마다 호출 키가 다르다:
@@ -486,13 +503,12 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
     if not hold_active and movable:
         calls += [
             {"agent": "REPLANNING", "approach": a}
-            for a in APPROACHES
+            for a in approaches
             if not same_facts(conn, site_id, call_key("REPLANNING", {"approach": a}))
         ]
 
     # 일정 검토: 일정 넣기 사건이 있는 Case에 충돌이 있을 때만 부를 수 있다(사실 조건, AG-36).
     # 같은 사실의 재호출은 거절된다 (AG-24)
-    schedule_case = any(e["kind"] == "SCHEDULE_IMPORTED" for e in events)
     review_key = call_key("SCHEDULE_REVIEW", {})
     if schedule_case and groups and not hold_active and not same_facts(conn, site_id, review_key):
         calls.append({"agent": "SCHEDULE_REVIEW"})

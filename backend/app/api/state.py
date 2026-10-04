@@ -215,6 +215,8 @@ def _solver(
             "work_delay": _work_delay_sum(s2.get("solution"), facts),
         },
         "chosen_stage": r["chosen_stage"],
+        # 1단계(접근이 먼저 줄이는 것)의 최적이 확인되지 않았다: 안 이름 옆에 "최적 미확인"으로 보인다
+        "first_unconfirmed": solution is not None and s1["status"] != "OPTIMAL",
         "minimal_change": s1["status"] == "OPTIMAL" and not delay_first,
         "minimal_delay": s1["status"] == "OPTIMAL" and delay_first,
         "delay_optimality_unconfirmed": solution is not None
@@ -308,6 +310,8 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "changes": changes,
         # 이 안이 기준에서 바꾸는 것: 시각·자원·새 배치·기준에서 옮긴 거리와 방향 (서버 계산)
         "plan_changes": plan_changes(facts, cand.assignments),
+        # 기존 작업(계획에 있던 작업) 변경 수, 추가 작업(계획에 없던 작업) 변경 수, 옮긴 거리(분). 서버 계산
+        "change_counts": None if facts is None else facts.change_counts(cand.assignments),
         # 기준 계획을 확정한 뒤 사람이 바꾼 사실: 무엇 때문에 다시 계획·확정하는가
         "fact_changes": [
             *fact_changes(basis, facts),

@@ -88,10 +88,10 @@ def cond(task_id: str, **fields: Any) -> dict[str, Any]:
 def solve_with(
     level: str,
     *conditions: dict[str, Any],
-    objective: str | None = None,
     summary: str = "조건을 걸어 계산한다",
+    **extra: Any,
 ) -> AIMessage:
-    extra = {} if objective is None else {"objective": objective}
+    """extra는 도구에 없는 인자를 보내 보는 시험용이다(목적 순서는 접근이 정한다, CV-27)."""
     return call("SOLVE_WITH_CONDITIONS", summary, level=level, conditions=list(conditions), **extra)
 
 
@@ -180,8 +180,13 @@ def auto_main(obs: dict[str, Any]) -> AIMessage:
         and r["run_status"] != "SUCCEEDED"
         for r in obs["child_results"]
     )
-    # 기본 응답은 접근 하나(변경 최소)만 쓴다. 접근을 달리해 부르는 것은 스크립트로 시험한다
-    replanning = None if failed else first(agent="REPLANNING", approach="MIN_CHANGE")
+    # 기본 응답은 접근 하나만 쓴다(변경 최소, 일정 Case는 적절하게). 접근을 달리해 부르는 것은 스크립트로
+    # 시험한다
+    replanning = None
+    if not failed:
+        replanning = first(agent="REPLANNING", approach="MIN_CHANGE") or first(
+            agent="REPLANNING", approach="BALANCED"
+        )
     chosen = (
         first(agent="COORDINATION", phase="NOTICE")
         or first(agent="EVENT_RESPONSE")

@@ -63,6 +63,35 @@ class AgentBinding:
     exec_contract_version: str
 
 
-# 메인이 재계획에 주는 접근(무엇을 우선할지). 방식은 재계획 Agent가 고른다 (AG-28)
-# 변경 최소 / 덜 옮기기(기준에서 옮긴 거리를 먼저 줄인다)
+# 메인이 재계획에 주는 접근(무엇을 우선할지). 목적 순서는 접근이 정하고, 방식(범위·조건)은 재계획
+# Agent가 고른다 (AG-28·CV-27). 접근 목록은 Case 종류로 나뉜다(사실 조건).
+# 일정이 아닌 Case: 변경 최소 / 덜 옮기기(기준에서 옮긴 거리를 먼저 줄인다)
 APPROACHES = ("MIN_CHANGE", "MIN_DELAY")
+# 일정 넣기 사건이 있는 Case의 세 방향: 기존 위주(기존 작업을 지킨다) / 추가 위주(들어온 작업을 문서
+# 자리에 둔다) / 적절하게(전체 변경 최소. 변경 최소와 목적은 같지만 값은 따로 둔다)
+DIRECTIONS = ("KEEP_EXISTING", "KEEP_ADDED", "BALANCED")
+# 접근 → 목적 순서. 서버가 채운다
+APPROACH_OBJECTIVE = {
+    "MIN_CHANGE": "CHANGE_FIRST",
+    "MIN_DELAY": "DELAY_FIRST",
+    "KEEP_EXISTING": "EXISTING_FIRST",
+    "KEEP_ADDED": "ADDED_FIRST",
+    "BALANCED": "CHANGE_FIRST",
+}
+# 방향 호출의 탐색 범위는 서버가 작업 전체로 채운다: 세 방향이 같은 범위에서 풀려야 숫자를 비교한다
+DIRECTION_SCOPE = "L2"
+
+
+def approaches_for(schedule_case: bool) -> tuple[str, ...]:
+    """그 Case에서 열리는 접근 목록."""
+    return DIRECTIONS if schedule_case else APPROACHES
+
+
+def objective_of(approach: str | None) -> str:
+    """접근이 정하는 목적 순서. 접근 없이 부른 재계획은 변경 먼저다."""
+    return APPROACH_OBJECTIVE.get(approach or "", "CHANGE_FIRST")
+
+
+def scope_of(approach: str | None) -> str | None:
+    """서버가 채우는 탐색 범위. 방향 호출이 아니면 None(재계획이 고른다)."""
+    return DIRECTION_SCOPE if approach in DIRECTIONS else None

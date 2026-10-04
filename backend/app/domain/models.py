@@ -4,6 +4,7 @@ app 내부 모듈을 import하지 않는다. 시간은 Horizon 원점 기준 정
 조회 결과는 매번 새 객체로 만든다. 모델은 frozen이다.
 """
 
+from collections.abc import Iterable
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
@@ -20,8 +21,11 @@ Origin = Literal["STATED", "DECIDED"]
 CandidateKind = Literal["REPLAN", "RECONFIRM", "MOVE", "REMOVE"]
 ValidationStatus = Literal["PASS", "FAIL", "INCOMPLETE"]
 ScopeLevel = Literal["L0", "L1", "L2"]
-# 목적 순서: 변경 작업 수를 먼저 줄일지, 기준에서 옮긴 거리(지연)를 먼저 줄일지 (CV-27)
-Objective = Literal["CHANGE_FIRST", "DELAY_FIRST"]
+# 목적 순서: 무엇을 먼저 줄이는가 (CV-27). 접근이 정하고 Agent는 고르지 않는다.
+# CHANGE_FIRST 변경 작업 수, DELAY_FIRST 기준에서 옮긴 거리(지연),
+# EXISTING_FIRST 기존 작업(계획에 있는 작업)의 변경 수 → 추가 작업의 변경 수,
+# ADDED_FIRST 추가 작업(계획에 없는 작업)의 변경 수 → 기존 작업의 변경 수
+Objective = Literal["CHANGE_FIRST", "DELAY_FIRST", "EXISTING_FIRST", "ADDED_FIRST"]
 AttributeType = Literal["NUMBER", "LIST"]
 RequirementOp = Literal["GTE", "LTE", "CONTAINS"]  # 코어가 아는 비교는 이 셋뿐이다 (CV-17)
 
@@ -467,6 +471,22 @@ class SnapshotContent(Frozen):
         return (
             self.deviation(after.task_id, after.start) > 0 or after.resource_id != base.resource_id
         )
+
+    def change_counts(self, assignments: Iterable[Assignment]) -> dict[str, int]:
+        """그 배치가 기준에서 바꾸는 것의 수 (서버 계산, CV-29와 같은 기준).
+
+        existing: 지금 계획에 있는 작업(기존) 가운데 바뀐 수, added: 계획에 없는 작업(추가) 가운데 바뀐
+        수(기준이 없는 작업은 변경으로 세지 않는다), delay: 기준에서 옮긴 거리의 합(분)."""
+        in_plan = {a.task_id for a in self.plan.assignments}
+        tasks = self.task_map()
+        out = {"existing": 0, "added": 0, "delay": 0}
+        for a in assignments:
+            if a.task_id not in tasks:
+                continue
+            if self.is_changed(a):
+                out["existing" if a.task_id in in_plan else "added"] += 1
+            out["delay"] += self.deviation(a.task_id, a.start)
+        return out
 
     def check_assignments(self) -> tuple[Assignment, ...]:
         """검사 대상 배정 = 현재 Plan 배정 + Plan에 없는 READY 작업의 기준 배정."""

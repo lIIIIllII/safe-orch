@@ -37,14 +37,14 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=main_prompt,
         observer=main_observer,
         executor=MainExecutor,
-        exec_contract_version="main-c5",  # 기록만. 일정 Case의 일정 검토 호출 (AG-36)
+        exec_contract_version="main-c6",  # 기록만. 접근 목록은 Case 종류로 나뉜다 (AG-28)
     ),
     replanning_spec.AGENT_TYPE: AgentBinding(
         spec=replanning_spec.SPEC,
         prompt=replanning_prompt,
         observer=replanning_observer,
         executor=ReplanningExecutor,
-        exec_contract_version="replanning-c9",  # 기록만. 조건의 희망 영역 삭제, 기준 위치 (CV-29)
+        exec_contract_version="replanning-c10",  # 기록만. 목적 순서는 접근이 정한다 (CV-27)
     ),
     coordination_spec.AGENT_TYPE: AgentBinding(
         spec=coordination_spec.SPEC,

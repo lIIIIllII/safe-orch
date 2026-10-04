@@ -19,7 +19,7 @@ from app.domain.needs import ResultFields
 AGENT_TYPE = "REPLANNING"
 GOAL = (
     "Hard 제약과 확인된 조건을 지키면서 충돌을 해소하는 검증 가능한 대안을 찾는다. "
-    "변경 작업 수를 먼저, 기준에서 옮긴 거리(지연)를 그다음으로 최소화한다."
+    "무엇을 먼저 줄일지(목적 순서)는 메인이 준 접근이 정한다."
 )
 
 MAX_STEPS = 15
@@ -48,10 +48,14 @@ class Action(BaseModel):
 
 
 class SolveWithScope(Action):
-    """현재 사실에서 탐색 범위를 정해 CP-SAT로 대안을 계산한다. 해가 있으면 후보가 등록되고 검증을
-    기다린다. 해가 없으면(INFEASIBLE·UNKNOWN) 결과를 관찰하고 다음 전략을 고른다."""
+    """현재 사실에서 탐색 범위를 정해 CP-SAT로 대안을 계산한다. 목적 순서는 접근에서 서버가 채운다.
+    해가 있으면 후보가 등록되고 검증을 기다린다. 해가 없으면(INFEASIBLE·UNKNOWN) 결과를 관찰하고 다음
+    전략을 고른다."""
 
-    OPENS = "충돌이 있고 아직 시도하지 않은 탐색 범위와 Solver 호출이 남아 있을 때"
+    OPENS = (
+        "충돌이 있고 아직 시도하지 않은 탐색 범위와 Solver 호출이 남아 있을 때. 접근이 범위를 정한 "
+        "호출이면 그 범위만 열린다"
+    )
 
     level: Literal["L0", "L1", "L2"] = Field(
         description="탐색 범위. L0 충돌에 걸린 작업, L1 같은 구역·같은 자원 작업까지, L2 작업 전부"
@@ -83,30 +87,22 @@ class TaskCondition(BaseModel):
 class SolveWithConditions(Action):
     """탐색 범위에 작업별 조건을 걸어 CP-SAT로 계산한다. 조건은 시작 이후·이전, 시작 지정, 자원
     지정이다. 조건은 좁히기만 하고, 걸지 않은 작업은 계산이 정한다. 범위 안 작업을 모두 지정하면 그
-    배치 그대로를 검사한다. 목적 순서(objective)로 변경 작업 수와 기준에서 옮긴 거리(지연) 가운데
-    무엇을 먼저 줄일지 고른다. 해가 있으면 후보가 등록되고 검증을 기다린다. 해가 없으면 계산 상태를
-    돌려주고, 모두 지정한 배치였으면 그 배치가 어긴 규칙을 붙인다."""
+    배치 그대로를 검사한다. 목적 순서는 접근에서 서버가 채우고 고를 수 없다. 해가 있으면 후보가
+    등록되고 검증을 기다린다. 해가 없으면 계산 상태를 돌려주고, 모두 지정한 배치였으면 그 배치가 어긴
+    규칙을 붙인다."""
 
     OPENS = (
         "충돌이 있고 Solver 호출이 남아 있을 때. 탐색 범위를 모두 시도한 뒤에도 쓸 수 있다. 같은 "
-        "사실에서 같은 범위·같은 조건·같은 목적 순서는 받아들여지지 않는다. 조건 없이 변경 먼저로 푸는 "
-        "것은 범위 계산과 같아 받아들여지지 않는다. 조건이 시간창 밖이거나, 고정된 작업이거나, "
-        "범위 밖 작업이거나, 자원이 적격이 아니면 받아들여지지 않는다"
+        "사실에서 같은 범위·같은 조건은 받아들여지지 않는다. 조건 없이 푸는 것은 범위 계산과 같아 "
+        "받아들여지지 않는다. 조건이 시간창 밖이거나, 고정된 작업이거나, 범위 밖 작업이거나, 자원이 "
+        "적격이 아니면 받아들여지지 않는다. 접근이 범위를 정한 호출이면 그 범위만 열린다"
     )
 
     level: Literal["L0", "L1", "L2"] = Field(
         description="탐색 범위. L0 충돌에 걸린 작업, L1 같은 구역·같은 자원 작업까지, L2 작업 전부"
     )
     conditions: list[TaskCondition] = Field(
-        default_factory=list,
-        description="작업별 조건 (작업마다 하나). 목적 순서만 바꿀 때는 비운다",
-    )
-    objective: Literal["CHANGE_FIRST", "DELAY_FIRST"] = Field(
-        default="CHANGE_FIRST",
-        description=(
-            "목적 순서. CHANGE_FIRST 변경 작업 수를 먼저 줄이고 그 안에서 기준에서 옮긴 거리(지연)를 "
-            "줄인다(기본). DELAY_FIRST 기준에서 옮긴 거리를 먼저 줄이고 그 안에서 변경 작업 수를 줄인다"
-        ),
+        default_factory=list, description="작업별 조건 (작업마다 하나). 하나 이상 건다"
     )
 
 
@@ -185,9 +181,11 @@ def valid_actions(
     if obs["conflicts"] and obs["untried_levels"] and budget["solver_calls"] > 0:
         out["SOLVE_WITH_SCOPE"] = {"level": list(obs["untried_levels"])}
     # 조건을 걸어 풀기: 범위를 다 써도 열려 있다. 조건의 유효성은 실행 때 서버가 본다 (CV-24)
+    # 접근이 범위를 정한 호출(일정의 방향)이면 범위는 그 값 하나다 (AG-28)
+    fixed = (obs.get("approach") or {}).get("scope_level")
     movable = any(not t["pinned"] for t in obs["tasks"])
     if obs["conflicts"] and movable and budget["solver_calls"] > 0:
-        out["SOLVE_WITH_CONDITIONS"] = {"level": list(LEVELS)}
+        out["SOLVE_WITH_CONDITIONS"] = {"level": [fixed] if fixed else list(LEVELS)}
     c = choices(obs, hidden)
     if c["LIST"]:
         out["LIST_ASSIGNABLE_RESOURCES"] = {"task_id": c["LIST"]}

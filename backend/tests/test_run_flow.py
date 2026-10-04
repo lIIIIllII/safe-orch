@@ -101,7 +101,7 @@ def test_gate_path_automated(seeded):
     pack = seeded
     main, run, _, alpha = _alpha(pack)
 
-    assert main.case_id.startswith("case_") and main.exec_contract_version == "main-c5"
+    assert main.case_id.startswith("case_") and main.exec_contract_version == "main-c6"
     assert (run.parent_run_id, run.case_id) == (main.run_id, main.case_id)
     # 재계획 Run에는 주체 Unit도 대신 움직이는 Actor도 없다 (AG-24)
     assert (run.acting_unit_id, run.acting_actor_id) == (None, None)

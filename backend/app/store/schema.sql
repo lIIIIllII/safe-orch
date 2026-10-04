@@ -1,4 +1,4 @@
--- SAFE-ORCH schema. schema_version 24.
+-- SAFE-ORCH schema. schema_version 25.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -173,7 +173,8 @@ CREATE TABLE search_spec (
     conditions            TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(conditions)),
     -- 목적 순서: 변경 먼저(기본) / 지연 먼저. Agent가 고르는 입력이다 (CV-27)
     objective             TEXT NOT NULL DEFAULT 'CHANGE_FIRST'
-                              CHECK (objective IN ('CHANGE_FIRST', 'DELAY_FIRST')),
+                              CHECK (objective IN ('CHANGE_FIRST', 'DELAY_FIRST', 'EXISTING_FIRST',
+                                                    'ADDED_FIRST')),
     time_limit_s          INTEGER NOT NULL CHECK (time_limit_s > 0),
     -- 실효 탐색 키(미시도 판정용, Solver 입력만). hash는 무결성용
     search_key            TEXT NOT NULL

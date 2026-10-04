@@ -1,5 +1,7 @@
 """CP-SAT 단계 최적화: 변경 작업 수 → 지연 → 자원을 바꾸는 작업 수.
 
+목적 순서(SearchSpec.objective)는 접근이 정한다 (CV-27).
+
 트랜잭션 밖에서 돈다. 모든 READY 작업을 넣고 SearchSpec이 허용하지 않은 작업·축은 기준값 상수다.
 1단계 min Σ changed_t, 1단계가 OPTIMAL이면 그 값을 고정하고 2단계 min Σ delay_t.
 변경과 지연은 작업의 기준 시작 범위에서 잰다 (CV-29): Plan에 있는 작업은 승인된 시작 한 점, 기준 위치가
@@ -7,6 +9,10 @@
 세지 않고 delay_t는 0이며, 밖이면 변경 하나이고 delay_t는 범위 끝에서 벗어난 거리(앞뒤 모두)다. 범위가
 없으면 시간창 안 어디든 변경도 지연도 아니다. 자원이 기준 자원이 아니면 변경이다.
 목적 순서가 지연 먼저(DELAY_FIRST)면 두 단계의 목적을 바꾼다: 1단계 지연, 2단계 변경 작업 수 (CV-27).
+기존 먼저(EXISTING_FIRST)·추가 먼저(ADDED_FIRST)는 1단계에서 변경 수를 기존 작업(계획에 있는 작업)과
+추가 작업(계획에 없는 작업)으로 나눠 사전식으로 줄인다: 먼저 줄일 쪽에 나머지 쪽 작업 수보다 큰 가중치를
+곱해 한 번에 푼다(뒤쪽 합이 가중치를 넘지 못하므로 사전식 순서와 같고, 단계 수와 시간 한도는 그대로다).
+2단계는 두 수를 고정하고 지연을 줄인다.
 마지막 단계: 두 값이 모두 OPTIMAL이면 둘을 고정하고 자원을 바꾸는 작업 수를 줄인다 (CV-12). 변경 수는
 작업당 하나라 시각을 바꾼 작업의 자원을 더 바꿔도 앞의 두 값이 같기 때문이다. 이 단계의 해는 2단계의
 해를 대신하고, 2단계 결과에 자원을 바꾸는 작업 수(resource_changed)와 이 단계의 상태(resource_status)를
@@ -37,6 +43,9 @@ class _Built:
     durations: dict[str, int] = field(default_factory=dict)
     choices: dict[str, list[tuple[str, cp_model.IntVar]]] = field(default_factory=dict)
     changed: list[cp_model.IntVar] = field(default_factory=list)
+    # changed를 기존 작업(계획에 있는 작업)과 추가 작업(계획에 없는 작업)으로 나눈 것
+    changed_existing: list[cp_model.IntVar] = field(default_factory=list)
+    changed_added: list[cp_model.IntVar] = field(default_factory=list)
     delays: list[cp_model.IntVar] = field(default_factory=list)
     # 작업마다 "기준 자원이 아닌 자원을 쓴다" (자원 축이 열려 있고 고를 자원이 둘 이상인 작업만)
     swaps: list[cp_model.IntVar] = field(default_factory=list)
@@ -47,6 +56,7 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
     horizon = facts.horizon_minutes
     base = facts.base_assignments()
     resources = facts.resource_map()
+    in_plan = {a.task_id for a in facts.plan.assignments}
     tasks = sorted(facts.tasks, key=lambda t: t.task_id)
     m = cp_model.CpModel()
     b = _Built(model=m)
@@ -107,6 +117,7 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
             elif t.required_resource_type is not None:
                 m.add(ch == 1)  # 기준 자원이 없으면 배정 자체가 변경
             b.changed.append(ch)
+            (b.changed_existing if tid in in_plan else b.changed_added).append(ch)
             if ax.resource and base_lit is not None and len(lits) > 1:
                 swap = m.new_bool_var(f"swap_{tid}")
                 m.add(swap + base_lit == 1)
@@ -221,17 +232,45 @@ def _resource_changes(snapshot: Snapshot, solution: list[dict[str, Any]]) -> int
     )
 
 
+def _first_objective(b: _Built, objective: str) -> Any:
+    """1단계 목적식. 기존 먼저·추가 먼저는 가중치로 사전식 순서를 한 번에 푼다."""
+    if objective == "DELAY_FIRST":
+        return sum(b.delays)
+    if objective == "EXISTING_FIRST":
+        return (len(b.changed_added) + 1) * sum(b.changed_existing) + sum(b.changed_added)
+    if objective == "ADDED_FIRST":
+        return (len(b.changed_existing) + 1) * sum(b.changed_added) + sum(b.changed_existing)
+    return sum(b.changed)
+
+
+def _fix_changed(b: _Built, stage1: dict[str, Any], split: bool) -> None:
+    """다음 단계에서 1단계의 변경 수를 고정한다. 나눠 푼 목적은 기존·추가 수를 각각 고정한다."""
+    if split:
+        b.model.add(sum(b.changed_existing) == stage1["changed_existing"])
+        b.model.add(sum(b.changed_added) == stage1["changed_added"])
+    else:
+        b.model.add(sum(b.changed) == stage1["changed"])
+
+
 def solve(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> SolverResult:
     began = time.monotonic()
     delay_first = spec.objective == "DELAY_FIRST"
+    split = spec.objective in ("EXISTING_FIRST", "ADDED_FIRST")
     b1 = _build(snapshot, spec, pack)
-    b1.model.minimize(sum(b1.delays if delay_first else b1.changed))
+    b1.model.minimize(_first_objective(b1, spec.objective))
     status1, solver1 = _solve_stage(b1.model, spec.time_limit_s)
     stage1: dict[str, Any] = {"status": status1, "changed": None, "solution": None}
     if delay_first:
         stage1["delay"] = None
+    if split:
+        stage1["changed_existing"] = stage1["changed_added"] = None
     if status1 in SOLVED:
-        stage1["delay" if delay_first else "changed"] = round(solver1.objective_value)
+        if split:
+            stage1["changed_existing"] = sum(solver1.value(v) for v in b1.changed_existing)
+            stage1["changed_added"] = sum(solver1.value(v) for v in b1.changed_added)
+            stage1["changed"] = stage1["changed_existing"] + stage1["changed_added"]
+        else:
+            stage1["delay" if delay_first else "changed"] = round(solver1.objective_value)
         stage1["solution"] = _solution(b1, solver1)
 
     stage2: dict[str, Any] | None = None
@@ -253,7 +292,7 @@ def solve(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> SolverResul
                 stage2["changed"] = round(solver2.objective_value)
                 stage2["solution"] = _solution(b2, solver2)
         else:
-            b2.model.add(sum(b2.changed) == stage1["changed"])
+            _fix_changed(b2, stage1, split)
             b2.model.minimize(sum(b2.delays))
             status2, solver2 = _solve_stage(b2.model, remaining)
             stage2 = {"status": status2, "delay": None, "solution": None}
@@ -266,8 +305,10 @@ def solve(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> SolverResul
             # 마지막 단계: 변경 수와 지연을 고정하고 자원을 바꾸는 작업 수를 줄인다 (CV-12)
             b3 = _build(snapshot, spec, pack)
             if b3.swaps:
-                fixed = stage2["changed"] if delay_first else stage1["changed"]
-                b3.model.add(sum(b3.changed) == fixed)
+                if delay_first:
+                    b3.model.add(sum(b3.changed) == stage2["changed"])
+                else:
+                    _fix_changed(b3, stage1, split)
                 b3.model.add(sum(b3.delays) == stage2["delay"])
                 b3.model.minimize(sum(b3.swaps))
                 remaining = max(spec.time_limit_s - (time.monotonic() - began), 0.1)

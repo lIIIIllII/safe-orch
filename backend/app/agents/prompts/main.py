@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p13"
+PROMPT_VERSION = "main-p14"
 
 
 def tool_catalog() -> str:
@@ -62,7 +62,9 @@ Hold가 걸린 작업(held_task_ids), 이 묶음의 작업을 바꾸는 검토 �
 뿐이고 재계획을 부르는 단위가 아니다: 재계획은 지금 충돌 전체를 한 번에 푼다.
 - 재계획 사실(replanning): 충돌에 걸린 작업 가운데 사람이 고정하지 않아 움직일 수 있는 \
 작업(movable_task_ids), 아직 계획에 없는 요청 작업(request_task_ids), 이 Case에서 아직 시도하지 않은 \
-탐색 범위(untried_levels), \
+탐색 범위(untried_levels), 이 Case에서 열리는 접근(approaches: 일정 넣기 사건이 있으면 세 방향 \
+KEEP_EXISTING 기존 위주·KEEP_ADDED 추가 위주·BALANCED 적절하게, 없으면 MIN_CHANGE 변경 최소·MIN_DELAY \
+덜 옮기기. 접근이 무엇을 먼저 줄일지를 정하고, 세 방향은 모두 작업 전체 범위에서 푼다), \
 마지막에 부른 재계획의 결과(last_result: 그때의 접근 approach, 결과 상태, 재계획 Agent가 엮은 길 paths, \
 서버가 계산해 붙인 열 수 있는 것 openers, 그 뒤 관련 사실이 바뀌었는지 facts_changed)가 있다. 길과 열 수 \
 있는 것의 필요한 것마다 need_id가 있다. 재계획은 고정되지 않은 작업을 Unit을 가리지 않고 옮긴다.
@@ -168,4 +170,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p11": "ff0d36ccdd36eed0ef07d29a844ba89d0ffe8618a9365c33e6bec03069677208",  # 일정 넣기 사건(SCHEDULE_IMPORTED): 한 일정에서 온 작업 (ST-24)
     "main-p12": "eb98aaa258b12af1f00547ec9bc22571ac904721105ac8e6cbd4a5294f8ca356",  # 희망 영역 작업(preferred_task_ids)·희망 사건 삭제, 접근 MIN_DELAY(덜 옮기기) (AG-28)
     "main-p13": "6eb90b73f621071cf16d64c1bbe2db1c2ce769cf720cbfc45ece3a95328403bf",  # 일정 검토 호출(SCHEDULE_REVIEW)과 묶음안 요약(schedule_review) (AG-36)
+    "main-p14": "63d7b630b0dbad00f57a0cb8b2b9f3ddae089c67be1be10a0ab58470c25fbab4",  # 접근 목록은 Case 종류로: 일정 Case의 세 방향, 목적 순서는 접근이 정한다 (AG-28·CV-27)
 }
