@@ -306,6 +306,49 @@ export type FactChange =
       before: number | string | null
       after: number | string | null
     }
+  | { kind: 'BASE_RANGE_CHANGED'; task_id: string; before: BaseRangeRef; after: BaseRangeRef }
+
+/** 요청 시작 범위(분)와 출처 */
+type BaseRangeRef = { start: number; start_max: number; origin: 'STATED' | 'DECIDED' }
+
+/** 최소 묶음: 작업을 공유하는 충돌끼리 서버가 묶은 것 */
+export interface BundleGroup {
+  group_id: string
+  task_ids: string[]
+  rule_ids: string[]
+  interval: [number, number]
+  /** 사람만 풀 수 있다: ALL_PINNED 걸린 작업이 모두 고정, FACT_REQUIRED 사실이 바뀌어야 함 */
+  human_only: boolean
+  human_only_reason: string | null
+}
+
+/** 일정 검토 Agent가 낸 묶음안. groups·relations·tasks와 bundles의 구조는 서버 값이고,
+ *  quoted_note·quoted_opinion은 모델이 쓴 문장이다(UI-06). current가 false면 낸 뒤 현장 사실이 바뀌었다 */
+export interface BundlePlan {
+  bundle_plan_id: string
+  case_id: string
+  run_id: string
+  context_version: number
+  current: boolean
+  groups: BundleGroup[]
+  relations: {
+    group_a: string
+    group_b: string
+    shared_resource_ids: string[]
+    zone_links: { zone_a: string; zone_b: string; relation: string }[]
+    gap_minutes: number
+  }[]
+  tasks: { task_id: string; from_schedule: boolean; in_plan: boolean; pinned: boolean }[]
+  bundles: {
+    bundle_id: string
+    group_ids: string[]
+    task_ids: string[]
+    human_only: boolean
+    human_only_group_ids: string[]
+    quoted_note: string
+  }[]
+  quoted_opinion: string
+}
 
 export interface HoldView {
   hold_id: string
@@ -374,6 +417,8 @@ export interface SiteState {
   conflicts: Conflict[]
   candidates: CandidateView[]
   review_queue: string[]
+  /** 일정 검토 Agent가 낸 묶음안(최근 것, 만든 순서) */
+  bundle_plans: BundlePlan[]
   /** 대기열(QUEUED) 접수 순서 */
   task_queue: string[]
   holds: HoldView[]

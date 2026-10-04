@@ -1,4 +1,4 @@
-// 검토 패널. 서버 계산 결과만 보여 준다(모델 문장 없음).
+// 검토 패널. 서버 계산 결과를 보여 준다. 모델이 쓴 문장(접근의 이유, 일정 검토 의견·메모)은 따로 구분한다(UI-06).
 // 승인 버튼은 권한만 보고 켠다. STALE·Hold여도 막지 않고 서버의 거절 사유를 보여 준다.
 
 import { Fragment, useState } from 'react'
@@ -11,7 +11,9 @@ import {
   CHECK_NAME,
   CHECK_STATUS,
   CONSULTATION_STATUS,
+  HUMAN_ONLY,
   ITEM_STATUS,
+  REASON,
   REJECT_REASON,
   OBJECTIVE,
   SCOPE_LEVEL,
@@ -20,7 +22,7 @@ import {
   VALUE_NAME,
 } from '../labels'
 import { delayText } from '../time'
-import { decidedValues, useEnv } from '../context'
+import { decidedValues, ruleName, useEnv } from '../context'
 import { Code, OutcomeBox, ValidationBadge } from './common'
 
 /** 명령 실행. 응답(실패 시 null)을 돌려준다. 결과 영역 표시는 App이 한다. */
@@ -74,6 +76,7 @@ export function ReviewPanel(props: Props) {
             <button onClick={() => onSelect(queueNotice)}>보기</button>
           </div>
         )}
+        <ScheduleReview {...props} />
         <PlanCompare {...props} />
         {candidate ? (
           <CandidateDetail
@@ -105,6 +108,8 @@ function FactChanges({ changes, base, state }: { changes: FactChange[]; base: nu
           ? clock.format(v)
           : `${v}분`
         : String(v)
+  const range = (r: { start: number; start_max: number }) =>
+    r.start === r.start_max ? clock.format(r.start) : `${clock.format(r.start)} ~ ${clock.format(r.start_max)}`
   const line = (x: FactChange): string => {
     switch (x.kind) {
       case 'TASK_ADDED':
@@ -117,6 +122,8 @@ function FactChanges({ changes, base, state }: { changes: FactChange[]; base: nu
         return `${x.task_id} 고정 해제`
       case 'VALUE_CHANGED':
         return `${x.task_id} ${VALUE_NAME[x.field] ?? x.field}: ${value(x.field, x.before)} → ${value(x.field, x.after)}`
+      case 'BASE_RANGE_CHANGED':
+        return `${x.task_id} 요청 시작 범위: ${range(x.before)} → ${range(x.after)}`
     }
   }
   return (
@@ -127,6 +134,103 @@ function FactChanges({ changes, base, state }: { changes: FactChange[]; base: nu
           <li key={`${x.kind}:${x.task_id}:${i}`}>{line(x)}</li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+/** 일정 검토: 일정 검토 Agent가 낸 묶음안. 묶음과 작업, 묶음 사이 관계, 사람만 풀 수 있는 묶음은 서버 값이고,
+ *  검토 의견과 묶음 메모는 모델이 쓴 문장이라 따로 구분해 보인다(UI-06). 화면은 판정하지 않는다. */
+function ScheduleReview({ state, candidate }: Props) {
+  const { clock, meta } = useEnv()
+  const plans = state.bundle_plans
+  // 보고 있는 안의 Case 것, 없으면 가장 최근 것
+  const plan = [...plans].reverse().find((p) => p.case_id === candidate?.case_id) ?? plans[plans.length - 1]
+  if (!plan) return null
+  const groups = new Map(plan.groups.map((g) => [g.group_id, g]))
+  const tasks = new Map(plan.tasks.map((t) => [t.task_id, t]))
+  const ruleLabel = (id: string) => ruleName(meta, id) ?? REASON[id] ?? id
+  const taskLabel = (id: string) => `${id}${tasks.get(id)?.from_schedule ? '(일정)' : ''}`
+  const groupLabel = (id: string) => (groups.get(id)?.task_ids ?? [id]).join('·')
+  const linked = plan.relations.filter((r) => r.shared_resource_ids.length > 0 || r.zone_links.length > 0)
+  return (
+    <div className="plans">
+      <h3>
+        일정 검토 <span className="muted small">묶음·관계는 서버 계산 · 의견과 메모는 Agent 문장</span>
+        {!plan.current && <span className="tag tag-warn"> 낸 뒤 현장 사실이 바뀜</span>}
+      </h3>
+      <div className="model-block">
+        <div className="block-label">Agent 검토 의견(모델 작성)</div>
+        <p>{plan.quoted_opinion}</p>
+      </div>
+      <div className="server-block">
+        <div className="block-label">묶음 (서버 값: 최소 묶음의 합 · (일정)은 일정으로 들어온 작업)</div>
+        <table className="tbl small">
+          <thead>
+            <tr>
+              <th>묶음</th>
+              <th>작업</th>
+              <th>걸린 규칙</th>
+              <th>충돌 시간</th>
+              <th>표시</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plan.bundles.map((b) => {
+              const members = b.group_ids.flatMap((id) => groups.get(id) ?? [])
+              const lo = Math.min(...members.map((g) => g.interval[0]))
+              const hi = Math.max(...members.map((g) => g.interval[1]))
+              return (
+                <tr key={b.bundle_id}>
+                  <th>{b.bundle_id}</th>
+                  <td>
+                    {members.map((g) => (
+                      <div key={g.group_id}>{g.task_ids.map(taskLabel).join(', ')}</div>
+                    ))}
+                  </td>
+                  <td>{[...new Set(members.flatMap((g) => g.rule_ids))].map(ruleLabel).join(', ')}</td>
+                  <td>{members.length > 0 ? clock.span(lo, hi) : '—'}</td>
+                  <td>
+                    {members
+                      .filter((g) => g.human_only)
+                      .map((g) => (
+                        <div key={g.group_id}>
+                          <span className="tag tag-warn">사람만 풀 수 있음</span> {g.task_ids.join('·')}:{' '}
+                          {HUMAN_ONLY[g.human_only_reason ?? ''] ?? g.human_only_reason}
+                        </div>
+                      ))}
+                    {members.length > 1 && <div className="muted">최소 묶음 {members.length}개를 합침</div>}
+                    {members.length <= 1 && !b.human_only && <span className="muted">—</span>}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+        {linked.length > 0 && (
+          <>
+            <div className="block-label">최소 묶음 사이의 관계 (서버 계산)</div>
+            <ul>
+              {linked.map((r) => (
+                <li key={`${r.group_a}:${r.group_b}`}>
+                  {groupLabel(r.group_a)} ↔ {groupLabel(r.group_b)}
+                  {r.shared_resource_ids.length > 0 && ` · 같은 자원 ${r.shared_resource_ids.join(', ')}`}
+                  {r.zone_links.length > 0 &&
+                    ` · 구역 ${[...new Set(r.zone_links.map((z) => (z.zone_a === z.zone_b ? z.zone_a : `${z.zone_a}–${z.zone_b}`)))].join(', ')}`}
+                  {` · 시간 간격 ${r.gap_minutes}분`}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+      <div className="model-block">
+        <div className="block-label">묶음 메모(모델 작성)</div>
+        {plan.bundles.map((b) => (
+          <p key={b.bundle_id}>
+            <b>{b.bundle_id}</b> {b.quoted_note || '—'}
+          </p>
+        ))}
+      </div>
     </div>
   )
 }

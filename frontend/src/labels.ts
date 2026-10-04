@@ -137,6 +137,8 @@ export const REASON: Record<string, string> = {
   NO_CONFLICT: '지금 풀 충돌이 없음',
   NO_MOVABLE_TASK: '충돌에 걸린 작업이 모두 고정되어 움직일 수 있는 작업이 없음',
   SAME_FACTS: '마지막 결과 뒤로 관련 사실이 바뀌지 않음',
+  NOT_SCHEDULE_CASE: '일정 넣기 사건이 없는 Case(일정 검토는 일정 Case에서만)',
+  BUNDLES_INVALID: '묶음이 최소 묶음의 합이 아님(빠짐·두 번·없는 ID)',
   NEW_EVENT: '아직 보지 않은 사건이 있음',
   OPEN_WORK: '이 Case에 열린 일이 남아 있음',
   NOTHING_TO_WAIT_FOR: '기다릴 후보·Hold가 없음',
@@ -316,6 +318,7 @@ export const AGENT_TYPE: Record<string, string> = {
   COORDINATION: '협의 Agent',
   INTAKE: '작업 접수 Agent',
   EVENT_RESPONSE: '신고 대응 Agent',
+  SCHEDULE_REVIEW: '일정 검토 Agent',
   ASSISTANT: '현장 도우미',
 }
 
@@ -355,12 +358,19 @@ export const RESULT_KIND: Record<string, string> = {
 
 export const ACTION_NAME: Record<string, string> = {
   CALL_AGENT: '전문 Agent 부르기',
+  SUBMIT_BUNDLES: '묶음안과 검토 의견 내기',
   WAIT: '사람의 결정 기다리기',
   ESCALATE: 'Supervisor에게 이관',
   CLOSE: '끝내기',
   SOLVE_WITH_SCOPE: '탐색 범위 지정 Solver 실행',
   RETURN_RESULT: '결과 돌려주기',
   LIST_ASSIGNABLE_RESOURCES: '사용 가능 자원 조회',
+}
+
+/** 최소 묶음을 사람만 풀 수 있는 이유 (서버 계산) */
+export const HUMAN_ONLY: Record<string, string> = {
+  ALL_PINNED: '걸린 작업이 모두 고정됨',
+  FACT_REQUIRED: '작업을 옮겨도 풀리지 않음(사실이 바뀌어야 함)',
 }
 
 /** 메인이 재계획에 준 접근(무엇을 우선할지) */
