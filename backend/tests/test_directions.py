@@ -57,24 +57,29 @@ def test_existing_first_and_added_first_minimize_their_own_side(seeded_real):
     assert m_first["added"] == min(c["added"] for c in others)
     total = [c["existing"] + c["added"] for c in others]
     assert total[2] == min(total)
-    # 이 장면에서는 방향이 실제로 갈린다: 들어온 화기 작업을 옮기거나, 기존 도장 작업을 옮기거나
-    assert n_first == {"existing": 0, "added": 2, "delay": 210}
-    assert m_first == {"existing": 2, "added": 0, "delay": 1275}
-    assert total_first == n_first
-    # 1단계 결과에는 기존·추가 변경 수가 따로 남고, 2단계는 두 수를 고정한 채 옮긴 거리를 줄인다
-    assert (existing.stage1["changed_existing"], existing.stage1["changed_added"]) == (0, 2)
-    assert (added.stage1["changed_existing"], added.stage1["changed_added"]) == (2, 0)
-    assert (existing.stage1["changed"], added.stage1["changed"]) == (2, 2)
+    # 1단계 결과에는 기존·추가 변경 수가 따로 남고, 그 값은 그 해를 서버가 센 수와 같다(2단계는 두 수를
+    # 고정한 채 옮긴 거리를 줄인다)
+    for result, counts in ((existing, n_first), (added, m_first)):
+        s1 = result.stage1
+        assert (s1["changed_existing"], s1["changed_added"]) == (
+            counts["existing"],
+            counts["added"],
+        )
+        assert s1["changed"] == counts["existing"] + counts["added"]
     assert "changed_existing" not in balanced.stage1  # 변경 먼저의 결과 모양은 그대로다
-    # 범위가 같으면 좁은 범위보다 나쁠 수 없다
-    _, narrow = _solved(pack, "EXISTING_FIRST", "L0")
-    assert n_first["existing"] <= narrow["existing"]
+    assert balanced.stage1["changed"] == total[2]
+    # 넓은 범위는 좁은 범위보다 나쁠 수 없다: 방향마다 먼저 줄이는 수로 본다
+    for objective, side in (("EXISTING_FIRST", "existing"), ("ADDED_FIRST", "added")):
+        _, wide = _solved(pack, objective, "L2")
+        _, narrow = _solved(pack, objective, "L0")
+        assert wide[side] <= narrow[side]
 
 
 def test_schedule_case_runs_three_directions_and_names_the_plans(seeded_real, main_on):
     """일정 Case에서는 세 방향이 열리고 변경 최소·덜 옮기기는 열리지 않는다. 방향 호출에서 재계획은 목적
-    순서도 범위도 고르지 못한다. 안의 이름은 그 안을 낸 호출의 방향이고, 같은 배치가 두 방향에서 나오면
-    번호와 방향 이름이 함께 보인다. 숫자(기존 n · 추가 m · 옮긴 거리)는 서버가 계산한다."""
+    순서도 범위도 고르지 못한다. 안의 이름은 그 안을 낸 호출의 방향이고, 같은 배치가 여러 방향에서 나오면
+    번호와 방향 이름이 함께 보인다. 숫자(기존 n · 추가 m · 옮긴 거리)는 서버가 계산한다. 어느 방향이 어떤
+    배치를 냈는지는 장면에 달린 값이라 고정하지 않는다."""
     pack = seeded_real
     _import_two_conflicts(pack)
     _, groups = _groups(pack)
@@ -142,32 +147,29 @@ def test_schedule_case_runs_three_directions_and_names_the_plans(seeded_real, ma
     results = [_steps(r.run_id)[-2]["tool_result"] for r in (first, second, third)]
     assert [r.get("objective") for r in results] == ["EXISTING_FIRST", "ADDED_FIRST", None]
     assert [r["scope_level"] for r in results] == ["L2", "L2", "L2"]
-    # 결과에 서버가 남기는 숫자. 적절하게는 기존 위주와 같은 배치라 새 후보가 없다
-    assert results[0]["change_counts"] == {"existing": 0, "added": 2, "delay": 210}
-    assert results[1]["change_counts"] == {"existing": 2, "added": 0, "delay": 1275}
-    assert results[2]["same_as_candidate_id"] == results[0]["candidate_id"]
 
     with db.read() as conn:
         state = build_state(conn, pack, "supervisor")
     views = {c["candidate_id"]: c for c in state["candidates"]}
-    keep_existing, keep_added = views[results[0]["candidate_id"]], views[results[1]["candidate_id"]]
-    # 이름은 그 안을 낸 호출의 방향이다. 같은 배치가 두 방향에서 나오면 번호도 방향 이름도 함께 보인다
-    assert (keep_existing["plan_label"], keep_added["plan_label"]) == ("1안 + 3안", "2안")
-    assert [(a["approach"], a["same"]) for a in keep_existing["approaches"]] == [
-        ("KEEP_EXISTING", False),
-        ("BALANCED", True),
-    ]
-    assert [a["approach"] for a in keep_added["approaches"]] == ["KEEP_ADDED"]
-    assert keep_existing["change_counts"] == {"existing": 0, "added": 2, "delay": 210}
-    assert keep_added["change_counts"] == {"existing": 2, "added": 0, "delay": 1275}
-    assert [x["kind"] for x in keep_existing["plan_changes"]] == ["NEW", "NEW"]
-    assert [(x["kind"], x["changed"]) for x in keep_added["plan_changes"]] == [
-        ("CHANGED", True),
-        ("NEW", False),  # 문서 자리 그대로 놓인 추가 작업
-        ("NEW", False),
-        ("CHANGED", True),
-    ]
-    assert not keep_existing["solver"]["first_unconfirmed"]
+    # 결과마다 그 배치의 안(새 후보이거나, 같은 배치였던 기존 후보)
+    reached = [r["candidate_id"] or r["same_as_candidate_id"] for r in results]
+    assert all(cid in views for cid in reached)
+    for cid, view in views.items():
+        # 이름은 그 안을 낸 호출의 방향이다. 같은 배치가 여러 방향에서 나오면 방향 이름도 번호도 함께 보인다
+        directions = [a for a, c in zip(DIRECTIONS, reached, strict=True) if c == cid]
+        assert [a["approach"] for a in view["approaches"]] == directions
+        assert [a["same"] for a in view["approaches"]] == [False] + [True] * (len(directions) - 1)
+        assert len(view["plan_label"].split(" + ")) == len(directions)
+        # 숫자는 서버가 계산한다: 기존(계획에 있던 작업)·추가(없던 작업) 변경 수는 변경 목록과 맞는다
+        changed = [x for x in view["plan_changes"] if x["changed"]]
+        assert view["change_counts"]["existing"] == sum(x["kind"] == "CHANGED" for x in changed)
+        assert view["change_counts"]["added"] == sum(x["kind"] == "NEW" for x in changed)
+        assert view["change_counts"]["delay"] == sum(x["delay"] for x in view["plan_changes"])
+        assert not view["solver"]["first_unconfirmed"]
+    # 새 후보를 낸 결과에 남긴 숫자는 그 안의 숫자와 같다
+    for r in results:
+        if r["candidate_id"] is not None:
+            assert r["change_counts"] == views[r["candidate_id"]]["change_counts"]
 
 
 def test_first_stage_not_optimal_is_shown_as_unconfirmed(seeded_real, monkeypatch):

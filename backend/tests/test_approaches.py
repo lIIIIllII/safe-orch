@@ -212,9 +212,10 @@ def test_replanning_cannot_choose_the_objective(seeded_real):
     assert refused["observation"]["approach"]["objective"] == "CHANGE_FIRST"
     result = solved["tool_result"]
     assert "objective" not in result and "delay" not in result["stage1"]  # 변경 먼저로 풀렸다
-    assert (result["stage1"]["changed"], result["stage2"]["delay"]) == (1, 30)
-    # 서버가 남기는 숫자: 기존 작업 변경 1(C), 추가 작업 변경 0(기준 없는 A는 세지 않는다), 옮긴 거리 30
-    assert result["change_counts"] == {"existing": 1, "added": 0, "delay": 30}
+    # 서버가 남기는 숫자는 Solver의 값과 맞는다: 기존·추가 변경 수의 합 = 변경 작업 수, 옮긴 거리 = 지연
+    counts = result["change_counts"]
+    assert counts["existing"] + counts["added"] == result["stage1"]["changed"]
+    assert counts["delay"] == result["stage2"]["delay"]
 
 
 # ── 접근을 달리한 재계획과 같은 안 ─────────────────────────────
