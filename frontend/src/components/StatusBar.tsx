@@ -8,11 +8,12 @@ interface Props {
   onActor: (id: string) => void
   lastOk: Date | null
   connected: boolean
+  onExport: () => void
   onReset: () => void
   resetBusy: boolean
 }
 
-export function StatusBar({ state, actorId, onActor, lastOk, connected, onReset, resetBusy }: Props) {
+export function StatusBar({ state, actorId, onActor, lastOk, connected, onExport, onReset, resetBusy }: Props) {
   const site = state?.site
   const holds = state?.holds.length ?? 0
   const actors = state?.actors ?? [{ actor_id: actorId, name: actorId, unit_id: '', roles: [] }]
@@ -56,6 +57,9 @@ export function StatusBar({ state, actorId, onActor, lastOk, connected, onReset,
           : `서버 연결 끊김${lastOk ? `, 마지막 성공 ${lastOk.toLocaleTimeString('ko-KR', { hour12: false })}` : ''}`}
       </span>
       <span className="spacer" />
+      <button onClick={onExport} disabled={resetBusy || !state} title="지금 확정 계획을 일정 문서(JSON)로 내려받습니다">
+        일정 꺼내기
+      </button>
       <button className="btn-danger" onClick={onReset} disabled={resetBusy}>
         시연 초기화
       </button>

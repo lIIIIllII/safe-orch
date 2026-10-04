@@ -1,7 +1,7 @@
 // SAFE-ORCH 최소 UI. 1초 폴링, 명령 직후 즉시 재조회.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchMeta, fetchScenario, fetchSites, fetchState, postCommand } from './api'
+import { fetchMeta, fetchScenario, fetchSchedule, fetchSites, fetchState, postCommand } from './api'
 import { EnvContext, type Env } from './context'
 import { Clock } from './time'
 import type { CandidateView, CommandOutcome, CommandResponse, SiteEntry, SiteState } from './types'
@@ -180,6 +180,20 @@ function Site({ env, firstActor }: { env: Env; firstActor: string }) {
     }
   }
 
+  // 일정 꺼내기: 서버가 지금 확정 계획을 문서로 만들어 기록에 남기고, 그 문서를 JSON 파일로 내려받는다
+  const exportSchedule = async () => {
+    const actor = actorRef.current
+    const response = await run('일정 꺼내기', `/sites/${siteId}/schedules/export`, undefined)
+    const id = response?.result_refs.schedule_id
+    if (typeof id !== 'string') return
+    const text = JSON.stringify(await fetchSchedule(actor, id), null, 2)
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+    link.download = `schedule_${siteId}_R${String(response?.result_refs.plan_revision)}.json`
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }
+
   const roles = state?.actors.find((a) => a.actor_id === actorId)?.roles ?? []
   const isSupervisor = roles.includes('SUPERVISOR')
   const live = new Map((state?.candidates ?? []).map((c) => [c.candidate_id, c]))
@@ -201,6 +215,7 @@ function Site({ env, firstActor }: { env: Env; firstActor: string }) {
         onActor={changeActor}
         lastOk={lastOk}
         connected={fails < FAILS_BEFORE_OFFLINE}
+        onExport={() => void exportSchedule()}
         onReset={() => void reset()}
         resetBusy={busy !== null}
       />

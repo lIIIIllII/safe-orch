@@ -86,6 +86,11 @@ export function fetchResourceCheck(actor: string, taskId: string, resourceId: st
   return getJson<ResourceCheck>(`/tasks/${id}/resource-check?resource_id=${encodeURIComponent(resourceId)}`, actor)
 }
 
+/** 기록에 남은 일정 문서 원문. 꺼내기 명령이 돌려준 schedule_id로 받는다. */
+export function fetchSchedule(actor: string, scheduleId: string): Promise<unknown> {
+  return getJson<unknown>(`/schedules/${encodeURIComponent(scheduleId)}`, actor)
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /** 변경 명령. key는 호출자가 조작마다 만든다. 재시도는 같은 key로 한다. */
