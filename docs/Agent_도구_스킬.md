@@ -80,7 +80,7 @@
 | `DIAGNOSE(conflict)` | 왜 안 풀리나: 막고 있는 조건·작업 |
 | `TEST_RELAXATION(conflict, conditions)` | 무엇을 풀면 풀리나: 물어볼 수 있는 조건(Soft 조건, 다른 작업 이동)을 하나씩 풀어 해가 생기는지 |
 | `PREVIEW(change)` | 가정한 변경을 등록 없이 검사 |
-| `ANALYZE_IMPACT(change)` | 변경이 닿는 작업·담당자·규칙 |
+| `ANALYZE_IMPACT(change)` | 변경이 닿는 작업·담당자·규칙. 신고 대응에서는 새 시작 가능 시각이 지금 계획된 시작(현재 배정)보다 몇 분 뒤인지와 계획이 그대로인지도 준다: 지연 신고의 분은 시간창의 시작이 아니라 계획된 시작에서 센다. 계획에 없는 작업은 기준 위치를 보인다 |
 | `COMPARE_CANDIDATES(ids)` | 후보 사이 지표 차이(변경 수·지연·비용·넘은 Soft 조건) |
 
 알아보기 도구 모두 흐름은 C다.
