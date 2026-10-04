@@ -19,7 +19,7 @@ from app.agents.specs import intake as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "intake-p14"
+PROMPT_VERSION = "intake-p15"
 
 
 def tool_catalog() -> str:
@@ -161,4 +161,5 @@ PROMPT_FINGERPRINTS = {
     "intake-p12": "3d3cae036de3aa6721811d0fbcd620a3dccbf98180e17774aac1f219c9e6ed86",  # 막히면 RETURN_RESULT로 접수 미완, 완료 가능 사실 can_complete (AG-06)
     "intake-p13": "60190a6c6513ccf62eccd39116141675a49153f9fa91171df6613048dfbd3cdc",  # 결과의 OTHER_UNIT에 충돌 그룹 참조
     "intake-p14": "2aecae0f5f0868501a55c42fe7f8ebe325eb523863cb5b2e4de2dcf449b6cc06",  # 스킬 지침의 제약 문구 정리 (AG-27)
+    "intake-p15": "20c6cd09eb3b7315c3b0987ebd97974c50152f69d51906f0040207bc5f04694b",  # 모호는 해석이 둘 이상일 때만, 해석이 하나면 받음으로 적고 되묻지 않는다
 }
