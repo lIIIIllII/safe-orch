@@ -33,6 +33,8 @@
 - 전문 Agent는 다른 Agent를 부르지 않고 사람에게 이관하지도 않는다. 막히면 `RETURN_RESULT(BLOCKED)`에 요약과 풀 수 있는 길을 담아 메인에게 돌려준다. Supervisor 이관은 메인만 한다.
 - 작업 담당자 확인은 Coordination 한 창구다. 후보가 있으면 협의로, 후보가 없으면 사전 확인으로 묻는다. Replanning은 사람에게 묻지 않고, 담당자 확인이 있어야 열리는 해는 막힌 결과의 길로 돌려준다.
 - 작업 고정·고정 해제와 희망 영역은 사람만 타임라인에서 한다. Agent 도구에 없다(AG-27). 작업을 관찰에 넣는 Agent(Replanning, Event Response)의 관찰에는 고정 여부(누가)와 희망 영역이 들어가고, 메인의 "움직일 수 있는 작업"은 고정되지 않은 작업이다. 희망 영역을 Solver 시도에 쓰는 것은 여러 안 제안 때 한다.
+- 사람이 남긴 사유(Supervisor 거절 문장, 담당자 이견)는 Case가 닫힐 때까지 Replanning 관찰에 인용으로 전부 쌓인다. Replanning은 사유가 시각·자원 조건으로 읽히면 조건을 걸어 다시 풀고, 서버는 사유를 해석하지 않는다(CV-26).
+- 서버는 살아 있는 후보가 거절·이견된 변경과 같은 변경을 담았는지 표시만 한다(Replanning·메인 관찰과 검토 패널). 메인은 그 표시가 있는 후보를 협의로 보내지 않고 재계획을 다시 부른다(지침).
 - Intake는 메인이 부르지 않는 입구다. 접수에서 시작하고, 완료하면 작업이 준비되며, 막히면 이관 없이 요청자에게 접수 미완을 알린다.
 - 메인은 한 번에 하나다. 사건(작업 준비됨, 신고, Hold 해제, 후보 승인·거절, 하위 Run 종료, 요청 철회)이 생겼는데 열린 메인이 없으면 새 메인을 띄운다. 작업 고정·고정 해제는 열린 메인이 있을 때만 사건이 되고, 새 메인을 띄우지 않는다. 열린 메인은 하위 Run이 끝날 때, 또는 열린 하위 Run이 없을 때 그 Case의 사건이 생기면 깨어난다(하위 Run이 사람을 기다리는 동안에는 깨우지 않는다). 사람의 답은 사건이 아니라 물은 전문 Agent가 받는다.
 - 열린 메인이 있는 동안 새 작업은 대기열에 서고, 메인이 어떤 상태로 끝나든 대기열에서 1건이 올라간다(사건을 합치거나 미루는 판단은 3단계).
@@ -74,7 +76,7 @@
 **후보** (Replanning)
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `SOLVE(group, profile, scope, extra_constraints, try_resources)` | Solver 하나. 후보를 등록하고 Validator에 넘긴다 | C |
+| `SOLVE(group, profile, scope, conditions, try_resources)` | Solver 하나. 후보를 등록하고 Validator에 넘긴다. `conditions`는 작업별 조건(시작 이후·이전, 시작 지정, 자원 지정, 희망 영역을 시작 범위로)이고 좁히기만 한다. 범위 안 작업을 모두 지정하면 그 배치 그대로를 검사하고, 해가 없으면 그 배치가 어긴 규칙을 돌려준다. 같은 범위·같은 조건은 다시 풀지 않는다. 살아 있는 후보와 전체 배정이 같으면 새 후보를 만들지 않고 그 후보를 돌려준다 | C |
 | `SUBMIT_CANDIDATES(ids, recommended, reasons)` | 후보 묶음과 추천 이유를 결과로 낸다. 이유는 서버 지표 ID를 가리켜야 한다 | D |
 
 **사람** (수신자는 Agent별로 서버가 고정)
@@ -134,7 +136,7 @@
 | 작업 접수 | 작성 중인 작업 묶음이 있음 | `REQUEST_CONFIRMATION`, `COMPLETE_TASK_BATCH` | Intake |
 | 원인 찾기 | 풀리지 않은 충돌 그룹이 있음 | `DIAGNOSE`, `TEST_RELAXATION`, `PREVIEW` | Replanning |
 | 후보 구성 | 충돌 그룹이 있음 | `SOLVE`, `COMPARE_CANDIDATES`, `SUBMIT_CANDIDATES` | Replanning |
-| 거절 반영 | 이 Case 후보에 거절이 있음 | `DIAGNOSE`, `SOLVE`, `COMPARE_CANDIDATES` | Replanning |
+| 거절 반영 | 이 Case 후보에 거절이나 담당자 이견이 있음 | `DIAGNOSE`, `SOLVE`, `COMPARE_CANDIDATES` | Replanning |
 | 영향 분석 | 분석할 변경(신고·후보·가정)이 있음 | `ANALYZE_IMPACT`, `PREVIEW` | Replanning, Event Response, Coordination (Main은 4단계) |
 | 요청자 질문 | 작성 중인 작업 묶음이 있음 | `ASK_REQUESTER`, `WAIT_FOR_REPLIES` | Intake |
 | 신고자 질문 | 신고가 있음 | `ASK_REPORTER`, `WAIT_FOR_REPLIES` | Event Response |
@@ -157,7 +159,7 @@
 
 ## 6. 현재 코드와의 대응 (옮긴 뒤 이 절은 지운다)
 
-- Replanning `SOLVE_WITH_SCOPE`·`TRY_ALTERNATIVE_RESOURCE` → `SOLVE`
+- Replanning `SOLVE_WITH_SCOPE`·`SOLVE_WITH_CONDITIONS`(조건)·`TRY_ALTERNATIVE_RESOURCE` → `SOLVE`
 - Replanning `LIST_ASSIGNABLE_RESOURCES`, Intake `LOOKUP_RESOURCE` → `LOOKUP_RESOURCES`
 - Coordination `SEND_CHANGE_REQUEST`(후보의 변경 확인), `ASK_OWNER(need_id, message)`(사전 확인, 스킬 `PRE_CONFIRM`) → Coordination `ASK_OWNER`
 - 사전 확인의 `ASK_OWNER`는 지금 need 하나에 질문 하나다. 담당자별 묶음 메시지(`ASK_OWNER(owner, items)`)는 3단계 묶음 등록 때 한다.
