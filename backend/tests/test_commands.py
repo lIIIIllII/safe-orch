@@ -6,7 +6,7 @@ import threading
 import uuid
 
 import pytest
-from conftest import take_snapshot
+from conftest import choose, take_snapshot
 
 from app.commands import events as events_module
 from app.commands.approval import (
@@ -161,6 +161,7 @@ def alpha(seeded):
     spec, _, cand = _solve(seeded, snap, "L1")
     v, _ = _validate_and_consult(seeded, snap, spec, cand)
     assert v.status == "PASS"
+    choose(seeded, cand.candidate_id)  # 승인·수용은 고른 안에만 된다 (AG-29)
     return seeded, snap, spec, cand, v
 
 
@@ -197,6 +198,11 @@ def test_gate_path(seeded):
     assert _view(pack, alpha).status == "OPEN"
     assert _queue(pack) == [alpha.candidate_id]  # OPEN도 검토 대기
 
+    # 고르지 않은 안은 승인도 협의 항목 수용도 되지 않는다 (AG-29)
+    unchosen = _approve(pack, alpha, v)
+    assert unchosen.reason_codes == ("CANDIDATE_NOT_CHOSEN", "CONSULTATION_INCOMPLETE")
+    assert _waive(pack, alpha).reason_codes == ("CANDIDATE_NOT_CHOSEN",)
+    choose(pack, alpha.candidate_id)
     blocked = _approve(pack, alpha, v)
     assert (blocked.status, blocked.reason_codes) == ("REJECTED", ("CONSULTATION_INCOMPLETE",))
 
@@ -248,7 +254,7 @@ def test_reject_checks_reason_code_and_targets(alpha):
     pack, _, _, cand, v = alpha
     assert _reject(pack, cand, v, "NOPE").reason_codes == ("INVALID_REASON_CODE",)
     assert _reject(pack, cand, v, "OTHER", ("Z",)).reason_codes == ("TASK_NOT_FOUND",)
-    assert _count("decision") == 0
+    assert _count("decision") == 1  # 고르기(CHOOSE) 하나뿐이다
 
 
 # ── T01·폼 ─────────────────────────────────────────────────────
@@ -365,6 +371,7 @@ def test_t12_second_candidate_on_same_base_is_stale_plan(alpha_waived):
     pack, snap, _, first, v1 = alpha_waived
     spec2, _, second = _solve(pack, snap, "L1")
     v2, _ = _validate_and_consult(pack, snap, spec2, second)
+    choose(pack, second.candidate_id)
     assert _waive(pack, second).status == "APPLIED"
     assert _approve(pack, first, v1).status == "APPLIED"
     out = _approve(pack, second, v2)

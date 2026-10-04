@@ -45,13 +45,16 @@ class Action(BaseModel):
 
 
 class SendChangeRequest(Action):
-    """작업 담당자에게 후보의 변경을 알리고 수락 또는 이견을 묻는다. 변경 내용(서버 문구)은 서버가 쓴다."""
+    """담당자 한 명에게 후보의 변경을 한 통으로 알리고 항목마다 수락 또는 이견을 묻는다. 항목은 서버가
+    채운다: 그 담당자의 확인 대기 항목 가운데 이 Run이 아직 묻지 않은 것 전부다. 변경 내용(서버 문구)도
+    서버가 쓴다."""
 
     OPENS = (
-        "후보가 살아 있고, 확인 대기(PENDING) 항목 중 이 Run이 아직 요청하지 않은 작업이 있을 때"
+        "후보가 살아 있고, 확인 대기(PENDING) 항목 중 이 Run이 아직 요청하지 않은 것이 있는 담당자가 "
+        "있을 때"
     )
 
-    task_id: str = Field(description="변경 요청을 보낼 협의 항목의 작업 ID")
+    actor_id: str = Field(description="변경 요청을 보낼 담당자 actor_id")
     message: str = Field(
         min_length=1, max_length=TEXT_MAX, description="담당자에게 보이는 설명(Agent 설명으로 표시)"
     )
@@ -100,18 +103,20 @@ FLOW = {
 def choices(obs: dict[str, Any]) -> dict[str, Any]:
     """Action별 허용 값. Available Actions와 Gateway의 인자 조합 검사가 같이 쓴다.
 
-    REQUEST: 후보가 살아 있고 PENDING이며 이 Run의 변경 요청이 없는 항목.
+    REQUEST: 보낼 항목이 남은 담당자 {actor_id: task_ids}. 항목 = 후보가 살아 있고 PENDING이며 이 Run의
+    변경 요청이 없는 것. 한 통에 담는 순서(바뀐 뒤 시작 시각순)다 (ST-26).
     WAIT: 답을 기다리는 변경 요청이 있음.
     NOTICE: 아직 알리지 않은 통지 대상 {actor_id: task_ids}.
     """
     live = bool((obs.get("candidate") or {}).get("live"))
-    request, waiting = [], False
-    for item in obs["items"]:
+    request: dict[str, list[str]] = {}
+    waiting = False
+    for item in sorted(obs["items"], key=lambda i: (i["after"]["start"], i["task_id"])):
         mine = item["requests"]
         if not live:
             continue
         if item["status"] == "PENDING" and not mine:
-            request.append(item["task_id"])
+            request.setdefault(item["owner_actor_id"], []).append(item["task_id"])
         if any(req["status"] == "OPEN" for req in mine):
             waiting = True
     notice = {t["actor_id"]: list(t["task_ids"]) for t in obs["notice_targets"] if not t["sent"]}
@@ -146,7 +151,7 @@ def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
     c = choices(obs)
     out: dict[str, dict[str, Any]] = {}
     if c["REQUEST"]:
-        out["SEND_CHANGE_REQUEST"] = {"task_id": sorted(c["REQUEST"])}
+        out["SEND_CHANGE_REQUEST"] = {"actor_id": sorted(c["REQUEST"])}
     if c["WAIT"]:
         out["WAIT_FOR_REPLIES"] = {}
     if c["NOTICE"]:

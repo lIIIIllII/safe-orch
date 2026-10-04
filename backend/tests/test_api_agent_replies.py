@@ -14,6 +14,7 @@ from test_event_response import _to_proposal
 
 from app.api.commands import (
     ApproveBody,
+    ChangeReplyBody,
     CommentBody,
     RejectBody,
     ReleaseBody,
@@ -23,7 +24,7 @@ from app.api.commands import (
 )
 from app.commands.approval import ApproveRequest, RejectRequest, WaiveRequest
 from app.commands.events import HoldRelease
-from app.commands.messages import ProposalDecision, ReplyRequest
+from app.commands.messages import ChangeReplyRequest, ProposalDecision, ReplyRequest
 from app.commands.task_request import TaskWithdraw
 from app.main import app
 from app.store import db
@@ -47,6 +48,15 @@ def _reply(client, actor, message_id, decision, comment=""):
     )
 
 
+def _reply_request(client, actor, rows, decision, comment=""):
+    """화면(Inbox)이 보내는 본문 그대로: 변경 요청 한 통의 항목 전부를 한 번에 답한다 (ST-26)."""
+    answers = [
+        {"message_id": r["message_id"], "decision": decision, "comment": comment} for r in rows
+    ]
+    group = rows[0]["request_group_id"]
+    return _post(client, f"requests/{group}/reply", actor, {"answers": answers})
+
+
 def _rows(table, type_):
     with db.read() as conn:
         cur = conn.execute(f"SELECT * FROM {table} WHERE type = ? ORDER BY rowid", (type_,))
@@ -64,7 +74,12 @@ def _reasons(res):
 def test_change_request_accept_via_api(seeded, client, main_on):
     _alpha_consulting(seeded)
     [cr] = _rows("message", "CHANGE_REQUEST")
-    res = _reply(client, "foreman_a2", cr["message_id"], "ACCEPT")
+    # 메시지 하나씩 답하는 옛 길은 변경 요청을 받지 않는다
+    assert _reasons(_reply(client, "foreman_a2", cr["message_id"], "ACCEPT")) == (
+        409,
+        ["REPLY_BY_REQUEST"],
+    )
+    res = _reply_request(client, "foreman_a2", [cr], "ACCEPT")
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
 
 
@@ -72,11 +87,11 @@ def test_change_request_objection_via_api(seeded, client, main_on):
     """이견(DECLINE)은 사유가 필요하다 → 빈 사유 409 COMMENT_REQUIRED, 사유 있으면 200."""
     _alpha_consulting(seeded)
     [cr] = _rows("message", "CHANGE_REQUEST")
-    assert _reasons(_reply(client, "foreman_a2", cr["message_id"], "DECLINE")) == (
+    assert _reasons(_reply_request(client, "foreman_a2", [cr], "DECLINE")) == (
         409,
         ["COMMENT_REQUIRED"],
     )
-    res = _reply(client, "foreman_a2", cr["message_id"], "DECLINE", "작업발판 연계 공정 확정")
+    res = _reply_request(client, "foreman_a2", [cr], "DECLINE", "작업발판 연계 공정 확정")
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
 
 
@@ -84,22 +99,24 @@ def test_free_text_answer_is_not_a_decision_via_api(seeded, client, main_on):
     """자유 텍스트 답(ANSWER)은 없다: 신고자 되묻기가 없어졌다. 본문 검증에서 걸린다 → 422."""
     _alpha_consulting(seeded)
     [cr] = _rows("message", "CHANGE_REQUEST")
-    res = _reply(client, "foreman_a2", cr["message_id"], "ANSWER", "옮겨도 됩니다")
+    res = _reply_request(client, "foreman_a2", [cr], "ANSWER", "옮겨도 됩니다")
     assert res.status_code == 422
 
 
 def test_reply_api_route(seeded, client, main_on):
-    """받는 사람이 아니면 403, 없는 메시지 404, 답한 뒤 다른 결정 409, 없는 제안 404."""
+    """받는 사람이 아니면 403, 없는 요청·메시지 404, 답한 뒤 다른 결정 409, 없는 제안 404."""
     _alpha_consulting(seeded)
     [cr] = _rows("message", "CHANGE_REQUEST")
-    assert _reasons(_reply(client, "planner_a", cr["message_id"], "ACCEPT")) == (
+    assert _reasons(_reply_request(client, "planner_a", [cr], "ACCEPT")) == (
         403,
         ["NOT_AUTHORIZED"],
     )
     assert _reply(client, "foreman_a2", "msg_none", "ACCEPT").status_code == 404
-    res = _reply(client, "foreman_a2", cr["message_id"], "ACCEPT")
+    none = {**cr, "request_group_id": "req_none"}
+    assert _reply_request(client, "foreman_a2", [none], "ACCEPT").status_code == 404
+    res = _reply_request(client, "foreman_a2", [cr], "ACCEPT")
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
-    assert _reasons(_reply(client, "foreman_a2", cr["message_id"], "DECLINE", "어렵다")) == (
+    assert _reasons(_reply_request(client, "foreman_a2", [cr], "DECLINE", "어렵다")) == (
         409,
         ["ALREADY_ANSWERED"],
     )
@@ -145,6 +162,7 @@ def test_fact_update_discard_via_api(seeded, client, main_on):
     ("api_body", "command"),
     [
         (ReplyBody, ReplyRequest),
+        (ChangeReplyBody, ChangeReplyRequest),
         (ReleaseBody, HoldRelease),
         (ApproveBody, ApproveRequest),
         (RejectBody, RejectRequest),

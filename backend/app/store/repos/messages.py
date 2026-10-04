@@ -58,14 +58,16 @@ def insert_message(
     context_version: int,
     candidate_id: str | None = None,
     change_hash: str | None = None,
+    request_group_id: str | None = None,
 ) -> None:
     """candidate_id·change_hash는 변경 요청(CHANGE_REQUEST)을 후보의 그 변경에 묶는다.
+    request_group_id는 한 담당자에게 보낸 한 통의 키다: 한 통의 행은 변경마다 하나다 (ST-26).
 
     Run 없이 서버가 보내는 통지(직접 이동)는 run_id·step_no가 None이다."""
     tx.execute(
         "INSERT INTO message (message_id, site_id, run_id, step_no, to_actor_id, type,"
-        " proposal_id, body, agent_text, created_context_version, candidate_id, change_hash)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " proposal_id, body, agent_text, created_context_version, candidate_id, change_hash,"
+        " request_group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             message_id,
             site_id,
@@ -79,6 +81,7 @@ def insert_message(
             context_version,
             candidate_id,
             change_hash,
+            request_group_id,
         ),
     )
 
@@ -155,6 +158,7 @@ def decide_proposal(
 _JOINED = (
     "SELECT m.message_id, m.run_id, m.step_no, m.to_actor_id, m.type, m.status, m.body,"
     " m.agent_text, m.reply, m.created_context_version, m.answered_context_version, m.candidate_id,"
+    " m.change_hash, m.request_group_id,"
     " p.proposal_id, p.type AS proposal_type, p.status AS proposal_status, p.target_task_id,"
     " p.payload FROM message m LEFT JOIN proposal p ON p.proposal_id = m.proposal_id"
 )
@@ -199,7 +203,8 @@ def _change_requests(
     out = []
     for r in rows(
         conn,
-        "SELECT message_id, run_id, step_no, to_actor_id, status, reply, change_hash, candidate_id"
+        "SELECT message_id, run_id, step_no, to_actor_id, status, reply, change_hash, candidate_id,"
+        " request_group_id"
         f" FROM message WHERE site_id = ? AND type = 'CHANGE_REQUEST' AND {where}"
         " ORDER BY rowid",
         (site_id, *params),
@@ -224,6 +229,21 @@ def list_requests_for_changes(
         return []
     marks = ", ".join("?" * len(change_hashes))
     return _change_requests(conn, site_id, f"change_hash IN ({marks})", tuple(change_hashes))
+
+
+def list_request_group(
+    conn: sqlite3.Connection, site_id: str, request_group_id: str
+) -> list[dict[str, Any]]:
+    """변경 요청 한 통의 행(변경마다 하나). 없으면 빈 목록."""
+    return _change_requests(conn, site_id, "request_group_id = ?", (request_group_id,))
+
+
+def cancel_request_group(tx: sqlite3.Connection, request_group_id: str) -> None:
+    """한 통의 열린 행을 OPEN → CANCELLED로. 답한 행은 건드리지 않는다."""
+    tx.execute(
+        "UPDATE message SET status = 'CANCELLED' WHERE request_group_id = ? AND status = 'OPEN'",
+        (request_group_id,),
+    )
 
 
 def change_answers(requests: list[dict[str, Any]]) -> dict[str, str]:
@@ -257,7 +277,8 @@ def list_run_messages(conn: sqlite3.Connection, run_id: str) -> list[dict[str, A
     found = rows(
         conn,
         "SELECT message_id, step_no, to_actor_id, type, status, reply, proposal_id,"
-        " candidate_id, change_hash, agent_text FROM message WHERE run_id = ? ORDER BY rowid",
+        " candidate_id, change_hash, request_group_id, agent_text FROM message WHERE run_id = ?"
+        " ORDER BY rowid",
         (run_id,),
     )
     for r in found:

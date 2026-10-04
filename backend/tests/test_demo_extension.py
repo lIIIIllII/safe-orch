@@ -7,7 +7,7 @@
 import uuid
 
 import pytest
-from conftest import take_snapshot, with_facts
+from conftest import ensure_chosen, take_snapshot, with_facts
 from fastapi.testclient import TestClient
 from scripted import Router, escalate, solve
 
@@ -229,6 +229,7 @@ def _approve_pending(pack, waive_tasks=()):
         cand_id = list_review_queue(conn, pack.site_id)[-1]
         [v] = list_validations(conn, pack.site_id, cand_id)
     assert v.status == "PASS"
+    ensure_chosen(pack, cand_id)  # 승인·수용은 고른 안에만 된다 (AG-29)
     if waive_tasks:
         body = WaiveRequest(candidate_id=cand_id, task_ids=waive_tasks, comment="시연 수용")
         assert waive(pack, "supervisor", _key(), body).status == "APPLIED"

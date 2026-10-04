@@ -1,6 +1,8 @@
 """ApproveAndCommit·WAIVE·구조화 거절·모두 거절·안 고르기.
 
 NOT_AUTHORIZED와 CANDIDATE_NOT_FOUND는 단독으로 반환하고, 나머지 사유는 해당하는 것을 모두 반환한다.
+승인과 협의 항목 수용은 Supervisor가 그 Case에서 지금 고른 안에만 된다(CANDIDATE_NOT_CHOSEN, AG-29).
+거절과 모두 거절은 아무 안에나 된다.
 STALE은 STALE_PLAN·STALE_CONTEXT로만 보고한다(승인 8단계는 item만 본 상태로 판정).
 """
 
@@ -15,7 +17,7 @@ from app.packs.loader import LoadedPack
 from app.store.repos._rows import rows
 from app.store.repos.cases import deliver_event, end_candidate_runs, register_recheck, wake_run
 from app.store.repos.consultations import CandidateState, candidate_state, consultation_view
-from app.store.repos.decisions import chosen_by_case, insert_decision
+from app.store.repos.decisions import chosen_by_case, insert_decision, is_chosen
 from app.store.repos.events import list_active_holds
 from app.store.repos.plans import get_plan_by_candidate, insert_plan
 from app.store.repos.records import get_candidate, list_validations
@@ -114,6 +116,8 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
     if candidate is None:
         return r
     state = candidate_state(tx, site_id, candidate)
+    if not is_chosen(tx, site_id, candidate.candidate_id):
+        r.reject("CANDIDATE_NOT_CHOSEN")
     if state.rejected:
         r.reject("CANDIDATE_REJECTED")
     validation = _pass_validation(tx, site_id, candidate.candidate_id, body.validation_id)
@@ -153,7 +157,8 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
         ctx.actor_id,
         site.context_version,
     )
-    # 이 후보의 협의 Run이 열려 있으면 끝낸다. 확정 뒤 남은 요청을 위해 RECHECK(plan 키)를 등록한다.
+    # 이 후보의 협의 Run이 열려 있으면 끝낸다. 계획 revision이 올라 무효가 된 다른 안의 협의 Run은 명령
+    # 공통 처리가 정리한다(ST-22). 확정 뒤 남은 요청을 위해 RECHECK(plan 키)를 등록한다.
     # 승인 결과는 사건으로 메인에게 간다. 확정 뒤 통지는 메인이 부른다 (AG-25).
     end_candidate_runs(
         tx, ctx.pack, candidate.candidate_id, "SUCCEEDED", f"COMMITTED:{plan_revision}"
@@ -178,6 +183,8 @@ def _waive(tx: sqlite3.Connection, ctx: CommandContext, body: WaiveRequest) -> R
     candidate = _load(tx, ctx, body.candidate_id, r)
     if candidate is None:
         return r
+    if not is_chosen(tx, ctx.site_id, candidate.candidate_id):
+        r.reject("CANDIDATE_NOT_CHOSEN")
     if not body.comment.strip():
         r.reject("COMMENT_REQUIRED")
     _stale(r, candidate_state(tx, ctx.site_id, candidate))

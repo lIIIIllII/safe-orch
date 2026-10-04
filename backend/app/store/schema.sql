@@ -1,4 +1,4 @@
--- SAFE-ORCH schema. schema_version 23.
+-- SAFE-ORCH schema. schema_version 24.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -520,6 +520,8 @@ CREATE TABLE message (
     proposal_id               TEXT REFERENCES proposal (proposal_id),
     candidate_id              TEXT,
     change_hash               TEXT,
+    -- 변경 요청 한 통(담당자 하나)의 키. 한 통의 행은 변경마다 하나다 (ST-26)
+    request_group_id          TEXT,
     body                      TEXT NOT NULL,
     agent_text                TEXT,
     status                    TEXT NOT NULL DEFAULT 'OPEN'
@@ -528,10 +530,15 @@ CREATE TABLE message (
     created_context_version   INTEGER NOT NULL CHECK (created_context_version >= 0),
     answered_context_version  INTEGER,
     created_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    UNIQUE (run_id, step_no),
     CHECK ((run_id IS NULL) = (step_no IS NULL)),
-    CHECK (run_id IS NOT NULL OR type = 'NOTICE')
+    CHECK (run_id IS NOT NULL OR type = 'NOTICE'),
+    CHECK ((type = 'CHANGE_REQUEST') = (request_group_id IS NOT NULL)),
+    CHECK (request_group_id IS NULL OR change_hash IS NOT NULL)
 );
+-- step 하나에 메시지 하나. 변경 요청 한 통은 step 하나에 행이 여럿이고 같은 변경은 한 번만 담는다
+CREATE UNIQUE INDEX message_step ON message (run_id, step_no) WHERE request_group_id IS NULL;
+CREATE UNIQUE INDEX message_request_group ON message (request_group_id, change_hash)
+    WHERE request_group_id IS NOT NULL;
 
 -- 제안은 PENDING에서 한 번만 바뀐다. 메시지는 OPEN → ANSWERED·CANCELLED, CANCELLED → LATE만.
 CREATE TRIGGER proposal_transition BEFORE UPDATE ON proposal

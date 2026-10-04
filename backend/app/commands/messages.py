@@ -1,5 +1,7 @@
-"""메시지 답변·제안 확인/폐기.
+"""메시지 답변·제안 확인/폐기·변경 요청 한 통의 답.
 
+변경 요청(CHANGE_REQUEST)은 한 통 전부를 한 번에 답한다(REPLY_CHANGE_REQUEST, ST-26). 메시지 하나씩
+답하는 reply는 변경 요청을 받지 않는다.
 reply(ACCEPT|DECLINE)와 proposals/{pid}/confirm·discard는 같은 처리(_answer)를 쓴다. 제안이 붙은
 메시지면 ACCEPT = 확인, DECLINE = 폐기다. 검사 순서(각 단계에서 걸리면 그 사유 하나로 끝난다):
 ① *_NOT_FOUND ② NOT_AUTHORIZED ③ 메시지 CANCELLED·제안 STALE → LATE(기록만, 도메인 변화·wake 없음)
@@ -11,18 +13,24 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from pydantic import Field
+
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
 from app.domain.models import FieldRecord
 from app.packs.loader import LoadedPack
 from app.store.repos.cases import end_case_run, wake_run
+from app.store.repos.consultations import candidate_state
 from app.store.repos.events import get_hold
 from app.store.repos.messages import (
+    cancel_request_group,
     decide_proposal,
     get_message,
     get_proposal,
+    list_request_group,
     message_for_proposal,
     set_message_reply,
 )
+from app.store.repos.records import get_candidate
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
@@ -118,11 +126,6 @@ def _answer(
                 r.reject("HOLD_NOT_ACTIVE")
                 return r
 
-    # 변경 요청의 이견(DECLINE)에는 사유가 필요하다. 협의 결과에 인용으로 담긴다
-    if message["type"] == "CHANGE_REQUEST" and decision == "DECLINE" and not comment.strip():
-        r.reject("COMMENT_REQUIRED")
-        return r
-
     context_version = ctx.site.context_version
     fact = None
     if proposal is not None and decision == "ACCEPT" and proposal["type"] == "FACT_UPDATE":
@@ -199,6 +202,11 @@ def _reply(tx: sqlite3.Connection, ctx: CommandContext, body: ReplyRequest) -> R
         r = Result()
         r.reject("NOT_AUTHORIZED")
         return r
+    if message["type"] == "CHANGE_REQUEST":
+        # 변경 요청은 한 통 전부를 한 번에 답한다 (ST-26)
+        r = Result()
+        r.reject("REPLY_BY_REQUEST")
+        return r
     proposal = (
         get_proposal(tx, ctx.site_id, message["proposal_id"]) if message["proposal_id"] else None
     )
@@ -209,6 +217,109 @@ def reply_message(
     pack: LoadedPack, actor_id: str, idempotency_key: str, body: ReplyRequest
 ) -> CommandOutcome:
     return run_command(pack, "REPLY_MESSAGE", actor_id, idempotency_key, body, _reply)
+
+
+# ── 변경 요청 한 통의 답 ───────────────────────────────────────
+
+
+class ChangeAnswer(Body):
+    message_id: str
+    decision: Decision
+    comment: str = ""
+
+
+class ChangeReplyRequest(Body):
+    """변경 요청 한 통(담당자 하나)의 답. 그 통의 항목 전부를 한 번에 담는다 (ST-26)."""
+
+    request_group_id: str
+    answers: tuple[ChangeAnswer, ...] = Field(min_length=1)
+
+
+def _reply_changes(tx: sqlite3.Connection, ctx: CommandContext, body: ChangeReplyRequest) -> Result:
+    """한 통의 답: 항목마다 수락·이견을 한 번에 받고 Run은 한 번만 깨운다.
+
+    검사 순서는 메시지 하나의 답과 같고 한 통 단위로 본다: ① REQUEST_NOT_FOUND ② NOT_AUTHORIZED
+    ③ 빠진 항목(REPLY_INCOMPLETE)·그 통에 없는 항목(ITEM_NOT_FOUND) ④ 늦은 답: 요청이 취소됐거나 후보가
+    무효·거절·확정이면 LATE로 기록만 한다(도메인 변화·wake 없음, ST-15) ⑤ 이미 답함 ⑥ 이견마다 사유.
+    """
+    r = Result()
+    site_id = ctx.site_id
+    group = list_request_group(tx, site_id, body.request_group_id)
+    if not group:
+        r.reject("REQUEST_NOT_FOUND")
+        return r
+    if any(ctx.actor_id != m["to_actor_id"] for m in group):
+        r.reject("NOT_AUTHORIZED")
+        return r
+    answers = {a.message_id: a for a in body.answers}
+    ids = {m["message_id"] for m in group}
+    if len(answers) != len(body.answers) or set(answers) - ids:
+        r.reject("ITEM_NOT_FOUND")
+    if ids - set(answers):
+        r.reject("REPLY_INCOMPLETE")
+    if r.reason_codes:
+        return r
+
+    def same(m: dict[str, Any]) -> bool:
+        return (m["reply"] or {}).get("decision") == answers[m["message_id"]].decision
+
+    refs: dict[str, Any] = {"request_group_id": body.request_group_id, "run_id": group[0]["run_id"]}
+    candidate = get_candidate(tx, site_id, group[0]["candidate_id"])
+    state = None if candidate is None else candidate_state(tx, site_id, candidate)
+    dead = state is None or state.stale or state.rejected or state.committed
+    statuses = {m["status"] for m in group}
+    answered = [m for m in group if m["status"] in ("ANSWERED", "LATE")]
+    if answered:
+        # ⑤ 이미 답함: 같은 결정이면 기존 결과(효과 1회), 다른 결정이면 거절
+        if len(answered) != len(group) or not all(same(m) for m in group):
+            r.reject("ALREADY_ANSWERED")
+            return r
+        r.replayed = True
+        r.refs = {**refs, "late": True} if "LATE" in statuses else refs
+        return r
+    if dead or "CANCELLED" in statuses:
+        # ④ 늦은 답. 열려 있던 요청은 여기서 거둔다: 죽은 안에 한 답은 답도 이견 사유도 아니다
+        cancel_request_group(tx, body.request_group_id)
+        for m in group:
+            a = answers[m["message_id"]]
+            set_message_reply(
+                tx,
+                m["message_id"],
+                "LATE",
+                _reply_record(ctx, a.decision, a.comment),
+                ctx.site.context_version,
+            )
+        r.refs = {**refs, "late": True}
+        return r
+    # ⑥ 이견(DECLINE)인 항목마다 사유가 필요하다. 협의 결과에 인용으로 담긴다
+    if any(a.decision == "DECLINE" and not a.comment.strip() for a in body.answers):
+        r.reject("COMMENT_REQUIRED")
+        return r
+    for m in group:
+        a = answers[m["message_id"]]
+        set_message_reply(
+            tx,
+            m["message_id"],
+            "ANSWERED",
+            _reply_record(ctx, a.decision, a.comment),
+            ctx.site.context_version,
+        )
+    # 한 통 = 깨우기 한 번. 이미 끝난 Run이면 아무것도 하지 않는다
+    woke = wake_run(tx, site_id, group[0]["run_id"])
+    declined = sorted(
+        m["message_id"] for m in group if answers[m["message_id"]].decision == "DECLINE"
+    )
+    r.refs = {**refs, "woke": woke, "declined": declined}
+    r.audit_reason = "DECLINE" if declined else "ACCEPT"
+    return r
+
+
+def reply_change_request(
+    pack: LoadedPack, actor_id: str, idempotency_key: str, body: ChangeReplyRequest
+) -> CommandOutcome:
+    return run_command(
+        pack, "REPLY_CHANGE_REQUEST", actor_id, idempotency_key, body, _reply_changes
+    )
 
 
 # ── proposals/{pid}/confirm·discard ──────────────────────

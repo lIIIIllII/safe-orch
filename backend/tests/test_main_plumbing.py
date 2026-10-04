@@ -4,7 +4,7 @@ import sqlite3
 import uuid
 
 import pytest
-from conftest import add_run
+from conftest import add_run, ensure_chosen
 from scripted import Router, ScriptedChatModel, escalate, solve
 
 from app.agents import runtime
@@ -181,6 +181,7 @@ def test_withdraw_and_queue_promotion_record_events(seeded, main_on):
         site = get_site(conn, pack.site_id)
         reconfirm = main.wait_ref
         [validation] = list_validations(conn, pack.site_id, reconfirm)
+    ensure_chosen(pack, reconfirm)  # 재확인 후보도 고른 뒤 승인한다 (AG-29)
     approve = ApproveRequest(
         candidate_id=reconfirm,
         validation_id=validation.validation_id,

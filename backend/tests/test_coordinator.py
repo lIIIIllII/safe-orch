@@ -4,7 +4,7 @@ import time
 import uuid
 
 import pytest
-from conftest import take_snapshot
+from conftest import ensure_chosen, take_snapshot
 
 from app.commands.approval import ApproveRequest, WaiveRequest, approve_and_commit, waive
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
@@ -91,6 +91,7 @@ def _solve(pack, snap, level):
 
 
 def _approve(pack, cid, validation_id):
+    ensure_chosen(pack, cid)  # 승인은 고른 안에만 된다 (AG-29)
     body = ApproveRequest(
         candidate_id=cid,
         validation_id=validation_id,
@@ -132,6 +133,7 @@ def gate_r1(seeded):
     assert none is None
     run_until_idle(pack)
     [v] = _validations(pack, alpha.candidate_id)
+    ensure_chosen(pack, alpha.candidate_id)
     body = WaiveRequest(candidate_id=alpha.candidate_id, task_ids=("C",), comment="확인")
     assert waive(pack, "supervisor", _key(), body).status == "APPLIED"
     assert _approve(pack, alpha.candidate_id, v.validation_id).status == "APPLIED"
@@ -170,6 +172,7 @@ def test_gate_path_with_worker(seeded, main_on):
         ("BUILD_CONSULTATION", "DONE"),
     }
 
+    ensure_chosen(pack, alpha.candidate_id)
     body = WaiveRequest(candidate_id=alpha.candidate_id, task_ids=("C",), comment="확인")
     assert waive(pack, "supervisor", _key(), body).status == "APPLIED"
     out = _approve(pack, alpha.candidate_id, v.validation_id)

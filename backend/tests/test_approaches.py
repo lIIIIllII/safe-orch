@@ -5,7 +5,15 @@ Pack 파일 그대로(seeded_real)에서 요청 A를 넣은 장면을 쓴다.
 
 import uuid
 
-from conftest import add_run, add_task, choose, make_task, pin_tasks, take_snapshot
+from conftest import (
+    add_run,
+    add_task,
+    choose,
+    make_task,
+    pin_tasks,
+    reply_request,
+    take_snapshot,
+)
 from scripted import (
     Router,
     ScriptedChatModel,
@@ -21,14 +29,17 @@ from scripted import (
 from app.agents import casefacts, runtime
 from app.api.state import build_state
 from app.commands.approval import (
+    ApproveRequest,
     ChooseRequest,
     RejectAllRequest,
     RejectRequest,
+    WaiveRequest,
+    approve_and_commit,
     choose_candidate,
     reject_all,
     reject_candidate,
+    waive,
 )
-from app.commands.messages import ReplyRequest, reply_message
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.models import Condition
@@ -38,9 +49,11 @@ from app.solver.candidate import build_candidate
 from app.solver.search_spec import build_search_spec
 from app.store import db
 from app.store.repos.calls import call_key
+from app.store.repos.consultations import case_objections, consultation_view
 from app.store.repos.decisions import case_rejection_reasons
 from app.store.repos.records import list_validations
 from app.store.repos.runs import get_run, list_steps
+from app.store.repos.site import get_site
 from app.validator.validator import validate
 
 CONFLICT = {"conflict": {"rule_id": "SEP-LIFT-BELOW", "task_ids": ["A", "B"]}}
@@ -357,16 +370,79 @@ def test_choice_change_and_objection_count_as_human_work(seeded_real, main_on):
     assert count() == 1
 
     with db.read() as conn:
-        message_id, owner = conn.execute(
-            "SELECT message_id, to_actor_id FROM message WHERE type = 'CHANGE_REQUEST'"
+        group, owner = conn.execute(
+            "SELECT request_group_id, to_actor_id FROM message WHERE type = 'CHANGE_REQUEST'"
             " AND status = 'OPEN' AND candidate_id = ?",
             (second,),
         ).fetchone()
-    body = ReplyRequest(message_id=message_id, decision="DECLINE", comment="그 시각은 안 됩니다")
-    assert reply_message(pack, owner, _key(), body).status == "APPLIED"
+    out = reply_request(pack, owner, group, "DECLINE", "그 시각은 안 됩니다")
+    assert out.status == "APPLIED"
     assert count() == 2
     choose(pack, first)
     assert count() == 2
+
+
+# ── 승인·수용은 고른 안에만, 죽은 안의 답은 LATE (AG-29·ST-15) ──
+
+
+def _approve(pack, candidate_id):
+    with db.read() as conn:
+        v = list_validations(conn, pack.site_id, candidate_id)[-1]
+        ctx = get_site(conn, pack.site_id).context_version
+    body = ApproveRequest(
+        candidate_id=candidate_id, validation_id=v.validation_id, expected_context_version=ctx
+    )
+    return approve_and_commit(pack, "supervisor", _key(), body)
+
+
+def _requests(candidate_id):
+    """그 안의 변경 요청 한 통들 [(request_group_id, 담당자, 상태들)]."""
+    with db.read() as conn:
+        found = conn.execute(
+            "SELECT request_group_id, to_actor_id, status FROM message"
+            " WHERE type = 'CHANGE_REQUEST' AND candidate_id = ? ORDER BY rowid",
+            (candidate_id,),
+        ).fetchall()
+    out: dict[str, tuple[str, set[str]]] = {}
+    for group, owner, status in found:
+        out.setdefault(group, (owner, set()))[1].add(status)
+    return [(group, owner, statuses) for group, (owner, statuses) in out.items()]
+
+
+def test_approve_and_waive_only_on_the_chosen_plan(seeded_real, main_on):
+    """승인과 협의 항목 수용은 Supervisor가 지금 고른 안에만 된다. 다른 안으로 가려면 그 안을 고른다.
+    앞 안의 요청에 온 답은 LATE로만 남고 이견으로 쌓이지 않는다."""
+    pack = seeded_real
+    _submit_a(pack)
+    replies = [solve("L1"), solve_with("L2", cond("M", start_at=2940)), done()]
+    run_until_idle(pack, model_factory=Router(replanning=replies, auto_done=False).factory())
+    first, second = _candidate_ids()
+    [main] = _runs("MAIN")
+    choose(pack, first)
+    run_until_idle(pack, model_factory=Router().factory())
+    [(group, owner, statuses)] = _requests(first)
+    assert statuses == {"OPEN"}
+
+    # 고르지 않은 2안: 승인도 수용도 거절된다. 거절(모두 거절 포함)은 고르지 않아도 된다
+    with db.read() as conn:
+        pending = [i.task_id for i in consultation_view(conn, pack.site_id, second).items]
+    assert "CANDIDATE_NOT_CHOSEN" in _approve(pack, second).reason_codes
+    body = WaiveRequest(candidate_id=second, task_ids=tuple(pending), comment="급함")
+    assert waive(pack, "supervisor", _key(), body).reason_codes == ("CANDIDATE_NOT_CHOSEN",)
+
+    # 2안을 고르면 1안의 열린 협의는 바로 정리되고, 2안은 수용한 뒤 승인된다
+    choose(pack, second)
+    assert _requests(first) == [(group, owner, {"CANCELLED"})]
+    assert waive(pack, "supervisor", _key(), body).status == "APPLIED"
+    assert _approve(pack, second).status == "APPLIED"
+    assert "CANDIDATE_NOT_CHOSEN" in _approve(pack, first).reason_codes
+
+    # 무효가 된 1안의 요청에 온 답: 기록만 남는다(LATE). 유효한 답도 이견 사유도 아니다
+    late = reply_request(pack, owner, group, "DECLINE", "그 시각은 안 됩니다")
+    assert late.status == "APPLIED" and late.result_refs["late"] is True
+    assert _requests(first) == [(group, owner, {"LATE"})]
+    with db.read() as conn:
+        assert case_objections(conn, pack.site_id, main.case_id) == []
 
 
 # ── 안 번호 (AG-29) ────────────────────────────────────────────

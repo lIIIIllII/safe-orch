@@ -92,10 +92,10 @@ def test_available_is_open_skill_tools_with_valid_arguments():
     # 유효한 인자 값이 없는 도구(조건을 걸어 풀기)는 빠진다
     assert list(out) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]
     # 열리지 않은 스킬의 도구(협의 항목이 없을 때의 변경 요청)도 빠진다
-    asking = {"SEND_CHANGE_REQUEST": {"task_id": ["C"]}, "RETURN_RESULT": {}}
+    asking = {"SEND_CHANGE_REQUEST": {"actor_id": ["foreman_a2"]}, "RETURN_RESULT": {}}
     assert list(skills.available(coordination.SKILLS, {}, asking)) == ["RETURN_RESULT"]
     opened = skills.available(coordination.SKILLS, {"has_consult_item": True}, asking)
-    assert opened["SEND_CHANGE_REQUEST"] == {"task_id": ["C"], "skill": ["CONSULT"]}
+    assert opened["SEND_CHANGE_REQUEST"] == {"actor_id": ["foreman_a2"], "skill": ["CONSULT"]}
     assert out["SOLVE_WITH_SCOPE"] == {
         "level": ["L1"],
         "skill": ["BUILD_CANDIDATE", "APPLY_REJECTION"],

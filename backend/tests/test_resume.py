@@ -16,7 +16,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-from conftest import choose
+from conftest import choose, ensure_chosen, reply_request
 from scripted import (
     Router,
     blocked,
@@ -35,10 +35,6 @@ from app.commands.approval import (
     waive,
 )
 from app.commands.events import EventReport, receive_event
-from app.commands.messages import (
-    ReplyRequest,
-    reply_message,
-)
 from app.commands.pins import TaskRef, pin_task
 from app.commands.runs import CancelRun, cancel_run
 from app.commands.task_request import (
@@ -196,6 +192,7 @@ def _reject_demo(pack, cand_id):
 
 
 def _approve(pack, cand_id):
+    ensure_chosen(pack, cand_id)  # 승인은 고른 안에만 된다 (AG-29)
     body = ApproveRequest(
         candidate_id=cand_id,
         validation_id=_validation(pack, cand_id).validation_id,
@@ -289,9 +286,10 @@ def test_plan_b_reject_and_pin_recalls_replanning(seeded):
     assert not [c for c in woke["calls"] if c["agent"] == "COORDINATION"]
 
 
-def _reply(pack, message_id, decision="ACCEPT", actor="foreman_a2", key=None, **kw):
-    body = ReplyRequest(message_id=message_id, decision=decision, **kw)
-    return reply_message(pack, actor, key or _key(), body)
+def _reply(pack, message_id, decision="ACCEPT", actor="foreman_a2", key=None, comment=""):
+    """그 메시지가 든 변경 요청 한 통 전체에 답한다 (ST-26)."""
+    group = (_message(pack, message_id) or {}).get("request_group_id") or "req_none"
+    return reply_request(pack, actor, group, decision, comment, key or _key())
 
 
 def _message(pack, message_id):
@@ -624,7 +622,7 @@ def test_t24_only_recipient_can_answer(seeded):
     for actor in ("planner_a", "supervisor", "planner_b"):
         out = _reply(pack, cr["message_id"], actor=actor)
         assert out.reason_codes == ("NOT_AUTHORIZED",)
-    assert _reply(pack, "msg_none").reason_codes == ("MESSAGE_NOT_FOUND",)
+    assert _reply(pack, "msg_none").reason_codes == ("REQUEST_NOT_FOUND",)
     assert _message(pack, cr["message_id"])["status"] == "OPEN"
     assert _reply(pack, cr["message_id"]).status == "APPLIED"
 

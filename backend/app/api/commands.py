@@ -29,11 +29,14 @@ from app.commands.events import (
 )
 from app.commands.intake import IntakeRequest, submit_intake
 from app.commands.messages import (
+    ChangeAnswer,
+    ChangeReplyRequest,
     Decision,
     ProposalDecision,
     ReplyRequest,
     confirm_proposal,
     discard_proposal,
+    reply_change_request,
     reply_message,
 )
 from app.commands.moves import (
@@ -92,6 +95,10 @@ class WithdrawBody(Body):
 class ReplyBody(Body):
     decision: Decision
     comment: str = ""
+
+
+class ChangeReplyBody(Body):
+    answers: tuple[ChangeAnswer, ...] = Field(min_length=1)
 
 
 class CommentBody(Body):
@@ -283,6 +290,15 @@ def post_reply(
     """받은 요청에 답한다. 제안이 붙은 메시지면 ACCEPT = 확인, DECLINE = 폐기."""
     req = ReplyRequest(message_id=message_id, **body.model_dump())
     return respond(reply_message(pack, actor.actor_id, key, req))
+
+
+@router.post("/requests/{request_group_id}/reply")
+def post_request_reply(
+    request_group_id: str, body: ChangeReplyBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """변경 요청 한 통에 답한다. 그 통의 항목 전부를 항목별 수락·이견으로 한 번에 보낸다 (ST-26)."""
+    req = ChangeReplyRequest(request_group_id=request_group_id, **body.model_dump())
+    return respond(reply_change_request(pack, actor.actor_id, key, req))
 
 
 @router.post("/proposals/{proposal_id}/confirm")

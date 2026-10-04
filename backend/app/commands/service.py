@@ -1,7 +1,7 @@
 """Command Service 공통 실행.
 
 한 명령 = write() 트랜잭션 1개: 멱등 키 확인 → 권한·버전 검사와 도메인 변경(handler) →
-Audit(APPLIED만) → CommandResult. 잠금 timeout은 저장하지 않고 RETRYABLE_ERROR로 응답한다.
+버전이 올랐으면 무효가 된 안의 협의 Run 정리(ST-22) → Audit(APPLIED만) → CommandResult. 잠금 timeout은 저장하지 않고 RETRYABLE_ERROR로 응답한다.
 """
 
 import sqlite3
@@ -15,6 +15,7 @@ from app.domain.canonical import canonical_hash
 from app.domain.models import Actor, Site
 from app.packs.loader import LoadedPack
 from app.store import db
+from app.store.repos.cases import end_invalid_consults
 from app.store.repos.commands import get_command_result, insert_audit, insert_command_result
 from app.store.repos.site import get_actor, get_site
 
@@ -112,6 +113,13 @@ def run_command[B: Body](
             tx.execute("RELEASE command_handler")
             after = get_site(tx, site_id)
             assert after is not None
+            if (after.context_version, after.plan_revision) != (
+                before.context_version,
+                before.plan_revision,
+            ):
+                # 현장·계획 버전이 오르면 그 전의 안은 모두 무효다. 버전을 올리는 명령이 여럿이라 여기 한
+                # 곳에서 그 안들의 협의 Run을 끝낸다 (ST-22)
+                end_invalid_consults(tx, pack)
             outcome = CommandOutcome(
                 status="REPLAYED"
                 if applied and result.replayed

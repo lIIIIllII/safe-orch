@@ -8,7 +8,7 @@ Event Response는 메인이 부른다: 사건 → 메인 자동 시작을 켠 �
 import json
 import uuid
 
-from conftest import choose
+from conftest import choose, ensure_chosen, reply_request
 from langchain_core.messages import AIMessage
 from scripted import Router, blocked, call, solve
 
@@ -110,6 +110,7 @@ def _pass_id(pack, cand_id):
 
 
 def _approve(pack, cand_id):
+    ensure_chosen(pack, cand_id)  # 승인은 고른 안에만 된다 (AG-29)
     body = ApproveRequest(
         candidate_id=cand_id,
         validation_id=_pass_id(pack, cand_id),
@@ -144,7 +145,8 @@ def _r1(pack):
     choose(pack, alpha)
     run_until_idle(pack, model_factory=Router().factory())
     [request] = _messages("CHANGE_REQUEST")
-    assert _reply(pack, request["to_actor_id"], request["message_id"]).status == "APPLIED"
+    out = reply_request(pack, request["to_actor_id"], request["request_group_id"])
+    assert out.status == "APPLIED"
     run_until_idle(pack, model_factory=Router().factory())
     assert _approve(pack, alpha).status == "APPLIED"
     assert _site(pack).plan_revision == 1
@@ -267,6 +269,7 @@ def test_er_minimal_path_to_r2(seeded, main_on):
     assert placed["E"] == 60  # E 10:00–10:30, 변경 1·지연 15
     assert _steps(gamma_run.run_id)[0]["tool_result"]["stage2"]["delay"] == 15
     assert view.item_status == {"E": "PENDING"}  # 계획 작업을 옮겼으므로 담당자 확인을 기다린다
+    ensure_chosen(pack, gamma)
     body = WaiveRequest(candidate_id=gamma, task_ids=("E",), comment="Scene 4 수용")
     assert waive(pack, "supervisor", _key(), body).status == "APPLIED"
     assert _approve(pack, gamma).status == "APPLIED"
@@ -280,7 +283,9 @@ def test_er_with_coordination_to_notice(seeded, main_on):
     [confirm] = _messages("CONFIRMATION")
     assert _reply(pack, "supervisor", confirm["message_id"]).status == "APPLIED"
     assert _release(pack, refs["hold_id"]).status == "APPLIED"
-    request_e = call("SEND_CHANGE_REQUEST", "요청", task_id="E", message="E를 15분 늦춥니다.")
+    request_e = call(
+        "SEND_CHANGE_REQUEST", "요청", actor_id="planner_b", message="E를 15분 늦춥니다."
+    )
     wait = call("WAIT_FOR_REPLIES", "대기")
     router = Router(replanning=[solve("L0")], coordination=[request_e, wait])
     run_until_idle(pack, model_factory=router.factory())
@@ -288,7 +293,7 @@ def test_er_with_coordination_to_notice(seeded, main_on):
     run_until_idle(pack, model_factory=router.factory())
     cr = [m for m in _messages("CHANGE_REQUEST") if m["to_actor_id"] == "planner_b"]
     assert len(cr) == 1 and "10/12 09:45 → 10/12 10:00" in cr[0]["body"]
-    assert _reply(pack, "planner_b", cr[0]["message_id"]).status == "APPLIED"
+    assert reply_request(pack, "planner_b", cr[0]["request_group_id"]).status == "APPLIED"
     report = AIMessage(
         content="",
         tool_calls=[

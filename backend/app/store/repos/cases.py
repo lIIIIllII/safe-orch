@@ -6,6 +6,7 @@
 - wake_run: 영향받는 Run의 wake_seq += 1, 대기 중이면 RESUME_RUN 등록(Run당 PENDING 1개).
 - claim_resume: `WAITING_HUMAN ∧ wait_generation 일치` 조건부 claim.
 - end_case_run: Run 종료 + 보낸 요청 정리(메시지 CANCELLED·제안 STALE) + 열린 Case가 없어지면 대기열 전부 승격.
+- end_invalid_consults: 후보가 무효·거절·확정된 열린 협의 Run을 끝낸다(버전이 오른 명령마다 한 번, ST-22).
 - promote_queued: 대기 중인 QUEUED 작업을 전부 새 revision READY로, context +1 한 번,
   RECHECK 등록 한 번. 열린 Case 중 접수는 QUEUED로 저장된다 (AG-07).
 모든 함수는 호출한 쪽의 tx 안에서 돈다(트랜잭션 중첩 없음).
@@ -21,8 +22,10 @@ from app.packs.loader import LoadedPack
 from app.store.repos._rows import rows
 from app.store.repos.calls import fingerprint
 from app.store.repos.case_events import case_of, record_case_event
+from app.store.repos.consultations import candidate_state
 from app.store.repos.dispatch import register_job
 from app.store.repos.messages import insert_message
+from app.store.repos.records import get_candidate
 from app.store.repos.runs import (
     ACTIVE,
     CASE_AGENT_TYPES,
@@ -329,6 +332,29 @@ def end_candidate_runs(
         )
     ]
     return [rid for rid in ids if end_case_run(tx, pack, rid, status, end_reason)]
+
+
+def end_invalid_consults(tx: sqlite3.Connection, pack: LoadedPack) -> list[str]:
+    """후보가 살아 있지 않은(무효·거절·확정) 열린 협의 Run을 STALE로 끝낸다. 끝낸 run_id (ST-22).
+
+    협의 Run은 무효가 된 안에서 판단할 것이 없다: 깨우지 않고 서버가 끝내며, 열린 요청은 CANCELLED가
+    되고 결과도 서버가 만든다(ST-20). 현장·계획 버전을 올린 명령이 끝날 때 한 번 부른다. 확정 뒤 통지
+    (NOTICE) Run은 대상이 아니다.
+    """
+    ended = []
+    for run_id, candidate_id in tx.execute(
+        "SELECT run_id, json_extract(input_ref, '$.candidate_id') FROM agent_run"
+        " WHERE site_id = ? AND agent_type = 'COORDINATION' AND status IN (?, ?)"
+        " AND json_extract(input_ref, '$.phase') = 'CONSULT' ORDER BY rowid",
+        (pack.site_id, *ACTIVE),
+    ).fetchall():
+        candidate = get_candidate(tx, pack.site_id, candidate_id) if candidate_id else None
+        state = None if candidate is None else candidate_state(tx, pack.site_id, candidate)
+        if state is not None and not (state.stale or state.rejected or state.committed):
+            continue
+        if end_case_run(tx, pack, run_id, "STALE", f"CANDIDATE_INVALID:{candidate_id}"):
+            ended.append(run_id)
+    return ended
 
 
 def supervisor_actor(conn: sqlite3.Connection, pack: LoadedPack) -> Any:

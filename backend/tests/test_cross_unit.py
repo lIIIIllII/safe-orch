@@ -6,11 +6,10 @@
 
 import uuid
 
-from conftest import add_task, choose, make_task, take_snapshot, with_facts
+from conftest import add_task, choose, make_task, reply_request, take_snapshot, with_facts
 from scripted import Router, solve
 
 from app.commands.approval import ApproveRequest, approve_and_commit
-from app.commands.messages import ReplyRequest, reply_message
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.consultation import build_items
@@ -207,23 +206,17 @@ def test_other_units_changed_task_needs_its_owners_answer(seeded_real, main_on):
         )
         return approve_and_commit(pack, "supervisor", _key(), body)
 
-    assert approve().reason_codes == ("CONSULTATION_INCOMPLETE",)
+    assert approve().reason_codes == ("CANDIDATE_NOT_CHOSEN", "CONSULTATION_INCOMPLETE")
     # Supervisor가 고르면 협의가 K의 담당자에게 간다
     choose(pack, cand_id)
     run_until_idle(pack, model_factory=router.factory())
     with db.read() as conn:
-        [(message_id, to_actor)] = conn.execute(
-            "SELECT message_id, to_actor_id FROM message WHERE type = 'CHANGE_REQUEST'"
+        [(group, to_actor)] = conn.execute(
+            "SELECT request_group_id, to_actor_id FROM message WHERE type = 'CHANGE_REQUEST'"
         ).fetchall()
     assert to_actor == "planner_b"
     # 지정된 사람의 답만 효력이 있다
-    by_requester = reply_message(
-        pack, "planner_a", _key(), ReplyRequest(message_id=message_id, decision="ACCEPT")
-    )
-    assert by_requester.reason_codes == ("NOT_AUTHORIZED",)
+    assert reply_request(pack, "planner_a", group).reason_codes == ("NOT_AUTHORIZED",)
     assert approve().reason_codes == ("CONSULTATION_INCOMPLETE",)
-    by_owner = reply_message(
-        pack, "planner_b", _key(), ReplyRequest(message_id=message_id, decision="ACCEPT")
-    )
-    assert by_owner.status == "APPLIED"
+    assert reply_request(pack, "planner_b", group).status == "APPLIED"
     assert approve().status == "APPLIED"

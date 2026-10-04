@@ -64,7 +64,7 @@ class CoordinationExecutor:
         if isinstance(action, spec.ReturnResult):
             return "RETURN_RESULT" in available
         if isinstance(action, spec.SendChangeRequest):
-            return "SEND_CHANGE_REQUEST" in available and action.task_id in c["REQUEST"]
+            return "SEND_CHANGE_REQUEST" in available and action.actor_id in c["REQUEST"]
         if isinstance(action, spec.WaitForReplies):
             return "WAIT_FOR_REPLIES" in available
         if isinstance(action, spec.SendNotice):
@@ -116,33 +116,49 @@ class CoordinationExecutor:
         obs: Observation,
         action: spec.SendChangeRequest,
     ) -> GatewayResult:
-        """변경 요청(CHANGE_REQUEST): 후보·change_hash에 묶고 수신자는 항목의 담당자다."""
+        """변경 요청 한 통(CHANGE_REQUEST): 담당자 하나에게 그 담당자의 확인 대기 항목 가운데 이 Run이
+        아직 묻지 않은 것을 전부 담는다. 항목은 서버가 채우고(Agent는 고르지 않는다), 행은 변경마다
+        하나로 후보·change_hash에 묶는다 (ST-15·ST-26)."""
         candidate_id = obs.data["candidate"]["candidate_id"]
-        items = get_consultation_items(tx, self.pack.site_id, candidate_id) or ()
-        item = next(i for i in items if i.task_id == action.task_id)
+        task_ids = spec.choices(obs.data)["REQUEST"][action.actor_id]
+        items = {
+            i.task_id: i for i in get_consultation_items(tx, self.pack.site_id, candidate_id) or ()
+        }
         site = get_site(tx, self.pack.site_id)
         assert site is not None
-        task = self._task(tx, action.task_id)
-        body = change_request_text(self.pack, task, item.before, item.after)
-        message_id = new_id("msg")
-        insert_message(
-            tx,
-            self.pack.site_id,
-            message_id,
-            run_id=run_id,
-            step_no=step_no,
-            to_actor_id=item.owner_actor_id,
-            type_="CHANGE_REQUEST",
-            proposal_id=None,
-            body=body,
-            agent_text=action.message,
-            context_version=site.context_version,
-            candidate_id=candidate_id,
-            change_hash=item.change_hash,
-        )
+        request_group_id = new_id("req")
+        message_ids = []
+        for task_id in task_ids:
+            item = items[task_id]
+            message_id = new_id("msg")
+            insert_message(
+                tx,
+                self.pack.site_id,
+                message_id,
+                run_id=run_id,
+                step_no=step_no,
+                to_actor_id=action.actor_id,
+                type_="CHANGE_REQUEST",
+                proposal_id=None,
+                body=change_request_text(
+                    self.pack, self._task(tx, task_id), item.before, item.after
+                ),
+                agent_text=action.message,
+                context_version=site.context_version,
+                candidate_id=candidate_id,
+                change_hash=item.change_hash,
+                request_group_id=request_group_id,
+            )
+            message_ids.append(message_id)
         outcome = GatewayResult("CONTINUE")
-        result = {"message_id": message_id, "to_actor_id": item.owner_actor_id, "body": body}
-        self._done(tx, run_id, step_no, meta, parsed, outcome, result, {"message_id": message_id})
+        result = {
+            "request_group_id": request_group_id,
+            "to_actor_id": action.actor_id,
+            "task_ids": task_ids,
+            "message_ids": message_ids,
+        }
+        changes = {"request_group_id": request_group_id}
+        self._done(tx, run_id, step_no, meta, parsed, outcome, result, changes)
         return outcome
 
     def _notice(

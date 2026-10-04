@@ -283,6 +283,35 @@ def choose(pack, candidate_id=None):
     return cid
 
 
+def ensure_chosen(pack, candidate_id):
+    """승인·수용은 Supervisor가 고른 안에만 된다 (AG-29). 아직 고르지 않았으면 고른다."""
+    from app.store.repos.decisions import is_chosen
+
+    with db.read() as conn:
+        chosen = is_chosen(conn, pack.site_id, candidate_id)
+    if not chosen:
+        choose(pack, candidate_id)
+
+
+def reply_request(pack, actor, request_group_id, decision="ACCEPT", comment="", key=None):
+    """변경 요청 한 통의 항목 전부에 같은 결정으로 답한다 (ST-26)."""
+    from app.commands.messages import ChangeAnswer, ChangeReplyRequest, reply_change_request
+
+    with db.read() as conn:
+        ids = [
+            r[0]
+            for r in conn.execute(
+                "SELECT message_id FROM message WHERE request_group_id = ? ORDER BY rowid",
+                (request_group_id,),
+            )
+        ]
+    answers = tuple(
+        ChangeAnswer(message_id=i, decision=decision, comment=comment) for i in ids or ["msg_none"]
+    )
+    body = ChangeReplyRequest(request_group_id=request_group_id, answers=answers)
+    return reply_change_request(pack, actor, key or new_id("key"), body)
+
+
 @pytest.fixture
 def with_a(seeded):
     """R0 + 신규 작업 A(revision 1)."""

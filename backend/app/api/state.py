@@ -27,6 +27,7 @@ from app.store.repos.consultations import (
     candidate_state,
     consultation_view,
     contested_changes,
+    get_consultation_items,
     list_review_queue,
 )
 from app.store.repos.decisions import is_chosen, list_decisions
@@ -41,6 +42,7 @@ from app.store.repos.records import (
 )
 from app.store.repos.resources import list_resources
 from app.store.repos.runs import (
+    ACTIVE,
     approach_attempts,
     get_run,
     list_steps,
@@ -322,6 +324,29 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "contested": contested_changes(conn, site_id, cand) if display == "OPEN" else [],
         "validation": validation,
         "consultation": consultation,
+        # 이 안의 협의가 지금 열려 있으면: 요청을 보낸 담당자 수와 답한 담당자 수 (ST-26)
+        "consulting": _consulting(conn, site_id, cand.candidate_id),
+    }
+
+
+def _consulting(conn: sqlite3.Connection, site_id: str, candidate_id: str) -> dict[str, Any] | None:
+    """이 안의 열린 협의 Run이 보낸 변경 요청: 한 통 = 담당자 하나. 열린 협의가 없으면 None."""
+    row = conn.execute(
+        "SELECT run_id FROM agent_run WHERE site_id = ? AND agent_type = 'COORDINATION'"
+        " AND status IN (?, ?) AND json_extract(input_ref, '$.phase') = 'CONSULT'"
+        " AND json_extract(input_ref, '$.candidate_id') = ?",
+        (site_id, *ACTIVE, candidate_id),
+    ).fetchone()
+    if row is None:
+        return None
+    groups: dict[str, list[str]] = {}
+    for r in list_change_requests(conn, site_id, candidate_id):
+        if r["run_id"] == row[0]:
+            groups.setdefault(r["request_group_id"], []).append(r["status"])
+    return {
+        "run_id": row[0],
+        "asked": len(groups),
+        "answered": sum(1 for s in groups.values() if all(x == "ANSWERED" for x in s)),
     }
 
 
@@ -558,7 +583,7 @@ def build_state(
         "runs": [run_summary(conn, rid) for rid in run_ids],
         "dispatch": {"pending": jobs.get("PENDING", 0), "failed": jobs.get("FAILED", 0)},
         # X-Actor 본인에게 온 질문. body = 서버 문구, agent_text = 모델 작성
-        "inbox": [] if actor_id is None else list_inbox(conn, site_id, actor_id),
+        "inbox": [] if actor_id is None else _inbox(conn, site_id, actor_id),
     }
 
 
@@ -651,6 +676,55 @@ def get_run_steps(run_id: str, actor: ActorDep) -> list[dict[str, Any]]:
     return steps
 
 
+def _inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[dict[str, Any]]:
+    """받은 편지함. 변경 요청은 한 통(담당자 하나)으로 묶어 항목 표로 준다 (ST-26).
+
+    한 통의 항목 값(작업, 변경 전·후)은 협의 항목에서 채운다. 한 통의 상태는 행이 같이 움직이므로 하나다.
+    Agent 설명은 행마다 같은 문장이라 한 번만 준다.
+    """
+    out: list[dict[str, Any]] = []
+    groups: dict[str, dict[str, Any]] = {}
+    for m in list_inbox(conn, site_id, actor_id):
+        group_id, change = m.pop("request_group_id"), m.pop("change_hash")
+        if group_id is None:
+            out.append({**m, "request_group_id": None, "plan_label": None, "items": []})
+            continue
+        entry = groups.get(group_id)
+        if entry is None:
+            run = get_run(conn, m["run_id"])
+            labels = {} if run is None else plan_labels(conn, run.case_id)
+            entry = groups[group_id] = {
+                **m,
+                "message_id": group_id,
+                "body": "",
+                "reply": None,
+                "request_group_id": group_id,
+                "plan_label": labels.get(m["candidate_id"]),
+                "items": [],
+            }
+            out.append(entry)
+        items = get_consultation_items(conn, site_id, m["candidate_id"]) or ()
+        item = next((i for i in items if i.change_hash == change), None)
+        entry["items"].append(
+            {
+                "message_id": m["message_id"],
+                "task_id": None if item is None else item.task_id,
+                "before": None if item is None else item.before.model_dump(),
+                "after": None if item is None else item.after.model_dump(),
+                "status": m["status"],
+                "reply": m["reply"],
+            }
+        )
+    for entry in groups.values():
+        # 편지함은 최근 것부터 읽으므로 한 통 안의 항목 순서를 보낸 순서(시각순)로 되돌린다
+        entry["items"].reverse()
+        statuses = {i["status"] for i in entry["items"]}
+        entry["status"] = next(
+            s for s in ("LATE", "CANCELLED", "OPEN", "ANSWERED") if s in statuses
+        )
+    return out
+
+
 def _request_view(r: dict[str, Any] | None) -> dict[str, Any] | None:
     """검토 패널용 변경 요청 요약. comment는 담당자가 쓴 인용이다."""
     if r is None:
@@ -658,6 +732,7 @@ def _request_view(r: dict[str, Any] | None) -> dict[str, Any] | None:
     reply = r["reply"] or {}
     return {
         "message_id": r["message_id"],
+        "request_group_id": r["request_group_id"],
         "to_actor_id": r["to_actor_id"],
         "status": r["status"],
         "decision": reply.get("decision"),

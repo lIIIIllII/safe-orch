@@ -42,6 +42,7 @@ def _items(conn: sqlite3.Connection, pack: LoadedPack, run_id: str, candidate_id
         mine.setdefault(r["change_hash"], []).append(
             {
                 "message_id": r["message_id"],
+                "request_group_id": r["request_group_id"],
                 "status": r["status"],
                 "decision": reply.get("decision"),
                 "quoted_comment": reply.get("comment"),
@@ -61,6 +62,22 @@ def _items(conn: sqlite3.Connection, pack: LoadedPack, run_id: str, candidate_id
         }
         for i in view.items
     ]
+
+
+def _owners(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """담당자별 묶음: 그 담당자의 항목과 상태, 아직 묻지 않은 항목, 답을 기다리는 한 통이 있는가."""
+    out: dict[str, dict[str, Any]] = {}
+    for i in sorted(items, key=lambda i: (i["after"]["start"], i["task_id"])):
+        o = out.setdefault(
+            i["owner_actor_id"],
+            {"actor_id": i["owner_actor_id"], "items": [], "unsent": [], "waiting": False},
+        )
+        o["items"].append({"task_id": i["task_id"], "status": i["status"]})
+        if i["status"] == "PENDING" and not i["requests"]:
+            o["unsent"].append(i["task_id"])
+        if any(r["status"] == "OPEN" for r in i["requests"]):
+            o["waiting"] = True
+    return [out[k] for k in sorted(out)]
 
 
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:
@@ -104,6 +121,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "consultation_status": consultation,
         },
         "items": items,
+        "owners": _owners(items),
         "notice_targets": targets,
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),

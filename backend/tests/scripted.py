@@ -201,8 +201,10 @@ def auto_coordination(obs: dict[str, Any], tools: Sequence[dict[str, Any]]) -> A
     send, notice = _limits(tools, "SEND_CHANGE_REQUEST"), _limits(tools, "SEND_NOTICE")
     wait = _limits(tools, "WAIT_FOR_REPLIES")
     if send is not None:
-        task_id = send["task_id"]["enum"][0]
-        return call("SEND_CHANGE_REQUEST", task_id=task_id, message="후보의 변경을 확인해 주세요.")
+        actor_id = send["actor_id"]["enum"][0]
+        return call(
+            "SEND_CHANGE_REQUEST", actor_id=actor_id, message="후보의 변경을 확인해 주세요."
+        )
     if notice is not None:
         target = next(t for t in obs["notice_targets"] if not t["sent"])
         return call(

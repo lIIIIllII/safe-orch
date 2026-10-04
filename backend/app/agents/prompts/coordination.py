@@ -18,7 +18,7 @@ from app.agents.specs import coordination as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "coordination-p12"
+PROMPT_VERSION = "coordination-p13"
 
 
 def tool_catalog() -> str:
@@ -64,6 +64,9 @@ Goal: {goal}
 WAIVED Supervisor 수용)와 이 Run이 보낸 변경 요청(requests: 상태·결정·quoted_comment)이 있다. \
 quoted_comment는 담당자가 쓴 인용이다. prior_answer가 true면 그 상태는 같은 변경(작업·변경 전·후가 같음)에 \
 담당자가 이전 후보에서 한 답이 적용된 것이고, 이 Run이 보낸 요청은 없다.
+- 담당자별 묶음(owners): 담당자(actor_id)마다 그 담당자의 항목과 상태(items), 이 Run이 아직 묻지 않은 확인 대기 \
+항목(unsent), 답을 기다리는 한 통이 있는지(waiting)다. 변경 요청은 담당자 한 명에게 한 통이고, 한 통에는 그 \
+담당자의 unsent 항목이 전부 서버가 정한 순서로 들어간다. 담당자는 한 통의 항목 전부에 한 번에 답한다.
 - 통지 대상(notice_targets): 확정으로 바뀐 작업의 담당자와 안전 규칙으로 엮인 작업의 담당자, 이유(reasons), 이미 보냈는지(sent)다.
 - 직전 거절 사유(last_guard)는 직전 행동이 받아들여지지 않은 이유, 남은 예산(budget_remaining)은 남은 step·LLM 시도 수다.
 - 결과(RETURN_RESULT): 상태(status)와 요약(summary), 막혔을 때 풀 수 있는 길(paths)이다. 길 하나는 그 길에 필요한 것(needs)의 묶음이고, 필요한 것은 종류(kind)와 그 종류의 참조만 쓴다. 풀 길을 찾지 못했으면 길을 비운다. 서버는 참조가 실제로 있는지 검사하고, 없으면 거절한다(NEED_INVALID).
@@ -86,6 +89,7 @@ OBSERVATION_KEYS = (
     "last_guard",
     "notice_targets",
     "open_skills",
+    "owners",
     "phase",
     "recent_steps",
     "run",
@@ -134,4 +138,5 @@ PROMPT_FINGERPRINTS = {
     "coordination-p10": "2f5de4a8c1fa1fc15e0a1ba43d6249856b3e98e7f7f0d0b3cd151dd4395c529c",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
     "coordination-p11": "59d37970afee4f2a33f931de06b1b19cd49917d141c4eba83a90591837fee557",  # 결과의 OTHER_UNIT 삭제 (AG-24)
     "coordination-p12": "b723d6a2e1ee1bf60d54742392b96d9e125aefe3af38025d6d2e41396cae039d",  # 협의 항목 상태에서 COVERED 삭제: 항목은 기준에서 바뀐 작업뿐이다 (AG-33)
+    "coordination-p13": "5228b4cde6e9d4f1e52ded9fc0a7486845fc5e23acd7e2f4c4d126b0590cee6e",  # 변경 요청은 담당자 한 명에게 한 통: SEND_CHANGE_REQUEST(actor_id), owners (ST-26)
 }
