@@ -384,9 +384,8 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                 onClick={() => onSelect(c.candidate_id)}
               >
                 <td>
-                  {/* 이름은 그 안을 낸 호출의 접근(방향)이다. 같은 배치가 여러 접근에서 나오면 함께 보인다 */}
+                  {/* 방향 이름은 접근 칸에 보인다 */}
                   <b>{planLabel(c)}</b>
-                  {approachNames(c).length > 0 && <> · {approachNames(c).join('·')}</>}
                   {c.solver?.first_unconfirmed && (
                     <div className="tag tag-warn" title="시간 한도 안에 최적이 확인되지 않았습니다">
                       최적 미확인
