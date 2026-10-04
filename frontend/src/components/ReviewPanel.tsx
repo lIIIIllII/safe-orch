@@ -1,7 +1,7 @@
 // 검토 패널. 서버 계산 결과만 보여 준다(모델 문장 없음).
 // 승인 버튼은 권한만 보고 켠다. STALE·Hold여도 막지 않고 서버의 거절 사유를 보여 준다.
 
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { CandidateView, CommandOutcome, CommandResponse, FactChange, SiteState } from '../types'
 import {
   APPROACH,
@@ -185,9 +185,13 @@ function PlanChange({ x }: { x: CandidateView['plan_changes'][number] }) {
   )
 }
 
-/** 이 Case의 안을 나란히: 접근, 서버 지표, 필요한 동의, 조건, 거절·이견된 변경, 고르기.
- *  지표·동의·표시는 서버 계산이고, 접근의 이유 문장은 Agent가 쓴 것이다(UI-06). */
+/** 이 Case의 안을 나란히: 접근, 바뀌는 것, 서버 지표, 필요한 동의, 조건, 거절·이견된 변경, 고르기.
+ *  지표·동의·표시는 서버 계산이고, 접근의 이유 문장은 Agent가 쓴 것이다(UI-06).
+ *  좁은 폭에서도 깨지지 않게: 바뀌는 것 칸만 줄바꿈하고, Agent 이유는 그 안 줄 아래에 표 전체 폭으로 둔다
+ *  (두 줄까지 보이고 누르면 펼친다). 패널 폭이 모자라면 표 영역만 가로로 스크롤된다. */
 function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, busy, run }: Props) {
+  // 이유를 펼친 안
+  const [opened, setOpened] = useState<string[]>([])
   const queue = state.candidates.filter((c) => state.review_queue.includes(c.candidate_id))
   const caseId = candidate?.case_id ?? queue[0]?.case_id ?? null
   const plans = queue.filter((c) => c.case_id === caseId)
@@ -209,7 +213,8 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
       </h3>
       {/* 같은 Case의 안은 같은 사실 위에 있다: 사실 변경은 한 번만 보인다 */}
       <FactChanges changes={plans[0].fact_changes} base={plans[0].base_plan_revision} state={state} />
-      <table className="tbl small">
+      <div className="plans-scroll">
+      <table className="tbl small plans-table">
         <thead>
           <tr>
             <th>안</th>
@@ -228,10 +233,13 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
             const objected = items.filter((i) => i.item_status === 'OBJECTED')
             const delay = c.changes.reduce((n, x) => n + x.delay, 0)
             const workDelay = c.changes.reduce((n, x) => n + x.work_delay, 0)
+            const reasons = c.approaches.filter((a) => a.quoted_reason)
+            const open = opened.includes(c.candidate_id)
+            const rowClass = `${c.candidate_id === selectedId ? 'plan-on' : ''} ${c.chosen ? 'plan-chosen' : ''}`
             return (
+              <Fragment key={c.candidate_id}>
               <tr
-                key={c.candidate_id}
-                className={`plan-row ${c.candidate_id === selectedId ? 'plan-on' : ''} ${c.chosen ? 'plan-chosen' : ''}`}
+                className={`plan-row ${reasons.length > 0 ? 'plan-has-reason' : ''} ${rowClass}`}
                 onClick={() => onSelect(c.candidate_id)}
               >
                 <td>
@@ -244,21 +252,19 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                     <div key={`${a.run_id}`}>
                       {APPROACH[a.approach] ?? a.approach}
                       {a.same && <span className="muted"> (같은 배치에 도달)</span>}
-                      {a.quoted_reason && <div className="agent-quote">Agent: “{a.quoted_reason}”</div>}
                     </div>
                   ))}
                   {approachNames(c).length > 1 && <div className="tag">{approachNames(c).join('·')} 동일 의견</div>}
                 </td>
-                <td>
+                <td className="wrap">
                   {c.plan_changes.length === 0 && <span className="muted">없음</span>}
                   {c.plan_changes.map((x) => (
                     <PlanChange key={x.task_id} x={x} />
                   ))}
                 </td>
-                <td>
-                  변경 {c.changes.length}건 · 자원 변경 {c.plan_changes.filter((x) => x.resource_changed).length}건
-                  <br />
-                  희망에서 벗어남 {delayText(delay, workDelay)}
+                <td title={`변경 작업 수 · 자원이 바뀌는 작업 수 · 희망에서 벗어난 정도 ${delayText(delay, workDelay)}`}>
+                  변경 {c.changes.length} · 자원 {c.plan_changes.filter((x) => x.resource_changed).length} · 희망 벗어남{' '}
+                  {delay}분
                   {c.off_hope.map((x) => (
                     <div key={`o:${x.task_id}`} className="muted" title="희망 영역 밖에 놓인 작업">
                       희망 밖: {offHopeText(x)}
@@ -315,10 +321,31 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                   </button>
                 </td>
               </tr>
+              {reasons.length > 0 && (
+                <tr
+                  className={`plan-reason ${rowClass}`}
+                  title={open ? '누르면 접습니다' : '누르면 펼칩니다'}
+                  onClick={() =>
+                    setOpened(open ? opened.filter((id) => id !== c.candidate_id) : [...opened, c.candidate_id])
+                  }
+                >
+                  <td colSpan={7}>
+                    <div className={`agent-quote plan-reason-text ${open ? '' : 'plan-reason-clamp'}`}>
+                      {reasons.map((a) => (
+                        <span key={a.run_id}>
+                          Agent({APPROACH[a.approach] ?? a.approach}): “{a.quoted_reason}”{' '}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             )
           })}
         </tbody>
       </table>
+      </div>
       {!isSupervisor && <p className="muted small">{denied}</p>}
       <p className="muted small">
         고른 안만 담당자 협의로 갑니다. 협의가 끝나면 아래에서 승인합니다. 고르지 않은 안은 그대로 남습니다.
