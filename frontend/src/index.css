@@ -1375,6 +1375,24 @@ input.time {
   border: 1px dashed var(--border);
 }
 
+/* 후보 카드: 거절·이견된 변경(서버 계산)과 Agent가 건 조건 */
+.contested,
+.conditions {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.contested {
+  border-color: var(--stale);
+}
+
+.conditions ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
 .rejection {
   margin: 6px 0;
   padding: 6px 10px;

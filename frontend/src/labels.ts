@@ -92,6 +92,12 @@ export const REASON: Record<string, string> = {
   LLM_CONFIG: '모델 설정 오류',
   STALE_SNAPSHOT: '계산 중 상태 변경, 결과 폐기',
   DUPLICATE_REJECTED: '거절된 배정과 같아 후보 만들지 않음',
+  SAME_AS_EXISTING: '살아 있는 기존 후보와 같은 배치(새 후보 없음)',
+  ALREADY_TRIED: '같은 범위·같은 조건은 이미 계산함',
+  CONDITION_INVALID: '조건 모양 오류',
+  CONDITION_OUTSIDE_WINDOW: '조건이 작업 시간창 밖',
+  CONDITION_TASK_NOT_IN_SCOPE: '조건을 건 작업이 탐색 범위 밖',
+  NO_PREFERRED_WINDOW: '희망 영역이 없는 작업',
   NEW_CHANGE_BEFORE_WAIT: '대기 직전 새 변화, 다시 관찰',
   RUN_INACTIVE: 'Run 종료됨',
   NO_ACTING_TASKS: '움직일 수 있는 작업 없음',
@@ -338,6 +344,12 @@ export const ACTION_NAME: Record<string, string> = {
   TRY_ALTERNATIVE_RESOURCE: '대체 자원 시도',
   ASK_TASK_OWNER: '작업 담당자에게 확인 요청',
   ASK_OWNER: '작업 담당자에게 사전 확인',
+}
+
+/** 후보가 담은 거절·이견된 변경의 출처 (서버 계산) */
+export const CONTESTED_BY: Record<string, string> = {
+  REJECTION: '거절된 변경과 같음',
+  OBJECTION: '담당자 이견',
 }
 
 export const ROLE: Record<string, string> = {

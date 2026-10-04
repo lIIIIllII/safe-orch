@@ -210,6 +210,17 @@ export interface CandidateView {
     work_delay: number
   }[]
   solver: SolverView | null
+  /** Agent가 그 탐색에 건 조건(서버가 받은 값, 시각은 분). 없으면 빈 목록 */
+  conditions: {
+    task_id: string
+    start_min: number | null
+    start_max: number | null
+    resource_id: string | null
+    /** 시작 범위가 담당자의 희망 영역에서 왔다 */
+    preferred: boolean
+  }[]
+  /** 이 후보가 담은 변경 가운데 거절·이견된 것(서버 계산). REJECTION 거절된 후보의 대상 작업 변경과 같음, OBJECTION 담당자 이견 */
+  contested: { task_id: string; by: 'REJECTION' | 'OBJECTION' }[]
   validation: {
     validation_id: string
     status: string

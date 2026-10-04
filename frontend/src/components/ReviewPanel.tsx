@@ -5,6 +5,7 @@ import { useState } from 'react'
 import type { CandidateView, CommandOutcome, CommandResponse, SiteState } from '../types'
 import {
   CANDIDATE_KIND,
+  CONTESTED_BY,
   CANDIDATE_STATUS,
   CHECK_NAME,
   CHECK_STATUS,
@@ -128,6 +129,35 @@ function CandidateDetail({
         {CANDIDATE_KIND[c.kind]} · Context v{c.context_version} · 기준 Plan R{c.base_plan_revision}
         {c.run_id && ` · Run ${c.run_id}`}
       </p>
+      {c.contested.length > 0 && (
+        <div className="contested">
+          <b>거절·이견된 변경 포함</b> <span className="muted small">서버 계산(같은 변경인지만 비교)</span>
+          <div>
+            {c.contested.map((x) => (
+              <span key={`${x.task_id}:${x.by}`} className="tag tag-warn">
+                {x.task_id} · {CONTESTED_BY[x.by] ?? x.by}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {c.conditions.length > 0 && (
+        <div className="conditions">
+          <b>Agent가 건 조건</b> <span className="muted small">Agent가 고르고 서버가 유효성만 검사한 값</span>
+          <ul>
+            {c.conditions.map((x) => (
+              <li key={x.task_id}>
+                {x.task_id}
+                {x.start_min !== null && x.start_min === x.start_max && ` 시작 = ${clock.format(x.start_min)}`}
+                {x.start_min !== null && x.start_min !== x.start_max && ` 시작 ≥ ${clock.format(x.start_min)}`}
+                {x.start_max !== null && x.start_min !== x.start_max && ` 시작 ≤ ${clock.format(x.start_max)}`}
+                {x.resource_id && ` 자원 = ${x.resource_id}`}
+                {x.preferred && ' (희망 영역)'}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {c.rejection && (
         <div className="rejection">
