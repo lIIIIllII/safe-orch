@@ -21,13 +21,19 @@ from app.store.repos.cases import queued_task_ids
 from app.store.repos.consultations import (
     candidate_state,
     consultation_view,
+    contested_changes,
     list_review_queue,
 )
 from app.store.repos.decisions import list_decisions
 from app.store.repos.messages import list_change_requests, list_fact_updates, list_inbox
 from app.store.repos.pins import active_pin_views, preferred_windows
 from app.store.repos.plans import get_current_plan
-from app.store.repos.records import get_candidate, get_snapshot, list_validations
+from app.store.repos.records import (
+    get_candidate,
+    get_search_spec,
+    get_snapshot,
+    list_validations,
+)
 from app.store.repos.resources import list_resources
 from app.store.repos.runs import get_run, list_steps, run_for_solver_result
 from app.store.repos.site import get_site, list_actors, list_zone_relations
@@ -191,9 +197,20 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "assignments": [a.model_dump() for a in cand.assignments],
         "changes": changes,
         "solver": _solver(conn, cand.solver_result_id, facts),
+        # Agent가 건 조건(서버가 받은 값, 분)과 거절·이견된 변경(서버 계산) (CV-24·CV-26)
+        "conditions": _conditions(conn, cand.search_spec_id),
+        "contested": contested_changes(conn, site_id, cand) if display == "OPEN" else [],
         "validation": validation,
         "consultation": consultation,
     }
+
+
+def _conditions(conn: sqlite3.Connection, search_spec_id: str | None) -> list[dict[str, Any]]:
+    """그 후보의 탐색에 Agent가 건 조건. 조건이 없으면 빈 목록."""
+    spec = get_search_spec(conn, search_spec_id) if search_spec_id else None
+    if spec is None:
+        return []
+    return [{"task_id": tid, **c.model_dump()} for tid, c in sorted(spec.conditions.items())]
 
 
 def _rejection(conn: sqlite3.Connection, site_id: str, candidate_id: str) -> dict[str, Any] | None:

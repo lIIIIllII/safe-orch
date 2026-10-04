@@ -50,6 +50,13 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
         m.add(s <= t.latest_start)
         m.add(s + d <= t.latest_end)
         m.add(s + d <= horizon)
+        # Agent가 건 조건: 시작 범위를 좁힌다. 축이 닫힌 작업에는 걸리지 않는다(SearchSpec이 거절한다)
+        cond = spec.conditions.get(tid)
+        if cond is not None and ax.time:
+            if cond.start_min is not None:
+                m.add(s >= cond.start_min)
+            if cond.start_max is not None:
+                m.add(s <= cond.start_max)
         # 근무 달력: 시작은 근무 구간 하나 안에 끝나는 값만. 상수(고정 작업)에도 걸어 위반이면
         # INFEASIBLE이다(Rule Engine CALENDAR·Validator C04와 같은 판정).
         m.add_linear_expression_in_domain(
@@ -62,6 +69,8 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
                 options.append(ref.resource_id)
             if ax.resource:
                 options += [r for r in spec.resource_alternatives.get(tid, ()) if r not in options]
+            if cond is not None and cond.resource_id is not None:
+                options = [r for r in options if r == cond.resource_id]  # 자원 지정
         lits = []
         for rid in options:
             lit = m.new_bool_var(f"x_{tid}_{rid}")

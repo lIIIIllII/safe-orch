@@ -228,11 +228,13 @@ def finish_solver_job(
     step_no: int,
     status: str,
     solver_result_id: str | None = None,
+    same_candidate_id: str | None = None,
 ) -> None:
+    """same_candidate_id: 해가 살아 있는 기존 후보와 같은 배치라 새 후보를 만들지 않았다 (CV-25)."""
     tx.execute(
-        "UPDATE solver_job SET status = ?, solver_result_id = ?"
+        "UPDATE solver_job SET status = ?, solver_result_id = ?, same_candidate_id = ?"
         " WHERE run_id = ? AND step_no = ? AND status = 'RESERVED'",
-        (status, solver_result_id, run_id, step_no),
+        (status, solver_result_id, same_candidate_id, run_id, step_no),
     )
 
 
@@ -241,6 +243,7 @@ def tried_search_keys(conn: sqlite3.Connection, site_id: str, case_id: str) -> s
 
     무효가 된 후보(현장 버전이 달라진 후보)의 탐색은 미시도로 본다: 거절·확정되지 않은 후보만이다.
     거절된 후보의 탐색과 후보가 없는 결과(INFEASIBLE·UNKNOWN)는 해 본 탐색으로 남는다 (CV-13).
+    기존 후보와 같은 배치에 도달한 시도는 그 후보를 따른다 (CV-25).
     """
     found = rows(
         conn,
@@ -253,6 +256,7 @@ def tried_search_keys(conn: sqlite3.Connection, site_id: str, case_id: str) -> s
         " FROM solver_job j JOIN search_spec s ON s.search_spec_id = j.search_spec_id"
         " JOIN agent_run r ON r.run_id = j.run_id JOIN site st ON st.site_id = j.site_id"
         " LEFT JOIN candidate c ON c.solver_result_id = j.solver_result_id"
+        "  OR c.candidate_id = j.same_candidate_id"
         " WHERE j.site_id = ? AND r.case_id = ? AND j.status IN ('RESERVED', 'REGISTERED')",
         (site_id, case_id),
     )
@@ -270,7 +274,8 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
     found = rows(
         conn,
         "SELECT j.run_id, j.step_no, j.status AS job_status, s.scope_level, s.search_key,"
-        " s.resource_alternatives, r.stage1, r.stage2, c.candidate_id FROM solver_job j"
+        " s.resource_alternatives, s.conditions, r.stage1, r.stage2, c.candidate_id,"
+        " j.same_candidate_id FROM solver_job j"
         " JOIN search_spec s ON s.search_spec_id = j.search_spec_id"
         " JOIN agent_run a ON a.run_id = j.run_id"
         " LEFT JOIN solver_result r ON r.solver_result_id = j.solver_result_id"
@@ -291,12 +296,15 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
                 "job_status": r["job_status"],
                 "scope_level": r["scope_level"],
                 "try_resources": loads(r["resource_alternatives"]),  # TRY 시도
+                "conditions": loads(r["conditions"]),  # Agent가 건 조건 (분)
                 "search_key": r["search_key"],
                 "stage1": None
                 if s1 is None
                 else {"status": s1["status"], "changed": s1["changed"]},
                 "stage2": None if s2 is None else {"status": s2["status"], "delay": s2["delay"]},
                 "candidate_id": r["candidate_id"],
+                # 해가 살아 있는 기존 후보와 같은 배치였다(새 후보 없음)
+                "same_as_candidate_id": r["same_candidate_id"],
             }
         )
     return out

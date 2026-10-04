@@ -93,6 +93,23 @@ def solve(level: str, summary: str = "범위를 정해 계산한다") -> AIMessa
     return call("SOLVE_WITH_SCOPE", summary, level=level)
 
 
+def cond(task_id: str, **fields: Any) -> dict[str, Any]:
+    """SOLVE_WITH_CONDITIONS의 작업별 조건. 시각(start_from·start_until·start_at)은 분으로 써도 된다."""
+    return {
+        "task_id": task_id,
+        **{
+            k: site(v) if k.startswith("start_") and isinstance(v, int) else v
+            for k, v in fields.items()
+        },
+    }
+
+
+def solve_with(
+    level: str, *conditions: dict[str, Any], summary: str = "조건을 걸어 계산한다"
+) -> AIMessage:
+    return call("SOLVE_WITH_CONDITIONS", summary, level=level, conditions=list(conditions))
+
+
 def _result(decision: str, status: str, summary: str, paths: Sequence[dict]) -> AIMessage:
     message = call("RETURN_RESULT", decision, status=status, paths=list(paths))
     message.tool_calls[0]["args"]["summary"] = summary  # call의 summary는 decision_summary다

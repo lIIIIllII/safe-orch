@@ -16,10 +16,11 @@ from app.domain.consultation import (
 )
 from app.domain.models import Candidate, ConsultationItem
 from app.store.repos._rows import dumps, loads, rows
-from app.store.repos.decisions import list_decisions
+from app.store.repos.decisions import list_case_rejections, list_decisions
 from app.store.repos.messages import answer_sources, change_answers, list_requests_for_changes
 from app.store.repos.plans import get_plan_by_candidate
 from app.store.repos.records import get_candidate, list_validations
+from app.store.repos.runs import get_run, run_for_solver_result
 from app.store.repos.site import get_site
 
 
@@ -144,3 +145,68 @@ def list_review_queue(conn: sqlite3.Connection, site_id: str) -> list[str]:
         if not (state.stale or state.rejected or state.committed):
             out.append(cid)
     return out
+
+
+def case_objections(conn: sqlite3.Connection, site_id: str, case_id: str) -> list[dict[str, Any]]:
+    """이 Case의 협의에서 담당자가 낸 이견 전부 (Case가 닫힐 때까지 쌓인다, CV-26). 문장은 인용이다.
+
+    변경 요청에 DECLINE으로 답한 것. 취소된 요청에 온 늦은 답은 넣지 않는다 (ST-15).
+    """
+    out = []
+    for r in rows(
+        conn,
+        "SELECT m.message_id, m.candidate_id, m.change_hash, m.to_actor_id, m.reply FROM message m"
+        " JOIN agent_run r ON r.run_id = m.run_id"
+        " WHERE m.site_id = ? AND r.case_id = ? AND m.type = 'CHANGE_REQUEST'"
+        " AND m.status = 'ANSWERED' AND json_extract(m.reply, '$.decision') = 'DECLINE'"
+        " ORDER BY m.rowid",
+        (site_id, case_id),
+    ):
+        items = get_consultation_items(conn, site_id, r["candidate_id"]) or ()
+        item = next((i for i in items if i.change_hash == r["change_hash"]), None)
+        out.append(
+            {
+                "candidate_id": r["candidate_id"],
+                "task_id": None if item is None else item.task_id,
+                "owner_actor_id": r["to_actor_id"],
+                "before": None if item is None else item.before.model_dump(),
+                "after": None if item is None else item.after.model_dump(),
+                "quoted_comment": (loads(r["reply"]) or {}).get("comment"),
+            }
+        )
+    return out
+
+
+def contested_changes(
+    conn: sqlite3.Connection, site_id: str, candidate: Candidate
+) -> list[dict[str, str]]:
+    """이 후보가 담은 변경 가운데 거절·이견된 것 [{task_id, by}] (서버 계산, 표시만 한다, CV-26).
+
+    OBJECTION: 같은 변경에 담당자 이견이 있다(항목 상태 OBJECTED). REJECTION: 이 후보를 만든 Case에서
+    거절된 다른 후보가 대상 작업에 한 변경과 같은 변경이다. 같은 변경 = change hash(작업 revision·
+    변경 전·후)가 같다. 서버는 사유를 해석하지 않고 이 후보를 거절하지도 않는다.
+    """
+    view = consultation_view(conn, site_id, candidate.candidate_id)
+    if view is None:
+        return []
+    out = [
+        {"task_id": i.task_id, "by": "OBJECTION"}
+        for i in view.items
+        if view.item_status[i.task_id] == "OBJECTED"
+    ]
+    maker_id = (
+        run_for_solver_result(conn, candidate.solver_result_id)
+        if candidate.solver_result_id
+        else None
+    )
+    maker = get_run(conn, maker_id) if maker_id else None
+    rejected: set[str] = set()
+    for r in [] if maker is None else list_case_rejections(conn, maker.case_id):
+        if r["candidate_id"] == candidate.candidate_id:
+            continue
+        items = get_consultation_items(conn, site_id, r["candidate_id"]) or ()
+        rejected |= {i.change_hash for i in items if i.task_id in r["target_task_ids"]}
+    out += [
+        {"task_id": i.task_id, "by": "REJECTION"} for i in view.items if i.change_hash in rejected
+    ]
+    return sorted(out, key=lambda c: (c["task_id"], c["by"]))

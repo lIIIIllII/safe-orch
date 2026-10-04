@@ -69,7 +69,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p16",
+        "replanning-p17",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -107,8 +107,9 @@ def test_same_effective_spec_is_not_retried_within_case(with_a):
     run, steps, model = _run(
         with_a, [solve("L2"), escalate()], run_id="run_2", case_id="case_run_1"
     )
-    # 계산 Action은 없다. 자원 조회는 Solver를 부르지 않으므로 남는다
+    # 범위 계산은 없다. 조건을 걸어 풀기와 자원 조회는 남는다
     assert model.tool_names(0) == [
+        "SOLVE_WITH_CONDITIONS",
         "LIST_ASSIGNABLE_RESOURCES",
         "RETURN_RESULT",
     ]
@@ -381,7 +382,7 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
         "llm_attempts": spec.MAX_LLM_ATTEMPTS,
         "solver_calls": spec.MAX_SOLVER_CALLS,
     }
-    assert binding.prompt.PROMPT_VERSION == "replanning-p16"
+    assert binding.prompt.PROMPT_VERSION == "replanning-p17"
     assert runtime.exec_contract_version("REPLANNING") == "replanning-c5"
     assert runtime.exec_contract_version("COORDINATION") == "coordination-c6"
     assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c6"

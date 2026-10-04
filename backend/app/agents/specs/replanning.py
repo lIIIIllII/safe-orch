@@ -1,7 +1,8 @@
 """Replanning AgentSpec. 순수 데이터: Goal, Action 스키마, Budget, 사용 조건.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터(untried_levels 등)만 보고 계산한다.
-Action: SOLVE_WITH_SCOPE, LIST_ASSIGNABLE_RESOURCES, TRY_ALTERNATIVE_RESOURCE, RETURN_RESULT.
+Action: SOLVE_WITH_SCOPE, SOLVE_WITH_CONDITIONS, LIST_ASSIGNABLE_RESOURCES,
+TRY_ALTERNATIVE_RESOURCE, RETURN_RESULT.
 사람 도구는 없다: 담당자 확인은 Coordination 한 창구로만 한다 (AG-09).
 순서는 스킬 지침에 있고, 여기 조건은 사실·유효성·Budget뿐이다 (AG-01).
 모듈 이름(GOAL, ACTIONS, tool_schemas 등)은 그대로 두고, 그 값으로 SPEC(AgentSpec)을 만든다.
@@ -57,6 +58,52 @@ class SolveWithScope(Action):
     )
 
 
+class TaskCondition(BaseModel):
+    """작업 하나에 거는 조건. 시각은 현장 날짜·시각 문자열이다 (AG-21)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(
+        description="조건을 걸 작업 (탐색 범위 안의 고정되지 않은 acting_unit 작업)"
+    )
+    start_from: str | None = Field(
+        default=None, description='이 시각 이후에 시작. 현장 날짜·시각 "YYYY-MM-DD HH:MM"'
+    )
+    start_until: str | None = Field(
+        default=None, description='이 시각 이전에 시작. 현장 날짜·시각 "YYYY-MM-DD HH:MM"'
+    )
+    start_at: str | None = Field(
+        default=None,
+        description="이 시각에 시작(시작 지정). start_from·start_until과 같이 쓰지 않는다",
+    )
+    resource_id: str | None = Field(
+        default=None,
+        description="이 자원을 쓴다(자원 지정). 현재 자원이거나 자원 축이 열린 작업의 적격 자원",
+    )
+    use_preferred_window: bool = Field(
+        default=False,
+        description="담당자가 그린 희망 영역 안에서 시작하고 끝나게 한다. 다른 시각 조건과 같이 쓰지 않는다",
+    )
+
+
+class SolveWithConditions(Action):
+    """탐색 범위에 작업별 조건을 걸어 CP-SAT로 계산한다. 조건은 시작 이후·이전, 시작 지정, 자원 지정,
+    희망 영역을 시작 범위로 쓰기다. 조건은 좁히기만 하고, 걸지 않은 작업은 계산이 정한다. 범위 안
+    작업을 모두 지정하면 그 배치 그대로를 검사한다. 해가 있으면 후보가 등록되고 검증을 기다린다. 해가
+    없으면 계산 상태를 돌려주고, 모두 지정한 배치였으면 그 배치가 어긴 규칙을 붙인다."""
+
+    OPENS = (
+        "맡은 충돌이 있고 Solver 호출이 남아 있을 때. 탐색 범위를 모두 시도한 뒤에도 쓸 수 있다. 같은 "
+        "사실에서 같은 범위·같은 조건은 받아들여지지 않는다. 조건이 시간창 밖이거나, 고정된 작업이거나, "
+        "범위 밖 작업이거나, 자원이 적격이 아니면 받아들여지지 않는다"
+    )
+
+    level: Literal["L0", "L1", "L2"] = Field(
+        description="탐색 범위. L0 충돌 당사자만, L1 같은 구역·같은 자원 작업까지, L2 acting_unit 작업 전부"
+    )
+    conditions: list[TaskCondition] = Field(min_length=1, description="작업별 조건 (작업마다 하나)")
+
+
 class ListAssignableResources(Action):
     """작업에 쓸 수 있는 자원을 조회한다(유형·사용 권한·가용 구간 기준). 결과는 자원 사실이 같은 동안
     유효하다. 대체 자원 시도는 서버가 같은 기준으로 쓸 수 있는 자원만 받는다."""
@@ -93,12 +140,14 @@ class ReturnResult(Action, ResultFields):
 
 ACTIONS: dict[str, type[Action]] = {
     "SOLVE_WITH_SCOPE": SolveWithScope,
+    "SOLVE_WITH_CONDITIONS": SolveWithConditions,
     "LIST_ASSIGNABLE_RESOURCES": ListAssignableResources,
     "TRY_ALTERNATIVE_RESOURCE": TryAlternativeResource,
     "RETURN_RESULT": ReturnResult,
 }
 FLOW = {
     "SOLVE_WITH_SCOPE": "CANDIDATE_OR_CONTINUE",
+    "SOLVE_WITH_CONDITIONS": "CANDIDATE_OR_CONTINUE",
     "LIST_ASSIGNABLE_RESOURCES": "CONTINUE",
     "TRY_ALTERNATIVE_RESOURCE": "CANDIDATE_OR_CONTINUE",
     "RETURN_RESULT": "DONE",
@@ -112,7 +161,7 @@ def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
     """스킬이 열리는 사실. 순서 조건은 없다."""
     return {
         "has_conflict": bool(obs["conflicts"]),
-        "has_rejection": bool(obs["rejections"]),
+        "has_rejection": bool(obs["rejections"]) or bool(obs["objections"]),
     }
 
 
@@ -161,6 +210,10 @@ def valid_actions(
     budget = obs["budget_remaining"]
     if obs["conflicts"] and obs["untried_levels"] and budget["solver_calls"] > 0:
         out["SOLVE_WITH_SCOPE"] = {"level": list(obs["untried_levels"])}
+    # 조건을 걸어 풀기: 범위를 다 써도 열려 있다. 조건의 유효성은 실행 때 서버가 본다 (CV-24)
+    movable = any(not t["pinned"] for t in obs["acting_tasks"])
+    if obs["primary_conflict"] and movable and budget["solver_calls"] > 0:
+        out["SOLVE_WITH_CONDITIONS"] = {"level": list(LEVELS)}
     c = choices(obs, hidden)
     if c["LIST"]:
         out["LIST_ASSIGNABLE_RESOURCES"] = {"task_id": c["LIST"]}

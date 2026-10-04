@@ -22,7 +22,7 @@ from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "replanning-p16"
+PROMPT_VERSION = "replanning-p17"
 
 
 def tool_catalog() -> str:
@@ -68,12 +68,15 @@ Goal: {goal}
 - 현재 충돌(conflicts)은 전부, 맡은 충돌(primary_conflict)은 이 Run이 해소할 충돌이다. 충돌 그룹(group)은 맡은 충돌과 작업을 공유하는 충돌의 묶음이고, 그 그룹에 작업을 가진 Unit(unit_ids)이 있다. 이 Run은 acting_unit의 작업만 움직인다.
 - 수량 풀 초과(POOL_CAPACITY) 충돌에는 pool이 붙는다: 어느 풀(pool_id)·종류(kind)가 언제(at, 분) 겹친 작업의 수요 합(demand)이 수량(quantity)을 넘었는지다. 인원처럼 여러 작업이 나눠 쓰는 수량이라, 겹치는 작업의 시간을 옮겨야 풀린다.
 - 움직일 수 있는 작업의 수요(demands)는 종류별로 그 작업이 풀에서 쓰는 수량이다.
-- acting_unit의 작업(acting_tasks): 자원 축이 열렸는지(movable의 resource), 고정(pinned: 사람이 걸었고 누가 걸었는지다. 고정된 작업은 시각·자원 모두 움직이지 않고, 고정되지 않은 작업은 시각이 움직인다), 희망 영역(preferred_window: 담당자가 바라는 시각 구간이다. 서버는 강제하지 않는다), 기준 배정(base), 필요한 자원 유형(required_resource_type)이 있다.
+- acting_unit의 작업(acting_tasks): 자원 축이 열렸는지(movable의 resource), 고정(pinned: 사람이 걸었고 누가 걸었는지다. 고정된 작업은 시각·자원 모두 움직이지 않고, 고정되지 않은 작업은 시각이 움직인다), 희망 영역(preferred_window: 담당자가 바라는 시각 구간이다. 서버는 강제하지 않는다), 기준 배정(base), 필요한 자원 유형(required_resource_type), 같은 값의 현장 날짜·시각(clock: 시작 가능 시각·시작 한도·기준 시작)이 있다.
+- 조건 도구의 시각 인자는 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다. 분으로 바꾸지 않는다(서버가 바꾼다). clock의 값이 같은 형식이다.
 - 동의 범위(consents)는 작업 담당자가 동의한 시작 범위·자원이다. 담당자가 대체 자원을 허용하면 그 작업의 자원 축이 열리고(movable의 resource) 동의 범위에 그 자원이 들어온다.
 - 아직 시도하지 않은 탐색 범위(untried_levels): L0은 충돌 당사자만, L1은 같은 구역·같은 자원의 작업까지, L2는 acting_unit 작업 전부를 움직일 수 있게 한다. 범위가 넓을수록 바뀌는 작업이 늘 수 있다.
-- 이전 계산(attempts): 이 Case에서 acting_unit으로 한 계산 전부다(this_run이 false면 같은 Case의 앞 Run이 한 것). 1단계(stage1)는 변경 작업 수 최소화, 2단계(stage2)는 총 지연 최소화 결과다. 대체 자원 시도(try_resources)가 있으면 그 자원을 더한 계산이다.
+- 이전 계산(attempts): 이 Case에서 acting_unit으로 한 계산 전부다(this_run이 false면 같은 Case의 앞 Run이 한 것). 1단계(stage1)는 변경 작업 수 최소화, 2단계(stage2)는 총 지연 최소화 결과다. 대체 자원 시도(try_resources)가 있으면 그 자원을 더한 계산이고, 조건(conditions)이 있으면 작업별로 건 시작 범위(start_min·start_max, 분)·자원을 넣은 계산이다. same_as_candidate_id가 있으면 해가 살아 있는 기존 후보와 같은 배치라 새 후보를 만들지 않았다.
 - 마지막 검증(latest_validation)은 마지막 후보의 독립 검증이고 live가 false면 그 후보는 무효가 되었거나 거절·확정되었다. 직전 거절 사유(last_guard)는 직전 행동이 받아들여지지 않은 이유다.
 - 후보 거절(rejections): 이 Case 후보에 대한 Supervisor 거절이다. 거절된 배정과 같은 배정은 다시 후보가 되지 않는다. quoted_comment는 인용이다. 거절 사실(rejection_facts)은 거절 수, 마지막 거절, 미시도 범위가 남았는지(untried_remaining)다.
+- 담당자 이견(objections): 이 Case의 협의에서 작업 담당자가 변경 요청에 낸 이견 전부다. 이견이 난 변경(작업, 변경 전·후 before·after)과 quoted_comment(인용)가 있다. 거절과 이견은 Case가 끝날 때까지 쌓인다.
+- 살아 있는 후보(live_candidates): 이 Case의 살아 있는 후보와, 그 후보가 담은 거절·이견된 변경(contested: 작업과 REJECTION 거절된 후보의 대상 작업 변경과 같음, OBJECTION 이견이 난 변경과 같음)이다. 서버가 같은 변경인지만 계산한 것이고 사유를 해석한 것이 아니다.
 - 자원 조회 결과(assignable_resources): 작업별로 쓸 수 있는 자원(assignable), 쓸 수 없는 자원과 이유(excluded의 reasons: NOT_ALLOWED 이 Unit 사용 권한 없음, NO_AVAILABILITY 가용 구간 없음, ZONE_NOT_ALLOWED 작업 구역에서 쓸 수 없음, REQUIREMENT_NOT_MET 작업의 자원 요구 조건을 맞추지 못함이고 attribute가 어느 속성인지다), 현재 자원(current), 아직 시도하지 않은 대체 자원(untried_alternatives)이다. 대체 자원은 자원 축이 열린 작업에서만 시도할 수 있고, 서버는 쓸 수 있는 자원만 받는다.
 - 열 수 있는 것(openers): 지금 계산으로는 열 수 없지만 충족되면 해가 열릴 수 있는 것을 서버가 계산해 필요한 것의 모양(kind와 참조)으로 준 것이다. OWNER_CONSENT는 자원 축이 확인되지 않은 작업과 담당자에게 허용을 물을 수 있는 대체 자원이고(담당자가 이미 거절한 값은 빠져 있다), OTHER_UNIT은 이 그룹에 움직일 수 있는 작업을 가진 다른 Unit, FACT_CHANGE는 바뀌면 열릴 수 있는 사실(초과한 풀의 수량, 사용 권한·가용 구간 때문에 제외된 자원, 모든 범위에서 해가 없는 요청 작업의 시간창)이다. 서버는 이것들을 엮지 않는다.
 - 남은 예산(budget_remaining): 남은 step·LLM 시도·Solver 호출 수다.
@@ -115,6 +118,8 @@ OBSERVATION_KEYS = (
     "group",
     "last_guard",
     "latest_validation",
+    "live_candidates",
+    "objections",
     "open_skills",
     "openers",
     "primary_conflict",
@@ -170,4 +175,5 @@ PROMPT_FINGERPRINTS = {
     "replanning-p14": "0397a3a992e57300c0447b096ae45c39b1928fd9a8759865b35cc4cd5420d193",  # 이전 계산은 같은 Case·같은 Unit 것만(묶음 2 ③에서 고친 문구)
     "replanning-p15": "410ef256f1c9b724708cc8733dd4ab6300919bb52200a996f7346e6529b1db91",  # 담당자 질문 삭제, 열 수 있는 것(openers)으로 길을 엮는다 (AG-09·AG-23)
     "replanning-p16": "d8005602e69ea2587c5ea05d497d5663f0cf94261f21e820165e3ff9b1371f50",  # 고정(pinned)·희망 영역(preferred_window), 제약(constraints) 삭제 (AG-27)
+    "replanning-p17": "362df5b67acc319b0cb528c2ea8cdc536fdf2a26a425e90272ff5bbb7e6d1829",  # 조건을 걸고 풀기(SOLVE_WITH_CONDITIONS), 담당자 이견·살아 있는 후보의 거절·이견된 변경, 현장 시각 clock (CV-24·25·26)
 }

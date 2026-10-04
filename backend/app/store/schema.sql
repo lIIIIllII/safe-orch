@@ -1,4 +1,4 @@
--- SAFE-ORCH schema. schema_version 10.
+-- SAFE-ORCH schema. schema_version 11.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -135,6 +135,8 @@ CREATE TABLE search_spec (
     scope_level           TEXT NOT NULL CHECK (scope_level IN ('L0', 'L1', 'L2')),
     axes                  TEXT NOT NULL CHECK (json_valid(axes)),
     resource_alternatives TEXT NOT NULL CHECK (json_valid(resource_alternatives)),
+    -- Agent가 건 조건: 작업 → {start_min, start_max, resource_id, preferred}. 없으면 {}
+    conditions            TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(conditions)),
     time_limit_s          INTEGER NOT NULL CHECK (time_limit_s > 0),
     -- 실효 탐색 키(미시도 판정용, Solver 입력만). hash는 무결성용
     search_key            TEXT NOT NULL,
@@ -457,6 +459,7 @@ CREATE TABLE agent_step (
 );
 
 -- Solver step의 예약·등록 연결. Run ↔ 후보는 solver_result_id로 찾는다.
+-- same_candidate_id: 해가 살아 있는 기존 후보와 같은 배치라 새 후보를 만들지 않았다 (CV-25).
 CREATE TABLE solver_job (
     run_id           TEXT NOT NULL,
     step_no          INTEGER NOT NULL,
@@ -465,9 +468,11 @@ CREATE TABLE solver_job (
     reserved_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     status           TEXT NOT NULL CHECK (status IN ('RESERVED', 'REGISTERED', 'STALE', 'ABORTED')),
     solver_result_id TEXT REFERENCES solver_result (solver_result_id),
+    same_candidate_id TEXT REFERENCES candidate (candidate_id),
     PRIMARY KEY (run_id, step_no),
     FOREIGN KEY (run_id, step_no) REFERENCES agent_step (run_id, step_no),
-    CHECK ((status = 'REGISTERED') = (solver_result_id IS NOT NULL))
+    CHECK ((status = 'REGISTERED') = (solver_result_id IS NOT NULL)),
+    CHECK (same_candidate_id IS NULL OR status = 'REGISTERED')
 );
 
 -- 사람에게 보내는 제안·메시지.

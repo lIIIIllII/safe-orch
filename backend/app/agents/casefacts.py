@@ -18,7 +18,11 @@ from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store.repos._rows import loads, rows
 from app.store.repos.calls import call_key, fingerprint, last_result
 from app.store.repos.case_events import list_case_events
-from app.store.repos.consultations import candidate_state, consultation_view
+from app.store.repos.consultations import (
+    candidate_state,
+    consultation_view,
+    contested_changes,
+)
 from app.store.repos.decisions import list_case_rejections, list_decisions
 from app.store.repos.events import get_event
 from app.store.repos.messages import list_fact_updates
@@ -214,6 +218,8 @@ def candidate_view(
         "stale": state.stale,
         "consultation_status": None if view is None else view.status,
         "open_items": sorted(t for t, s in items.items() if s in OPEN_ITEM),
+        # 거절·이견된 변경을 담고 있는가 (서버 계산, 표시만 한다, CV-26)
+        "contested": contested_changes(conn, site_id, candidate) if live else [],
         # 검토 대기: 검증을 통과했고 살아 있으며 협의 항목이 만들어졌다 (승인은 사람만 한다)
         "review_pending": passed and live and view is not None,
         "decision": None

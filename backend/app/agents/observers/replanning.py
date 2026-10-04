@@ -14,6 +14,7 @@ from app.agents import casefacts
 from app.agents import observe as common
 from app.agents.observe import budget_remaining
 from app.agents.specs import replanning as spec
+from app.domain.calendar import site_time
 from app.domain.canonical import canonical_hash
 from app.domain.eligibility import exclusion_reasons
 from app.domain.groups import ConflictGroup, conflict_groups, movable_task_ids
@@ -21,7 +22,7 @@ from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent, Tas
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.solver.search_spec import SearchSpecError, build_search_spec
-from app.store.repos.consultations import candidate_state
+from app.store.repos.consultations import candidate_state, case_objections, contested_changes
 from app.store.repos.decisions import list_case_rejections
 from app.store.repos.messages import declined_values, open_owner_asks
 from app.store.repos.pins import preferred_windows
@@ -199,6 +200,25 @@ def openers(
     return out
 
 
+def _live_candidates(
+    conn: sqlite3.Connection, pack: LoadedPack, case_id: str
+) -> list[dict[str, Any]]:
+    out = []
+    for cid in casefacts.case_candidate_ids(conn, pack, case_id):
+        candidate = get_candidate(conn, pack.site_id, cid)
+        assert candidate is not None
+        state = candidate_state(conn, pack.site_id, candidate)
+        if state.stale or state.rejected or state.committed:
+            continue
+        out.append(
+            {
+                "candidate_id": cid,
+                "contested": contested_changes(conn, pack.site_id, candidate),
+            }
+        )
+    return out
+
+
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:
     run = get_run(conn, run_id)
     site = get_site(conn, pack.site_id)
@@ -214,6 +234,10 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     untried = [lv for lv, k in keys.items() if k not in tried]
 
     base = facts.base_assignments()
+
+    def clock(minute: int) -> str:
+        return site_time(pack.horizon_start_utc, pack.timezone, minute)
+
     pins = {p.task_id: p for p in facts.pins}
     windows = preferred_windows(conn, pack.site_id)
     acting_tasks = [
@@ -241,6 +265,12 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             if t.task_id not in windows
             else {k: windows[t.task_id][k] for k in ("start", "end")},
             "base": base[t.task_id].model_dump(),
+            # 같은 값의 현장 날짜·시각. 조건 도구의 시각 인자가 이 형식이다 (AG-21)
+            "clock": {
+                "earliest_start": clock(t.earliest_start),
+                "latest_start": clock(t.latest_start),
+                "base_start": clock(base[t.task_id].start),
+            },
         }
         for t in sorted(facts.tasks, key=lambda t: t.task_id)
         if t.unit_id == run.acting_unit_id
@@ -248,7 +278,12 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     acting_ids = {t["task_id"] for t in acting_tasks}
     # 이전 계산과 마지막 검증은 Case 단위다: 메인이 다시 부른 Run도 앞 Run의 결과를 본다 (CV-13)
     attempts = list_attempts(conn, run_id)
-    candidates = [a["candidate_id"] for a in attempts if a["candidate_id"]]
+    # 기존 후보와 같은 배치에 도달한 시도는 그 후보를 가리킨다 (CV-25)
+    candidates = list(
+        dict.fromkeys(
+            cid for a in attempts if (cid := a["candidate_id"] or a["same_as_candidate_id"])
+        )
+    )
     latest_validation = None
     done_ready = False
     for cid in candidates:
@@ -328,7 +363,9 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         }
     hidden = {"eligible": eligible, "done_ready": done_ready}
     # 모든 범위를 계산했고 전부 해가 없다 (요청 작업의 시간창이 바뀌어야 열린다)
-    by_key = {a["search_key"]: a for a in attempts if not a["try_resources"]}
+    by_key = {
+        a["search_key"]: a for a in attempts if not a["try_resources"] and not a["conditions"]
+    }
     all_infeasible = bool(keys) and all(
         ((by_key.get(k) or {}).get("stage1") or {}).get("status") == "INFEASIBLE"
         for k in keys.values()
@@ -364,6 +401,10 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "latest_validation": latest_validation,
         # 이 Case 후보에 대한 Supervisor 거절. comment는 인용 데이터다
         "rejections": list_case_rejections(conn, run.case_id),
+        # 이 Case의 협의에서 담당자가 낸 이견 전부. quoted_comment는 인용 데이터다 (CV-26)
+        "objections": case_objections(conn, pack.site_id, run.case_id),
+        # 이 Case의 살아 있는 후보와 그 후보가 담은 거절·이견된 변경 (서버 계산)
+        "live_candidates": _live_candidates(conn, pack, run.case_id),
         # 거절 사실(서버 계산): 거절 수, 마지막 거절, 미시도 범위가 남았는지
         "rejection_facts": {
             **casefacts.rejection_facts(conn, run.case_id),

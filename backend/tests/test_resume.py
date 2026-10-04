@@ -272,7 +272,11 @@ def test_plan_b_reject_and_pin_recalls_replanning(seeded):
     assert pinned["C"] == {"pinned_by": "supervisor", "by_role": "SUPERVISOR"}
     assert pinned["A"] is None
     assert obs["untried_levels"] == []
-    assert _names(s3) == ["LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]  # 사람 도구는 없다
+    assert _names(s3) == [  # 사람 도구는 없다
+        "SOLVE_WITH_CONDITIONS",
+        "LIST_ASSIGNABLE_RESOURCES",
+        "RETURN_RESULT",
+    ]
     assert s3["action"]["name"] == "RETURN_RESULT"
     # 열 수 있는 것: C는 고정이라 빠지고, A에 물을 수 있는 대체 자원과 권한 때문에 제외된 자원이 남는다
     openers = [
@@ -394,7 +398,11 @@ def test_plan_b_full_e2e(seeded):
         "resources_hash": s_list["tool_result"]["resources_hash"],
     }
     # LIST 대상은 자원이 필요하고 고정되지 않은 acting 작업이다(C·Q는 고정이라 빠진다)
-    assert _names(s_list) == ["LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]
+    assert _names(s_list) == [
+        "SOLVE_WITH_CONDITIONS",
+        "LIST_ASSIGNABLE_RESOURCES",
+        "RETURN_RESULT",
+    ]
     assert _enum(s_list, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A"]
     assert s_end["observation"]["untried_levels"] == []
     assert (stuck.human_rounds_used, "human_rounds" in s_end["budget_remaining"]) == (0, False)
@@ -483,6 +491,7 @@ def test_plan_b_full_e2e(seeded):
     assert s_try["tool_result"]["try_resources"] == {"A": ["SITE-CR-01"]}
     # 자원 축이 열렸다. 수락으로 context·Consent가 바뀌어도 Solver 입력이 같아 L0는 다시 열리지 않는다
     assert _names(s_try) == [
+        "SOLVE_WITH_CONDITIONS",
         "LIST_ASSIGNABLE_RESOURCES",
         "TRY_ALTERNATIVE_RESOURCE",
         "RETURN_RESULT",
@@ -540,6 +549,7 @@ def test_accept_does_not_reopen_tried_levels(seeded):
     s_l0, s_end = _steps(recalled.run_id)
     assert s_l0["observation"]["untried_levels"] == []
     assert _names(s_l0) == [
+        "SOLVE_WITH_CONDITIONS",
         "LIST_ASSIGNABLE_RESOURCES",
         "TRY_ALTERNATIVE_RESOURCE",
         "RETURN_RESULT",
@@ -1164,7 +1174,12 @@ def test_server_does_not_order_list_try_or_blocked(seeded):
     run_until_idle(pack, model_factory=_factory(_try_beta(), stuck))
     [run] = _runs("REPLANNING")
     s_try, s_end = _steps(run.run_id)
-    assert _names(s_end) == ["SOLVE_WITH_SCOPE", "LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]
+    assert _names(s_end) == [
+        "SOLVE_WITH_SCOPE",
+        "SOLVE_WITH_CONDITIONS",
+        "LIST_ASSIGNABLE_RESOURCES",
+        "RETURN_RESULT",
+    ]
     assert s_try["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"  # 자원 축 미확인
     assert s_end["observation"]["untried_levels"] == ["L0", "L1", "L2"]
     assert s_end["observation"]["assignable_resources"] == []

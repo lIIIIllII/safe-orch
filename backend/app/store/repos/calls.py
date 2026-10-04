@@ -77,6 +77,17 @@ def fingerprint(conn: sqlite3.Connection, site_id: str, key: str, candidate_id: 
                 " ORDER BY rowid",
                 tuple(runs),
             ),
+            # 담당자 이견(현장 전체). 재계획은 다른 Run의 후보에 난 이견도 다음 안에 반영해야 하므로,
+            # 이견 뒤의 재호출이 막히지 않게 한다 (CV-26)
+            "objections": _column(
+                conn,
+                "SELECT message_id FROM message WHERE site_id = ? AND type = 'CHANGE_REQUEST'"
+                " AND status = 'ANSWERED' AND json_extract(reply, '$.decision') = 'DECLINE'"
+                " ORDER BY rowid",
+                (site_id,),
+            )
+            if key.startswith("REPLANNING:")
+            else [],
             "notices": _column(
                 conn,
                 f"SELECT message_id FROM message WHERE type = 'NOTICE' AND run_id IN ({marks})"

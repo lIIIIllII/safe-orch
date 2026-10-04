@@ -3,7 +3,7 @@
 from collections.abc import Mapping, Sequence
 
 from app.domain.canonical import canonical_hash
-from app.domain.models import Assignment, Movable, SnapshotContent
+from app.domain.models import Assignment, Condition, Movable, SnapshotContent
 
 
 def search_spec_hash(
@@ -12,17 +12,25 @@ def search_spec_hash(
     axes: Mapping[str, Movable],
     resource_alternatives: Mapping[str, Sequence[str]],
     time_limit_s: int,
+    conditions: Mapping[str, Condition] | None = None,
 ) -> str:
-    """실효 내용의 hash. 두 축이 모두 false인 작업, ID, scope_level은 넣지 않는다."""
-    return canonical_hash(
-        {
-            "snapshot_hash": snapshot_hash,
-            "acting_unit_id": acting_unit_id,
-            "axes": {tid: ax.model_dump() for tid, ax in axes.items() if ax.time or ax.resource},
-            "resource_alternatives": {k: list(v) for k, v in resource_alternatives.items()},
-            "time_limit_s": time_limit_s,
-        }
-    )
+    """실효 내용의 hash. 두 축이 모두 false인 작업, ID, scope_level은 넣지 않는다.
+    조건은 있을 때만 넣는다(조건 없는 탐색의 hash는 그대로다)."""
+    content = {
+        "snapshot_hash": snapshot_hash,
+        "acting_unit_id": acting_unit_id,
+        "axes": {tid: ax.model_dump() for tid, ax in axes.items() if ax.time or ax.resource},
+        "resource_alternatives": {k: list(v) for k, v in resource_alternatives.items()},
+        "time_limit_s": time_limit_s,
+    }
+    if conditions:
+        content["conditions"] = _condition_input(conditions)
+    return canonical_hash(content)
+
+
+def _condition_input(conditions: Mapping[str, Condition]) -> dict[str, list]:
+    """조건 가운데 Solver 입력인 것만(시작 범위·자원). 희망 영역에서 왔다는 표시는 입력이 아니다."""
+    return {tid: [c.start_min, c.start_max, c.resource_id] for tid, c in sorted(conditions.items())}
 
 
 def search_key(
@@ -31,6 +39,7 @@ def search_key(
     axes: Mapping[str, Movable],
     resource_alternatives: Mapping[str, Sequence[str]],
     time_limit_s: int,
+    conditions: Mapping[str, Condition] | None = None,
 ) -> str:
     """실효 탐색 키: "같은 실효 SearchSpec 미시도" 판정용. Solver 입력만 넣는다.
 
@@ -43,6 +52,7 @@ def search_key(
     - 고정은 넣지 않는다. 고정은 axes를 통해서만 Solver 입력에 영향을 준다(범위 밖 작업의 고정은
       그 범위의 탐색을 바꾸지 않는다)
     - axes는 정규화: resource 축이 true여도 대체 자원이 없으면 Solver 입력이 같으므로 false
+    - Agent가 건 조건은 Solver 입력이다. 같은 범위라도 조건이 다르면 다른 키다 (CV-24)
     """
     base = facts.base_assignments()
     effective = {}
@@ -50,8 +60,10 @@ def search_key(
         resource = ax.resource and bool(resource_alternatives.get(tid))
         if ax.time or resource:
             effective[tid] = {"time": ax.time, "resource": resource}
+    extra = {"conditions": _condition_input(conditions)} if conditions else {}
     return canonical_hash(
         {
+            **extra,
             "tasks": [
                 {
                     "task_id": t.task_id,

@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p4"
+PROMPT_VERSION = "main-p5"
 
 
 def tool_catalog() -> str:
@@ -68,7 +68,8 @@ Hold가 걸린 작업(held_task_ids), 이 그룹의 작업을 바꾸는 검토 �
 - Hold(holds): 신고로 걸린 보류와 그 신고의 유형·사실 수정안 상태다. ACTIVE Hold가 하나라도 있으면 재계획·협의 \
 호출과 승인이 막힌다. Hold는 사람이 푼다.
 - 후보(candidates): 이 Case의 후보마다 검증(validation), 살아 있는지(live), 협의 상태와 답을 기다리는 \
-항목(open_items), 검토 대기(review_pending), 사람의 결정(decision: 승인·거절, 거절이면 사유 코드·대상, \
+항목(open_items), 거절·이견된 변경(contested: 그 후보가 담은 변경 가운데 이 Case에서 거절된 후보의 대상 \
+작업 변경과 같거나 담당자 이견이 난 변경과 같은 것. 서버가 같은 변경인지만 계산했다), 검토 대기(review_pending), 사람의 결정(decision: 승인·거절, 거절이면 사유 코드·대상, \
 quoted_comment는 인용), 확정 뒤 통지(notice: 대상 수와 아직 보내지 않은 수)가 있다. 현장 버전이 하나라서 한 \
 후보가 확정되면 같은 현장의 다른 후보는 무효가 된다.
 - 거절 사실(rejections): 이 Case 후보에 대한 거절 수와 마지막 거절이다.
@@ -152,4 +153,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p2": "aca786e464d79a04b062e16bd8e5b46c98ce17abc9ac23cbb5f6d3cbea57ab19",  # 미배치 작업의 검토 대기 후보, 움직일 수 있는 작업
     "main-p3": "745ef85c552fdff4e018f85c7f389344d1dddc809e6df3e473501b864f1c555a",  # 사전 확인 호출(need_ids), 길과 열 수 있는 것, askable 삭제 (AG-09·AG-23)
     "main-p4": "9a270fdcd800ecd3cfad0173c714b619d82c4fc3e8706255261478f850f58598",  # 고정·해제 사건, 고정되지 않은 작업이 움직인다, 제약 삭제 (AG-27)
+    "main-p5": "fd9fdc255292ca861058682bf294f058371ccafa8d7614defc8dd4f49c0d60a5",  # 후보의 거절·이견된 변경(contested): 협의로 보내지 않고 재계획 (CV-26)
 }

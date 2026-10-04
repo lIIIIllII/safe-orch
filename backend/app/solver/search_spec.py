@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from app.domain.eligibility import exclusion_reasons
 from app.domain.hashes import search_key, search_spec_hash
 from app.domain.ids import new_id
-from app.domain.models import Conflict, Movable, ScopeLevel, SearchSpec, Snapshot
+from app.domain.models import Condition, Conflict, Movable, ScopeLevel, SearchSpec, Snapshot
 
 TIME_LIMIT_S = 10
 
@@ -27,6 +27,7 @@ def build_search_spec(
     acting_unit_id: str,
     scope_level: ScopeLevel,
     try_resources: Mapping[str, Sequence[str]] | None = None,
+    conditions: Mapping[str, Condition] | None = None,
 ) -> SearchSpec:
     facts = snapshot.facts()
     base = facts.base_assignments()
@@ -75,16 +76,44 @@ def build_search_spec(
             raise SearchSpecError("RESOURCE_NOT_AUTHORIZED", f"{tid}: {list(rids)}")
         alternatives[tid] = tuple(ok)
 
+    # Agent가 건 조건은 좁히기만 한다. 서버는 유효성만 본다 (CV-24)
+    conds = dict(sorted((conditions or {}).items()))
+    for tid, c in conds.items():
+        if tid in pinned and tid in tasks:
+            raise SearchSpecError("TASK_PINNED", tid)
+        if tid not in axes:
+            raise SearchSpecError("CONDITION_TASK_NOT_IN_SCOPE", tid)
+        task = tasks[tid]
+        lo, hi = c.start_min, c.start_max
+        if (lo, hi, c.resource_id) == (None, None, None) or (
+            lo is not None and hi is not None and lo > hi
+        ):
+            raise SearchSpecError("CONDITION_INVALID", tid)
+        if any(
+            v is not None and not task.earliest_start <= v <= task.latest_start for v in (lo, hi)
+        ):
+            raise SearchSpecError("CONDITION_OUTSIDE_WINDOW", tid)
+        if c.resource_id is not None and c.resource_id != base[tid].resource_id:
+            # 기준 자원이 아니면 자원 축이 열려 있고 적격인 자원이어야 한다 (CV-20)
+            if not axes[tid].resource:
+                raise SearchSpecError("RESOURCE_AXIS_NOT_ALLOWED", tid)
+            r = resources.get(c.resource_id)
+            if r is None or exclusion_reasons(task, r, acting_unit_id):
+                raise SearchSpecError("RESOURCE_NOT_ELIGIBLE", f"{tid}: {c.resource_id}")
+            alternatives[tid] = tuple(dict.fromkeys((*alternatives.get(tid, ()), c.resource_id)))
+    alternatives = dict(sorted(alternatives.items()))
+
     return SearchSpec(
         search_spec_id=new_id("ss"),
         hash=search_spec_hash(
-            snapshot.snapshot_hash, acting_unit_id, axes, alternatives, TIME_LIMIT_S
+            snapshot.snapshot_hash, acting_unit_id, axes, alternatives, TIME_LIMIT_S, conds
         ),
         snapshot_id=snapshot.snapshot_id,
         acting_unit_id=acting_unit_id,
         scope_level=scope_level,
         axes=axes,
         resource_alternatives=alternatives,
+        conditions=conds,
         time_limit_s=TIME_LIMIT_S,
-        search_key=search_key(facts, acting_unit_id, axes, alternatives, TIME_LIMIT_S),
+        search_key=search_key(facts, acting_unit_id, axes, alternatives, TIME_LIMIT_S, conds),
     )

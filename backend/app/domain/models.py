@@ -412,6 +412,16 @@ class Snapshot(Frozen):
         return SnapshotContent.model_validate(self.content)
 
 
+class Condition(Frozen):
+    """Agent가 한 작업에 건 탐색 조건 (CV-24). 좁히기만 한다: 시작 범위 [start_min, start_max](분),
+    자원 지정. preferred는 시작 범위가 희망 영역에서 왔다는 표시다."""
+
+    start_min: int | None = None
+    start_max: int | None = None
+    resource_id: str | None = None
+    preferred: bool = False
+
+
 class SearchSpec(Frozen):
     search_spec_id: str
     hash: str
@@ -420,6 +430,8 @@ class SearchSpec(Frozen):
     scope_level: ScopeLevel
     axes: dict[str, Movable]
     resource_alternatives: dict[str, tuple[str, ...]]
+    # Agent가 건 조건(작업별). 없으면 빈 dict (CV-24)
+    conditions: dict[str, Condition] = Field(default_factory=dict)
     time_limit_s: int = Field(gt=0)
     # 실효 탐색 키(미시도 판정용, Solver 입력만). 무결성 hash와 다르다
     search_key: str
