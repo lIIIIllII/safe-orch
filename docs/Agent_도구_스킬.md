@@ -32,8 +32,9 @@
 - LLM 시도 Budget은 모든 Agent가 step × 2다.
 - 전문 Agent는 다른 Agent를 부르지 않고 사람에게 이관하지도 않는다. 막히면 `RETURN_RESULT(BLOCKED)`에 요약과 풀 수 있는 길을 담아 메인에게 돌려준다. Supervisor 이관은 메인만 한다.
 - 작업 담당자 확인은 Coordination 한 창구다. 후보가 있으면 협의로, 후보가 없으면 사전 확인으로 묻는다. Replanning은 사람에게 묻지 않고, 담당자 확인이 있어야 열리는 해는 막힌 결과의 길로 돌려준다.
+- 작업 고정·고정 해제와 희망 영역은 사람만 타임라인에서 한다. Agent 도구에 없다(AG-27). 작업을 관찰에 넣는 Agent(Replanning, Event Response)의 관찰에는 고정 여부(누가)와 희망 영역이 들어가고, 메인의 "움직일 수 있는 작업"은 고정되지 않은 작업이다. 희망 영역을 Solver 시도에 쓰는 것은 여러 안 제안 때 한다.
 - Intake는 메인이 부르지 않는 입구다. 접수에서 시작하고, 완료하면 작업이 준비되며, 막히면 이관 없이 요청자에게 접수 미완을 알린다.
-- 메인은 한 번에 하나다. 사건(작업 준비됨, 신고, Hold 해제, 후보 승인·거절, 하위 Run 종료, 요청 철회)이 생겼는데 열린 메인이 없으면 새 메인을 띄운다. 열린 메인은 하위 Run이 끝날 때, 또는 열린 하위 Run이 없을 때 그 Case의 사건이 생기면 깨어난다(하위 Run이 사람을 기다리는 동안에는 깨우지 않는다). 사람의 답은 사건이 아니라 물은 전문 Agent가 받는다.
+- 메인은 한 번에 하나다. 사건(작업 준비됨, 신고, Hold 해제, 후보 승인·거절, 하위 Run 종료, 요청 철회)이 생겼는데 열린 메인이 없으면 새 메인을 띄운다. 작업 고정·고정 해제는 열린 메인이 있을 때만 사건이 되고, 새 메인을 띄우지 않는다. 열린 메인은 하위 Run이 끝날 때, 또는 열린 하위 Run이 없을 때 그 Case의 사건이 생기면 깨어난다(하위 Run이 사람을 기다리는 동안에는 깨우지 않는다). 사람의 답은 사건이 아니라 물은 전문 Agent가 받는다.
 - 열린 메인이 있는 동안 새 작업은 대기열에 서고, 메인이 어떤 상태로 끝나든 대기열에서 1건이 올라간다(사건을 합치거나 미루는 판단은 3단계).
 
 ## 3. 도구
@@ -90,7 +91,6 @@
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
 | `COMPLETE_TASK_BATCH(tasks)` | 확인된 값으로 작업 묶음을 만든다(확인 값과 다르면 거절) | D |
-| `DRAFT_CONSTRAINT(reply, task, axes)` | 담당자 이견을 제약 초안으로, 그 담당자에게 확인 요청 | C |
 | `PROPOSE_FACT_UPDATE(task, old, new, evidence)` | 사실 수정안, Supervisor 확인 요청 | C |
 
 **마무리·답변**
@@ -105,14 +105,14 @@
 - need는 종류와 그 종류의 참조만 쓴다. 자유 문장은 없다. 서버는 참조가 가리키는 대상이 지금 사실에 있는지 검사하고, 아니면 거절한다(`NEED_INVALID`).
 - Budget 소진은 need가 아니다. Run의 종료 사유로만 남는다.
 - 열 수 있는 것(openers): 서버가 지금 사실에서 계산해 need 모양으로 준다. Replanning 관찰에 넣고, 막힌 결과에도 붙인다(모델이 길을 비워도 메인이 볼 것이 남는다). 서버는 엮지 않는다. 길은 모델이 엮는다.
-  - 담당자 확인(`OWNER_CONSENT`): 자원 축이 확인되지 않은 작업과 물을 수 있는 적격 대체 자원. 거절한 값, 제약으로 고정된 작업, 답을 기다리는 질문이 있는 작업은 뺀다.
+  - 담당자 확인(`OWNER_CONSENT`): 자원 축이 확인되지 않은 작업과 물을 수 있는 적격 대체 자원. 거절한 값, 고정된 작업, 답을 기다리는 질문이 있는 작업은 뺀다.
   - 다른 Unit(`OTHER_UNIT`): 그 그룹에 움직일 수 있는 작업을 가진 다른 Unit.
   - 사실(`FACT_CHANGE`): 풀 초과 충돌의 풀(수량), 자원 조회에서 제외된 자원(사용 권한 없음 → 사용 권한, 가용 없음 → 가용 구간), 모든 범위에서 해가 없는 요청 작업의 시간창.
 - need ID: 결과의 need마다 서버가 ID를 붙인다(Run·길·순번). 모델이 엮은 길의 need와 서버가 붙인 openers의 need는 결과와 기록에서 따로 남고, 메인은 어느 쪽 ID든 같은 방식으로 넘긴다.
 
 | 종류 | 참조 | 서버 검증 |
 |---|---|---|
-| `OWNER_CONSENT` | 작업, 축, (자원 축이면 자원 값) | 현재 계산 대상 작업, 그 축이 확인된 제약으로 고정되지 않음, 자원 값이 적격이고 담당자가 거절한 값이 아님(같은 작업 revision이면 현장 전체) |
+| `OWNER_CONSENT` | 작업, 축, (자원 축이면 자원 값) | 현재 계산 대상 작업, 그 작업이 고정되지 않음(동의로 고정을 우회하지 않는다), 자원 값이 적격이고 담당자가 거절한 값이 아님(같은 작업 revision이면 현장 전체) |
 | `OTHER_UNIT` | 충돌 그룹, Unit | 그 그룹에 움직일 수 있는 작업을 가진 Unit이고 그 Run의 acting unit이 아님 |
 | `FACT_CHANGE` | 필드와 대상 하나(작업: 시간창·작업 시간·요청 철회, 자원: 가용 구간·사용 권한, 풀: 수량) | 대상이 있음 |
 | `HUMAN_INFO` | 사람, 신고 또는 작업 | 사람과 대상이 있음. Intake는 요청자와 접수 중인 작업, Event Response는 신고자와 그 신고 |
@@ -134,11 +134,11 @@
 | 작업 접수 | 작성 중인 작업 묶음이 있음 | `REQUEST_CONFIRMATION`, `COMPLETE_TASK_BATCH` | Intake |
 | 원인 찾기 | 풀리지 않은 충돌 그룹이 있음 | `DIAGNOSE`, `TEST_RELAXATION`, `PREVIEW` | Replanning |
 | 후보 구성 | 충돌 그룹이 있음 | `SOLVE`, `COMPARE_CANDIDATES`, `SUBMIT_CANDIDATES` | Replanning |
-| 거절 반영 | 이 Case 후보에 거절·이견이 있음 | `DIAGNOSE`, `SOLVE`, `COMPARE_CANDIDATES` | Replanning |
+| 거절 반영 | 이 Case 후보에 거절이 있음 | `DIAGNOSE`, `SOLVE`, `COMPARE_CANDIDATES` | Replanning |
 | 영향 분석 | 분석할 변경(신고·후보·가정)이 있음 | `ANALYZE_IMPACT`, `PREVIEW` | Replanning, Event Response, Coordination (Main은 4단계) |
 | 요청자 질문 | 작성 중인 작업 묶음이 있음 | `ASK_REQUESTER`, `WAIT_FOR_REPLIES` | Intake |
 | 신고자 질문 | 신고가 있음 | `ASK_REPORTER`, `WAIT_FOR_REPLIES` | Event Response |
-| 협의 | 확인 대기 항목이나 이견이 있음 | `ASK_OWNER`, `WAIT_FOR_REPLIES`, `DRAFT_CONSTRAINT` | Coordination |
+| 협의 | 확인 대기 항목이나 이견이 있음 | `ASK_OWNER`, `WAIT_FOR_REPLIES` (이견은 결과에 담아 돌려준다) | Coordination |
 | 통지 | 확정됐는데 통지하지 않은 대상이 있음 | `SEND_NOTICE` | Coordination |
 | 사실 수정 | Hold가 걸린 신고가 있음 | `PROPOSE_FACT_UPDATE` | Event Response |
 | 답변 | 질문이 있음 | `ANSWER`, `COMPARE_CANDIDATES` | Site Assistant |
@@ -151,7 +151,7 @@
 | Main | `CALL_AGENT`, `WAIT`, `ESCALATE`, `CLOSE`. 조회·영향 분석·알아보기 도구는 4단계 |
 | Intake | 조회, `ASK_REQUESTER`, `REQUEST_CONFIRMATION`, `WAIT_FOR_REPLIES`, `COMPLETE_TASK_BATCH`, `RETURN_RESULT` |
 | Replanning | 조회, 알아보기 전부, `SOLVE`, `SUBMIT_CANDIDATES`, `RETURN_RESULT`. 사람 도구 없음 |
-| Coordination | 조회, `ANALYZE_IMPACT`, `ASK_OWNER`, `WAIT_FOR_REPLIES`, `DRAFT_CONSTRAINT`, `SEND_NOTICE`, `RETURN_RESULT` |
+| Coordination | 조회, `ANALYZE_IMPACT`, `ASK_OWNER`, `WAIT_FOR_REPLIES`, `SEND_NOTICE`, `RETURN_RESULT` |
 | Event Response | 조회, `ANALYZE_IMPACT`, `PREVIEW`, `ASK_REPORTER`, `WAIT_FOR_REPLIES`, `PROPOSE_FACT_UPDATE`, `RETURN_RESULT` |
 | Site Assistant | 조회, `COMPARE_CANDIDATES`, `ANSWER` |
 

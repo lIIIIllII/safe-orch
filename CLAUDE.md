@@ -22,7 +22,7 @@ Agent·도구·스킬: `docs/Agent_도구_스킬.md` (목록과 규칙. 지침 �
 - `app/validator`는 `app.solver` import 금지.
 - `app/agents/graph.py`·`app/agents/specs`는 `app.store`·`app.commands` import 금지(Tool Gateway만 가능).
 - `langgraph.prebuilt`, `create_agent`, checkpointer, `interrupt` 사용 금지.
-- Tool Gateway에 승인·확정·Hold 해제·Proposal 확인 함수 금지.
+- Tool Gateway에 승인·확정·Hold 해제·Proposal 확인·작업 고정·고정 해제 함수 금지.
 - 1 step = step 예약 → LLM 1회 → Action 1개.
 
 ## 실행
