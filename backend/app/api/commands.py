@@ -51,6 +51,7 @@ from app.commands.pins import (
     unpin_task,
 )
 from app.commands.runs import CancelRun, cancel_run
+from app.commands.schedule import export_schedule
 from app.commands.service import Body
 from app.commands.task_edit import EditRequest, edit_task
 from app.commands.task_request import (
@@ -145,6 +146,13 @@ def post_intake(
     """자연어 작업 요청 → Work Intake Run."""
     check_site(site_id, pack)
     return respond(submit_intake(pack, actor.actor_id, key, body))
+
+
+@router.post("/sites/{site_id}/schedules/export")
+def post_schedule_export(site_id: str, pack: PackDep, actor: ActorDep, key: KeyDep) -> JSONResponse:
+    """지금 확정 계획을 일정 문서로 꺼내 기록에 남긴다. 문서는 GET /schedules/{id}로 받는다."""
+    check_site(site_id, pack)
+    return respond(export_schedule(pack, actor.actor_id, key))
 
 
 @router.post("/tasks/{task_id}/withdraw")

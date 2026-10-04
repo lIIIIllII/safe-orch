@@ -126,6 +126,20 @@ CREATE TABLE snapshot (
     content       TEXT NOT NULL CHECK (json_valid(content))
 );
 
+-- 일정 문서(꺼낸 것 EXPORT·넣은 것 IMPORT). content는 정규화 JSON 원문, content_hash는 본문(작업·배정)의
+-- hash다. 버전 번호는 두지 않는다: content_hash와 그 시점의 계획 revision으로 가린다 (ST-23).
+CREATE TABLE schedule (
+    schedule_id   TEXT PRIMARY KEY,
+    site_id       TEXT NOT NULL REFERENCES site (site_id),
+    kind          TEXT NOT NULL CHECK (kind IN ('EXPORT', 'IMPORT')),
+    content_hash  TEXT NOT NULL,
+    plan_revision INTEGER NOT NULL CHECK (plan_revision >= 0),
+    actor_id      TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    content       TEXT NOT NULL CHECK (json_valid(content)),
+    FOREIGN KEY (site_id, actor_id) REFERENCES actor (site_id, actor_id)
+);
+
 CREATE TABLE search_spec (
     search_spec_id        TEXT PRIMARY KEY,
     site_id               TEXT NOT NULL REFERENCES site (site_id),
@@ -621,6 +635,11 @@ CREATE TRIGGER snapshot_no_update BEFORE UPDATE ON snapshot
 BEGIN SELECT RAISE(ABORT, 'immutable: snapshot'); END;
 CREATE TRIGGER snapshot_no_delete BEFORE DELETE ON snapshot
 BEGIN SELECT RAISE(ABORT, 'immutable: snapshot'); END;
+
+CREATE TRIGGER schedule_no_update BEFORE UPDATE ON schedule
+BEGIN SELECT RAISE(ABORT, 'immutable: schedule'); END;
+CREATE TRIGGER schedule_no_delete BEFORE DELETE ON schedule
+BEGIN SELECT RAISE(ABORT, 'immutable: schedule'); END;
 
 CREATE TRIGGER search_spec_no_update BEFORE UPDATE ON search_spec
 BEGIN SELECT RAISE(ABORT, 'immutable: search_spec'); END;

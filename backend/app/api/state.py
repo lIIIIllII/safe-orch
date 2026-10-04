@@ -39,6 +39,7 @@ from app.store.repos.records import (
 )
 from app.store.repos.resources import list_resources
 from app.store.repos.runs import approach_attempts, get_run, list_steps, run_for_solver_result
+from app.store.repos.schedules import get_schedule
 from app.store.repos.site import get_site, list_actors, list_zone_relations
 from app.store.repos.snapshots import build_snapshot_content, plan_facts
 from app.store.repos.tasks import list_current_tasks
@@ -577,6 +578,16 @@ def get_remove_check(task_id: str, pack: PackDep, actor: ActorDep) -> dict[str, 
     """[작업 없애기]의 확인: 없앨 수 있는지와 무효가 될 검토 중인 안 (AG-31)."""
     with db.read_tx() as conn:
         return remove_check(conn, pack, actor.actor_id, task_id)
+
+
+@router.get("/schedules/{schedule_id}")
+def get_schedule_document(schedule_id: str, pack: PackDep, actor: ActorDep) -> dict[str, Any]:
+    """기록에 남은 일정 문서 원문."""
+    with db.read_tx() as conn:
+        found = get_schedule(conn, pack.site_id, schedule_id)
+    if found is None:
+        raise ApiError(404, "SCHEDULE_NOT_FOUND")
+    return found["document"]
 
 
 @router.get("/runs/{run_id}")
