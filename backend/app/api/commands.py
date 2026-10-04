@@ -10,9 +10,11 @@ from pydantic import Field
 from app.api.deps import ActorDep, KeyDep, PackDep, check_site, respond
 from app.commands.approval import (
     ApproveRequest,
+    ChooseRequest,
     RejectRequest,
     WaiveRequest,
     approve_and_commit,
+    choose_candidate,
     reject_candidate,
     waive,
 )
@@ -55,6 +57,10 @@ router = APIRouter()
 class ApproveBody(Body):
     validation_id: str
     expected_context_version: int
+
+
+class ChooseBody(Body):
+    validation_id: str
 
 
 class RejectBody(Body):
@@ -155,6 +161,15 @@ def post_approve(
 ) -> JSONResponse:
     req = ApproveRequest(candidate_id=candidate_id, **body.model_dump())
     return respond(approve_and_commit(pack, actor.actor_id, key, req))
+
+
+@router.post("/candidates/{candidate_id}/choose")
+def post_choose(
+    candidate_id: str, body: ChooseBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """Supervisor가 이 안을 고른다. 고른 안만 협의한다 (AG-28)."""
+    req = ChooseRequest(candidate_id=candidate_id, **body.model_dump())
+    return respond(choose_candidate(pack, actor.actor_id, key, req))
 
 
 @router.post("/candidates/{candidate_id}/reject")

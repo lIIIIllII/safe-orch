@@ -61,3 +61,7 @@ class AgentBinding:
     observer: ModuleType
     executor: type
     exec_contract_version: str
+
+
+# 메인이 재계획에 주는 접근(무엇을 우선할지). 방식은 재계획 Agent가 고른다 (AG-28)
+APPROACHES = ("MIN_CHANGE", "MIN_DELAY", "PREFER_WINDOW")

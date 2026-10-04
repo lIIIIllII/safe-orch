@@ -56,6 +56,15 @@ def _alpha_ready(client, pack):
     res = client.post(f"/api/sites/{SITE}/task-requests", json=_form(pack), headers=_h("planner_a"))
     assert res.status_code == 200, res.text
     run_until_idle(pack, model_factory=lambda: ScriptedChatModel(list(GATE_SCRIPT)))
+    # Supervisor가 안을 고른다(API). Supervisor가 아니면 고르지 못하고, 고른 안만 협의가 나간다 (AG-28)
+    [first] = _state(client)["review_queue"]
+    found = next(c for c in _state(client)["candidates"] if c["candidate_id"] == first)
+    assert (found["chosen"], found["approaches"][0]["approach"]) == (False, "MIN_CHANGE")
+    body = {"validation_id": found["validation"]["validation_id"]}
+    url = f"/api/candidates/{first}/choose"
+    assert client.post(url, json=body, headers=_h("planner_a")).status_code == 403
+    assert client.post(url, json=body, headers=_h()).status_code == 200
+    run_until_idle(pack, model_factory=lambda: ScriptedChatModel(list(GATE_SCRIPT)))
     state = _state(client)
     [alpha] = state["review_queue"]
     cand = next(c for c in state["candidates"] if c["candidate_id"] == alpha)

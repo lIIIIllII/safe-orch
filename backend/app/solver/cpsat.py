@@ -2,6 +2,7 @@
 
 트랜잭션 밖에서 돈다. 모든 READY 작업을 넣고 SearchSpec이 허용하지 않은 작업·축은 기준값 상수다.
 1단계 min Σ changed_t, 1단계가 OPTIMAL이면 그 값을 고정하고 2단계 min Σ max(0, s_t − base_t).
+목적 순서가 지연 먼저(DELAY_FIRST)면 두 단계의 목적을 바꾼다: 1단계 지연, 2단계 변경 작업 수 (CV-27).
 Rule 데이터는 Pack에서 읽고 app.rules·app.validator를 import하지 않는다.
 """
 
@@ -191,25 +192,43 @@ def _solution(b: _Built, solver: cp_model.CpSolver) -> list[dict[str, Any]]:
 
 def solve(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> SolverResult:
     began = time.monotonic()
+    delay_first = spec.objective == "DELAY_FIRST"
     b1 = _build(snapshot, spec, pack)
-    b1.model.minimize(sum(b1.changed))
+    b1.model.minimize(sum(b1.delays if delay_first else b1.changed))
     status1, solver1 = _solve_stage(b1.model, spec.time_limit_s)
     stage1: dict[str, Any] = {"status": status1, "changed": None, "solution": None}
+    if delay_first:
+        stage1["delay"] = None
     if status1 in SOLVED:
-        stage1["changed"] = round(solver1.objective_value)
+        stage1["delay" if delay_first else "changed"] = round(solver1.objective_value)
         stage1["solution"] = _solution(b1, solver1)
 
     stage2: dict[str, Any] | None = None
     if status1 == "OPTIMAL":
         b2 = _build(snapshot, spec, pack)
-        b2.model.add(sum(b2.changed) == stage1["changed"])
-        b2.model.minimize(sum(b2.delays))
         remaining = max(spec.time_limit_s - (time.monotonic() - began), 0.1)
-        status2, solver2 = _solve_stage(b2.model, remaining)
-        stage2 = {"status": status2, "delay": None, "solution": None}
-        if status2 in SOLVED:
-            stage2["delay"] = round(solver2.objective_value)
-            stage2["solution"] = _solution(b2, solver2)
+        if delay_first:
+            # 지연 먼저: 1단계의 지연을 고정하고 변경 작업 수를 줄인다
+            b2.model.add(sum(b2.delays) == stage1["delay"])
+            b2.model.minimize(sum(b2.changed))
+            status2, solver2 = _solve_stage(b2.model, remaining)
+            stage2 = {
+                "status": status2,
+                "delay": stage1["delay"],
+                "changed": None,
+                "solution": None,
+            }
+            if status2 in SOLVED:
+                stage2["changed"] = round(solver2.objective_value)
+                stage2["solution"] = _solution(b2, solver2)
+        else:
+            b2.model.add(sum(b2.changed) == stage1["changed"])
+            b2.model.minimize(sum(b2.delays))
+            status2, solver2 = _solve_stage(b2.model, remaining)
+            stage2 = {"status": status2, "delay": None, "solution": None}
+            if status2 in SOLVED:
+                stage2["delay"] = round(solver2.objective_value)
+                stage2["solution"] = _solution(b2, solver2)
 
     if stage2 is not None and stage2["solution"] is not None:
         chosen = 2

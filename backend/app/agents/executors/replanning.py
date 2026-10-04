@@ -152,10 +152,11 @@ class ReplanningExecutor:
         action = parsed.action
         try_resources: dict[str, list[str]] | None = None
         asked: list[spec.TaskCondition] = []
+        objective = "CHANGE_FIRST"
         if isinstance(action, spec.TryAlternativeResource):
             level, try_resources = "L0", {action.task_id: [action.resource_id]}
         elif isinstance(action, spec.SolveWithConditions):
-            level, asked = action.level, action.conditions
+            level, asked, objective = action.level, action.conditions, action.objective
         else:
             assert isinstance(action, spec.SolveWithScope)
             level = action.level
@@ -178,15 +179,25 @@ class ReplanningExecutor:
             conditions = _resolve_conditions(self.pack, obs, asked)
             if isinstance(conditions, str):
                 return self._reject(tx, run_id, step_no, meta, parsed, conditions)
+            narrowed = bool(conditions) or objective != "CHANGE_FIRST"
+            if isinstance(action, spec.SolveWithConditions) and not narrowed:
+                # 조건도 없고 목적 순서도 기본이면 범위 계산(SOLVE_WITH_SCOPE)과 같다
+                return self._reject(tx, run_id, step_no, meta, parsed, "CONDITION_INVALID")
             snapshot = create_snapshot(tx, site_id, self.pack)
             try:
                 search_spec = build_search_spec(
-                    snapshot, obs.primary, obs.run.acting_unit_id, level, try_resources, conditions
+                    snapshot,
+                    obs.primary,
+                    obs.run.acting_unit_id,
+                    level,
+                    try_resources,
+                    conditions,
+                    objective,
                 )
             except SearchSpecError as e:
                 return self._reject(tx, run_id, step_no, meta, parsed, e.reason_code)
-            # 같은 사실에서 같은 범위·같은 조건은 다시 풀지 않는다(Solver Budget을 쓰지 않는다)
-            if conditions and search_spec.search_key in tried_search_keys(
+            # 같은 사실에서 같은 범위·같은 조건·같은 목적 순서는 다시 풀지 않는다(Solver Budget을 쓰지 않는다)
+            if narrowed and search_spec.search_key in tried_search_keys(
                 tx, site_id, obs.run.case_id
             ):
                 return self._reject(tx, run_id, step_no, meta, parsed, "ALREADY_TRIED")
@@ -206,6 +217,8 @@ class ReplanningExecutor:
             tool_result = _solver_summary(snapshot, level, search_spec.hash, result, candidate)
             if try_resources:
                 tool_result["try_resources"] = try_resources
+            if search_spec.objective != "CHANGE_FIRST":
+                tool_result["objective"] = search_spec.objective
             if search_spec.conditions:
                 tool_result["conditions"] = {
                     tid: c.model_dump() for tid, c in search_spec.conditions.items()
@@ -397,10 +410,15 @@ def _solver_summary(
         "scope_level": level,
         "spec_hash": spec_hash,
         "snapshot_id": snapshot.snapshot_id,
-        "stage1": {k: result.stage1.get(k) for k in ("status", "changed")},
+        # 지연 먼저로 푼 결과는 단계마다 변경 수와 지연을 다 가진다 (CV-27)
+        "stage1": {
+            k: result.stage1.get(k) for k in ("status", "changed", "delay") if k in result.stage1
+        },
         "stage2": None
         if result.stage2 is None
-        else {k: result.stage2.get(k) for k in ("status", "delay")},
+        else {
+            k: result.stage2.get(k) for k in ("status", "delay", "changed") if k in result.stage2
+        },
         "chosen_stage": result.chosen_stage,
         "minimal_change": result.minimal_change,
         "delay_optimality_unconfirmed": result.delay_optimality_unconfirmed,

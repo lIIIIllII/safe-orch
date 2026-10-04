@@ -8,6 +8,7 @@ import sqlite3
 from typing import Any
 
 from app.agents.needs import ask_refusals
+from app.agents.types import APPROACHES
 from app.domain.canonical import canonical_hash
 from app.domain.groups import ConflictGroup, conflict_groups, movable_task_ids
 from app.domain.models import AgentRun, Conflict, Snapshot, SnapshotContent
@@ -23,12 +24,12 @@ from app.store.repos.consultations import (
     consultation_view,
     contested_changes,
 )
-from app.store.repos.decisions import list_case_rejections, list_decisions
+from app.store.repos.decisions import is_chosen, list_case_rejections, list_decisions
 from app.store.repos.events import get_event
 from app.store.repos.messages import list_fact_updates
 from app.store.repos.plans import get_plan, get_plan_by_candidate
 from app.store.repos.records import find_reconfirm_candidate, get_candidate, list_validations
-from app.store.repos.runs import get_run, list_steps, tried_search_keys
+from app.store.repos.runs import approach_attempts, get_run, list_steps, tried_search_keys
 from app.store.repos.site import get_site, list_actors
 from app.store.repos.snapshots import build_snapshot_content
 from app.store.repos.tasks import list_current_tasks
@@ -186,7 +187,8 @@ def candidate_view(
     passed = any(v.status == "PASS" for v in validations)
     view = consultation_view(conn, site_id, candidate_id)
     live = not (state.stale or state.rejected or state.committed)
-    decisions = [d for d in list_decisions(conn, site_id, candidate_id) if d["type"] != "WAIVE"]
+    found = list_decisions(conn, site_id, candidate_id)
+    decisions = [d for d in found if d["type"] in ("APPROVE", "REJECT")]
     last = decisions[-1] if decisions else None
     plan = get_plan_by_candidate(conn, site_id, candidate_id)
     notice = None
@@ -214,6 +216,11 @@ def candidate_view(
         # 이 후보가 지금 계획에서 바꾸거나 새로 배치하는 작업
         "changed_task_ids": changed,
         "validation": validations[-1].status if validations else None,
+        # 이 후보에 도달한 접근(같은 배치면 여럿)과 Supervisor가 골랐는가. 고른 안만 협의한다 (AG-28)
+        "approaches": sorted(
+            {a["approach"] for a in approach_attempts(conn, candidate_id=candidate_id)}
+        ),
+        "chosen": is_chosen(conn, site_id, candidate_id),
         "live": live,
         "stale": state.stale,
         "consultation_status": None if view is None else view.status,
@@ -300,6 +307,7 @@ CALL_REFS = (
     "agent_type",
     "group_id",
     "acting_unit_id",
+    "approach",
     "phase",
     "candidate_id",
     "plan_revision",
@@ -399,9 +407,16 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
     for g in groups:
         units = []
         for unit, task_ids in g.units.items():
-            key = call_key("REPLANNING", {"group_id": g.group_id, "acting_unit_id": unit})
-            last = last_result(conn, site_id, key)
-            unchanged = same_facts(conn, site_id, key)
+            refs = {"group_id": g.group_id, "acting_unit_id": unit}
+            # 마지막 결과는 어느 접근이든 그 그룹·Unit으로 마지막에 부른 재계획의 것이다
+            last = last_result(conn, site_id, call_key("REPLANNING", refs), any_approach=True)
+            unchanged = last is not None and same_facts(conn, site_id, last["call_key"])
+            # 접근마다 호출 키가 다르다: 같은 접근·같은 사실의 재호출만 거절된다 (AG-24)
+            open_approaches = [
+                a
+                for a in APPROACHES
+                if not same_facts(conn, site_id, call_key("REPLANNING", {**refs, "approach": a}))
+            ]
             movable = movable_task_ids(g, unit, facts.pins)
             last_view = None
             if last is not None:
@@ -413,6 +428,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                     if "need_id" in need:
                         found_needs[need["need_id"]] = need
                 last_view = {
+                    "approach": run.input_ref.get("approach"),
                     "run_status": last["status"],
                     "end_reason": last["end_reason"],
                     "result_status": result["status"],
@@ -436,10 +452,8 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                 }
             )
             # 움직일 수 있는 작업이 없는 Unit은 유효한 주체가 아니다 (AG-02)
-            if not hold_active and not unchanged and movable:
-                calls.append(
-                    {"agent": "REPLANNING", "group_id": g.group_id, "acting_unit_id": unit}
-                )
+            if not hold_active and movable:
+                calls += [{"agent": "REPLANNING", **refs, "approach": a} for a in open_approaches]
         group_views.append(
             {
                 "group_id": g.group_id,
@@ -473,7 +487,9 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
         ]
     for c in candidates:
         cid = c["candidate_id"]
-        if c["validation"] == "PASS" and c["live"] and c["open_items"] and not hold_active:
+        # 협의는 Supervisor가 고른 안만 한다 (AG-28)
+        consult = c["chosen"] and c["validation"] == "PASS" and c["live"] and c["open_items"]
+        if consult and not hold_active:
             key = call_key("COORDINATION", {"phase": "CONSULT", "candidate_id": cid})
             if not same_facts(conn, site_id, key, cid):
                 calls.append({"agent": "COORDINATION", "phase": "CONSULT", "candidate_id": cid})

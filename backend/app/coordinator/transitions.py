@@ -242,6 +242,7 @@ CALL_REFS = (
     "agent_type",
     "group_id",
     "acting_unit_id",
+    "approach",
     "phase",
     "candidate_id",
     "plan_revision",

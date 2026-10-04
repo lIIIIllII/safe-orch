@@ -1,4 +1,4 @@
--- SAFE-ORCH schema. schema_version 11.
+-- SAFE-ORCH schema. schema_version 12.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -137,6 +137,9 @@ CREATE TABLE search_spec (
     resource_alternatives TEXT NOT NULL CHECK (json_valid(resource_alternatives)),
     -- Agent가 건 조건: 작업 → {start_min, start_max, resource_id, preferred}. 없으면 {}
     conditions            TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(conditions)),
+    -- 목적 순서: 변경 먼저(기본) / 지연 먼저. Agent가 고르는 입력이다 (CV-27)
+    objective             TEXT NOT NULL DEFAULT 'CHANGE_FIRST'
+                              CHECK (objective IN ('CHANGE_FIRST', 'DELAY_FIRST')),
     time_limit_s          INTEGER NOT NULL CHECK (time_limit_s > 0),
     -- 실효 탐색 키(미시도 판정용, Solver 입력만). hash는 무결성용
     search_key            TEXT NOT NULL,
@@ -228,10 +231,11 @@ CREATE TABLE command_result (
 );
 
 -- reason_code는 REJECT만. WAIVE의 comment 필수는 명령에서 검사한다.
+-- CHOOSE: Supervisor가 그 안을 골랐다. 고른 안만 협의한다 (AG-28).
 CREATE TABLE decision (
     decision_id     TEXT PRIMARY KEY,
     site_id         TEXT NOT NULL REFERENCES site (site_id),
-    type            TEXT NOT NULL CHECK (type IN ('APPROVE', 'REJECT', 'WAIVE')),
+    type            TEXT NOT NULL CHECK (type IN ('APPROVE', 'REJECT', 'WAIVE', 'CHOOSE')),
     candidate_id    TEXT NOT NULL REFERENCES candidate (candidate_id),
     validation_id   TEXT NOT NULL REFERENCES validation (validation_id),
     actor_id        TEXT NOT NULL,
@@ -330,7 +334,8 @@ CREATE TABLE case_event (
                                                           'HOLD_RELEASED', 'CANDIDATE_DECIDED',
                                                           'CHILD_RUN_ENDED',
                                                           'TASK_REQUEST_WITHDRAWN',
-                                                          'TASK_PINNED', 'TASK_UNPINNED')),
+                                                          'TASK_PINNED', 'TASK_UNPINNED',
+                                                          'CANDIDATE_CHOSEN')),
     ref                     TEXT NOT NULL CHECK (json_valid(ref)),
     case_id                 TEXT NOT NULL,
     dedupe_key              TEXT NOT NULL,

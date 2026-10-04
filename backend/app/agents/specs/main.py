@@ -2,7 +2,7 @@
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
 Action: CALL_AGENT, WAIT, ESCALATE, CLOSE. 승인·확정·Hold 해제·제안 확인 도구는 없다.
-전문 Agent에게는 Agent 종류와 참조만 넘긴다(자유 문장 없음, AG-24). 순서는 지침에 있고 여기 조건은
+전문 Agent에게는 Agent 종류와 참조만 넘긴다(AG-24). 재계획에는 접근(목록 값)과 짧은 문장(인용)을 더한다(AG-28). 순서는 지침에 있고 여기 조건은
 사실·유효성·Budget뿐이다 (AG-01).
 """
 
@@ -28,7 +28,16 @@ MAX_AGENT_CALLS = get_settings().main_max_agent_calls
 RECURSION_LIMIT = MAX_STEPS * 5 + 10
 SUMMARY_MAX_DECISION = 200
 
-CALL_ARGS = ("group_id", "acting_unit_id", "phase", "candidate_id", "event_id", "need_ids")
+CALL_ARGS = (
+    "group_id",
+    "acting_unit_id",
+    "approach",
+    "phase",
+    "candidate_id",
+    "event_id",
+    "need_ids",
+)
+NOTE_MAX = 100  # 접근에 덧붙이는 문장 길이
 
 
 class Action(BaseModel):
@@ -47,12 +56,12 @@ class Action(BaseModel):
 
 
 class CallAgent(Action):
-    """전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다. 재계획(REPLANNING)은 충돌 그룹과 그 그룹에 작업을 가진 Unit, 협의·통지(COORDINATION)는 단계와 후보, 담당자 사전 확인(COORDINATION, 단계 ASK)은 막힌 결과의 필요한 것 ID, 신고 대응(EVENT_RESPONSE)은 신고를 가리킨다."""
+    """전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다. 재계획(REPLANNING)은 충돌 그룹과 그 그룹에 작업을 가진 Unit과 접근(무엇을 우선할지), 협의(COORDINATION)는 Supervisor가 고른 후보, 통지는 확정된 후보, 담당자 사전 확인(COORDINATION, 단계 ASK)은 막힌 결과의 필요한 것 ID, 신고 대응(EVENT_RESPONSE)은 신고를 가리킨다."""
 
     OPENS = (
         "지금 받아들여지는 호출(calls)이 있고 전문 Agent 호출 수가 남아 있을 때. 열린 하위 Run이 있거나, "
-        "ACTIVE Hold 중의 재계획·협의이거나, 같은 호출의 마지막 결과 뒤로 관련 사실이 바뀌지 않았으면 "
-        "받아들여지지 않는다"
+        "ACTIVE Hold 중의 재계획·협의이거나, 같은 호출(재계획은 같은 접근)의 마지막 결과 뒤로 관련 사실이 "
+        "바뀌지 않았거나, Supervisor가 고르지 않은 후보의 협의면 받아들여지지 않는다"
     )
 
     agent: Literal["REPLANNING", "COORDINATION", "EVENT_RESPONSE"] = Field(
@@ -62,11 +71,25 @@ class CallAgent(Action):
     acting_unit_id: str | None = Field(
         default=None, description="재계획의 주체 Unit. 그 그룹에 작업을 가진 Unit (REPLANNING)"
     )
+    approach: Literal["MIN_CHANGE", "MIN_DELAY", "PREFER_WINDOW"] | None = Field(
+        default=None,
+        description=(
+            "재계획이 우선할 것 (REPLANNING). MIN_CHANGE 변경 작업 수를 줄인다, MIN_DELAY 총 지연을 "
+            "줄인다, PREFER_WINDOW 담당자의 희망 영역을 살린다"
+        ),
+    )
+    approach_note: str | None = Field(
+        default=None,
+        max_length=NOTE_MAX,
+        description="접근에 덧붙이는 짧은 문장 (REPLANNING). 재계획 Agent에게 인용으로 전해진다",
+    )
     phase: Literal["CONSULT", "NOTICE", "ASK"] | None = Field(
         default=None,
         description="CONSULT 후보의 협의, NOTICE 확정 뒤 통지, ASK 후보 없는 담당자 사전 확인 (COORDINATION)",
     )
-    candidate_id: str | None = Field(default=None, description="협의·통지할 후보 ID (COORDINATION)")
+    candidate_id: str | None = Field(
+        default=None, description="협의(Supervisor가 고른 후보)·통지할 후보 ID (COORDINATION)"
+    )
     event_id: str | None = Field(default=None, description="대응할 신고 ID (EVENT_RESPONSE)")
     need_ids: list[str] = Field(
         default_factory=list,
@@ -78,7 +101,7 @@ class CallAgent(Action):
 
 
 class Wait(Action):
-    """사람의 결정(후보 승인·거절, Hold 해제)을 기다린다. 이 Case에 사건이 생기면 다시 관찰한다."""
+    """사람의 결정(안 고르기, 후보 승인·거절, Hold 해제)을 기다린다. 이 Case에 사건이 생기면 다시 관찰한다."""
 
     OPENS = "검토 대기 후보가 있거나 ACTIVE Hold가 있을 때"
 

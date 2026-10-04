@@ -16,6 +16,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
+from conftest import choose
 from fastapi.testclient import TestClient
 from scripted import (
     Router,
@@ -166,6 +167,8 @@ def _alpha_waiting(pack):
     run_id = 후보를 만든 Replanning Run, wait_ref = Alpha 후보, main_id·consult_id = 메인과 협의 Run."""
     assert _submit_a(pack).status == "APPLIED"
     run_until_idle(pack, model_factory=_factory(solve("L0"), solve("L1")))
+    choose(pack)  # Supervisor가 고른 안만 협의한다 (AG-28)
+    run_until_idle(pack, model_factory=_factory())
     run, main, consult = _last(), _last("MAIN"), _last("COORDINATION")
     assert (run.status, run.end_reason) == ("SUCCEEDED", "RETURN_DONE")
     assert (main.status, main.wait_kind, main.wait_ref) == (
@@ -1042,7 +1045,12 @@ def test_decline_discards_and_wakes_without_context_change(seeded):
     assert last["tool_result"]["asks"][0]["result"] == "DECLINED"
     main = _last("MAIN")
     assert (main.status, main.end_reason) == ("ESCALATED", "ESCALATE")
-    assert _steps(main.run_id)[-1]["observation"]["calls"] == []
+    # 부를 수 있는 것은 다른 접근의 재계획뿐이다(같은 접근·사전 확인은 사실이 바뀌지 않아 없다)
+    left = _steps(main.run_id)[-1]["observation"]["calls"]
+    assert {(c["agent"], c.get("approach")) for c in left} == {
+        ("REPLANNING", "MIN_DELAY"),
+        ("REPLANNING", "PREFER_WINDOW"),
+    }
     assert len(_runs("REPLANNING")) == 2
     with db.read() as conn:
         asked = conn.execute("SELECT COUNT(*) FROM message WHERE type = 'QUESTION'").fetchone()[0]

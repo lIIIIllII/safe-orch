@@ -7,7 +7,7 @@
 import uuid
 from types import SimpleNamespace
 
-from conftest import LEGACY_PINNED, add_task, make_task
+from conftest import LEGACY_PINNED, add_task, choose, make_task
 from langchain_core.messages import AIMessage
 from scripted import Router, ask_owner, blocked, call, done, solve, wait_answers
 
@@ -134,6 +134,9 @@ def _alpha_consulting(pack):
     A2에게 변경 요청 → 답 대기. (Replanning Run과 Alpha 후보, 협의 Run)."""
     _submit_a(pack)
     router = Router(replanning=[solve("L0"), solve("L1")], coordination=[_request_c(), _wait()])
+    run_until_idle(pack, model_factory=router.factory())
+    assert _runs("COORDINATION") == []  # 고르기 전에는 협의가 나가지 않는다 (AG-28)
+    choose(pack)
     run_until_idle(pack, model_factory=router.factory())
     assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
     [rp] = _runs("REPLANNING")
@@ -401,6 +404,9 @@ def _replan_after_release(pack, coordination=()):
     router = Router(replanning=[solve("L1")], coordination=list(coordination))
     run_until_idle(pack, model_factory=router.factory())
     assert router.left()["REPLANNING"] == 0
+    if coordination:
+        choose(pack)  # 새 후보를 골라야 협의가 나간다 (AG-28)
+        run_until_idle(pack, model_factory=router.factory())
     [main] = _runs("MAIN")
     first, second = _runs("REPLANNING")
     assert second.case_id == first.case_id == main.case_id

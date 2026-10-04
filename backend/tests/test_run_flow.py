@@ -4,6 +4,7 @@ import time
 import uuid
 
 import pytest
+from conftest import choose
 from scripted import Router, ScriptedChatModel, blocked, escalate, solve
 
 from app.commands.approval import ApproveRequest, WaiveRequest, approve_and_commit, waive
@@ -79,6 +80,8 @@ def _alpha(pack):
 
     (메인, Replanning Run, 협의 Run, Alpha 후보 ID)."""
     _submit_a(pack)
+    run_until_idle(pack, model_factory=_factory())
+    choose(pack)  # Supervisor가 고른 안만 협의한다
     run_until_idle(pack, model_factory=_factory())
     [main] = _runs("MAIN")
     [replanning] = _runs("REPLANNING")

@@ -226,6 +226,23 @@ def with_facts(snapshot, **updates):
     )
 
 
+def choose(pack, candidate_id=None):
+    """Supervisor가 안을 고른다(주지 않으면 검토 대기 첫 후보). 고른 안만 협의가 나간다 (AG-28)."""
+    from app.commands.approval import ChooseRequest, choose_candidate
+    from app.store.repos.consultations import list_review_queue
+    from app.store.repos.records import list_validations
+
+    with db.read() as conn:
+        cid = candidate_id or list_review_queue(conn, pack.site_id)[0]
+        validation = [v for v in list_validations(conn, pack.site_id, cid) if v.status == "PASS"][
+            -1
+        ]
+    body = ChooseRequest(candidate_id=cid, validation_id=validation.validation_id)
+    out = choose_candidate(pack, "supervisor", new_id("key"), body)
+    assert out.status == "APPLIED", out.reason_codes
+    return cid
+
+
 @pytest.fixture
 def with_a(seeded):
     """R0 + 신규 작업 A(revision 1)."""

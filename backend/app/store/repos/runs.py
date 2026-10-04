@@ -274,7 +274,7 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
     found = rows(
         conn,
         "SELECT j.run_id, j.step_no, j.status AS job_status, s.scope_level, s.search_key,"
-        " s.resource_alternatives, s.conditions, r.stage1, r.stage2, c.candidate_id,"
+        " s.resource_alternatives, s.conditions, s.objective, r.stage1, r.stage2, c.candidate_id,"
         " j.same_candidate_id FROM solver_job j"
         " JOIN search_spec s ON s.search_spec_id = j.search_spec_id"
         " JOIN agent_run a ON a.run_id = j.run_id"
@@ -297,14 +297,74 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
                 "scope_level": r["scope_level"],
                 "try_resources": loads(r["resource_alternatives"]),  # TRY 시도
                 "conditions": loads(r["conditions"]),  # Agent가 건 조건 (분)
+                "objective": r["objective"],  # 목적 순서
                 "search_key": r["search_key"],
-                "stage1": None
-                if s1 is None
-                else {"status": s1["status"], "changed": s1["changed"]},
-                "stage2": None if s2 is None else {"status": s2["status"], "delay": s2["delay"]},
+                "stage1": None if s1 is None else _stage(s1, "changed", r["objective"]),
+                "stage2": None if s2 is None else _stage(s2, "delay", r["objective"]),
                 "candidate_id": r["candidate_id"],
                 # 해가 살아 있는 기존 후보와 같은 배치였다(새 후보 없음)
                 "same_as_candidate_id": r["same_candidate_id"],
+            }
+        )
+    return out
+
+
+def _stage(stage: dict[str, Any], key: str, objective: str) -> dict[str, Any]:
+    """단계 요약. 변경 먼저면 1단계는 변경 수·2단계는 지연, 지연 먼저면 두 값을 다 보인다."""
+    if objective == "DELAY_FIRST":
+        return {k: stage.get(k) for k in ("status", "changed", "delay")}
+    return {"status": stage["status"], key: stage[key]}
+
+
+def approach_attempts(
+    conn: sqlite3.Connection, *, case_id: str | None = None, candidate_id: str | None = None
+) -> list[dict[str, Any]]:
+    """접근을 받은 재계획 Run이 후보를 만들었거나 기존 후보와 같은 배치에 도달한 시도 (AG-28).
+
+    Case 또는 후보로 거른다. no는 그 Case에서 접근을 받은 재계획 Run의 순번(1부터)이다: 화면의 "n안".
+    같은 Run이 같은 후보에 여러 번 닿아도 한 번만 낸다. quoted_reason은 그 step에 모델이 쓴 이유다.
+    """
+    found = rows(
+        conn,
+        "SELECT r.run_id, r.case_id, r.input_ref, s.decision_summary,"
+        " COALESCE(c.candidate_id, j.same_candidate_id) AS candidate_id,"
+        " j.same_candidate_id IS NOT NULL AS same FROM solver_job j"
+        " JOIN agent_run r ON r.run_id = j.run_id"
+        " JOIN agent_step s ON s.run_id = j.run_id AND s.step_no = j.step_no"
+        " LEFT JOIN candidate c ON c.solver_result_id = j.solver_result_id"
+        " WHERE j.status = 'REGISTERED' AND json_extract(r.input_ref, '$.approach') IS NOT NULL"
+        " AND COALESCE(c.candidate_id, j.same_candidate_id) IS NOT NULL ORDER BY j.rowid",
+    )
+    order: dict[str, list[str]] = {}
+    out, seen = [], set()
+    for r in found:
+        if (case_id is not None and r["case_id"] != case_id) or (
+            candidate_id is not None and r["candidate_id"] != candidate_id
+        ):
+            continue
+        if (r["run_id"], r["candidate_id"]) in seen:
+            continue
+        seen.add((r["run_id"], r["candidate_id"]))
+        if r["case_id"] not in order:
+            order[r["case_id"]] = [
+                x[0]
+                for x in conn.execute(
+                    "SELECT run_id FROM agent_run WHERE case_id = ? AND agent_type = 'REPLANNING'"
+                    " AND json_extract(input_ref, '$.approach') IS NOT NULL ORDER BY rowid",
+                    (r["case_id"],),
+                )
+            ]
+        ref = loads(r["input_ref"])
+        out.append(
+            {
+                "no": order[r["case_id"]].index(r["run_id"]) + 1,
+                "run_id": r["run_id"],
+                "approach": ref["approach"],
+                "quoted_note": ref.get("approach_note"),
+                "candidate_id": r["candidate_id"],
+                # 새 후보를 만들지 않고 기존 후보와 같은 배치에 도달했다 (CV-25)
+                "same": bool(r["same"]),
+                "quoted_reason": r["decision_summary"],
             }
         )
     return out

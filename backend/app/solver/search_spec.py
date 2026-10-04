@@ -8,7 +8,15 @@ from collections.abc import Mapping, Sequence
 from app.domain.eligibility import exclusion_reasons
 from app.domain.hashes import search_key, search_spec_hash
 from app.domain.ids import new_id
-from app.domain.models import Condition, Conflict, Movable, ScopeLevel, SearchSpec, Snapshot
+from app.domain.models import (
+    Condition,
+    Conflict,
+    Movable,
+    Objective,
+    ScopeLevel,
+    SearchSpec,
+    Snapshot,
+)
 
 TIME_LIMIT_S = 10
 
@@ -28,6 +36,7 @@ def build_search_spec(
     scope_level: ScopeLevel,
     try_resources: Mapping[str, Sequence[str]] | None = None,
     conditions: Mapping[str, Condition] | None = None,
+    objective: Objective = "CHANGE_FIRST",
 ) -> SearchSpec:
     facts = snapshot.facts()
     base = facts.base_assignments()
@@ -106,7 +115,13 @@ def build_search_spec(
     return SearchSpec(
         search_spec_id=new_id("ss"),
         hash=search_spec_hash(
-            snapshot.snapshot_hash, acting_unit_id, axes, alternatives, TIME_LIMIT_S, conds
+            snapshot.snapshot_hash,
+            acting_unit_id,
+            axes,
+            alternatives,
+            TIME_LIMIT_S,
+            conds,
+            objective,
         ),
         snapshot_id=snapshot.snapshot_id,
         acting_unit_id=acting_unit_id,
@@ -114,6 +129,9 @@ def build_search_spec(
         axes=axes,
         resource_alternatives=alternatives,
         conditions=conds,
+        objective=objective,
         time_limit_s=TIME_LIMIT_S,
-        search_key=search_key(facts, acting_unit_id, axes, alternatives, TIME_LIMIT_S, conds),
+        search_key=search_key(
+            facts, acting_unit_id, axes, alternatives, TIME_LIMIT_S, conds, objective
+        ),
     )

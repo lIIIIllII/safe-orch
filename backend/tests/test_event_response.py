@@ -8,6 +8,7 @@ Event Response는 메인이 부른다: 사건 → 메인 자동 시작을 켠 �
 import json
 import uuid
 
+from conftest import choose
 from langchain_core.messages import AIMessage
 from scripted import Router, blocked, call, solve
 
@@ -291,10 +292,10 @@ def test_er_with_coordination_to_notice(seeded, main_on):
     assert _release(pack, refs["hold_id"]).status == "APPLIED"
     request_e = call("SEND_CHANGE_REQUEST", "요청", task_id="E", message="E를 15분 늦춥니다.")
     wait = call("WAIT_FOR_REPLIES", "대기")
-    run_until_idle(
-        pack,
-        model_factory=Router(replanning=[solve("L0")], coordination=[request_e, wait]).factory(),
-    )
+    router = Router(replanning=[solve("L0")], coordination=[request_e, wait])
+    run_until_idle(pack, model_factory=router.factory())
+    choose(pack)  # Supervisor가 고른 안만 협의한다 (AG-28)
+    run_until_idle(pack, model_factory=router.factory())
     cr = [m for m in _messages("CHANGE_REQUEST") if m["to_actor_id"] == "planner_b"]
     assert len(cr) == 1 and "10/12 09:45 → 10/12 10:00" in cr[0]["body"]
     assert _reply(pack, "planner_b", cr[0]["message_id"]).status == "APPLIED"
@@ -339,7 +340,7 @@ def test_er_with_coordination_to_notice(seeded, main_on):
     run_until_idle(pack, model_factory=Router(coordination=[notice, done]).factory())
     sent = [m["to_actor_id"] for m in _messages("NOTICE")]
     assert sent[-1] == "planner_b" and _site(pack).plan_revision == 2
-    # 신고를 받은 메인이 신고 대응 → 재계획 → 협의 → (승인 대기) → 통지를 부르고 끝냈다.
+    # 신고를 받은 메인이 신고 대응 → 재계획 → (고르기 대기) → 협의 → (승인 대기) → 통지를 부르고 끝냈다.
     # 사실 수정 확정과 Hold 해제가 메인이 깨어나기 전에 함께 와서 Hold를 기다리는 step은 없다
     main = _runs("MAIN")[-1]
     assert (main.status, main.end_reason) == ("SUCCEEDED", "CLOSE")
@@ -350,6 +351,7 @@ def test_er_with_coordination_to_notice(seeded, main_on):
     assert actions == [
         ("CALL_AGENT", "EVENT_RESPONSE", None),
         ("CALL_AGENT", "REPLANNING", None),
+        ("WAIT", None, None),
         ("CALL_AGENT", "COORDINATION", "CONSULT"),
         ("WAIT", None, None),
         ("CALL_AGENT", "COORDINATION", "NOTICE"),

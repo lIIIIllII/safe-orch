@@ -105,9 +105,13 @@ def cond(task_id: str, **fields: Any) -> dict[str, Any]:
 
 
 def solve_with(
-    level: str, *conditions: dict[str, Any], summary: str = "조건을 걸어 계산한다"
+    level: str,
+    *conditions: dict[str, Any],
+    objective: str | None = None,
+    summary: str = "조건을 걸어 계산한다",
 ) -> AIMessage:
-    return call("SOLVE_WITH_CONDITIONS", summary, level=level, conditions=list(conditions))
+    extra = {} if objective is None else {"objective": objective}
+    return call("SOLVE_WITH_CONDITIONS", summary, level=level, conditions=list(conditions), **extra)
 
 
 def _result(decision: str, status: str, summary: str, paths: Sequence[dict]) -> AIMessage:
@@ -147,7 +151,9 @@ def wait_answers() -> AIMessage:
 
 
 def main_call(agent: str, **refs: Any) -> AIMessage:
-    """메인의 CALL_AGENT. 참조만 넘긴다."""
+    """메인의 CALL_AGENT. 참조만 넘긴다. 재계획은 접근을 주지 않으면 변경 최소(MIN_CHANGE)로 부른다."""
+    if agent == "REPLANNING":
+        refs.setdefault("approach", "MIN_CHANGE")
     return call("CALL_AGENT", "이유: 부른다/다음: 결과를 본다", agent=agent, **refs)
 
 
@@ -244,7 +250,10 @@ def auto_main(obs: dict[str, Any]) -> AIMessage:
         (
             c
             for c in calls
-            if c["agent"] == "REPLANNING" and (c["group_id"], c["acting_unit_id"]) in requesters
+            # 기본 응답은 접근 하나(변경 최소)만 쓴다. 접근을 달리해 부르는 것은 스크립트로 시험한다
+            if c["agent"] == "REPLANNING"
+            and c.get("approach") == "MIN_CHANGE"
+            and (c["group_id"], c["acting_unit_id"]) in requesters
         ),
         None,
     )

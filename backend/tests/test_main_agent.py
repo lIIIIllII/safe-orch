@@ -100,16 +100,19 @@ def test_call_agent_starts_child_and_result_wakes_main(with_a):
     assert units["UA"]["last_result"]["facts_changed"] is False
     # UB는 그룹에 작업이 있지만 움직일 수 있는 작업이 없어 호출 목록에 없다
     assert (units["UB"]["task_ids"], units["UB"]["movable_task_ids"]) == (["B"], [])
-    # 막힌 결과에 서버가 붙인 담당자 확인은 사전 확인으로 부를 수 있다. 재계획 호출은 없다
+    # 막힌 결과에 서버가 붙인 담당자 확인은 사전 확인으로 부를 수 있다. 같은 접근의 재계획은 없고
+    # 다른 접근은 부를 수 있다 (AG-24)
     openers = units["UA"]["last_result"]["openers"]
     asks = [n["need_id"] for n in openers if n["kind"] == "OWNER_CONSENT"]
     assert (units["UA"]["last_result"]["paths"], [n["task_id"] for n in openers[:2]]) == (
         [],
         ["A", "C"],
     )
+    group_id = last["observation"]["groups"][0]["group_id"]
     assert last["observation"]["calls"] == [
-        {"agent": "COORDINATION", "phase": "ASK", "need_ids": asks}
-    ]
+        {"agent": "REPLANNING", "group_id": group_id, "acting_unit_id": "UA", "approach": a}
+        for a in ("MIN_DELAY", "PREFER_WINDOW")
+    ] + [{"agent": "COORDINATION", "phase": "ASK", "need_ids": asks}]
     with db.read() as conn:
         [notice] = conn.execute(
             "SELECT to_actor_id, type, agent_text FROM message WHERE run_id = 'main'"

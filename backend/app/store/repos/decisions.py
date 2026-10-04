@@ -89,3 +89,24 @@ def list_case_rejections(conn: sqlite3.Connection, case_id: str) -> list[dict[st
         }
         for r in found
     ]
+
+
+def chosen_by_case(conn: sqlite3.Connection, site_id: str) -> dict[str, str]:
+    """Case마다 Supervisor가 마지막으로 고른 후보 (AG-28). Case = 그 후보를 만든 Run의 Case이고,
+    만든 Run이 없는 후보(재확인)는 후보 자신이 키다."""
+    out: dict[str, str] = {}
+    for r in rows(
+        conn,
+        "SELECT d.candidate_id, a.case_id FROM decision d"
+        " JOIN candidate c ON c.candidate_id = d.candidate_id"
+        " LEFT JOIN solver_job j ON j.solver_result_id = c.solver_result_id"
+        " LEFT JOIN agent_run a ON a.run_id = j.run_id"
+        " WHERE d.site_id = ? AND d.type = 'CHOOSE' ORDER BY d.rowid",
+        (site_id,),
+    ):
+        out[r["case_id"] or r["candidate_id"]] = r["candidate_id"]
+    return out
+
+
+def is_chosen(conn: sqlite3.Connection, site_id: str, candidate_id: str) -> bool:
+    return candidate_id in chosen_by_case(conn, site_id).values()

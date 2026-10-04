@@ -18,10 +18,10 @@ NO_RESULT = ("ERROR", "CANCELLED")
 
 
 def call_key(agent_type: str, refs: dict[str, Any]) -> str:
-    """Agent 종류와 참조로 만든 키. 참조: Replanning group_id·acting_unit_id, Coordination
+    """Agent 종류와 참조로 만든 키. 참조: Replanning group_id·acting_unit_id·approach, Coordination
     phase·candidate_id(통지는 plan_revision, 사전 확인은 need_ids), Event Response event_id."""
     names = {
-        "REPLANNING": ("group_id", "acting_unit_id"),
+        "REPLANNING": ("group_id", "acting_unit_id", "approach"),
         "COORDINATION": ("phase", "candidate_id", "plan_revision", "need_ids"),
         "EVENT_RESPONSE": ("event_id",),
     }[agent_type]
@@ -103,17 +103,22 @@ def fingerprint(conn: sqlite3.Connection, site_id: str, key: str, candidate_id: 
     )
 
 
-def last_result(conn: sqlite3.Connection, site_id: str, key: str) -> dict[str, Any] | None:
+def last_result(
+    conn: sqlite3.Connection, site_id: str, key: str, any_approach: bool = False
+) -> dict[str, Any] | None:
     """같은 키로 부른 마지막 Run(현장 전체, Case 무관)과 그 Run이 끝날 때의 지문.
+    any_approach면 key는 접근을 뺀 재계획 키이고, 어느 접근이든 마지막 Run을 찾는다. call_key도 돌려준다.
 
     결과 없이 끝난 Run(ERROR·취소)과 아직 열린 Run은 건너뛴다. {run_id, status, end_reason,
     end_fingerprint}. end_fingerprint는 하위 Run 종료 사건에 적힌 값이다(없으면 None).
     """
     row = conn.execute(
-        "SELECT run_id, status, end_reason FROM agent_run WHERE site_id = ?"
-        " AND json_extract(input_ref, '$.call_key') = ?"
+        "SELECT run_id, status, end_reason, json_extract(input_ref, '$.call_key')"
+        " FROM agent_run WHERE site_id = ?"
+        " AND (json_extract(input_ref, '$.call_key') = ?"
+        "      OR (? AND substr(json_extract(input_ref, '$.call_key'), 1, ?) = ?))"
         " AND status NOT IN ('RUNNING', 'WAITING_HUMAN', ?, ?) ORDER BY rowid DESC LIMIT 1",
-        (site_id, key, *NO_RESULT),
+        (site_id, key, any_approach, len(key) + 1, key + ":", *NO_RESULT),
     ).fetchone()
     if row is None:
         return None
@@ -126,5 +131,6 @@ def last_result(conn: sqlite3.Connection, site_id: str, key: str) -> dict[str, A
         "run_id": row[0],
         "status": row[1],
         "end_reason": row[2],
+        "call_key": row[3],
         "end_fingerprint": ref.get("fingerprint"),
     }

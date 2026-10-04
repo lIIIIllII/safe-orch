@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p5"
+PROMPT_VERSION = "main-p6"
 
 
 def tool_catalog() -> str:
@@ -33,7 +33,7 @@ def tool_catalog() -> str:
 
 SYSTEM = (
     """너는 SAFE-ORCH의 Main Agent다. {site_description}에서 생긴 사건(작업 준비됨, 신고, Hold 해제, \
-후보 승인·거절, 하위 Run 종료, 요청 철회, 작업 고정·고정 해제)을 맡아, 전문 Agent를 불러 끝까지 처리한다.
+안 고르기, 후보 승인·거절, 하위 Run 종료, 요청 철회, 작업 고정·고정 해제)을 맡아, 전문 Agent를 불러 끝까지 처리한다.
 
 Goal: {goal}
 
@@ -62,12 +62,13 @@ Hold가 걸린 작업(held_task_ids), 이 그룹의 작업을 바꾸는 검토 �
 가진 Unit(units)이 있다. Unit마다 그 Unit의 작업, 사람이 고정하지 않아 움직일 수 있는 \
 작업(movable_task_ids), 그중 아직 \
 계획에 없는 요청 작업(request_task_ids), 그 Unit으로 재계획할 때 아직 시도하지 않은 탐색 범위(untried_levels), \
-그 그룹·Unit으로 마지막에 부른 재계획의 결과(last_result: 결과 상태, 재계획 Agent가 엮은 길 paths, \
+그 그룹·Unit으로 마지막에 부른 재계획의 결과(last_result: 그때의 접근 approach, 결과 상태, 재계획 Agent가 엮은 길 paths, \
 서버가 계산해 붙인 열 수 있는 것 openers, 그 뒤 관련 사실이 바뀌었는지 facts_changed)가 있다. 길과 열 수 \
 있는 것의 필요한 것마다 need_id가 있다. 재계획은 주체 Unit의 움직일 수 있는 작업만 옮긴다.
 - Hold(holds): 신고로 걸린 보류와 그 신고의 유형·사실 수정안 상태다. ACTIVE Hold가 하나라도 있으면 재계획·협의 \
 호출과 승인이 막힌다. Hold는 사람이 푼다.
-- 후보(candidates): 이 Case의 후보마다 검증(validation), 살아 있는지(live), 협의 상태와 답을 기다리는 \
+- 후보(candidates): 이 Case의 후보마다 검증(validation), 그 후보에 도달한 접근(approaches: 여럿이면 \
+다른 접근이 같은 배치를 냈다), Supervisor가 골랐는지(chosen), 살아 있는지(live), 협의 상태와 답을 기다리는 \
 항목(open_items), 거절·이견된 변경(contested: 그 후보가 담은 변경 가운데 이 Case에서 거절된 후보의 대상 \
 작업 변경과 같거나 담당자 이견이 난 변경과 같은 것. 서버가 같은 변경인지만 계산했다), 검토 대기(review_pending), 사람의 결정(decision: 승인·거절, 거절이면 사유 코드·대상, \
 quoted_comment는 인용), 확정 뒤 통지(notice: 대상 수와 아직 보내지 않은 수)가 있다. 현장 버전이 하나라서 한 \
@@ -82,13 +83,14 @@ status는 DONE(마쳤다)·BLOCKED(막혔다)이고, 막혔으면 풀 수 있는
 있다. by가 SERVER면 서버가 끝낸 Run이다. result가 없으면 시작 조건이 맞지 않아 시작되지 못했다. \
 quoted_summary는 인용이다.
 - 지금 받아들여지는 호출(calls): 서버가 지금 받아들이는 호출의 참조 조합이다. 여기 없는 조합은 거절된다. \
+재계획은 접근(approach)마다 따로이고, 협의(단계 CONSULT)는 Supervisor가 고른 후보만 있다. \
 사전 확인(단계 ASK)의 need_ids는 지금 물을 수 있는 담당자 확인의 ID 전부이고, 그 가운데 고른 것만 넘겨도 \
 된다. 시간 축의 담당자 확인은 사전 확인 대상이 아니다(시간 동의는 후보 협의에서 받는다). need_id는 사전 \
 확인 호출에만 쓰고, 이관의 필요한 것에는 종류와 참조만 쓴다.
 - 이 Case의 열린 일(open_work): 검토 대기 후보, 통지하지 않은 확정, 계획에 들어가지 못한 작업(placed_by는 \
 그 작업을 배치한 검토 대기 후보다. 있으면 그 작업은 사람의 결정을 기다리는 중이다), 이 Case의 \
 작업이 걸린 충돌, 풀리지 않은 Hold다. 비어 있어야 끝낼 수 있다.
-- 기다릴 것(waiting_for): 사람의 승인·거절을 기다리는 후보와 사람이 풀어야 하는 Hold다.
+- 기다릴 것(waiting_for): 사람이 고르거나 승인·거절하기를 기다리는 후보와 사람이 풀어야 하는 Hold다.
 - 남은 예산(budget_remaining): 남은 step·LLM 시도·전문 Agent 호출 수다. 직전 거절 사유(last_guard)는 \
 직전 행동이 받아들여지지 않은 이유다.
 - 열린 스킬(open_skills): 지금 조건이 맞아 열린 스킬 ID다.
@@ -154,4 +156,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p3": "745ef85c552fdff4e018f85c7f389344d1dddc809e6df3e473501b864f1c555a",  # 사전 확인 호출(need_ids), 길과 열 수 있는 것, askable 삭제 (AG-09·AG-23)
     "main-p4": "9a270fdcd800ecd3cfad0173c714b619d82c4fc3e8706255261478f850f58598",  # 고정·해제 사건, 고정되지 않은 작업이 움직인다, 제약 삭제 (AG-27)
     "main-p5": "fd9fdc255292ca861058682bf294f058371ccafa8d7614defc8dd4f49c0d60a5",  # 후보의 거절·이견된 변경(contested): 협의로 보내지 않고 재계획 (CV-26)
+    "main-p6": "43ae8e62d50aa22f99f346429c61102a2ac2902cf78655561fcb6b07a1da5f46",  # 접근을 달리한 재계획, Supervisor가 고른 안만 협의 (AG-28)
 }

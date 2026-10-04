@@ -89,19 +89,31 @@ class TaskCondition(BaseModel):
 class SolveWithConditions(Action):
     """탐색 범위에 작업별 조건을 걸어 CP-SAT로 계산한다. 조건은 시작 이후·이전, 시작 지정, 자원 지정,
     희망 영역을 시작 범위로 쓰기다. 조건은 좁히기만 하고, 걸지 않은 작업은 계산이 정한다. 범위 안
-    작업을 모두 지정하면 그 배치 그대로를 검사한다. 해가 있으면 후보가 등록되고 검증을 기다린다. 해가
-    없으면 계산 상태를 돌려주고, 모두 지정한 배치였으면 그 배치가 어긴 규칙을 붙인다."""
+    작업을 모두 지정하면 그 배치 그대로를 검사한다. 목적 순서(objective)로 변경 작업 수와 총 지연 가운데
+    무엇을 먼저 줄일지 고른다. 해가 있으면 후보가 등록되고 검증을 기다린다. 해가 없으면 계산 상태를
+    돌려주고, 모두 지정한 배치였으면 그 배치가 어긴 규칙을 붙인다."""
 
     OPENS = (
         "맡은 충돌이 있고 Solver 호출이 남아 있을 때. 탐색 범위를 모두 시도한 뒤에도 쓸 수 있다. 같은 "
-        "사실에서 같은 범위·같은 조건은 받아들여지지 않는다. 조건이 시간창 밖이거나, 고정된 작업이거나, "
+        "사실에서 같은 범위·같은 조건·같은 목적 순서는 받아들여지지 않는다. 조건 없이 변경 먼저로 푸는 "
+        "것은 범위 계산과 같아 받아들여지지 않는다. 조건이 시간창 밖이거나, 고정된 작업이거나, "
         "범위 밖 작업이거나, 자원이 적격이 아니면 받아들여지지 않는다"
     )
 
     level: Literal["L0", "L1", "L2"] = Field(
         description="탐색 범위. L0 충돌 당사자만, L1 같은 구역·같은 자원 작업까지, L2 acting_unit 작업 전부"
     )
-    conditions: list[TaskCondition] = Field(min_length=1, description="작업별 조건 (작업마다 하나)")
+    conditions: list[TaskCondition] = Field(
+        default_factory=list,
+        description="작업별 조건 (작업마다 하나). 목적 순서만 바꿀 때는 비운다",
+    )
+    objective: Literal["CHANGE_FIRST", "DELAY_FIRST"] = Field(
+        default="CHANGE_FIRST",
+        description=(
+            "목적 순서. CHANGE_FIRST 변경 작업 수를 먼저 줄이고 그 안에서 총 지연을 줄인다(기본). "
+            "DELAY_FIRST 총 지연을 먼저 줄이고 그 안에서 변경 작업 수를 줄인다"
+        ),
+    )
 
 
 class ListAssignableResources(Action):

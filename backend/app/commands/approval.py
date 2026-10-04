@@ -1,4 +1,4 @@
-"""ApproveAndCommit·WAIVE·구조화 거절.
+"""ApproveAndCommit·WAIVE·구조화 거절·안 고르기.
 
 NOT_AUTHORIZED와 CANDIDATE_NOT_FOUND는 단독으로 반환하고, 나머지 사유는 해당하는 것을 모두 반환한다.
 STALE은 STALE_PLAN·STALE_CONTEXT로만 보고한다(승인 8단계는 item만 본 상태로 판정).
@@ -14,7 +14,7 @@ from app.domain.models import Candidate, Plan, Validation
 from app.packs.loader import LoadedPack
 from app.store.repos.cases import deliver_event, end_candidate_runs, register_recheck, wake_run
 from app.store.repos.consultations import CandidateState, candidate_state, consultation_view
-from app.store.repos.decisions import insert_decision
+from app.store.repos.decisions import chosen_by_case, insert_decision
 from app.store.repos.events import list_active_holds
 from app.store.repos.plans import get_plan_by_candidate, insert_plan
 from app.store.repos.records import get_candidate, list_validations
@@ -40,6 +40,11 @@ class WaiveRequest(Body):
     candidate_id: str
     task_ids: tuple[str, ...] = Field(min_length=1)
     comment: str
+
+
+class ChooseRequest(Body):
+    candidate_id: str
+    validation_id: str
 
 
 class RejectRequest(Body):
@@ -258,14 +263,70 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
     return r
 
 
+# ── 안 고르기 ───────────────────────────────────────────
+
+
+def _choose(tx: sqlite3.Connection, ctx: CommandContext, body: ChooseRequest) -> Result:
+    """Supervisor가 검토 대기 안 가운데 하나를 고른다. 고른 안만 협의한다 (AG-28).
+
+    고르는 것은 승인이 아니다: 계획과 현장 버전은 그대로다. 같은 Case에서 앞서 고른 안이 있으면 그 안의
+    열린 협의 Run을 끝낸다(보낸 요청 정리). 고른 결과는 사건으로 메인에게 간다.
+    """
+    r = Result()
+    candidate = _load(tx, ctx, body.candidate_id, r)
+    if candidate is None:
+        return r
+    site_id = ctx.site_id
+    validation = _pass_validation(tx, site_id, candidate.candidate_id, body.validation_id)
+    if validation is None:
+        r.reject("VALIDATION_NOT_PASS")
+    state = candidate_state(tx, site_id, candidate)
+    _stale(r, state)
+    if state.committed:
+        r.reject("CANDIDATE_COMMITTED")
+    before = chosen_by_case(tx, site_id)
+    if candidate.candidate_id in before.values():
+        r.reject("ALREADY_CHOSEN")
+    if r.reason_codes or validation is None:
+        return r
+
+    decision_id = new_id("dec")
+    insert_decision(
+        tx,
+        site_id,
+        decision_id,
+        "CHOOSE",
+        candidate.candidate_id,
+        validation.validation_id,
+        ctx.actor_id,
+        ctx.site.context_version,
+    )
+    after = chosen_by_case(tx, site_id)
+    replaced = sorted(set(before.values()) - set(after.values()))
+    for previous in replaced:
+        end_candidate_runs(
+            tx, ctx.pack, previous, "STALE", f"CHOICE_CHANGED:{candidate.candidate_id}"
+        )
+    r.refs = {"decision_id": decision_id, "replaced": replaced}
+    _deliver_decided(tx, ctx, candidate, decision_id, "CHOOSE", "CANDIDATE_CHOSEN")
+    return r
+
+
+def choose_candidate(
+    pack: LoadedPack, actor_id: str, idempotency_key: str, body: ChooseRequest
+) -> CommandOutcome:
+    return run_command(pack, "CHOOSE_CANDIDATE", actor_id, idempotency_key, body, _choose)
+
+
 def _deliver_decided(
     tx: sqlite3.Connection,
     ctx: CommandContext,
     candidate: Candidate,
     decision_id: str,
     decision: str,
+    kind: str = "CANDIDATE_DECIDED",
 ) -> None:
-    """후보 승인·거절 결과는 사건이다. 원래 Case는 그 후보를 만든 Run의 Case다."""
+    """후보 승인·거절·고르기 결과는 사건이다. 원래 Case는 그 후보를 만든 Run의 Case다."""
     maker_id = (
         run_for_solver_result(tx, candidate.solver_result_id)
         if candidate.solver_result_id
@@ -275,8 +336,8 @@ def _deliver_decided(
     deliver_event(
         tx,
         ctx.pack,
-        "CANDIDATE_DECIDED",
-        f"CANDIDATE_DECIDED:{decision_id}",
+        kind,
+        f"{kind}:{decision_id}",
         {"candidate_id": candidate.candidate_id, "decision_id": decision_id, "type": decision},
         None if maker is None else maker.case_id,
     )

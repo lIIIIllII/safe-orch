@@ -17,6 +17,8 @@ CandidateKind = Literal["REPLAN", "RECONFIRM"]
 ValidationStatus = Literal["PASS", "FAIL", "INCOMPLETE"]
 ScopeLevel = Literal["L0", "L1", "L2"]
 Axis = Literal["TIME", "RESOURCE"]
+# 목적 순서: 변경 작업 수를 먼저 줄일지, 총 지연을 먼저 줄일지 (CV-27)
+Objective = Literal["CHANGE_FIRST", "DELAY_FIRST"]
 AttributeType = Literal["NUMBER", "LIST"]
 RequirementOp = Literal["GTE", "LTE", "CONTAINS"]  # 코어가 아는 비교는 이 셋뿐이다 (CV-17)
 
@@ -432,6 +434,7 @@ class SearchSpec(Frozen):
     resource_alternatives: dict[str, tuple[str, ...]]
     # Agent가 건 조건(작업별). 없으면 빈 dict (CV-24)
     conditions: dict[str, Condition] = Field(default_factory=dict)
+    objective: Objective = "CHANGE_FIRST"
     time_limit_s: int = Field(gt=0)
     # 실효 탐색 키(미시도 판정용, Solver 입력만). 무결성 hash와 다르다
     search_key: str

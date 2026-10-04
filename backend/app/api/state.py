@@ -24,7 +24,7 @@ from app.store.repos.consultations import (
     contested_changes,
     list_review_queue,
 )
-from app.store.repos.decisions import list_decisions
+from app.store.repos.decisions import is_chosen, list_decisions
 from app.store.repos.messages import list_change_requests, list_fact_updates, list_inbox
 from app.store.repos.pins import active_pin_views, preferred_windows
 from app.store.repos.plans import get_current_plan
@@ -35,7 +35,7 @@ from app.store.repos.records import (
     list_validations,
 )
 from app.store.repos.resources import list_resources
-from app.store.repos.runs import get_run, list_steps, run_for_solver_result
+from app.store.repos.runs import approach_attempts, get_run, list_steps, run_for_solver_result
 from app.store.repos.site import get_site, list_actors, list_zone_relations
 from app.store.repos.snapshots import build_snapshot_content
 from app.store.repos.tasks import list_current_tasks
@@ -96,7 +96,7 @@ def _solver(
         return None
     found = rows(
         conn,
-        "SELECT r.stage1, r.stage2, r.chosen_stage, s.scope_level FROM solver_result r"
+        "SELECT r.stage1, r.stage2, r.chosen_stage, s.scope_level, s.objective FROM solver_result r"
         " JOIN search_spec s ON s.search_spec_id = r.search_spec_id"
         " WHERE r.solver_result_id = ?",
         (solver_result_id,),
@@ -108,18 +108,23 @@ def _solver(
     solution = s1 if r["chosen_stage"] == 1 else s2
     base = facts.base_assignments() if facts else {}
     intervals = facts.work_intervals if facts else ()
+    delay_first = r["objective"] == "DELAY_FIRST"
     return {
         "scope_level": r["scope_level"],
-        "stage1": {"status": s1["status"], "changed": s1["changed"]},
+        # 목적 순서. 지연 먼저면 1단계가 총 지연, 2단계가 변경 작업 수다 (CV-27)
+        "objective": r["objective"],
+        "stage1": {"status": s1["status"], "changed": s1["changed"], "delay": s1.get("delay")},
         "stage2": None
         if s2 is None
         else {
             "status": s2["status"],
             "delay": s2["delay"],
+            "changed": s2.get("changed"),
             "work_delay": _work_delay_sum(s2.get("solution"), base, intervals),
         },
         "chosen_stage": r["chosen_stage"],
-        "minimal_change": s1["status"] == "OPTIMAL",
+        "minimal_change": s1["status"] == "OPTIMAL" and not delay_first,
+        "minimal_delay": s1["status"] == "OPTIMAL" and delay_first,
         "delay_optimality_unconfirmed": solution is not None
         and (s2 is None or s2["status"] != "OPTIMAL"),
     }
@@ -184,13 +189,20 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
                 for i in view.items
             ],
         }
+    run_id = run_for_solver_result(conn, cand.solver_result_id) if cand.solver_result_id else None
+    maker = get_run(conn, run_id) if run_id else None
     return {
         "candidate_id": cand.candidate_id,
         "kind": cand.kind,
         "rejection": _rejection(conn, site_id, cand.candidate_id),
-        "run_id": run_for_solver_result(conn, cand.solver_result_id)
-        if cand.solver_result_id
-        else None,
+        "run_id": run_id,
+        # 이 후보를 만든 Case, 이 후보에 도달한 접근들(같은 배치면 여럿), Supervisor가 골랐는가 (AG-28)
+        "case_id": None if maker is None else maker.case_id,
+        "approaches": [
+            {k: a[k] for k in ("no", "approach", "quoted_note", "run_id", "same", "quoted_reason")}
+            for a in approach_attempts(conn, candidate_id=cand.candidate_id)
+        ],
+        "chosen": is_chosen(conn, site_id, cand.candidate_id),
         "context_version": cand.context_version,
         "base_plan_revision": cand.base_plan_revision,
         "display_status": display,

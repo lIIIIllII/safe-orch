@@ -13,9 +13,10 @@ def search_spec_hash(
     resource_alternatives: Mapping[str, Sequence[str]],
     time_limit_s: int,
     conditions: Mapping[str, Condition] | None = None,
+    objective: str = "CHANGE_FIRST",
 ) -> str:
     """실효 내용의 hash. 두 축이 모두 false인 작업, ID, scope_level은 넣지 않는다.
-    조건은 있을 때만 넣는다(조건 없는 탐색의 hash는 그대로다)."""
+    조건과 목적 순서는 기본값이 아닐 때만 넣는다(조건 없는 탐색의 hash는 그대로다)."""
     content = {
         "snapshot_hash": snapshot_hash,
         "acting_unit_id": acting_unit_id,
@@ -25,6 +26,8 @@ def search_spec_hash(
     }
     if conditions:
         content["conditions"] = _condition_input(conditions)
+    if objective != "CHANGE_FIRST":
+        content["objective"] = objective
     return canonical_hash(content)
 
 
@@ -40,6 +43,7 @@ def search_key(
     resource_alternatives: Mapping[str, Sequence[str]],
     time_limit_s: int,
     conditions: Mapping[str, Condition] | None = None,
+    objective: str = "CHANGE_FIRST",
 ) -> str:
     """실효 탐색 키: "같은 실효 SearchSpec 미시도" 판정용. Solver 입력만 넣는다.
 
@@ -60,7 +64,9 @@ def search_key(
         resource = ax.resource and bool(resource_alternatives.get(tid))
         if ax.time or resource:
             effective[tid] = {"time": ax.time, "resource": resource}
-    extra = {"conditions": _condition_input(conditions)} if conditions else {}
+    extra: dict = {"conditions": _condition_input(conditions)} if conditions else {}
+    if objective != "CHANGE_FIRST":
+        extra["objective"] = objective  # 목적 순서도 Solver 입력이다 (CV-27)
     return canonical_hash(
         {
             **extra,

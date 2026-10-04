@@ -92,6 +92,7 @@ def _c01(
             spec.resource_alternatives,
             spec.time_limit_s,
             spec.conditions,
+            spec.objective,
         )
         if len({candidate.search_spec_hash, spec.hash, recomputed}) != 1:
             out.append("SEARCH_SPEC_HASH_MISMATCH")

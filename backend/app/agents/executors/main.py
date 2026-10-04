@@ -127,6 +127,8 @@ class MainExecutor:
                 return "UNIT_NOT_IN_GROUP"  # 권한 주체는 그 그룹에 작업을 가진 Unit뿐이다
             if not unit["movable_task_ids"]:
                 return "UNIT_HAS_NO_MOVABLE_TASK"
+            if refs.get("approach") is None:
+                return "APPROACH_REQUIRED"
             return "HOLD_ACTIVE" if holds else "SAME_FACTS"
         if refs["agent"] == "COORDINATION":
             candidate = next(
@@ -136,6 +138,8 @@ class MainExecutor:
             if candidate is None or refs.get("phase") is None:
                 return "ACTION_NOT_AVAILABLE"
             if refs["phase"] == "CONSULT" and candidate["live"] and candidate["open_items"]:
+                if not candidate["chosen"]:
+                    return "CANDIDATE_NOT_CHOSEN"  # 협의는 Supervisor가 고른 안만 한다 (AG-28)
                 return "HOLD_ACTIVE" if holds else "SAME_FACTS"
             return "ACTION_NOT_AVAILABLE"
         hold = next((h for h in data["holds"] if h["event_id"] == refs.get("event_id")), None)
@@ -240,6 +244,9 @@ class MainExecutor:
                 "acting_unit_id": unit,
                 "acting_actor_id": casefacts.acting_actor(tx, self.pack, group, facts, unit),
                 "group_id": group.group_id,
+                # 접근은 호출 키에 들어가고, 문장은 재계획 관찰에 인용으로만 간다
+                "approach": action.approach,
+                "approach_note": action.approach_note,
                 "group_task_ids": list(group.task_ids),
                 "conflict": {"rule_id": primary.rule_id, "task_ids": list(primary.task_ids)},
             }

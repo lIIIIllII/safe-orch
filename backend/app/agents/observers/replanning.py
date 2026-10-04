@@ -27,7 +27,13 @@ from app.store.repos.decisions import list_case_rejections
 from app.store.repos.messages import declined_values, open_owner_asks
 from app.store.repos.pins import preferred_windows
 from app.store.repos.records import get_candidate, list_validations
-from app.store.repos.runs import get_run, list_attempts, list_steps, tried_search_keys
+from app.store.repos.runs import (
+    approach_attempts,
+    get_run,
+    list_attempts,
+    list_steps,
+    tried_search_keys,
+)
 from app.store.repos.site import get_site
 from app.store.repos.snapshots import build_snapshot_content
 
@@ -197,6 +203,32 @@ def openers(
     for change in changes:
         if change not in out:
             out.append(change)
+    return out
+
+
+def condition_args(pack: LoadedPack, conditions: dict[str, Any]) -> list[dict[str, Any]]:
+    """저장된 조건(분)을 조건 도구의 인자 모양(현장 날짜·시각 문자열)으로. 같은 조건을 다시 쓰지 않게
+    이전 계산에 붙인다 (AG-21)."""
+
+    def clock(minute: int) -> str:
+        return site_time(pack.horizon_start_utc, pack.timezone, minute)
+
+    out = []
+    for tid, c in sorted(conditions.items()):
+        arg: dict[str, Any] = {"task_id": tid}
+        lo, hi = c.get("start_min"), c.get("start_max")
+        if c.get("preferred"):
+            arg["use_preferred_window"] = True
+        elif lo is not None and lo == hi:
+            arg["start_at"] = clock(lo)
+        else:
+            if lo is not None:
+                arg["start_from"] = clock(lo)
+            if hi is not None:
+                arg["start_until"] = clock(hi)
+        if c.get("resource_id") is not None:
+            arg["resource_id"] = c["resource_id"]
+        out.append(arg)
     return out
 
 
@@ -393,11 +425,28 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "task_ids": list(group.task_ids),
             "unit_ids": sorted(group.units),
         },
+        # 메인이 이번 호출에 준 접근(무엇을 우선할지)과 짧은 문장(인용). 방식은 이 Agent가 고른다 (AG-28)
+        "approach": {
+            "approach": run.input_ref.get("approach"),
+            "quoted_note": run.input_ref.get("approach_note"),
+        },
+        # 이 Case에서 접근별로 나온 후보(앞 Run 포함). same이면 기존 후보와 같은 배치에 도달한 것이다
+        "approach_candidates": [
+            {k: a[k] for k in ("no", "approach", "candidate_id", "same")}
+            for a in approach_attempts(conn, case_id=run.case_id)
+        ],
         "acting_tasks": acting_tasks,
         "consents": [c.model_dump(mode="json") for c in facts.consents if c.task_id in acting_ids],
         "untried_levels": untried,
         # search_key는 내부 계산(시도 여부)에만 쓰고 모델에는 보이지 않는다
-        "attempts": [{k: v for k, v in a.items() if k != "search_key"} for a in attempts],
+        "attempts": [
+            {
+                **{k: v for k, v in a.items() if k != "search_key"},
+                # 건 조건을 도구 인자와 같은 모양으로(현장 날짜·시각 문자열)
+                "conditions_as_args": condition_args(pack, a["conditions"]),
+            }
+            for a in attempts
+        ],
         "latest_validation": latest_validation,
         # 이 Case 후보에 대한 Supervisor 거절. comment는 인용 데이터다
         "rejections": list_case_rejections(conn, run.case_id),
