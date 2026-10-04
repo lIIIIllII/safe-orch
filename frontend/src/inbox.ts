@@ -3,7 +3,7 @@
 import type { SiteState } from './types'
 
 /** 답할 수 있는 메시지 유형. 통지(NOTICE)는 답을 받지 않으므로 세지 않는다. */
-export const ANSWERABLE = ['QUESTION', 'CHANGE_REQUEST', 'CONFIRMATION']
+export const ANSWERABLE = ['CHANGE_REQUEST', 'CONFIRMATION']
 
 export function openInbox(state: SiteState | null): number {
   return (state?.inbox ?? []).filter((m) => m.status === 'OPEN' && ANSWERABLE.includes(m.type)).length

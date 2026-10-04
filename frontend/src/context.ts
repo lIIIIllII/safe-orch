@@ -74,7 +74,7 @@ export function poolExcessText(meta: Meta, c: Conflict): string {
   return `${pool?.display_name || c.pool.pool_id} 수요 ${c.pool.demand}${unit} > 수량 ${c.pool.quantity}${unit}`
 }
 
-/** Agent가 정한 값의 이름(요청자가 아직 확인하거나 고치지 않은 것). 서버 기록을 그대로 읽는다. */
+/** Agent가 정한 값의 이름(요청자가 아직 고치지 않은 것). 서버 기록을 그대로 읽는다. */
 export function decidedValues(task: { fields: Record<string, { origins: Record<string, string> }> }): string[] {
   return Object.values(task.fields ?? {})
     .flatMap((f) => Object.entries(f.origins ?? {}))

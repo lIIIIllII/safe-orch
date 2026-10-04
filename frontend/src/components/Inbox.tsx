@@ -1,5 +1,5 @@
 // 받은 요청. X-Actor 본인에게 온 질문만 state.inbox로 받는다.
-// 서버 문구(동의 내용의 기준)를 먼저, 모델이 쓴 설명은 아래에 따로 구분해 보여 준다.
+// 서버 문구(답의 기준)를 먼저, 모델이 쓴 설명은 아래에 따로 구분해 보여 준다.
 
 import { useState } from 'react'
 import type { InboxItem, SiteState } from '../types'
@@ -37,14 +37,7 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
   const { clock } = useEnv()
   const answerable = ANSWERABLE.includes(m.type)
   // 확인 메시지는 제안 유형으로 나눈다: 사실 수정
-  // 제안 없는 질문은 자유 텍스트 답이다(신고자 확인 질문)
-  const kind =
-    m.proposal_type === 'FACT_UPDATE'
-      ? 'FACT_UPDATE'
-      : m.type === 'QUESTION' && !m.proposal_id
-        ? 'FREE_QUESTION'
-        : m.type
-  const free = kind === 'FREE_QUESTION'
+  const kind = m.proposal_type === 'FACT_UPDATE' ? 'FACT_UPDATE' : m.type
   const open = m.status === 'OPEN' && answerable
   const done = m.status === 'LATE' || m.status === 'CANCELLED'
   const words = DECISION_BY_TYPE[kind] ?? DECISION
@@ -119,30 +112,7 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
           )}
         </tbody>
       </table>
-      {open && free && (
-        <div className="row">
-          <textarea
-            className="grow"
-            rows={2}
-            placeholder="답을 문장으로 적습니다(필수)"
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-          />
-          <button
-            className="btn-primary"
-            disabled={busy !== null || !comment.trim()}
-            onClick={() =>
-              void run(`${MESSAGE_TYPE[kind]} 답변`, `/messages/${m.message_id}/reply`, {
-                decision: 'ANSWER',
-                comment,
-              })
-            }
-          >
-            답변 보내기
-          </button>
-        </div>
-      )}
-      {open && !free && (
+      {open && (
         <div className="row">
           <input
             className="grow"

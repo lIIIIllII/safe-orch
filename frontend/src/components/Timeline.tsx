@@ -1,14 +1,15 @@
 // 타임라인. 행은 구역 + 자원. 위치는 분 → x(px)로 그린다(scale.ts).
 // 현재 Plan(실선), Plan 밖 READY 작업(점선 "요청"), 선택한 후보의 변경(굵은 테두리)을 겹쳐 그린다.
-// 막대를 누르면 작업이 선택되고 카드가 고정되어 열린다: 고정·고정 해제, 희망 영역 그리기·지우기(AG-27).
-// 고정은 자물쇠와 굵은 테두리, 희망 영역은 막대 뒤 Unit 색의 옅은 띠(늘 보임, 접수 Agent가 정했고 아직 확인하지
-// 않은 희망은 점선 테두리), 가능 범위(시간창)는 막대 아래 가는 괄호다. 괄호는 눌러 선택한 작업에만
+// 막대를 누르면 작업이 선택되고 카드가 고정되어 열린다: 고정·고정 해제(AG-27).
+// 고정은 자물쇠와 굵은 테두리, 가능 범위(시간창)는 막대 아래 가는 괄호다. 괄호는 눌러 선택한 작업에만
 // 보인다(좁힌 작업도 늘 보이지 않는다). 괄호가 지금 보이는 구간 밖으로 이어지면 화면 가장자리에 끝 시각을 적는다.
-// 후보 겹쳐 보기에서는 후보가 옮긴 자리에도 희망 영역을 같이 그리고, 선택하면 가능 범위도 같이 보인다.
+// 후보 겹쳐 보기는 서버가 계산한 "이 안이 바꾸는 것"을 그린다: 계획 작업은 승인된 자리를 "변경 전" 윤곽으로,
+// 새 작업은 기준 위치(요청한 자리·시작 범위)를 같은 모양의 윤곽으로 남기고 후보의 자리를 굵은 막대로 그린다.
+// 기준 위치가 없는 새 작업(폼 요청)은 윤곽 없이 "새 배치"로만 그린다. 선택하면 가능 범위도 같이 보인다.
 // 후보가 자원을 바꾼 작업은 후보 막대에 "자원 → 새 자원"을 달고, 원래 자원 행의 자리는 흐린 점선 윤곽으로 남긴다.
 // 담당자는 자기 작업의 Plan 막대를 끌어 시각을 옮긴다(AG-31): 놓을 수 있는 구간은 서버가 계산해 주고 화면은 칠하기만
-// 한다. 놓으면 미리보기와 [확정]/[취소]가 뜬다. 조금만 움직이면 선택이다. 희망 영역은 [희망 영역 그리기]를 누른 뒤
-// 그 작업의 행에서 끈다. 작업 카드의 [작업 없애기]는 서버 확인을 거쳐 [확정]해야 없어진다(계획 밖 요청은 요청 철회).
+// 한다. 놓으면 미리보기와 [확정]/[취소]가 뜬다. 조금만 움직이면 선택이다.
+// 작업 카드의 [작업 없애기]는 서버 확인을 거쳐 [확정]해야 없어진다(계획 밖 요청은 요청 철회).
 // [하루 | 전체] 보기와 날짜 탭. 분당 픽셀로 그려 넘치면 가로 스크롤(시간 머리줄·행 이름 고정). 비근무는 회색 사선,
 // 전체 보기의 밤은 접힌 띠다. 자동으로 날짜를 옮기지 않고, 가로 자동 스크롤은 사용자가 직접 스크롤하기 전까지만 한다.
 
@@ -40,6 +41,8 @@ interface Bar {
   resourceId: string | null
   zoneId: string
   kind: BarKind
+  /** 카드 머리말과 막대 글자에 쓰는 이름. 없으면 종류(kind)의 이름이다 */
+  label?: string
 }
 
 interface Props {
@@ -50,7 +53,7 @@ interface Props {
   /** 타임라인을 화면 전체 폭으로 ("크게 보기") */
   wide: boolean
   onWide: (on: boolean) => void
-  /** 지금 Actor. 고정·희망 영역 버튼의 권한 안내에 쓴다(판정은 서버가 한다) */
+  /** 지금 Actor. 고정 버튼의 권한 안내에 쓴다(판정은 서버가 한다) */
   actorId: string
   isSupervisor: boolean
   busy: string | null
@@ -68,7 +71,7 @@ const AXIS_H = 34
 const AUTO_MARGIN_PX = 80 // 자동 스크롤 시 대상 왼쪽 여백
 const MIN_PANEL_PX = 160
 const CONFLICT_STRIP_PX = 18 // 충돌이 있는 행 위쪽의 충돌 이름 띠(막대 라벨과 겹치지 않게)
-const DRAW_SNAP_MIN = 5 // 희망 영역을 그릴 때 맞추는 분 단위
+const SNAP_MIN = 5 // 끌어 옮길 때 맞추는 분 단위(서버가 단위를 주기 전)
 const DRAG_START_PX = 6 // 이만큼 끌어야 이동이다. 덜 움직이면 선택
 const PIN_MARK = '🔒'
 
@@ -155,10 +158,8 @@ export function Timeline(props: Props) {
   const [busyOnly, setBusyOnly] = useState(true)
   const [height, setHeight] = useState<number | null>(null)
   const [hover, setHover] = useState<{ key: string; x: number; y: number } | null>(null)
-  // 누른 작업(카드가 고정되어 열린다)과 희망 영역 그리기 상태
+  // 누른 작업(카드가 고정되어 열린다)
   const [selected, setSelected] = useState<{ taskId: string; x: number; y: number } | null>(null)
-  const [drawing, setDrawing] = useState<string | null>(null)
-  const [drag, setDrag] = useState<{ rowKey: string; x0: number; x1: number } | null>(null)
   // 직접 이동: 끄는 중이거나 놓은 뒤 [확정]을 기다리는 미리보기
   const [move, setMove] = useState<Move | null>(null)
   const dragged = useRef(false)
@@ -204,7 +205,10 @@ export function Timeline(props: Props) {
   const actorName = new Map(actors.map((a) => [a.actor_id, a.name]))
   const unitName = new Map(state.units.map((u) => [u.unit_id, u.name]))
   const unitIndex = new Map(state.units.map((u, i) => [u.unit_id, i % UNIT_COLORS]))
-  const changed = new Map(overlay && candidate ? candidate.changes.map((c) => [c.task_id, c]) : [])
+  // 겹쳐 보기: 이 안이 기준에서 바꾸는 것(서버 계산). 계획 밖 작업의 새 배치도 들어 있다
+  const changed = new Map(overlay && candidate ? candidate.plan_changes.map((c) => [c.task_id, c]) : [])
+  // 변경 전 자리: 계획 작업은 승인된 자리, 새 작업은 기준 위치의 시작점(없으면 null)
+  const beforeStart = (c: CandidateView['plan_changes'][number]) => c.before?.start ?? c.base?.start ?? null
   const ruleLabel = (id: string) => ruleName(meta, id) ?? REASON[id] ?? id
 
   const bars: Bar[] = []
@@ -225,7 +229,25 @@ export function Timeline(props: Props) {
   }
   for (const t of tasks) {
     if (inPlan.has(t.task_id) || t.lifecycle !== 'READY') continue
-    // 계획 밖 요청의 자리는 서버가 준 기준 시작이다(희망 시작, 희망 영역이 없으면 가장 이른 시작)
+    const c = changed.get(t.task_id)
+    if (c) {
+      // 겹쳐 보기의 새 작업: 기준 위치(요청한 자리·시작 범위)를 "변경 전"과 같은 윤곽으로 남긴다.
+      // 기준 위치가 없으면(폼 요청) 윤곽을 그리지 않는다
+      if (c.base) {
+        bars.push({
+          key: `r:${t.task_id}`,
+          taskId: t.task_id,
+          start: c.base.start,
+          end: c.base.start_max + t.duration,
+          resourceId: c.base.resource_id,
+          zoneId: t.zone_id,
+          kind: 'before',
+          label: '기준 위치(요청한 자리)',
+        })
+      }
+      continue
+    }
+    // 계획 밖 요청의 자리는 서버가 준 기준 시작이다(요청한 시작, 기준 위치가 없으면 가장 이른 시작)
     const at = t.base_start ?? t.earliest_start
     bars.push({
       key: `r:${t.task_id}`,
@@ -234,7 +256,7 @@ export function Timeline(props: Props) {
       end: at + t.duration,
       resourceId: t.requested_resource_id,
       zoneId: t.zone_id,
-      kind: changed.has(t.task_id) ? 'before' : 'request',
+      kind: 'request',
     })
   }
   for (const c of changed.values()) {
@@ -247,6 +269,7 @@ export function Timeline(props: Props) {
       resourceId: c.after.resource_id,
       zoneId: t?.zone_id ?? '',
       kind: 'after',
+      label: c.kind === 'NEW' ? '후보의 새 배치' : undefined,
     })
   }
 
@@ -264,9 +287,10 @@ export function Timeline(props: Props) {
     conflicts: conflicts.filter((c) => clock.dayIndex(c.interval[0]) === d.index).length,
     changes:
       overlay && candidate
-        ? candidate.changes.filter(
-            (c) => clock.dayIndex(c.after.start) === d.index || clock.dayIndex(c.before.start) === d.index,
-          ).length
+        ? candidate.plan_changes.filter((c) => {
+            const from = beforeStart(c)
+            return clock.dayIndex(c.after.start) === d.index || (from !== null && clock.dayIndex(from) === d.index)
+          }).length
         : 0,
   }))
 
@@ -286,9 +310,11 @@ export function Timeline(props: Props) {
     const mark = t?.pin ? `${PIN_MARK} ` : ''
     // 후보가 이 작업의 자원을 바꿨는가(겹쳐 보기)
     const ch = changed.get(b.taskId)
-    const swapped = !!ch && ch.before.resource_id !== ch.after.resource_id
+    const swapped = !!ch && ch.resource_changed
     const moved = b.kind === 'after' && swapped ? ` · 자원 → ${ch.after.resource_id ?? '없음'}` : ''
-    const line1 = `${b.kind === 'after' ? '→ ' : ''}${mark}${b.taskId} ${wt}${b.kind === 'request' ? ' · 요청' : ''}${moved}`
+    // 새 작업: 후보의 자리는 "새 배치", 기준 위치의 윤곽은 "기준"으로 적는다
+    const fresh = ch?.kind === 'NEW' ? (b.kind === 'after' ? ' · 새 배치' : ' · 기준') : ''
+    const line1 = `${b.kind === 'after' ? '→ ' : ''}${mark}${b.taskId} ${wt}${b.kind === 'request' ? ' · 요청' : ''}${fresh}${moved}`
     const line2 = `${clock.hm(b.start)}–${clock.hm(b.end)}`
     // Gate(시작 가능 아님)는 막대 안에 글자가 들어갈 때만 배지로, 아니면 모서리 표시로 둔다(사유는 카드)
     const gated = (b.kind === 'plan' || b.kind === 'before') && !!t && t.gate !== 'ALLOW'
@@ -328,7 +354,10 @@ export function Timeline(props: Props) {
     .map((c) => Math.max(c.interval[0], scale.start))
   const changeStarts =
     overlay && candidate
-      ? candidate.changes.flatMap((c) => [c.after.start, c.before.start]).filter(inView)
+      ? candidate.plan_changes
+          .flatMap((c) => [c.after.start, beforeStart(c)])
+          .filter((m): m is number => m !== null)
+          .filter(inView)
       : []
   const target = conflictStarts.length ? Math.min(...conflictStarts) : changeStarts.length ? Math.min(...changeStarts) : null
   const autoKey = [
@@ -424,7 +453,6 @@ export function Timeline(props: Props) {
   const select = (taskId: string) => (e: React.MouseEvent) => {
     if (dragged.current) return // 끌어 옮긴 뒤의 click은 선택이 아니다
     setHover(null)
-    setDrawing(null)
     setSelected((cur) => (cur?.taskId === taskId ? null : { taskId, x: e.clientX, y: e.clientY }))
   }
   const selectedTask = selected ? taskMap.get(selected.taskId) : undefined
@@ -433,35 +461,12 @@ export function Timeline(props: Props) {
       drawn.find((d) => d.b.taskId === selected.taskId))
     : undefined
 
-  // 희망 영역 그리기: [희망 영역 그리기]를 누른 작업의 행에서만 끈다. 놓으면 분으로 바꿔 서버에 보낸다.
-  const startDraw = (rowKey: string, taskId: string) => (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    const rect = e.currentTarget.getBoundingClientRect()
-    const at = (clientX: number) => Math.min(Math.max(clientX - rect.left, 0), scale.width)
-    const x0 = at(e.clientX)
-    setDrag({ rowKey, x0, x1: x0 })
-    const move = (ev: PointerEvent) => setDrag({ rowKey, x0, x1: at(ev.clientX) })
-    const up = (ev: PointerEvent) => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      setDrag(null)
-      const x1 = at(ev.clientX)
-      const snap = (px: number) => Math.round(scale.minute(px) / DRAW_SNAP_MIN) * DRAW_SNAP_MIN
-      const [start, end] = [snap(Math.min(x0, x1)), snap(Math.max(x0, x1))]
-      if (end - start < DRAW_SNAP_MIN) return // 너무 짧게 끌면 그리지 않는다
-      setDrawing(null)
-      void run('희망 영역 그리기', `/tasks/${taskId}/preferred-window`, { start, end })
-    }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-  }
-
   // 직접 이동: 담당자가 자기 작업의 Plan 막대를 끈다. 끌기를 시작할 때 서버에서 놓을 수 있는 구간을 한 번 받고
   // 끄는 동안에는 부르지 않는다. 놓으면 서버가 그 자리를 다시 판정하고, [확정]은 명령이 한 번 더 판정한다.
   const movable = (t: Task | undefined, b: Bar): t is Task =>
-    !!t && (b.kind === 'plan' || b.kind === 'before') && t.owner_actor_id === actorId && !t.pin
+    !!t && (b.kind === 'plan' || b.kind === 'before') && inPlan.has(t.task_id) && t.owner_actor_id === actorId && !t.pin
   const startMove = (t: Task, b: Bar) => (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || busy !== null || drawing !== null) return
+    if (e.button !== 0 || busy !== null) return
     const track = e.currentTarget.closest<HTMLElement>('.tl-track')
     if (!track) return
     const taskId = t.task_id
@@ -471,7 +476,7 @@ export function Timeline(props: Props) {
     let start = b.start
     let options: MoveOptions | null = null
     const at = (clientX: number) => {
-      const snap = options?.snap ?? DRAW_SNAP_MIN
+      const snap = options?.snap ?? SNAP_MIN
       return Math.round(scale.minute(clientX - track.getBoundingClientRect().left - grab) / snap) * snap
     }
     const failed = (err: unknown) =>
@@ -542,7 +547,6 @@ export function Timeline(props: Props) {
     if (!selected) return
     setRemoval({ taskId, x: selected.x, y: selected.y, check: null, error: null })
     setSelected(null)
-    setDrawing(null)
     fetchRemoveCheck(actorId, taskId)
       .then((check) => setRemoval((cur) => (cur?.taskId === taskId ? { ...cur, check } : cur)))
       .catch((err: unknown) =>
@@ -571,7 +575,6 @@ export function Timeline(props: Props) {
       : isSupervisor || owner
         ? null
         : '담당자 또는 Supervisor만 고정할 수 있습니다'
-    const hopeDenied = owner ? null : '희망 영역은 담당자만 그리고 지울 수 있습니다'
     const moveNote = !owner
       ? '담당자만 막대를 끌어 옮길 수 있습니다'
       : t.pin
@@ -596,28 +599,6 @@ export function Timeline(props: Props) {
           >
             {t.pin ? '고정 해제' : '고정'}
           </button>
-          {drawing === t.task_id ? (
-            <button className="btn-small" onClick={() => setDrawing(null)}>
-              그리기 취소
-            </button>
-          ) : (
-            <button
-              className="btn-small"
-              disabled={off || hopeDenied !== null}
-              title={hopeDenied ?? undefined}
-              onClick={() => setDrawing(t.task_id)}
-            >
-              희망 영역 그리기
-            </button>
-          )}
-          <button
-            className="btn-small"
-            disabled={off || hopeDenied !== null || !t.preferred_window}
-            title={hopeDenied ?? (t.preferred_window ? undefined : '희망 영역이 없습니다')}
-            onClick={() => void run('희망 영역 지우기', `/tasks/${t.task_id}/preferred-window/clear`, undefined)}
-          >
-            희망 영역 지우기
-          </button>
           <button
             className="btn-small"
             disabled={off || removeDenied !== null}
@@ -627,11 +608,7 @@ export function Timeline(props: Props) {
             작업 없애기
           </button>
         </div>
-        {drawing === t.task_id && (
-          <p className="small tl-card-note">이 작업의 행에서 끌어 바라는 시각 구간을 그리세요.</p>
-        )}
         {pinDenied && <p className="small muted tl-card-note">고정: {pinDenied}</p>}
-        {hopeDenied && <p className="small muted tl-card-note">{hopeDenied}</p>}
         <p className="small muted tl-card-note">{moveNote}</p>
         {removeDenied && <p className="small muted tl-card-note">없애기: {removeDenied}</p>}
         <TaskEdit
@@ -721,19 +698,13 @@ export function Timeline(props: Props) {
               {CANDIDATE_STATUS[candidate.display_status] ?? candidate.display_status}
             </span>
           )}
-          {overlay && candidate && candidate.changes.some((c) => c.before.resource_id !== c.after.resource_id) && (
+          {overlay && candidate && candidate.plan_changes.some((c) => c.resource_changed) && (
             <span className="lg lg-left" title="후보가 자원을 바꾼 작업의 원래 자원 행 자리">
               옮기기 전 자원 자리
             </span>
           )}
           <span className="lg lg-pinned" title="사람이 고정한 작업. 재계획이 움직이지 않는다">
             {PIN_MARK} 고정
-          </span>
-          <span
-            className="lg lg-hope"
-            title="희망 영역. 강제하지 않지만 벗어난 만큼이 지연으로 계산되고, 말한 희망의 범위 안이면 묻지 않는다. 점선 테두리는 Agent가 정했고 아직 확인하지 않은 희망"
-          >
-            희망 영역
           </span>
           <span className="lg lg-window" title="가능 범위(반드시 지켜야 하는 시간창). 눌러 선택한 작업만 보인다">
             가능 범위(선택한 작업만)
@@ -784,40 +755,21 @@ export function Timeline(props: Props) {
             const sep = i > 0 && row.group === 'resource' && rows[i - 1].row.group === 'zone'
             const strip = rowConflicts.length > 0 ? CONFLICT_STRIP_PX : 0
             const rowKey = `${row.group}:${row.id}`
-            // 이 행에 있는 작업의 기준 막대(후보 변경 후가 아닌 것): 그리기·직접 이동의 자리
+            // 이 행에 있는 작업의 기준 막대(후보 변경 후가 아닌 것): 직접 이동의 자리
             const baseBars = rowBars.filter((d) => d.b.kind !== 'after' && d.t)
-            // 희망 영역·가능 범위는 후보가 옮긴 자리(변경 후 막대)에도 같이 그린다
+            // 가능 범위는 후보가 옮긴 자리(변경 후 막대)에도 같이 그린다
             const rangeBars = rowBars.filter((d) => d.t)
             // 지금 화면에 보이는 가로 구간(px). 폭을 아직 모르면 보기 범위 전체로 본다
             const seenLo = scrollX
             const seenHi = avail > 0 ? scrollX + avail : scale.width
             const laneTop = (key: string) => strip + 2 + (laneOf.get(key) ?? 0) * LANE_PX
-            const drawable = drawing !== null && baseBars.some((d) => d.b.taskId === drawing)
             return (
               <div key={rowKey} className={`tl-row ${sep ? 'tl-sep' : ''}`}>
                 <div className="tl-label" style={{ width: LABEL_W }}>
                   {row.label}
                 </div>
-                <div
-                  className={`tl-track ${drawable ? 'tl-draw' : ''}`}
-                  style={{ width: scale.width, height: strip + laneCount * LANE_PX }}
-                  onPointerDown={drawable && drawing ? startDraw(rowKey, drawing) : undefined}
-                >
+                <div className="tl-track" style={{ width: scale.width, height: strip + laneCount * LANE_PX }}>
                   {background}
-                  {rangeBars.map((d) => {
-                    const w = d.t?.preferred_window
-                    const box = w ? scale.box(w.start, w.end) : null
-                    if (!w || !box) return null
-                    const decided = w.origin === 'DECIDED'
-                    return (
-                      <div
-                        key={`hope:${d.b.key}`}
-                        className={`tl-hope ${decided ? 'tl-hope-decided' : ''} unit-${unitIndex.get(d.t?.unit_id ?? '') ?? UNIT_COLORS - 1}`}
-                        style={{ left: box.left, width: box.width, top: laneTop(d.b.key) - 1, height: BAR_H + 2 }}
-                        title={`${d.b.taskId} 희망 영역 ${clock.span(w.start, w.end)}${decided ? ' · Agent가 정함(확인 전)' : ''}`}
-                      />
-                    )
-                  })}
                   {rangeBars.map((d) => {
                     // 가능 범위는 눌러 선택한 작업에만 그린다
                     if (!d.t || selected?.taskId !== d.b.taskId) return null
@@ -882,12 +834,6 @@ export function Timeline(props: Props) {
                           </div>
                         )
                       })}
-                  {drag && drag.rowKey === rowKey && (
-                    <div
-                      className="tl-drag"
-                      style={{ left: Math.min(drag.x0, drag.x1), width: Math.abs(drag.x1 - drag.x0) }}
-                    />
-                  )}
                   {rowConflicts.map((c) => {
                     const box = scale.box(c.interval[0], c.interval[1])
                     if (!box) return null
@@ -981,7 +927,7 @@ export function Timeline(props: Props) {
         </div>
       </div>
       <div className="tl-resize" onPointerDown={startDrag} title="끌어서 타임라인 높이 조절" />
-      {hovered && hover && hovered.b.taskId !== selected?.taskId && drawing === null && move === null && (
+      {hovered && hover && hovered.b.taskId !== selected?.taskId && move === null && (
         <BarCard
           d={hovered}
           x={hover.x}
@@ -1005,10 +951,7 @@ export function Timeline(props: Props) {
           ruleLabel={ruleLabel}
           actorName={actorName}
           horizon={state.site.horizon_minutes}
-          onClose={() => {
-            setSelected(null)
-            setDrawing(null)
-          }}
+          onClose={() => setSelected(null)}
         >
           {actions(selectedTask)}
         </BarCard>
@@ -1107,7 +1050,7 @@ export function Timeline(props: Props) {
   )
 }
 
-/** 작업 카드: 작업·담당·시각·자원·고정·희망 영역·Gate·충돌. 화면 밖으로 나가지 않게 뒤집는다.
+/** 작업 카드: 작업·담당·시각·자원·고정·기준 위치·Gate·충돌. 화면 밖으로 나가지 않게 뒤집는다.
  *  마우스를 올리면 잠깐 나오고, 막대를 누르면(onClose가 있으면) 고정되어 열려 버튼(children)을 쓸 수 있다. */
 function BarCard({
   d,
@@ -1148,7 +1091,7 @@ function BarCard({
           {b.taskId} {d.wt}
         </b>
         <span className="muted small">
-          {KIND_LABEL[b.kind]}
+          {b.label ?? KIND_LABEL[b.kind]}
           {onClose && (
             <button className="tl-card-close" onClick={onClose} title="닫기">
               ×
@@ -1196,13 +1139,19 @@ function BarCard({
             </td>
           </tr>
           <tr>
-            <th>희망 영역</th>
+            <th title="변경과 지연을 재는 기준. 여기서 바뀐 안은 고른 뒤 협의에서 담당자에게 갑니다">기준 위치</th>
             <td>
-              {t?.preferred_window ? clock.span(t.preferred_window.start, t.preferred_window.end) : '없음'}
-              {t?.preferred_window?.origin === 'DECIDED' && <span className="tag tag-warn"> 정함(확인 전)</span>}
-              {t?.preferred_window?.origin === 'STATED' && t.preferred_window.made_by === 'INTAKE' && (
-                <span className="muted"> · 요청 문장에서</span>
-              )}
+              {!t?.base
+                ? '—'
+                : t.base.source === 'PLAN'
+                  ? `승인된 계획의 자리 · ${clock.format(t.base.start ?? b.start)}`
+                  : t.base.source === 'NONE' || t.base.start === null || t.base.start_max === null
+                    ? '없음(가능 범위 안 어디든 변경이 아님)'
+                    : t.base.start === t.base.start_max
+                      ? `요청한 자리 · ${clock.format(t.base.start)} 시작`
+                      : `요청한 시작 범위 · ${clock.format(t.base.start)} ~ ${clock.format(t.base.start_max)}`}
+              {t?.base?.origin === 'STATED' && <span className="muted"> · 말함</span>}
+              {t?.base?.origin === 'DECIDED' && <span className="tag tag-warn"> 정함(Agent)</span>}
             </td>
           </tr>
           {t && decidedValues(t).length > 0 && (

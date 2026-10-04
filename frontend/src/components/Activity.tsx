@@ -334,11 +334,11 @@ function StepCard({ s }: { s: AgentStep }) {
               {stage2 && (
                 <>
                   {' '}
-                  / 2단계 {SOLVER_STATUS[stage2.status ?? ''] ?? stage2.status} <code>{stage2.status}</code> · 희망에서 벗어남{' '}
+                  / 2단계 {SOLVER_STATUS[stage2.status ?? ''] ?? stage2.status} <code>{stage2.status}</code> · 기준에서 옮긴 거리{' '}
                   {delayText(stage2.delay, stage2.work_delay)}
                 </>
               )}
-              {tr.delay_optimality_unconfirmed === true && <span className="tag tag-warn">벗어난 정도 최적성 미확정</span>}
+              {tr.delay_optimality_unconfirmed === true && <span className="tag tag-warn">옮긴 거리 최적성 미확정</span>}
             </p>
           )}
           {(name === 'LIST_ASSIGNABLE_RESOURCES' || name === 'LOOKUP_RESOURCE') && 'assignable' in tr && (

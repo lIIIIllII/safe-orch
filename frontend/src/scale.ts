@@ -63,7 +63,7 @@ export class Scale {
     return px
   }
 
-  /** x(px) → 분. x()의 역이다(희망 영역 그리기). 범위 밖은 가장자리로 붙인다. */
+  /** x(px) → 분. x()의 역이다(막대 끌어 옮기기). 범위 밖은 가장자리로 붙인다. */
   minute(px: number): number {
     let left = Math.min(Math.max(px, 0), this.width)
     for (const s of this.segs) {

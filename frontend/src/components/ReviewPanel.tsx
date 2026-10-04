@@ -105,8 +105,6 @@ function FactChanges({ changes, base, state }: { changes: FactChange[]; base: nu
           ? clock.format(v)
           : `${v}분`
         : String(v)
-  const hope = (h: { start: number; end: number; origin: string }) =>
-    `${clock.span(h.start, h.end)}${h.origin === 'DECIDED' ? ' (Agent가 정함)' : ''}`
   const line = (x: FactChange): string => {
     switch (x.kind) {
       case 'TASK_ADDED':
@@ -119,12 +117,6 @@ function FactChanges({ changes, base, state }: { changes: FactChange[]; base: nu
         return `${x.task_id} 고정 해제`
       case 'VALUE_CHANGED':
         return `${x.task_id} ${VALUE_NAME[x.field] ?? x.field}: ${value(x.field, x.before)} → ${value(x.field, x.after)}`
-      case 'PREFERRED_WINDOW_CHANGED':
-        if (!x.before && x.after) return `${x.task_id} 희망 영역 그림: ${hope(x.after)}`
-        if (x.before && !x.after) return `${x.task_id} 희망 영역 지움 (전: ${hope(x.before)})`
-        if (x.before && x.after && x.before.start === x.after.start && x.before.end === x.after.end)
-          return `${x.task_id} 희망 영역 확인: ${hope(x.after)}`
-        return x.before && x.after ? `${x.task_id} 희망 영역: ${hope(x.before)} → ${hope(x.after)}` : x.task_id
     }
   }
   return (
@@ -139,9 +131,17 @@ function FactChanges({ changes, base, state }: { changes: FactChange[]; base: nu
   )
 }
 
-/** 희망에서 벗어난 작업 한 줄: "A 30분 늦음". 정도는 서버 계산이다. */
-const offHopeText = (x: CandidateView['off_hope'][number]) =>
-  `${x.task_id} ${delayText(x.delay, x.work_delay)} ${x.direction === 'EARLY' ? '이름' : '늦음'}`
+type PlanChangeView = CandidateView['plan_changes'][number]
+
+/** 기준에서 옮긴 방향과 거리: "30분 늦음", "1시간 앞당김". 방향과 거리는 서버 계산이다. */
+const movedText = (x: PlanChangeView) =>
+  x.direction === null ? '' : `${delayText(x.delay, x.work_delay)} ${x.direction === 'EARLY' ? '앞당김' : '늦음'}`
+
+/** 그 안에서 그 작업을 기준에서 옮긴 방향과 거리. 옮기지 않았으면 빈 문자열 */
+const movedOf = (c: CandidateView, taskId: string) => {
+  const x = c.plan_changes.find((p) => p.task_id === taskId)
+  return x ? movedText(x) : ''
+}
 
 /** 안 번호: 서버가 이 Case의 재계획 후보 전체에 만들어진 순서로 매긴 번호다(고정). 안 비교에는 살아 있는 안만
  *  나오므로 번호가 건너뛸 수 있다. */
@@ -152,18 +152,32 @@ function planLabel(c: CandidateView): string {
 /** 그 후보의 배치에 도달한 접근 이름(겹치지 않게). 둘 이상이면 다른 접근이 같은 배치를 낸 것이다. */
 const approachNames = (c: CandidateView) => [...new Set(c.approaches.map((a) => APPROACH[a.approach] ?? a.approach))]
 
-/** 안이 바꾸는 것 한 작업분: 시각 줄과 자원 줄. 목록과 "요청 자원과 다름"은 서버 계산이고 화면은 풀어 쓰기만 한다. */
-function PlanChange({ x }: { x: CandidateView['plan_changes'][number] }) {
+/** 안이 바꾸는 것 한 작업분: 시각 줄과 자원 줄. 목록·방향·옮긴 거리·"요청 자원과 다름"은 서버 계산이고 화면은
+ *  풀어 쓰기만 한다. 새 작업은 기준 위치(요청한 자리·시작 범위)가 있으면 그것과 견줘 적고, 없으면 "새 배치"다. */
+function PlanChange({ x }: { x: PlanChangeView }) {
   const { clock, meta } = useEnv()
   const type = x.resource_type ? (meta.resource_types[x.resource_type] ?? x.resource_type) : ''
   const off = x.off_request ? '요청 자원과 다름' : ''
+  const moved = movedText(x)
   if (x.kind === 'NEW') {
+    const base = x.base
+    const from = !base
+      ? '기준 없음'
+      : base.start === base.start_max
+        ? `기준 ${clock.format(base.start)}`
+        : `기준 ${clock.format(base.start)} ~ ${clock.format(base.start_max)}`
     return (
       <div className={x.resource_changed ? 'chg chg-resource' : 'chg'}>
         {x.resource_changed && <span className="tag tag-resource">자원</span>}
-        {x.task_id} 새로 배치: {clock.format(x.after.start)}
+        {x.task_id} 새 배치: {clock.format(x.after.start)}
         {x.after.resource_id && ` · ${x.after.resource_id}`}
         {off && `(${off})`}
+        <span className="muted">
+          {' '}
+          · {from}
+          {base?.origin === 'DECIDED' && '(Agent가 정함)'}
+          {base && (moved ? ` → ${moved}` : ' 안')}
+        </span>
       </div>
     )
   }
@@ -172,6 +186,7 @@ function PlanChange({ x }: { x: CandidateView['plan_changes'][number] }) {
       {x.time_changed && x.before && (
         <div className="chg">
           {x.task_id} {clock.format(x.before.start)} → {clock.format(x.after.start)}
+          {moved && <span className="muted"> · {moved}</span>}
         </div>
       )}
       {x.resource_changed && (
@@ -185,8 +200,8 @@ function PlanChange({ x }: { x: CandidateView['plan_changes'][number] }) {
   )
 }
 
-/** 이 Case의 안을 나란히: 접근, 바뀌는 것, 서버 지표, 필요한 동의, 조건, 거절·이견된 변경, 고르기.
- *  지표·동의·표시는 서버 계산이고, 접근의 이유 문장은 Agent가 쓴 것이다(UI-06).
+/** 이 Case의 안을 나란히: 접근, 바뀌는 것, 서버 지표, 필요한 확인, 조건, 거절·이견된 변경, 고르기.
+ *  지표·확인·표시는 서버 계산이고, 접근의 이유 문장은 Agent가 쓴 것이다(UI-06).
  *  좁은 폭에서도 깨지지 않게: 바뀌는 것 칸만 줄바꿈하고, Agent 이유는 그 안 줄 아래에 표 전체 폭으로 둔다
  *  (두 줄까지 보이고 누르면 펼친다). 패널 폭이 모자라면 표 영역만 가로로 스크롤된다. */
 function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, busy, run }: Props) {
@@ -209,7 +224,7 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
   return (
     <div className="plans">
       <h3>
-        안 비교 <span className="muted small">지표·필요한 동의는 서버 계산 · 이유는 Agent 문장</span>
+        안 비교 <span className="muted small">지표·필요한 확인은 서버 계산 · 이유는 Agent 문장</span>
       </h3>
       {/* 같은 Case의 안은 같은 사실 위에 있다: 사실 변경은 한 번만 보인다 */}
       <FactChanges changes={plans[0].fact_changes} base={plans[0].base_plan_revision} state={state} />
@@ -221,7 +236,7 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
             <th>접근</th>
             <th>바뀌는 것</th>
             <th>지표</th>
-            <th>필요한 동의</th>
+            <th title="기준에서 바뀐 작업의 담당자 확인. 고른 안만 협의합니다">필요한 확인</th>
             <th>조건·표시</th>
             <th>고르기</th>
           </tr>
@@ -262,14 +277,16 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                     <PlanChange key={x.task_id} x={x} />
                   ))}
                 </td>
-                <td title={`변경 작업 수 · 자원이 바뀌는 작업 수 · 희망에서 벗어난 정도 ${delayText(delay, workDelay)}`}>
-                  변경 {c.changes.length} · 자원 {c.plan_changes.filter((x) => x.resource_changed).length} · 희망 벗어남{' '}
+                <td title={`기준에서 바뀐 작업 수 · 자원이 바뀌는 작업 수 · 기준에서 옮긴 거리 ${delayText(delay, workDelay)}`}>
+                  변경 {c.changes.length} · 자원 {c.plan_changes.filter((x) => x.resource_changed).length} · 기준에서 옮긴 거리{' '}
                   {delay}분
-                  {c.off_hope.map((x) => (
-                    <div key={`o:${x.task_id}`} className="muted" title="희망 영역 밖에 놓인 작업">
-                      희망 밖: {offHopeText(x)}
-                    </div>
-                  ))}
+                  {c.plan_changes
+                    .filter((x) => x.direction !== null)
+                    .map((x) => (
+                      <div key={`o:${x.task_id}`} className="muted" title="기준 시작 범위에서 옮긴 방향과 거리">
+                        {x.task_id} {movedText(x)}
+                      </div>
+                    ))}
                 </td>
                 <td>
                   {need.length === 0 && objected.length === 0 && <span className="muted">없음</span>}
@@ -421,7 +438,6 @@ function CandidateDetail({
                 {x.start_min !== null && x.start_min !== x.start_max && ` 시작 ≥ ${clock.format(x.start_min)}`}
                 {x.start_max !== null && x.start_min !== x.start_max && ` 시작 ≤ ${clock.format(x.start_max)}`}
                 {x.resource_id && ` 자원 = ${x.resource_id}`}
-                {x.preferred && ' (희망 영역)'}
               </li>
             ))}
           </ul>
@@ -468,17 +484,14 @@ function CandidateDetail({
                   {ch.before.resource_id !== ch.after.resource_id && <span className="tag tag-resource"> 자원 바뀜</span>}
                 </td>
                 <td className="small">
-                  {ch.delay > 0 ? `희망에서 벗어남 ${delayText(ch.delay, ch.work_delay)}` : ''}
+                  {ch.delay > 0
+                    ? `기준에서 ${movedOf(c, ch.task_id) || delayText(ch.delay, ch.work_delay)}`
+                    : ''}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-      )}
-      {c.off_hope.length > 0 && (
-        <p className="small">
-          <b>희망 영역 밖에 놓인 작업</b> <span className="muted">서버 계산</span>: {c.off_hope.map(offHopeText).join(', ')}
-        </p>
       )}
 
       {c.solver && (
@@ -497,9 +510,9 @@ function CandidateDetail({
               {c.solver.objective === 'DELAY_FIRST' ? (
                 <>
                   <tr>
-                    <th>1단계 (희망에서 벗어난 정도)</th>
+                    <th>1단계 (기준에서 옮긴 거리)</th>
                     <td>
-                      {SOLVER_STATUS[c.solver.stage1.status] ?? c.solver.stage1.status} · 벗어난 정도 합{' '}
+                      {SOLVER_STATUS[c.solver.stage1.status] ?? c.solver.stage1.status} · 옮긴 거리 합{' '}
                       {c.solver.stage1.delay ?? '—'}분 <code>{c.solver.stage1.status}</code>
                     </td>
                   </tr>
@@ -509,7 +522,7 @@ function CandidateDetail({
                       {c.solver.stage2 ? (
                         <>
                           {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 변경{' '}
-                          {c.solver.stage2.changed ?? '—'} · 근무시간 기준 벗어난 정도{' '}
+                          {c.solver.stage2.changed ?? '—'} · 근무시간 기준 옮긴 거리{' '}
                           {c.solver.stage2.work_delay ?? '—'}분 <code>{c.solver.stage2.status}</code>
                         </>
                       ) : (
@@ -528,11 +541,11 @@ function CandidateDetail({
                     </td>
                   </tr>
                   <tr>
-                    <th>2단계 (희망에서 벗어난 정도)</th>
+                    <th>2단계 (기준에서 옮긴 거리)</th>
                     <td>
                       {c.solver.stage2 ? (
                         <>
-                          {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 벗어난 정도 합{' '}
+                          {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 옮긴 거리 합{' '}
                           {delayText(c.solver.stage2.delay, c.solver.stage2.work_delay)}{' '}
                           <code>{c.solver.stage2.status}</code>
                         </>
@@ -548,15 +561,15 @@ function CandidateDetail({
           {c.solver.stage2?.resource_changed !== null && c.solver.stage2?.resource_changed !== undefined && (
             <p className="small">
               마지막 단계: 자원을 바꾸는 작업 {c.solver.stage2.resource_changed}건{' '}
-              <span className="muted">(변경 수와 벗어난 정도가 같은 해 가운데 가장 적게)</span>
+              <span className="muted">(변경 수와 옮긴 거리가 같은 해 가운데 가장 적게)</span>
             </p>
           )}
           <p className="small">
             {c.solver.minimal_change && <span className="tag">최소 변경(이 탐색 범위 안)</span>}
-            {c.solver.minimal_delay && <span className="tag">희망에서 가장 덜 벗어남(이 탐색 범위 안)</span>}
+            {c.solver.minimal_delay && <span className="tag">기준에서 가장 덜 옮김(이 탐색 범위 안)</span>}
             {c.solver.delay_optimality_unconfirmed && (
               <span className="tag tag-warn">
-                {c.solver.objective === 'DELAY_FIRST' ? '변경 수 최적성 미확정' : '벗어난 정도 최적성 미확정'}
+                {c.solver.objective === 'DELAY_FIRST' ? '변경 수 최적성 미확정' : '옮긴 거리 최적성 미확정'}
               </span>
             )}
           </p>

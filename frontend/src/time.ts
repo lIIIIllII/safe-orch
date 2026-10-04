@@ -132,7 +132,7 @@ export class Clock {
   }
 }
 
-/** 서버가 내려준 희망에서 벗어난 정도(달력 분)와 같은 값의 근무 분. 같으면 하나만 (화면에서 계산하지 않는다). */
+/** 서버가 내려준 기준에서 옮긴 거리(달력 분)와 같은 값의 근무 분. 같으면 하나만 (화면에서 계산하지 않는다). */
 export function delayText(delay: number | null | undefined, workDelay: number | null | undefined): string {
   if (delay === null || delay === undefined) return '—'
   if (workDelay === null || workDelay === undefined || workDelay === delay) return `${delay}분`

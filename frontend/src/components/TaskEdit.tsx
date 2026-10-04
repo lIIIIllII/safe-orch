@@ -1,8 +1,7 @@
-// 작업 카드의 "Agent가 정한 값"과 값 고치기·확인(AG-33). 담당자(요청자)만 한다.
-// Work Intake가 정한 값(문장에 없거나 해석·추정이 들어간 값)을 따로 보여 주고, 담당자가 고치거나 그대로 확인한다.
-// 고친 값과 확인한 값은 사람이 말한 값이 된다. 검증은 서버가 폼과 같은 규칙으로 한다(화면은 판정하지 않는다).
-// 카드에서 고치는 시각은 가능 범위(Hard)다. 희망 영역은 타임라인에서 그리고 지우며, 접수 Agent가 정한 희망은
-// 여기 [정한 값 확인]으로 말한 희망이 된다(그때부터 그 범위 안은 묻지 않는다).
+// 작업 카드의 "Agent가 정한 값"과 값 고치기(AG-33). 담당자(요청자)만 한다.
+// Work Intake가 정한 값(문장에 없거나 해석·추정이 들어간 값)을 따로 보여 주고, 담당자가 고친다. 고친 값은 사람이
+// 말한 값이 된다(그대로 확인하는 버튼은 없다). 검증은 서버가 폼과 같은 규칙으로 한다(화면은 판정하지 않는다).
+// 카드에서 고치는 시각은 가능 범위(Hard)다. 기준 위치(요청한 시작 범위)는 카드 위쪽에 글로 보이고 고치지 않는다.
 // 자원 바꾸기: 서버가 그 자원으로 바꿀 수 있는지 확인해 주고, [확정]하면 계획에 있는 작업은 지금 시각 그대로
 // 자원만 바뀐 계획이 바로 확정된다(직접 이동과 같은 판정). 계획 밖 요청은 요청 자원만 고친다.
 
@@ -31,8 +30,6 @@ interface Props {
 export function TaskEdit({ task, state, owner, actorId, planned, busy, run }: Props) {
   const { clock, meta } = useEnv()
   const decided = decidedValues(task)
-  const hope = task.preferred_window
-  const decidedHope = hope?.origin === 'DECIDED' ? hope : null
   const [open, setOpen] = useState(false)
   const at = (m: number) => ({ day: clock.dateKey(m), time: clock.hm(m) })
   const initial = () => ({
@@ -87,7 +84,7 @@ export function TaskEdit({ task, state, owner, actorId, planned, busy, run }: Pr
     return opts.some((o) => o.key === value) ? opts : [...opts, { key: value, label: value }]
   }
   const off = busy !== null
-  const denied = owner ? undefined : '담당자만 값을 고치거나 확인할 수 있습니다'
+  const denied = owner ? undefined : '담당자만 값을 고칠 수 있습니다'
 
   // 바뀐 값만 보낸다. 시각 형식이 틀리면 보내지 않는다(형식 안내만 하고 판정은 서버가 한다)
   const save = () => {
@@ -107,7 +104,7 @@ export function TaskEdit({ task, state, owner, actorId, planned, busy, run }: Pr
 
   return (
     <div className="tl-edit">
-      {(decided.length > 0 || decidedHope) && (
+      {decided.length > 0 && (
         <div className="tl-decided">
           <div className="block-label">Agent가 정한 값 (요청 문장에 없거나 해석·추정한 값)</div>
           {decided.map((name) => (
@@ -115,28 +112,10 @@ export function TaskEdit({ task, state, owner, actorId, planned, busy, run }: Pr
               <span className="tag tag-warn">정함</span> {VALUE_NAME[name] ?? name}: {text(name)}
             </div>
           ))}
-          {decidedHope && (
-            <div className="small">
-              <span className="tag tag-warn">정함</span> 희망 영역: {clock.span(decidedHope.start, decidedHope.end)}
-              <span className="muted"> · 확인하기 전에는 이 범위 안으로 옮기는 안도 담당자에게 묻습니다</span>
-            </div>
-          )}
+          <div className="small muted">틀린 값은 [값 고치기]로 고칩니다. 고친 값은 말한 값이 됩니다.</div>
         </div>
       )}
       <div className="tl-card-actions">
-        {(decided.length > 0 || decidedHope) && (
-          <button
-            className="btn-small"
-            disabled={off || !owner}
-            title={
-              denied ??
-              '정한 값을 그대로 받아들입니다. 요청 자원에 동의한 것으로, 희망 영역은 말한 희망으로 기록됩니다'
-            }
-            onClick={() => void run('정한 값 확인', `/tasks/${task.task_id}/edit`, { confirm: true })}
-          >
-            정한 값 확인
-          </button>
-        )}
         <button
           className="btn-small"
           disabled={off || !owner}
@@ -192,7 +171,7 @@ export function TaskEdit({ task, state, owner, actorId, planned, busy, run }: Pr
           ))}
           {badTime && <p className="small bad tl-card-note">시각은 HH:MM 형식으로 적습니다.</p>}
           <p className="small muted tl-card-note">
-            시각 셋은 가능 범위(반드시 지켜야 하는 범위)입니다. 바라는 시각은 타임라인에서 희망 영역으로 그립니다.
+            시각 셋은 가능 범위(반드시 지켜야 하는 범위)입니다. 기준 위치는 고치지 않습니다.
             고친 값은 사람이 말한 값이 됩니다. 검증은 요청 폼과 같고, 검토 중인 안은 무효가 됩니다. 지금 배치와 어긋나면 Agent가 다시 풉니다.
           </p>
           <div className="tl-card-actions">

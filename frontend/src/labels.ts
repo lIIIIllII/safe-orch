@@ -24,12 +24,12 @@ export const REASON: Record<string, string> = {
   // WAIVE
   CONSULTATION_NOT_FOUND: '협의 정보가 아직 없음',
   ITEM_NOT_FOUND: '협의 항목에 없는 작업',
-  ITEM_NOT_WAIVABLE: '동의 대기 항목만 수용 가능',
+  ITEM_NOT_WAIVABLE: '확인 대기 항목만 수용 가능',
   COMMENT_REQUIRED: '사유 필요(수용·이견)',
   // 거절
   INVALID_REASON_CODE: '거절 사유 코드 오류',
   TASK_NOT_FOUND: '대상 작업 없음',
-  // 고정·희망 영역
+  // 고정
   ALREADY_PINNED: '이미 고정된 작업',
   MOVE_NOT_VALID: '그 자리(또는 그 자원)로 바꿀 수 없음',
   MOVE_TIME_AND_RESOURCE: '직접 이동은 시각만 또는 자원만 바꿈',
@@ -42,7 +42,6 @@ export const REASON: Record<string, string> = {
   MOVE_NOT_OWNER: '옮긴 사람이 담당자가 아님',
   MOVE_NOT_SINGLE_TASK: '직접 이동은 작업 하나만 바꿈',
   PIN_NOT_FOUND: '고정되지 않은 작업',
-  PREFERRED_WINDOW_NOT_FOUND: '희망 영역이 없는 작업',
   // 요청 철회
   TASK_IN_PLAN: '확정 계획에 있는 작업은 철회 불가',
   TASK_HAS_SUCCESSORS: '이 작업을 선행으로 둔 요청이 있음(후속 요청을 먼저 철회)',
@@ -110,7 +109,6 @@ export const REASON: Record<string, string> = {
   CONDITION_INVALID: '조건 모양 오류',
   CONDITION_OUTSIDE_WINDOW: '조건이 작업 시간창 밖',
   CONDITION_TASK_NOT_IN_SCOPE: '조건을 건 작업이 탐색 범위 밖',
-  NO_PREFERRED_WINDOW: '희망 영역이 없는 작업',
   NEW_CHANGE_BEFORE_WAIT: '대기 직전 새 변화, 다시 관찰',
   RUN_INACTIVE: 'Run 종료됨',
   NO_CONFLICT_TASKS: '충돌에 걸린 작업 없음',
@@ -301,8 +299,7 @@ export const CONSULTATION_STATUS: Record<string, string> = {
 }
 
 export const ITEM_STATUS: Record<string, string> = {
-  COVERED: '기존 동의 범위',
-  PENDING: '담당자 동의 필요',
+  PENDING: '담당자 확인 필요',
   WAIVED: 'Supervisor 수용',
   ACCEPTED: '담당자 수용',
   OBJECTED: '담당자 이견',
@@ -365,12 +362,12 @@ export const ACTION_NAME: Record<string, string> = {
 /** 메인이 재계획에 준 접근(무엇을 우선할지) */
 export const APPROACH: Record<string, string> = {
   MIN_CHANGE: '변경 최소',
-  PREFER_WINDOW: '희망 우선',
+  MIN_DELAY: '덜 옮기기',
 }
 
 export const OBJECTIVE: Record<string, string> = {
   CHANGE_FIRST: '변경 먼저',
-  DELAY_FIRST: '희망에서 덜 벗어나기 먼저',
+  DELAY_FIRST: '기준에서 덜 옮기기 먼저',
 }
 
 /** 후보가 담은 거절·이견된 변경의 출처 (서버 계산) */
@@ -415,15 +412,12 @@ export const PROPOSAL_STATUS: Record<string, string> = {
 export const DECISION: Record<string, string> = {
   ACCEPT: '수락',
   DECLINE: '거절',
-  ANSWER: '답변',
 }
 
 /** 받은 요청 유형 */
 export const MESSAGE_TYPE: Record<string, string> = {
-  QUESTION: '담당자 확인 질문',
   CHANGE_REQUEST: '변경 요청',
   FACT_UPDATE: '사실 수정 확인',
-  FREE_QUESTION: '확인 질문(답 입력)',
   NOTICE: '확정 통지',
 }
 
@@ -468,7 +462,6 @@ export const EXCLUDE_REASON: Record<string, string> = {
 export const IMPORT_VERDICT: Record<string, string> = {
   NEW: '새 작업',
   UNCHANGED: '바뀌는 것 없음',
-  HOPE_CHANGED: '희망이 바뀜',
   VALUE_CHANGED: '값이 바뀜',
   REJECTED: '넣을 수 없음',
 }

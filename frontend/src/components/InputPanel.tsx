@@ -452,7 +452,7 @@ function RequestList({ state, actorId, roles, busy, run }: Props) {
 }
 
 function IntakeForm({ actorId, roles, busy, run }: Props) {
-  // 자연어 작업 요청 → Work Intake Agent. 묻지 않고 완료한다. 문장의 시각은 희망 영역이 된다(가능 범위는 폼·카드로).
+  // 자연어 작업 요청 → Work Intake Agent. 묻지 않고 완료한다. 문장의 시각은 기준 위치가 된다(가능 범위는 폼·카드로).
   const { siteId, scenario } = useEnv()
   const [taskId, setTaskId] = useState('')
   const [text, setText] = useState('')
@@ -465,8 +465,8 @@ function IntakeForm({ actorId, roles, busy, run }: Props) {
         <input value={taskId} onChange={(e) => setTaskId(e.target.value)} />
       </label>
       <p className="muted small">
-        문장의 시각은 희망 영역이 됩니다(벗어난 안도 나올 수 있고, 말한 범위 밖이면 물어봅니다). 반드시 지켜야 하는
-        범위는 폼 탭이나 작업 카드의 값 고치기로 넣습니다.
+        문장의 시각은 기준 위치(요청한 시작 범위)가 됩니다. 그 범위 밖으로 옮긴 안도 나올 수 있고, 고른 안이 범위
+        밖이면 협의에서 확인을 요청합니다. 반드시 지켜야 하는 범위는 폼 탭이나 작업 카드의 값 고치기로 넣습니다.
       </p>
       <label className="span2">
         요청 문장

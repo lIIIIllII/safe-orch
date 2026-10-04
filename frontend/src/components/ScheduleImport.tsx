@@ -76,8 +76,8 @@ export function ScheduleImport({ actorId, roles, busy, run }: Props) {
   return (
     <div className="form-grid">
       <p className="muted small span2">
-        꺼낸 일정 문서(JSON)를 고쳐서 넣습니다. 자기 Unit의 작업만 넣을 수 있고, 문서의 시각은 희망 영역이 됩니다(가능
-        범위는 계획 기간 전체). 반드시 지켜야 하는 범위는 넣은 뒤 작업 카드에서 고칩니다.
+        꺼낸 일정 문서(JSON)를 고쳐서 넣습니다. 자기 Unit의 작업만 넣을 수 있고, 새 작업은 문서의 배정이 기준
+        위치가 됩니다(가능 범위는 계획 기간 전체). 반드시 지켜야 하는 범위는 넣은 뒤 작업 카드에서 고칩니다.
       </p>
       <label className="span2">
         일정 문서
@@ -124,7 +124,8 @@ export function ScheduleImport({ actorId, roles, busy, run }: Props) {
                         <Code key={code} code={code} />
                       ))}
                       {t.changed.length > 0 && <span> 값: {t.changed.join(', ')}</span>}
-                      {t.hope_changed && <span> 희망 영역</span>}
+                      {t.assignment_differs && <span className="muted"> 배정이 계획과 다름 — 쓰지 않음</span>}
+                      {t.hope_dropped && <span className="muted"> 희망 영역 칸은 쓰지 않음</span>}
                     </td>
                   </tr>
                 ))}
