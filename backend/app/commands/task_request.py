@@ -86,10 +86,12 @@ def validate_task_request(
     actor: Actor,
     form: TaskRequestForm,
     existing: bool = False,
+    batch: frozenset[str] = frozenset(),
 ) -> list[str]:
-    """폼 검증. 폼과 Work Intake, 작업 카드에서 고치기가 같이 쓴다. 사유를 검사 순서대로 모은다.
+    """폼 검증. 폼과 Work Intake, 작업 카드에서 고치기, 일정 넣기가 같이 쓴다. 사유를 검사 순서대로 모은다.
 
-    existing: 이미 있는 작업의 값을 고치는 검증이다(작업 ID 중복을 보지 않는다)."""
+    existing: 이미 있는 작업의 값을 고치는 검증이다(작업 ID 중복을 보지 않는다).
+    batch: 같은 묶음(일정 문서)으로 함께 들어오는 작업 ID. 선행 작업으로 가리킬 수 있다."""
     r = Result()
     site_id = site.site_id
     if (
@@ -166,7 +168,7 @@ def validate_task_request(
         for t in list_current_tasks(tx, site_id, pack)
         if t.lifecycle in ("READY", "QUEUED")
     }
-    if any(p.task_id not in current for p in form.predecessors):
+    if any(p.task_id not in current | batch for p in form.predecessors):
         r.reject("PREDECESSOR_NOT_FOUND")
     return r.reason_codes
 
@@ -205,27 +207,34 @@ def stated_consents(task: Task, source_ref: str, time: bool = True) -> list[Cons
     return out
 
 
-def create_requested_task(
+def waits_in_queue(tx: sqlite3.Connection, site_id: str) -> bool:
+    """새 작업이 대기열(QUEUED)에 서는가: 열린 메인(Case)이 있거나 먼저 접수된 대기 요청이 있다.
+    대기 중인 작업은 Snapshot·충돌 검사에 들어가지 않고, 메인이 끝날 때 READY가 된다 (AG-07)."""
+    return has_open_case(tx, site_id) or bool(queued_task_ids(tx, site_id))
+
+
+def insert_requested_task(
     tx: sqlite3.Connection,
     pack: LoadedPack,
-    site: Site,
     actor: Actor,
     form: TaskRequestForm,
     source_ref: str,
-    cause_kind: str = "FORM",
+    queued: bool,
+    context_version: int,
     origins: dict[str, str] | None = None,
     hope: tuple[int, int, str] | None = None,
+    hope_made_by: str = "INTAKE",
 ) -> dict[str, Any]:
-    """검증을 통과한 요청으로 작업을 만든다. 폼과 Work Intake가 같이 쓴다.
+    """검증을 통과한 요청으로 작업 하나를 만든다. 폼·Work Intake·일정 넣기가 같이 쓴다.
 
-    critical field CONFIRMED(source_ref), Consent(시작 범위, 요청 자원),
-    대기열 판단, Context +1, RECHECK. source_ref만 다르면 같은 작업이 된다.
+    critical field CONFIRMED(source_ref), Consent(시작 범위, 요청 자원), 희망 영역. 현장 버전·재확인·
+    사건은 부르는 쪽이 한다(일정 넣기는 여러 작업에 한 번만 한다).
     origins(값 이름 → 출처, Work Intake): Agent가 정한 값은 기록에 적고, Consent는 사람이 말한 시작
     범위·요청 자원에만 만든다. 정한 값의 동의는 요청자가 작업 카드에서 확인할 때 생긴다 (AG-33).
-    hope((시작, 끝, 출처), Work Intake): 요청 문장에서 읽은 시간이다. 희망 영역 기록을 만들고(만든 주체
-    INTAKE) 시작 범위 Consent는 만들지 않는다. 그 작업의 동의 범위는 희망 영역이다 (ST-22).
+    hope((시작, 끝, 출처)): 희망 영역 기록을 만들고 시작 범위 Consent는 만들지 않는다. 그 작업의 동의
+    범위는 희망 영역이다 (ST-22). 만든 주체(hope_made_by)는 Work Intake 또는 담당자다.
     """
-    site_id = site.site_id
+    site_id = pack.site_id
     wt = pack.work_types[form.work_type]
     data = form.model_dump()
     task = Task(
@@ -237,17 +246,9 @@ def create_requested_task(
         default_requirements=pack.default_requirements(form.work_type),
         default_demands=pack.default_demands(form.work_type),
         fields=confirmed_fields(data, wt.critical_fields, source_ref, origins),
-        lifecycle="READY",
+        lifecycle="QUEUED" if queued else "READY",
     )
-    # 열린 메인(Case)이 있거나 먼저 접수된 대기 요청이 있으면 대기열(QUEUED): Snapshot·충돌
-    # 검사에 들어가지 않으므로 context를 올리지 않고 RECHECK도 없다. 메인이 끝날 때 접수 순서로
-    # READY가 된다.
-    queued = has_open_case(tx, site_id) or bool(queued_task_ids(tx, site_id))
-    if queued:
-        task = task.model_copy(update={"lifecycle": "QUEUED"})
     insert_task_revision(tx, site_id, task)
-    context_version = site.context_version if queued else bump_context_version(tx, site_id)
-
     consents = stated_consents(task, source_ref, time=hope is None)
     for c in consents:
         insert_consent(tx, site_id, c, context_version)
@@ -263,18 +264,40 @@ def create_requested_task(
             actor.actor_id,
             datetime.now(UTC).isoformat(timespec="seconds"),
             origin,
-            "INTAKE",
+            hope_made_by,
         )
-    if not queued:
-        cause = {"kind": cause_kind, "task_id": task.task_id, "actor_id": actor.actor_id}
-        register_recheck(tx, site_id, cause)
-        deliver_event(tx, pack, "TASK_READY", f"TASK_READY:{task.task_id}:1", cause)
     return {
         "task_id": task.task_id,
         "revision": 1,
         "queued": queued,
         "consent_ids": [c.consent_id for c in consents],
     }
+
+
+def create_requested_task(
+    tx: sqlite3.Connection,
+    pack: LoadedPack,
+    site: Site,
+    actor: Actor,
+    form: TaskRequestForm,
+    source_ref: str,
+    cause_kind: str = "FORM",
+    origins: dict[str, str] | None = None,
+    hope: tuple[int, int, str] | None = None,
+) -> dict[str, Any]:
+    """작업 하나의 접수(폼·Work Intake): 작업을 만들고, 대기열이 아니면 Context +1, RECHECK,
+    작업 준비됨 사건. source_ref만 다르면 같은 작업이 된다."""
+    site_id = site.site_id
+    queued = waits_in_queue(tx, site_id)
+    context_version = site.context_version if queued else bump_context_version(tx, site_id)
+    refs = insert_requested_task(
+        tx, pack, actor, form, source_ref, queued, context_version, origins, hope
+    )
+    if not queued:
+        cause = {"kind": cause_kind, "task_id": form.task_id, "actor_id": actor.actor_id}
+        register_recheck(tx, site_id, cause)
+        deliver_event(tx, pack, "TASK_READY", f"TASK_READY:{form.task_id}:1", cause)
+    return refs
 
 
 def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) -> Result:

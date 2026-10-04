@@ -51,7 +51,7 @@ from app.commands.pins import (
     unpin_task,
 )
 from app.commands.runs import CancelRun, cancel_run
-from app.commands.schedule import export_schedule
+from app.commands.schedule import ImportRequest, export_schedule, import_schedule
 from app.commands.service import Body
 from app.commands.task_edit import EditRequest, edit_task
 from app.commands.task_request import (
@@ -153,6 +153,15 @@ def post_schedule_export(site_id: str, pack: PackDep, actor: ActorDep, key: KeyD
     """지금 확정 계획을 일정 문서로 꺼내 기록에 남긴다. 문서는 GET /schedules/{id}로 받는다."""
     check_site(site_id, pack)
     return respond(export_schedule(pack, actor.actor_id, key))
+
+
+@router.post("/sites/{site_id}/schedules/import")
+def post_schedule_import(
+    site_id: str, body: ImportRequest, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """일정 문서를 넣는다. 넣는 사람의 Unit 작업만, 넣기 하나가 사건 하나다 (ST-24)."""
+    check_site(site_id, pack)
+    return respond(import_schedule(pack, actor.actor_id, key, body))
 
 
 @router.post("/tasks/{task_id}/withdraw")

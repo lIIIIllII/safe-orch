@@ -96,6 +96,53 @@ def edited_fields(
     return out
 
 
+def revise_task(
+    tx: sqlite3.Connection,
+    site_id: str,
+    task: Task,
+    changes: dict[str, Any],
+    confirm: bool,
+    source: str,
+    context_version: int,
+) -> list[str]:
+    """고친 값으로 새 revision을 만들고 동의를 맞춘다. 작업 카드와 일정 넣기가 같이 쓴다 (AG-33).
+    검증·현장 버전·깨우기·사건은 부르는 쪽이 한다. 새로 만든 consent_id를 돌려준다."""
+    revision = task.revision + 1
+    changed = set(changes)
+    data = {**task.model_dump(), **changes}
+    updated = task.model_copy(
+        update={
+            **changes,
+            "revision": revision,
+            "fields": edited_fields(task, data, changed, confirm, source),
+        }
+    )
+    insert_task_revision(tx, site_id, updated)
+
+    # 동의: 값이 바뀌지 않은 축은 복사한다. 시작 범위는 사람이 고쳤을 때만, 요청 자원은 말한 값에
+    # 동의가 없으면 만든다(자연어 요청의 시간창은 사람이 넣은 값이 아니다, ST-22)
+    timed = bool({"earliest_start", "latest_start"} & changed)
+    axes = tuple(
+        axis
+        for axis, moved in (("TIME", timed), ("RESOURCE", "requested_resource_id" in changed))
+        if not moved
+    )
+    consent_ids = copy_consents(
+        tx, site_id, task.task_id, task.revision, revision, context_version, axes
+    )
+    have = [c for c in list_current_consents(tx, site_id) if c.task_id == task.task_id]
+    for consent in stated_consents(updated, source, time=timed):
+        if not any(c.axis == consent.axis and c.scope == consent.scope for c in have):
+            insert_consent(tx, site_id, consent, context_version)
+            consent_ids.append(consent.consent_id)
+    return consent_ids
+
+
+def needs_agent(tx: sqlite3.Connection, ctx: CommandContext) -> bool:
+    """고친 뒤 Agent가 풀 일이 남았는가 (일정 넣기도 같은 판정을 쓴다)."""
+    return _needs_agent(tx, ctx)
+
+
 def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Result:
     r = Result()
     site_id = ctx.site_id
@@ -138,31 +185,7 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
     context_version = bump_context_version(tx, site_id) if ready else ctx.site.context_version
     consent_ids: list[str] = []
     if revise:
-        updated = task.model_copy(
-            update={
-                **changes,
-                "revision": revision,
-                "fields": edited_fields(task, data, changed, body.confirm, source),
-            }
-        )
-        insert_task_revision(tx, site_id, updated)
-
-        # 동의: 값이 바뀌지 않은 축은 복사한다. 시작 범위는 사람이 고쳤을 때만, 요청 자원은 말한 값에
-        # 동의가 없으면 만든다(자연어 요청의 시간창은 사람이 넣은 값이 아니다, ST-22)
-        timed = bool({"earliest_start", "latest_start"} & changed)
-        axes = tuple(
-            axis
-            for axis, moved in (("TIME", timed), ("RESOURCE", "requested_resource_id" in changed))
-            if not moved
-        )
-        consent_ids = copy_consents(
-            tx, site_id, task.task_id, task.revision, revision, context_version, axes
-        )
-        have = [c for c in list_current_consents(tx, site_id) if c.task_id == task.task_id]
-        for consent in stated_consents(updated, source, time=timed):
-            if not any(c.axis == consent.axis and c.scope == consent.scope for c in have):
-                insert_consent(tx, site_id, consent, context_version)
-                consent_ids.append(consent.consent_id)
+        consent_ids = revise_task(tx, site_id, task, changes, body.confirm, source, context_version)
     if confirm_hope:
         confirm_preferred_window(tx, ctx, task.task_id)
 

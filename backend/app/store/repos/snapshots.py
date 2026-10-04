@@ -14,6 +14,7 @@ from app.store.repos.pins import list_active_pins, list_preferred_windows
 from app.store.repos.plans import get_current_plan, get_plan
 from app.store.repos.records import get_candidate, get_snapshot, insert_snapshot
 from app.store.repos.resources import list_pools, list_resources
+from app.store.repos.schedules import list_task_bases
 from app.store.repos.site import get_site, list_zone_relations
 from app.store.repos.tasks import list_current_tasks
 
@@ -53,6 +54,8 @@ def build_snapshot_content(
         preferred_windows=tuple(
             w for w in list_preferred_windows(conn, site_id) if w.task_id in ready
         ),
+        # 일정으로 들어온 작업의 기준 배정 (ST-24). READY 작업의 것만 넣는다
+        task_bases=tuple(b for b in list_task_bases(conn, site_id) if b.task_id in ready),
     )
     return content.model_dump(mode="json")
 

@@ -177,7 +177,7 @@ def test_read_rejects_what_it_cannot_fill(seeded):
 
     missing = copy.deepcopy(base)
     del missing["tasks"][0]["zone_id"]
-    assert any("tasks.0.zone_id" in r for r in _reasons(pack, missing))
+    assert any("tasks[0].zone_id" in r for r in _reasons(pack, missing))
 
     outside = copy.deepcopy(base)
     outside["assignments"][0]["start"] = "2026-10-20 09:00"

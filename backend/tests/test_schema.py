@@ -45,7 +45,7 @@ def _insert_chain(tx: sqlite3.Connection, site_id: str) -> None:
 
 def test_init_db_creates_v5_tables(temp_db):
     with db.read() as conn:
-        assert db.get_schema_version(conn) == db.SCHEMA_VERSION == 19
+        assert db.get_schema_version(conn) == db.SCHEMA_VERSION == 20
         assert {
             "schema_meta",
             "site",
@@ -63,6 +63,7 @@ def test_init_db_creates_v5_tables(temp_db):
             "task_pin",
             "preferred_window",
             "schedule",
+            "task_base",
             "event",
             "hold",
             "consent",

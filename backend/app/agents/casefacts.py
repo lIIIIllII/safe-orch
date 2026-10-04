@@ -253,6 +253,9 @@ def human_work(conn: sqlite3.Connection, site_id: str, case_id: str) -> int:
             continue
         if e["kind"] in HUMAN_EVENTS:
             count += 1
+        elif e["kind"] == "SCHEDULE_IMPORTED" and e["ref"].get("changed_task_ids"):
+            # 일정 넣기로 기존 작업의 희망·값을 바꾼 것은 카드 고치기·희망 그리기와 같은 사람의 일이다
+            count += 1
         elif e["kind"] == "CANDIDATE_CHOSEN":
             if chosen not in (None, e["ref"]["candidate_id"]) and chosen not in turned_down:
                 count += 1
@@ -517,10 +520,14 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                 calls.append({"agent": "EVENT_RESPONSE", "event_id": h["event_id"]})
 
     # 이 Case의 열린 일 (CLOSE의 사실 조건). 다른 Case가 남긴 것은 넣지 않는다
-    # 이 Case가 맡은 작업: 준비된 요청과, 담당자가 카드에서 값을 고친 작업 (AG-33)
+    # 이 Case가 맡은 작업: 준비된 요청과, 담당자가 카드에서 값을 고친 작업 (AG-33), 일정 넣기로 들어오거나
+    # 바뀐 작업 (ST-24)
     case_tasks = {
         e["ref"].get("task_id") for e in events if e["kind"] in ("TASK_READY", "TASK_EDITED")
     }
+    for e in events:
+        if e["kind"] == "SCHEDULE_IMPORTED":
+            case_tasks |= {*e["ref"].get("task_ids", ()), *e["ref"].get("changed_task_ids", ())}
     case_events = {e["ref"].get("event_id") for e in events if e["kind"] == "EVENT_REPORTED"}
     for p in rows(conn, "SELECT payload, target_task_id FROM proposal WHERE type = 'FACT_UPDATE'"):
         if loads(p["payload"]).get("event_id") in case_events:

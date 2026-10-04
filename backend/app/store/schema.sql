@@ -140,6 +140,18 @@ CREATE TABLE schedule (
     FOREIGN KEY (site_id, actor_id) REFERENCES actor (site_id, actor_id)
 );
 
+-- 일정으로 들어온 작업의 기준 배정(문서의 배정: 시작·자원)과 어느 넣기에서 왔는지. 작업당 하나이고 불변이다.
+-- 계획에 들어가기 전까지 그 작업의 기준 위치다 (ST-24).
+CREATE TABLE task_base (
+    site_id     TEXT NOT NULL REFERENCES site (site_id),
+    task_id     TEXT NOT NULL,
+    start_min   INTEGER NOT NULL CHECK (start_min >= 0),
+    resource_id TEXT,
+    schedule_id TEXT NOT NULL REFERENCES schedule (schedule_id),
+    PRIMARY KEY (site_id, task_id),
+    FOREIGN KEY (site_id, resource_id) REFERENCES resource (site_id, resource_id)
+);
+
 CREATE TABLE search_spec (
     search_spec_id        TEXT PRIMARY KEY,
     site_id               TEXT NOT NULL REFERENCES site (site_id),
@@ -358,7 +370,8 @@ CREATE TABLE case_event (
                                                           'CANDIDATE_CHOSEN', 'TASK_MOVED',
                                                           'TASK_REMOVED', 'TASK_EDITED',
                                                           'PREFERRED_WINDOW_SET',
-                                                          'PREFERRED_WINDOW_CLEARED')),
+                                                          'PREFERRED_WINDOW_CLEARED',
+                                                          'SCHEDULE_IMPORTED')),
     ref                     TEXT NOT NULL CHECK (json_valid(ref)),
     case_id                 TEXT NOT NULL,
     dedupe_key              TEXT NOT NULL,
@@ -639,6 +652,11 @@ CREATE TRIGGER schedule_no_update BEFORE UPDATE ON schedule
 BEGIN SELECT RAISE(ABORT, 'immutable: schedule'); END;
 CREATE TRIGGER schedule_no_delete BEFORE DELETE ON schedule
 BEGIN SELECT RAISE(ABORT, 'immutable: schedule'); END;
+
+CREATE TRIGGER task_base_no_update BEFORE UPDATE ON task_base
+BEGIN SELECT RAISE(ABORT, 'immutable: task_base'); END;
+CREATE TRIGGER task_base_no_delete BEFORE DELETE ON task_base
+BEGIN SELECT RAISE(ABORT, 'immutable: task_base'); END;
 
 CREATE TRIGGER search_spec_no_update BEFORE UPDATE ON search_spec
 BEGIN SELECT RAISE(ABORT, 'immutable: search_spec'); END;

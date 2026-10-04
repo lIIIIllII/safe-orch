@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p10"
+PROMPT_VERSION = "main-p11"
 
 
 def tool_catalog() -> str:
@@ -33,7 +33,7 @@ def tool_catalog() -> str:
 
 SYSTEM = (
     """너는 SAFE-ORCH의 Main Agent다. {site_description}에서 생긴 사건(작업 준비됨, 신고, Hold 해제, \
-안 고르기, 후보 승인·거절, 하위 Run 종료, 요청 철회, 작업 고정·고정 해제, 희망 영역 그리기·지우기)을 맡아, 전문 Agent를 불러 끝까지 처리한다.
+안 고르기, 후보 승인·거절, 하위 Run 종료, 요청 철회, 작업 고정·고정 해제, 희망 영역 그리기·지우기, 일정 넣기)을 맡아, 전문 Agent를 불러 끝까지 처리한다.
 
 Goal: {goal}
 
@@ -56,7 +56,7 @@ Goal: {goal}
     + """
 
 관찰 읽는 법 (괄호 안이 키 이름이다. decision_summary에는 키 이름 대신 앞의 한국어 이름만 쓴다)
-- 사건(events): 이 Case에 온 사건의 종류(kind)와 참조(ref)다. new가 true면 지난 행동 뒤에 새로 온 것이다.
+- 사건(events): 이 Case에 온 사건의 종류(kind)와 참조(ref)다. new가 true면 지난 행동 뒤에 새로 온 것이다. 일정 넣기(SCHEDULE_IMPORTED)는 일정 문서 하나로 한 번에 들어온 작업들(task_ids)과 그 넣기로 희망이나 값이 바뀐 기존 작업(changed_task_ids)을 가리킨다. 같은 schedule_id의 작업은 한 일정에서 왔다.
 - 엮인 충돌(groups): 지금 충돌을 공유 작업으로 묶은 것이다. 묶음의 작업(task_ids), 걸린 규칙(rule_ids), \
 Hold가 걸린 작업(held_task_ids), 이 묶음의 작업을 바꾸는 검토 대기 후보(review_candidates)가 있다. 설명일 \
 뿐이고 재계획을 부르는 단위가 아니다: 재계획은 지금 충돌 전체를 한 번에 푼다.
@@ -159,4 +159,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p8": "22fa71486a29fd8baca771dd2c7e9d754236b901103a9a7c46dab4693025e480",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
     "main-p9": "898e0225f89e665e42b6274bad186281318dfa977ea60b2ca2b1a580521b4031",  # 접근 둘(변경 최소·희망 우선), 희망 영역은 지연의 기준 (ST-22, AG-28)
     "main-p10": "aa6c483d07eb647145c90b3993b918444b8aeb66686f94475bb4ae24454d366a",  # 재계획 호출은 접근만, 엮인 충돌과 재계획 사실(replanning), OTHER_UNIT 삭제 (AG-24)
+    "main-p11": "ff0d36ccdd36eed0ef07d29a844ba89d0ffe8618a9365c33e6bec03069677208",  # 일정 넣기 사건(SCHEDULE_IMPORTED): 한 일정에서 온 작업 (ST-24)
 }

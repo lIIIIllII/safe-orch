@@ -514,7 +514,7 @@ def test_form_during_open_case_is_queued_then_promoted_on_commit(seeded):
     assert waive(pack, "supervisor", _key(), body).status == "APPLIED"
     assert _approve(pack, run.wait_ref).status == "APPLIED"
     assert _task(pack, "N1").lifecycle == "QUEUED"  # 메인이 끝나야 대기열이 올라간다
-    # 메인: 통지 → CLOSE → 대기열 1건 승격 → 새 메인이 올라온 요청을 요청자로 재계획한다
+    # 메인: 통지 → CLOSE → 대기열 승격 → 새 메인이 올라온 요청을 재계획한다
     run_until_idle(pack, model_factory=_factory(solve("L0")))
     assert (_run(run.main_id).status, _run(run.main_id).end_reason) == ("SUCCEEDED", "CLOSE")
     n1 = _task(pack, "N1")
@@ -532,7 +532,7 @@ def test_form_during_open_case_is_queued_then_promoted_on_commit(seeded):
     ]
     last = _jobs(pack, "RECHECK")[-1]
     assert last["dedupe_key"] == f"RECHECK:ctx{ctx + 1}:plan1"
-    assert last["payload"]["cause"] == {"kind": "QUEUE", "task_id": "N1", "actor_id": "planner_a"}
+    assert last["payload"]["cause"] == {"kind": "QUEUE", "task_ids": ["N1"]}
     n1_run, n1_main = _last(), _last("MAIN")
     assert n1_main.run_id != run.main_id and n1_main.status == "WAITING_HUMAN"
     assert (n1_run.parent_run_id, n1_run.status) == (n1_main.run_id, "SUCCEEDED")
@@ -688,46 +688,39 @@ def test_t40_late_reply_is_recorded_without_effect(seeded):
 # ── 대기열 순서 ─────────────────────────────────────
 
 
-def test_form_waits_behind_queue_while_reconfirm_pending(seeded):
-    """재확인 후보의 승인을 기다리는 메인이 열려 있는 동안 새 폼은 대기열 뒤에 선다."""
+def test_queue_is_promoted_all_at_once_when_main_ends(seeded):
+    """메인이 끝나면 대기 중인 접수가 전부 한 번에 오른다(현장 버전 한 번, 재확인 한 번). 사건은 접수마다
+    하나이고 모두 새 메인의 Case에 들어간다. 그 메인이 열려 있는 동안 온 폼은 다시 대기열에 선다 (AG-07)."""
     pack = seeded
     run = _alpha_waiting(pack)
     assert _submit(pack, "N1", earliest_start=1560).result_refs["queued"] is True
     assert _submit(pack, "N2").result_refs["queued"] is True
+    with db.read() as conn:
+        assert queued_task_ids(conn, pack.site_id) == ["N1", "N2"]
+    ctx = _site(pack).context_version
     body = WaiveRequest(candidate_id=run.wait_ref, task_ids=("C",), comment="확인")
     waive(pack, "supervisor", _key(), body)
     assert _approve(pack, run.wait_ref).status == "APPLIED"
-    # 메인 CLOSE → N1 승격: 충돌 없음 → RECONFIRM 후보, 새 메인은 승인을 기다린다(재계획 없음)
-    run_until_idle(pack, model_factory=_factory())
+    run_until_idle(pack, model_factory=_factory(solve("L0")))
     with db.read() as conn:
-        [reconfirm] = [
-            r[0] for r in conn.execute("SELECT candidate_id FROM candidate WHERE kind='RECONFIRM'")
-        ]
-        assert queued_task_ids(conn, pack.site_id) == ["N2"]
+        assert queued_task_ids(conn, pack.site_id) == []
+        ready = conn.execute(
+            "SELECT json_extract(ref, '$.task_id'), case_id FROM case_event"
+            " WHERE kind = 'TASK_READY' ORDER BY seq"
+        ).fetchall()
+    assert (_task(pack, "N1").lifecycle, _task(pack, "N2").lifecycle) == ("READY", "READY")
+    assert _site(pack).context_version == ctx + 1
+    cause = {"kind": "QUEUE", "task_ids": ["N1", "N2"]}
+    assert cause in [j["payload"]["cause"] for j in _jobs(pack, "RECHECK")]
     main = _last("MAIN")
-    assert _task(pack, "N1").lifecycle == "READY" and len(_runs("REPLANNING")) == 1
-    assert (main.status, main.wait_kind, main.wait_ref) == (
-        "WAITING_HUMAN",
-        "HUMAN_DECISION",
-        reconfirm,
-    )
+    assert main.run_id != run.main_id
+    assert [tuple(r) for r in ready[-2:]] == [("N1", main.case_id), ("N2", main.case_id)]
+    # 새 메인이 열려 있다: 그동안 온 폼은 다시 대기열에 선다
+    assert main.status in ("RUNNING", "WAITING_HUMAN")
     out = _submit(pack, "N4")
     assert out.status == "APPLIED" and out.result_refs["queued"] is True
     with db.read() as conn:
-        assert queued_task_ids(conn, pack.site_id) == ["N2", "N4"]
-    assert _approve(pack, reconfirm).status == "APPLIED"
-    # 승인 뒤 메인 CLOSE → 먼저 접수된 N2가 올라간다
-    run_until_idle(pack, model_factory=_factory(escalate()))
-    assert _task(pack, "N2").lifecycle == "READY"
-    with db.read() as conn:
-        ready = [
-            r[0]
-            for r in conn.execute(
-                "SELECT json_extract(ref, '$.task_id') FROM case_event"
-                " WHERE kind = 'TASK_READY' ORDER BY seq"
-            )
-        ]
-    assert ready[:3] == ["A", "N1", "N2"]
+        assert queued_task_ids(conn, pack.site_id) == ["N4"]
 
 
 # ── state inbox ───────────────────────────────────────

@@ -308,6 +308,15 @@ class PreferredWindow(Frozen):
         return max(0, lo - start, start - hi)
 
 
+class TaskBase(Frozen):
+    """일정으로 들어온 작업의 기준 배정(문서의 배정: 시작·자원). 계획에 들어가기 전까지 그 작업의 기준
+    위치다. 희망 영역과 따로 둔다 (ST-24)."""
+
+    task_id: str
+    start: int
+    resource_id: str | None = None
+
+
 class HoldRef(Frozen):
     """Snapshot에 넣는 ACTIVE Hold."""
 
@@ -402,6 +411,7 @@ class SnapshotContent(Frozen):
     pins: tuple[Pin, ...] = ()
     consents: tuple[Consent, ...] = ()
     preferred_windows: tuple[PreferredWindow, ...] = ()  # READY 작업의 희망 영역 (ST-22)
+    task_bases: tuple[TaskBase, ...] = ()  # 일정으로 들어온 READY 작업의 기준 배정 (ST-24)
 
     def task_map(self) -> dict[str, Task]:
         return {t.task_id: t for t in self.tasks}
@@ -425,22 +435,23 @@ class SnapshotContent(Frozen):
         return None
 
     def base_assignments(self) -> dict[str, Assignment]:
-        """READY 작업의 기준 배정. Plan에 있으면 Plan 값, 없으면 (기준 시작, 요청 자원).
+        """READY 작업의 기준 배정. Plan에 있으면 Plan 값, 없으면 (기준 시작, 기준 자원).
 
-        Plan에 없는 작업의 기준 시작은 희망 영역이 있으면 희망 시작(시간창 안으로 맞춘 값), 없으면
-        earliest_start다."""
+        Plan에 없는 작업: 일정으로 들어온 작업은 문서의 배정(시작·자원)이 기준이다(ST-24). 그 밖에는 요청
+        자원에, 희망 영역이 있으면 희망 시작, 없으면 earliest_start다. 시작은 시간창 안으로 맞춘다."""
         in_plan = {a.task_id: a for a in self.plan.assignments}
         wanted = self.preferred_map()
+        given = {b.task_id: b for b in self.task_bases}
         out = {}
         for t in sorted(self.tasks, key=lambda t: t.task_id):
-            start = t.earliest_start
-            if t.task_id in wanted:
-                start = min(max(wanted[t.task_id].start, t.earliest_start), t.latest_start)
+            start, resource = t.earliest_start, t.requested_resource_id
+            if t.task_id in given:
+                start, resource = given[t.task_id].start, given[t.task_id].resource_id
+            elif t.task_id in wanted:
+                start = wanted[t.task_id].start
+            start = min(max(start, t.earliest_start), t.latest_start)
             out[t.task_id] = in_plan.get(t.task_id) or Assignment(
-                task_id=t.task_id,
-                start=start,
-                end=start + t.duration,
-                resource_id=t.requested_resource_id,
+                task_id=t.task_id, start=start, end=start + t.duration, resource_id=resource
             )
         return out
 

@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from app.agents import casefacts
 from app.api.deps import ActorDep, ApiError, PackDep, check_site
 from app.commands.moves import move_check, move_range, remove_check, resource_check
+from app.commands.schedule import ImportRequest, preview_import
 from app.domain.calendar import work_delay, work_minutes
 from app.domain.canonical import canonical_hash
 from app.domain.factdiff import fact_changes
@@ -580,6 +581,16 @@ def get_remove_check(task_id: str, pack: PackDep, actor: ActorDep) -> dict[str, 
     """[작업 없애기]의 확인: 없앨 수 있는지와 무효가 될 검토 중인 안 (AG-31)."""
     with db.read_tx() as conn:
         return remove_check(conn, pack, actor.actor_id, task_id)
+
+
+@router.post("/sites/{site_id}/schedules/preview")
+def post_schedule_preview(
+    site_id: str, body: ImportRequest, pack: PackDep, actor: ActorDep
+) -> dict[str, Any]:
+    """일정 넣기 미리보기: 작업별 판정. 읽기 전용이고 기록을 남기지 않는다. 넣기 명령이 같은 판정을 다시 한다."""
+    check_site(site_id, pack)
+    with db.read_tx() as conn:
+        return preview_import(conn, pack, actor, body.document, body.exclude)
 
 
 @router.get("/schedules/{schedule_id}")

@@ -5,9 +5,9 @@
 
 - wake_run: 영향받는 Run의 wake_seq += 1, 대기 중이면 RESUME_RUN 등록(Run당 PENDING 1개).
 - claim_resume: `WAITING_HUMAN ∧ wait_generation 일치` 조건부 claim.
-- end_case_run: Run 종료 + 보낸 요청 정리(메시지 CANCELLED·제안 STALE) + 열린 Case가 없어지면 대기열 1건 승격.
-- promote_queued: 가장 먼저 접수된 QUEUED 작업을 새 revision READY로(Consent 복사),
-  context +1, RECHECK 등록. 열린 Case 중 폼은 QUEUED로 저장된다.
+- end_case_run: Run 종료 + 보낸 요청 정리(메시지 CANCELLED·제안 STALE) + 열린 Case가 없어지면 대기열 전부 승격.
+- promote_queued: 대기 중인 QUEUED 작업을 전부 새 revision READY로(Consent 복사), context +1 한 번,
+  RECHECK 등록 한 번. 열린 Case 중 접수는 QUEUED로 저장된다 (AG-07).
 모든 함수는 호출한 쪽의 tx 안에서 돈다(트랜잭션 중첩 없음).
 """
 
@@ -33,6 +33,7 @@ from app.store.repos.runs import (
     insert_run,
     list_steps,
 )
+from app.store.repos.schedules import schedule_of_tasks
 from app.store.repos.site import bump_context_version, get_site, list_actors
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
@@ -202,10 +203,10 @@ def cancel_requests(tx: sqlite3.Connection, run_id: str) -> None:
     )
 
 
-def close_case(tx: sqlite3.Connection, pack: LoadedPack) -> str | None:
-    """열린 Case가 없으면 대기열 1건을 올린다. 올린 task_id."""
+def close_case(tx: sqlite3.Connection, pack: LoadedPack) -> list[str]:
+    """열린 Case가 없으면 대기 중인 접수를 전부 올린다. 올린 task_id들."""
     if has_open_case(tx, pack.site_id):
-        return None
+        return []
     return promote_queued(tx, pack)
 
 
@@ -411,20 +412,44 @@ def copy_consents(
     return out
 
 
-def promote_queued(tx: sqlite3.Connection, pack: LoadedPack) -> str | None:
-    """가장 먼저 접수된 QUEUED 작업 1건을 READY로 올리고 context +1, RECHECK. 없으면 None."""
+def promote_queued(tx: sqlite3.Connection, pack: LoadedPack) -> list[str]:
+    """대기 중인 접수(QUEUED 작업)를 전부 한 번에 READY로 올린다: context +1 한 번, RECHECK 한 번 (AG-07).
+
+    사건은 접수 단위다. 폼·Work Intake로 온 작업은 작업마다 작업 준비됨, 일정으로 온 작업은 일정마다
+    일정 넣기 사건 하나다(ST-24). 첫 사건이 메인을 띄우고 나머지는 그 메인의 Case에 들어간다.
+    올린 task_id들(접수 순서). 없으면 빈 목록."""
     site_id = pack.site_id
     ids = queued_task_ids(tx, site_id)
     if not ids:
-        return None
-    task = next(t for t in list_current_tasks(tx, site_id, pack) if t.task_id == ids[0])
-    revision = task.revision + 1
-    insert_task_revision(
-        tx, site_id, task.model_copy(update={"revision": revision, "lifecycle": "READY"})
-    )
+        return []
     context_version = bump_context_version(tx, site_id)
-    copy_consents(tx, site_id, task.task_id, task.revision, revision, context_version)
-    cause = {"kind": "QUEUE", "task_id": task.task_id, "actor_id": task.owner_actor_id}
-    register_recheck(tx, site_id, cause)
-    deliver_event(tx, pack, "TASK_READY", f"TASK_READY:{task.task_id}:{revision}", cause)
-    return task.task_id
+    tasks = {t.task_id: t for t in list_current_tasks(tx, site_id, pack)}
+    revisions = {}
+    for tid in ids:
+        task = tasks[tid]
+        revisions[tid] = task.revision + 1
+        insert_task_revision(
+            tx, site_id, task.model_copy(update={"revision": revisions[tid], "lifecycle": "READY"})
+        )
+        copy_consents(tx, site_id, tid, task.revision, revisions[tid], context_version)
+    register_recheck(tx, site_id, {"kind": "QUEUE", "task_ids": ids})
+    sources = schedule_of_tasks(tx, site_id)
+    delivered: set[str] = set()
+    for tid in ids:
+        schedule_id = sources.get(tid)
+        if schedule_id is None:
+            cause = {"kind": "QUEUE", "task_id": tid, "actor_id": tasks[tid].owner_actor_id}
+            deliver_event(tx, pack, "TASK_READY", f"TASK_READY:{tid}:{revisions[tid]}", cause)
+        elif schedule_id not in delivered:
+            delivered.add(schedule_id)
+            ref = {
+                "kind": "QUEUE",
+                "schedule_id": schedule_id,
+                "task_ids": [t for t in ids if sources.get(t) == schedule_id],
+                "changed_task_ids": [],
+                "actor_id": tasks[tid].owner_actor_id,
+            }
+            deliver_event(
+                tx, pack, "SCHEDULE_IMPORTED", f"SCHEDULE_IMPORTED:{schedule_id}:queue", ref
+            )
+    return ids

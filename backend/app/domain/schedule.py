@@ -2,7 +2,8 @@
 
 문서는 plan_r0.yaml의 뼈대(tasks + assignments)에 머리말을 더한 것이다. 문서의 시각은 현장 날짜·시각
 문자열이고(AG-21) 모델은 Horizon 원점 기준 정수 분이다. 위험 태그와 시간창은 담지 않는다 (CV-11).
-읽기는 문서 안에서 알 수 있는 것만 검사한다. 현장 사실(구역·자원·담당자)과의 대조는 넣기 명령이 한다.
+읽기는 문서 안에서 알 수 있는 것만 작업별로 검사한다. 현장 사실(구역·자원·담당자)과의 대조는 넣기
+명령(commands/schedule.py)이 한다.
 """
 
 from typing import Any
@@ -82,17 +83,6 @@ class _DocAssignment(Frozen):
     resource_id: str | None = None
 
 
-class _Document(Frozen):
-    schedule_id: str
-    site_id: str
-    pack_hash: str
-    plan_revision: int = Field(ge=0)
-    exported_by: str
-    exported_at: str
-    tasks: tuple[_DocTask, ...]
-    assignments: tuple[_DocAssignment, ...]
-
-
 BODY = ("tasks", "assignments")
 
 
@@ -117,101 +107,194 @@ def to_document(schedule: Schedule, horizon_start_utc: str, timezone: str) -> di
     return document
 
 
-def from_document(
-    document: Any, horizon_start_utc: str, timezone: str, horizon_minutes: int
-) -> Schedule:
-    """문서 → 모델. 모양·시각·문서 안 정합성을 검사하고, 틀린 곳을 모두 모아 ScheduleError로 낸다.
+class Entry(Frozen):
+    """문서의 작업 하나를 읽은 결과. 읽지 못했으면 task·assignment가 비고 사유가 남는다.
 
+    codes는 사유 코드(화면·판정용), details는 "위치: 사유" 문장이다."""
+
+    task_id: str
+    task: ScheduleTask | None = None
+    assignment: Assignment | None = None
+    codes: tuple[str, ...] = ()
+    details: tuple[str, ...] = ()
+
+
+class Parsed(Frozen):
+    """머리말과 작업별로 읽은 결과. 작업 하나의 오류는 그 작업에만 남는다."""
+
+    schedule_id: str
+    site_id: str
+    pack_hash: str
+    plan_revision: int
+    exported_by: str
+    exported_at: str
+    entries: tuple[Entry, ...]
+
+
+class _Header(Frozen):
+    schedule_id: str
+    site_id: str
+    pack_hash: str
+    plan_revision: int = Field(ge=0)
+    exported_by: str
+    exported_at: str
+    tasks: list[Any]
+    assignments: list[Any]
+
+
+def _field_errors(where: str, e: ValidationError) -> tuple[list[str], list[str]]:
+    codes, details = [], []
+    for err in e.errors():
+        codes.append("FIELD_MISSING" if err["type"] == "missing" else "INVALID_VALUE")
+        details.append(f"{where}.{'.'.join(str(p) for p in err['loc'])}: {err['msg']}")
+    return codes, details
+
+
+def read_document(
+    document: Any, horizon_start_utc: str, timezone: str, horizon_minutes: int
+) -> Parsed:
+    """문서 → 머리말과 작업별로 읽은 결과. 문서 전체 모양이 깨졌을 때만 ScheduleError를 낸다.
+
+    작업 하나의 모양·시각·정합성 오류는 그 작업의 사유로 남긴다(넣기 미리보기가 작업별로 판정한다).
     빠진 값은 채우지 않는다. 작업 시간만 배정의 끝 − 시작으로 채운다. 위험 태그는 받으면 버린다 (CV-11).
-    Horizon 밖 시각은 읽지 못한다.
     """
     if not isinstance(document, dict):
         raise ScheduleError(["schedule: must be an object"])
-    raw = dict(document)
-    if isinstance(raw.get("tasks"), list):
-        raw["tasks"] = [
-            {k: v for k, v in t.items() if k != "hazard_tags"} if isinstance(t, dict) else t
-            for t in raw["tasks"]
-        ]
     try:
-        doc = _Document.model_validate(raw)
+        head = _Header.model_validate(document)
     except ValidationError as e:
-        raise ScheduleError(
-            [f"schedule.{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors()]
-        ) from e
+        raise ScheduleError(_field_errors("schedule", e)[1]) from e
 
-    reasons: list[str] = []
-
-    def minute(where: str, text: str) -> int | None:
+    def minute(where: str, text: str, codes: list[str], details: list[str]) -> int | None:
         try:
             return parse_site_time(text, horizon_start_utc, timezone, horizon_minutes)
         except ValueError as e:
-            reasons.append(f"{where}: {e}")
+            codes.append("OUTSIDE_HORIZON" if "outside the horizon" in str(e) else "TIME_INVALID")
+            details.append(f"{where}: {e}")
             return None
 
-    def interval(where: str, start: str, end: str) -> tuple[int, int] | None:
-        lo, hi = minute(f"{where}.start", start), minute(f"{where}.end", end)
+    def interval(
+        where: str, start: str, end: str, codes: list[str], details: list[str]
+    ) -> tuple[int, int] | None:
+        lo = minute(f"{where}.start", start, codes, details)
+        hi = minute(f"{where}.end", end, codes, details)
         if lo is None or hi is None:
             return None
         if lo >= hi:
-            reasons.append(f"{where}: start must be before end")
+            codes.append("TIME_INVALID")
+            details.append(f"{where}: start must be before end")
             return None
         return lo, hi
 
-    task_ids = [t.task_id for t in doc.tasks]
-    for tid in sorted({t for t in task_ids if task_ids.count(t) > 1}):
-        reasons.append(f"schedule.tasks: duplicate task_id {tid!r}")
-    placed_ids = [a.task_id for a in doc.assignments]
-    for tid in sorted({t for t in placed_ids if placed_ids.count(t) > 1}):
-        reasons.append(f"schedule.assignments: duplicate task_id {tid!r}")
-
-    assignments: dict[str, Assignment] = {}
-    for i, a in enumerate(doc.assignments):
+    # 배정: 작업 ID로 모은다. 작업을 가리키지 못하는 배정은 문서 전체의 오류다
+    raw_ids = [t.get("task_id") if isinstance(t, dict) else None for t in head.tasks]
+    broken: list[str] = []
+    placed: dict[str, list[tuple[int, _DocAssignment]]] = {}
+    for i, a in enumerate(head.assignments):
         where = f"schedule.assignments[{i}]"
-        if a.task_id not in task_ids:
-            reasons.append(f"{where}: undefined task {a.task_id!r}")
-        span = interval(where, a.start, a.end)
-        if span is not None:
-            assignments[a.task_id] = Assignment(
-                task_id=a.task_id, start=span[0], end=span[1], resource_id=a.resource_id
-            )
+        try:
+            item = _DocAssignment.model_validate(a)
+        except ValidationError as e:
+            tid = a.get("task_id") if isinstance(a, dict) else None
+            if tid in raw_ids and isinstance(tid, str):
+                placed.setdefault(tid, []).append(
+                    (i, _DocAssignment(task_id=tid, start="", end=""))
+                )
+            else:
+                broken += _field_errors(where, e)[1]
+            continue
+        if item.task_id not in raw_ids:
+            broken.append(f"{where}: undefined task {item.task_id!r}")
+        placed.setdefault(item.task_id, []).append((i, item))
+    if broken:
+        raise ScheduleError(broken)
 
-    tasks: list[ScheduleTask] = []
-    for i, t in enumerate(doc.tasks):
+    entries: list[Entry] = []
+    for i, raw in enumerate(head.tasks):
         where = f"schedule.tasks[{i}]"
-        placed = assignments.get(t.task_id)
-        if t.task_id not in placed_ids:
-            reasons.append(f"{where}: no assignment for {t.task_id!r}")
+        codes: list[str] = []
+        details: list[str] = []
+        if (
+            not isinstance(raw, dict)
+            or not isinstance(raw.get("task_id"), str)
+            or not raw["task_id"]
+        ):
+            raise ScheduleError([f"{where}: task_id missing"])
+        tid = raw["task_id"]
+        try:
+            t = _DocTask.model_validate({k: v for k, v in raw.items() if k != "hazard_tags"})
+        except ValidationError as e:
+            codes, details = _field_errors(where, e)
+            entries.append(Entry(task_id=tid, codes=tuple(codes), details=tuple(details)))
+            continue
+        if raw_ids.count(tid) > 1:
+            codes.append("DUPLICATE_TASK_ID")
+            details.append(f"schedule.tasks: duplicate task_id {tid!r}")
+        found = placed.get(tid, [])
+        assignment = None
+        if not found:
+            codes.append("NO_ASSIGNMENT")
+            details.append(f"{where}: no assignment for {tid!r}")
+        elif len(found) > 1:
+            codes.append("DUPLICATE_TASK_ID")
+            details.append(f"schedule.assignments: duplicate task_id {tid!r}")
+        else:
+            index, a = found[0]
+            span = interval(f"schedule.assignments[{index}]", a.start, a.end, codes, details)
+            if span is not None:
+                assignment = Assignment(
+                    task_id=tid, start=span[0], end=span[1], resource_id=a.resource_id
+                )
         duration = t.duration
-        if placed is not None:
-            length = placed.end - placed.start
+        if assignment is not None:
+            length = assignment.end - assignment.start
             if duration is None:
                 duration = length
             elif duration != length:
-                reasons.append(f"{where}: end - start = {length} != duration {duration}")
+                codes.append("DURATION_MISMATCH")
+                details.append(f"{where}: end - start = {length} != duration {duration}")
         for p in t.predecessors:
-            if p.task_id == t.task_id:
-                reasons.append(f"{where}: predecessor refers to itself {t.task_id!r}")
+            if p.task_id == tid:
+                codes.append("PREDECESSOR_INVALID")
+                details.append(f"{where}: predecessor refers to itself {tid!r}")
             if p.min_lag < 0:
-                reasons.append(f"{where}: predecessor {p.task_id!r} min_lag {p.min_lag} < 0")
+                codes.append("PREDECESSOR_INVALID")
+                details.append(f"{where}: predecessor {p.task_id!r} min_lag {p.min_lag} < 0")
         hope = None
         if t.preferred_window is not None:
             w = t.preferred_window
-            span = interval(f"{where}.preferred_window", w.start, w.end)
+            span = interval(f"{where}.preferred_window", w.start, w.end, codes, details)
             if span is not None:
                 hope = Hope(start=span[0], end=span[1], origin=w.origin)
-        if duration is not None:
-            tasks.append(
-                ScheduleTask(
-                    **t.model_dump(exclude={"duration", "preferred_window"}),
-                    duration=duration,
-                    preferred_window=hope,
-                )
+        task = None
+        if not codes and duration is not None:
+            task = ScheduleTask(
+                **t.model_dump(exclude={"duration", "preferred_window"}),
+                duration=duration,
+                preferred_window=hope,
             )
+        entries.append(
+            Entry(
+                task_id=tid,
+                task=task,
+                assignment=assignment if task is not None else None,
+                codes=tuple(dict.fromkeys(codes)),
+                details=tuple(details),
+            )
+        )
+    return Parsed(**head.model_dump(exclude=set(BODY)), entries=tuple(entries))
+
+
+def from_document(
+    document: Any, horizon_start_utc: str, timezone: str, horizon_minutes: int
+) -> Schedule:
+    """문서 → 모델. 읽지 못한 작업이 하나라도 있으면 틀린 곳을 모두 모아 ScheduleError로 낸다."""
+    parsed = read_document(document, horizon_start_utc, timezone, horizon_minutes)
+    reasons = [d for e in parsed.entries for d in e.details]
     if reasons:
         raise ScheduleError(reasons)
     return Schedule(
-        **doc.model_dump(exclude=set(BODY)),
-        tasks=tuple(tasks),
-        assignments=tuple(assignments[t.task_id] for t in tasks),
+        **parsed.model_dump(exclude={"entries"}),
+        tasks=tuple(e.task for e in parsed.entries if e.task is not None),
+        assignments=tuple(e.assignment for e in parsed.entries if e.assignment is not None),
     )
