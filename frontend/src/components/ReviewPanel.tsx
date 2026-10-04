@@ -143,10 +143,10 @@ const movedOf = (c: CandidateView, taskId: string) => {
   return x ? movedText(x) : ''
 }
 
-/** 안 번호: 서버가 매긴다(고정). 재계획 호출마다 번호 하나, 한 호출의 여러 안은 가·나, 다른 호출이 같은
- *  배치를 냈으면 번호를 합친다("1가·2안"). 안 비교에는 살아 있는 안만 나오므로 번호가 건너뛸 수 있다. */
+/** 안 번호: 서버가 매긴 표기를 그대로 쓴다(고정). 재계획 결과가 나온 순서대로 1안, 2안이고, 같은 배치를 낸
+ *  결과의 번호는 이어 보인다("1안 + 3안"). 안 비교에는 살아 있는 안만 나오므로 번호가 건너뛸 수 있다. */
 function planLabel(c: CandidateView): string {
-  return c.plan_label === null ? short(c.candidate_id) : `${c.plan_label}안`
+  return c.plan_label ?? short(c.candidate_id)
 }
 
 /** 그 후보의 배치에 도달한 접근 이름(겹치지 않게). 둘 이상이면 다른 접근이 같은 배치를 낸 것이다. */
