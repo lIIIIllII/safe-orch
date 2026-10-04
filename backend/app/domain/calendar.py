@@ -57,7 +57,7 @@ def now_view(
 ) -> dict[str, str | int]:
     """현장의 지금: 현장 날짜·요일·시각, Horizon 원점 기준 분, Horizon 안(IN)·앞(BEFORE)·뒤(AFTER).
 
-    알려 주기만 하는 값이다. 판정·계산에는 쓰지 않는다 (CV-14).
+    알려 주기만 하는 값이다. 판정·계산에는 쓰지 않는다 (ST-17).
     """
     origin = datetime.fromisoformat(horizon_start_utc)
     minute = int((now - origin).total_seconds() // 60)

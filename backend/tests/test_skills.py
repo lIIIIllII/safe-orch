@@ -1,4 +1,4 @@
-"""스킬 층 (AG-01·AG-02·AG-19, CV-15). 열림 조건·도구 계산·Gateway 스킬 검사·자원 적격성."""
+"""스킬 층 (AG-01·AG-02·AG-19, CV-20). 열림 조건·도구 계산·Gateway 스킬 검사·자원 적격성."""
 
 from conftest import add_run, take_snapshot, with_facts
 from langchain_core.messages import AIMessage
@@ -176,7 +176,7 @@ def test_missing_skill_argument_is_malformed(with_a):
     assert _reasons(steps)[0] == ("REJECTED", "MALFORMED")
 
 
-# ── 자원 적격성 (CV-15) ────────────────────────────────────────
+# ── 자원 적격성 (CV-20) ────────────────────────────────────────
 
 
 def test_resource_eligibility_type_permission_and_availability(with_a):

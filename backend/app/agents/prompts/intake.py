@@ -150,7 +150,7 @@ PROMPT_FINGERPRINTS = {
     "intake-p8": "bff8e2276cf36287f65061d14ed59fc3376e455632c29f9fd1120fc2cd065638",  # 도구의 시각 인자는 현장 날짜·시각 문자열, 관찰에 같은 형식의 시각 (AG-21)
     "intake-p9": "dc87d9d7a1e37fe736228f4571bb356c39440621b6f859954e30d3b8e24ae01e",  # 자원 속성 선언·기본 요구 조건·자원 조회의 구역·속성·이유, 값에 요구 조건 (CV-17·19·20)
     "intake-p10": "dea0de657f87150484ea045e2abfd6329a46e4f0387c85d99e03b44549be7099",  # 수량 풀 종류·작업 유형 기본 수요, 값에 수요 (CV-11·23)
-    "intake-p11": "e0aa160c4321af804830aaf8cf1364cfbd0e4a38080095a3da5d8ea1e4c95b1a",  # 질문의 필드별 판단, 조회의 구역·작업 유형과 제외 사유, 라운드·검증 사실 (AG-22)
+    "intake-p11": "e0aa160c4321af804830aaf8cf1364cfbd0e4a38080095a3da5d8ea1e4c95b1a",  # 질문의 필드별 판단, 조회의 구역·작업 유형과 제외 사유, 라운드·검증 사실
     "intake-p12": "3d3cae036de3aa6721811d0fbcd620a3dccbf98180e17774aac1f219c9e6ed86",  # 막히면 RETURN_RESULT로 접수 미완, 완료 가능 사실 can_complete (AG-06)
     "intake-p13": "60190a6c6513ccf62eccd39116141675a49153f9fa91171df6613048dfbd3cdc",  # 결과의 OTHER_UNIT에 충돌 그룹 참조
     "intake-p14": "2aecae0f5f0868501a55c42fe7f8ebe325eb523863cb5b2e4de2dcf449b6cc06",  # 스킬 지침의 제약 문구 정리 (AG-27)

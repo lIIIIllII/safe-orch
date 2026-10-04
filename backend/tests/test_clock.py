@@ -1,4 +1,4 @@
-"""현장의 지금 SITE_NOW (ST-17, CV-14). 고정 시각, 오프셋 필수, 관찰용 표현."""
+"""현장의 지금 SITE_NOW (ST-17). 고정 시각, 오프셋 필수, 관찰용 표현."""
 
 from datetime import UTC, datetime
 

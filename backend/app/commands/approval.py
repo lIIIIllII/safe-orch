@@ -145,7 +145,7 @@ def _approve(tx: sqlite3.Connection, ctx: CommandContext, body: ApproveRequest) 
         site.context_version,
     )
     # 이 후보의 협의 Run이 열려 있으면 끝낸다. 확정 뒤 남은 요청을 위해 RECHECK(plan 키)를 등록한다.
-    # 승인 결과는 사건으로 메인에게 간다. 확정 뒤 통지는 메인이 부른다 (AG-26).
+    # 승인 결과는 사건으로 메인에게 간다. 확정 뒤 통지는 메인이 부른다 (AG-25).
     end_candidate_runs(
         tx, ctx.pack, candidate.candidate_id, "SUCCEEDED", f"COMMITTED:{plan_revision}"
     )
