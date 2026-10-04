@@ -143,7 +143,8 @@ function FactChanges({ changes, base, state }: { changes: FactChange[]; base: nu
 const offHopeText = (x: CandidateView['off_hope'][number]) =>
   `${x.task_id} ${delayText(x.delay, x.work_delay)} ${x.direction === 'EARLY' ? '이름' : '늦음'}`
 
-/** 안 번호: 서버가 이 Case의 살아 있는 후보에 만들어진 순서로 매긴 번호다. 한 호출이 후보를 여럿 내도 다르다. */
+/** 안 번호: 서버가 이 Case의 재계획 후보 전체에 만들어진 순서로 매긴 번호다(고정). 안 비교에는 살아 있는 안만
+ *  나오므로 번호가 건너뛸 수 있다. */
 function planLabel(c: CandidateView): string {
   return c.plan_no === null ? short(c.candidate_id) : `${c.plan_no}안`
 }

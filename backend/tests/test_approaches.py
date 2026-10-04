@@ -20,7 +20,12 @@ from scripted import (
 
 from app.agents import casefacts, runtime
 from app.api.state import build_state
-from app.commands.approval import ChooseRequest, choose_candidate
+from app.commands.approval import (
+    ChooseRequest,
+    RejectRequest,
+    choose_candidate,
+    reject_candidate,
+)
 from app.commands.messages import ReplyRequest, reply_message
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
@@ -313,6 +318,19 @@ def test_choosing_another_plan_ends_the_open_consultation(seeded_real, main_on):
     again = _runs("COORDINATION")[-1]
     assert (again.input_ref["candidate_id"], again.status) == (second, "WAITING_HUMAN")
     assert _choose(pack, "supervisor", first).status == "APPLIED"  # 다시 바꿀 수 있다
+
+    # 안 번호는 고정이다: 앞 안이 거절되어도 남은 안의 번호가 당겨지지 않는다
+    with db.read() as conn:
+        v = list_validations(conn, pack.site_id, first)[-1]
+    body = RejectRequest(
+        candidate_id=first, validation_id=v.validation_id, reason_code="PREFERENCE"
+    )
+    assert reject_candidate(pack, "supervisor", _key(), body).status == "APPLIED"
+    with db.read() as conn:
+        state = build_state(conn, pack, "supervisor")
+    views = {c["candidate_id"]: c for c in state["candidates"]}
+    assert (views[first]["display_status"], views[first]["plan_no"]) == ("REJECTED", 1)
+    assert views[second]["plan_no"] == 2
 
 
 def test_choice_change_and_objection_count_as_human_work(seeded_real, main_on):

@@ -224,7 +224,8 @@ export interface CandidateView {
     same: boolean
     quoted_reason: string | null
   }[]
-  /** 안 번호: 이 Case의 살아 있는 후보에 만들어진 순서로 매긴 번호(후보마다 다르다). 없으면 null */
+  /** 안 번호: 이 Case의 재계획 후보 전체(무효·거절 포함)에 만들어진 순서로 매긴 번호. 바뀌지 않으므로
+   *  살아 있는 안만 보면 건너뛸 수 있다. 재계획 후보가 아니면 null */
   plan_no: number | null
   /** Supervisor가 고른 안. 고른 안만 협의한다 */
   chosen: boolean

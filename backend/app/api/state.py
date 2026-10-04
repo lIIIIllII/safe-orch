@@ -146,9 +146,10 @@ def plan_changes(facts: SnapshotContent | None, assignments: Any) -> list[dict[s
     return out
 
 
-def plan_numbers(conn: sqlite3.Connection, site_id: str, case_id: str) -> dict[str, int]:
-    """이 Case의 살아 있는 재계획 후보에 만들어진 순서로 매긴 안 번호(1부터). 화면의 "n안"이다.
-    한 호출이 후보를 여럿 내도 후보마다 번호가 다르다. 무효·거절·확정된 후보에는 번호가 없다."""
+def plan_numbers(conn: sqlite3.Connection, case_id: str) -> dict[str, int]:
+    """이 Case의 재계획 후보 전체에 만들어진 순서로 매긴 안 번호(1부터). 화면의 "n안"이다.
+    한 호출이 후보를 여럿 내도 후보마다 번호가 다르다. 무효·거절된 후보도 세므로 번호는 바뀌지 않고,
+    살아 있는 안만 보면 번호가 건너뛸 수 있다."""
     ids = [
         r["candidate_id"]
         for r in rows(
@@ -159,14 +160,7 @@ def plan_numbers(conn: sqlite3.Connection, site_id: str, case_id: str) -> dict[s
             (case_id,),
         )
     ]
-    out: dict[str, int] = {}
-    for cid in ids:
-        candidate = get_candidate(conn, site_id, cid)
-        assert candidate is not None
-        state = candidate_state(conn, site_id, candidate)
-        if not (state.stale or state.rejected or state.committed):
-            out[cid] = len(out) + 1
-    return out
+    return {cid: no for no, cid in enumerate(ids, start=1)}
 
 
 def off_hope(facts: SnapshotContent | None, assignments: Any) -> list[dict[str, Any]]:
@@ -302,10 +296,10 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "run_id": run_id,
         # 이 후보를 만든 Case, 이 후보에 도달한 접근들(같은 배치면 여럿), Supervisor가 골랐는가 (AG-28·AG-29)
         "case_id": None if maker is None else maker.case_id,
-        # 안 번호: 이 Case의 살아 있는 후보에 만들어진 순서로 매긴다(후보마다 다르다). 없으면 None
+        # 안 번호: 이 Case의 재계획 후보 전체에 만들어진 순서로 매긴다(바뀌지 않는다). 없으면 None
         "plan_no": None
         if maker is None
-        else plan_numbers(conn, site_id, maker.case_id).get(cand.candidate_id),
+        else plan_numbers(conn, maker.case_id).get(cand.candidate_id),
         "approaches": [
             {k: a[k] for k in ("no", "approach", "quoted_note", "run_id", "same", "quoted_reason")}
             for a in approach_attempts(conn, candidate_id=cand.candidate_id)
