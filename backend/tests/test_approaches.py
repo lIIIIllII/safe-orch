@@ -257,8 +257,8 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
         (2, "MIN_DELAY", True),
     ]
     assert view["approaches"][1]["quoted_reason"] == "이유: 지연을 먼저 줄인다/다음: 검증"
-    # 안 번호: 호출마다 번호 하나이고, 두 호출이 같은 배치를 냈으면 번호를 합친다
-    assert view["plan_label"] == "1·2"
+    # 안 번호: 결과마다 번호 하나이고, 두 결과가 같은 배치면 번호를 이어 보인다
+    assert view["plan_label"] == "1안 + 2안"
     assert (view["chosen"], view["case_id"], view["solver"]["objective"]) == (
         False,
         main.case_id,
@@ -311,9 +311,9 @@ def test_choosing_another_plan_ends_the_open_consultation(seeded_real, main_on):
     chosen = {c["candidate_id"]: c["chosen"] for c in state["candidates"]}
     assert (chosen[first], chosen[second]) == (False, True)
     assert set(state["review_queue"]) == {first, second}  # 고르지 않은 안은 그대로 둔다
-    # 안 번호는 재계획 호출마다 하나다: 한 호출이 낸 두 안은 그 번호에 가·나를 붙인다
+    # 안 번호는 결과가 나온 순서다: 한 호출이 낸 두 안도 각각 다음 번호를 받는다
     views = {c["candidate_id"]: c for c in state["candidates"]}
-    assert (views[first]["plan_label"], views[second]["plan_label"]) == ("1가", "1나")
+    assert (views[first]["plan_label"], views[second]["plan_label"]) == ("1안", "2안")
     assert [a["no"] for cid in (first, second) for a in views[cid]["approaches"]] == [1, 1]
 
     run_until_idle(pack, model_factory=Router().factory())
@@ -331,8 +331,8 @@ def test_choosing_another_plan_ends_the_open_consultation(seeded_real, main_on):
     with db.read() as conn:
         state = build_state(conn, pack, "supervisor")
     views = {c["candidate_id"]: c for c in state["candidates"]}
-    assert (views[first]["display_status"], views[first]["plan_label"]) == ("REJECTED", "1가")
-    assert views[second]["plan_label"] == "1나"
+    assert (views[first]["display_status"], views[first]["plan_label"]) == ("REJECTED", "1안")
+    assert views[second]["plan_label"] == "2안"
 
 
 def test_choice_change_and_objection_count_as_human_work(seeded_real, main_on):
@@ -367,6 +367,45 @@ def test_choice_change_and_objection_count_as_human_work(seeded_real, main_on):
     assert count() == 2
     choose(pack, first)
     assert count() == 2
+
+
+# ── 안 번호 (AG-29) ────────────────────────────────────────────
+
+
+def _labels(pack):
+    with db.read() as conn:
+        state = build_state(conn, pack, "supervisor")
+    return {c["candidate_id"]: c["plan_label"] for c in state["candidates"]}
+
+
+def test_plan_numbers_follow_result_order_and_join_the_same_placement(seeded_real, main_on):
+    """결과가 나온 순서대로 1안, 2안, 3안이다. 해가 없는 계산은 번호를 받지 않고, 이미 있는 안과 같은 배치를
+    낸 결과도 번호를 받아 그 안에 "1안 + 3안"으로 이어 보인다. 거절 뒤에도 번호는 그대로다."""
+    pack = seeded_real
+    _submit_a(pack)
+    replies = [
+        # A·B를 지금 자리에 못 박으면 해가 없다: 번호를 받지 않는다
+        solve_with("L0", cond("A", start_at=0), cond("B", start_at=0)),
+        solve("L0"),  # 1안
+        solve("L1"),  # 2안
+        solve_with("L1", objective="DELAY_FIRST"),  # 1안과 같은 배치: 3안
+        done(),
+    ]
+    run_until_idle(pack, model_factory=Router(replanning=replies, auto_done=False).factory())
+    [rp] = _runs("REPLANNING")
+    results = [s["tool_result"] for s in _steps(rp.run_id)[:4]]
+    first, second = _candidate_ids()
+    assert results[0]["stage1"]["status"] == "INFEASIBLE"
+    assert [r["candidate_id"] for r in results] == [None, first, second, None]
+    assert results[3]["same_as_candidate_id"] == first
+    assert _labels(pack) == {first: "1안 + 3안", second: "2안"}
+
+    # 거절·무효가 생겨도 번호는 바뀌지 않는다
+    with db.read() as conn:
+        v = list_validations(conn, pack.site_id, first)[-1]
+    body = RejectRequest(candidate_id=first, validation_id=v.validation_id, reason_code="OTHER")
+    assert reject_candidate(pack, "supervisor", _key(), body).status == "APPLIED"
+    assert _labels(pack) == {first: "1안 + 3안", second: "2안"}
 
 
 # ── 모두 거절 (AG-29) ──────────────────────────────────────────

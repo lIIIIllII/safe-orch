@@ -288,8 +288,8 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "run_id": run_id,
         # 이 후보를 만든 Case, 이 후보에 도달한 접근들(같은 배치면 여럿), Supervisor가 골랐는가 (AG-28·AG-29)
         "case_id": None if maker is None else maker.case_id,
-        # 안 번호: 재계획 호출 순서의 숫자, 한 호출의 여러 안은 가·나, 같은 배치는 번호를 합친다("1가·2").
-        # Case 안에서 바뀌지 않는다. 없으면 None
+        # 안 번호: 재계획 결과가 나온 순서대로 1안, 2안이고, 같은 배치를 낸 결과의 번호는 이어 보인다
+        # ("1안 + 3안"). Case 안에서 바뀌지 않는다. 없으면 None
         "plan_label": None
         if maker is None
         else plan_labels(conn, maker.case_id).get(cand.candidate_id),
