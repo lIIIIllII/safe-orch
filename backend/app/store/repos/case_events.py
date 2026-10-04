@@ -24,6 +24,7 @@ KINDS = (
     "CANDIDATE_CHOSEN",
     "TASK_MOVED",
     "TASK_REMOVED",
+    "TASK_EDITED",
 )
 
 

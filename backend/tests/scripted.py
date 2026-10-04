@@ -53,24 +53,6 @@ def _times(args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-JUDGED_FIELDS = ("work_type", "zone_id", "duration", "window", "resource")
-
-
-def field_judgments(*open_fields: str, ambiguous: Sequence[str] = (), **values: Any) -> dict:
-    """ASK_CLARIFICATION의 필드별 판단. open_fields는 빠짐, ambiguous는 모호, 나머지는 받음."""
-    return {
-        f: {
-            "status": "MISSING"
-            if f in open_fields
-            else "AMBIGUOUS"
-            if f in ambiguous
-            else "RECEIVED",
-            "value": values.get(f),
-        }
-        for f in JUDGED_FIELDS
-    }
-
-
 def call(name: str, summary: str = "다음 전략을 시도한다", **args: Any) -> AIMessage:
     args = _times(args)
     return AIMessage(

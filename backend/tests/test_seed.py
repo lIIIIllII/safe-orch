@@ -17,7 +17,7 @@ SRC = "fixture:plan_r0"
 
 
 def _confirmed(value):
-    return {"value": value, "status": "CONFIRMED", "source_ref": SRC}
+    return {"value": value, "status": "CONFIRMED", "source_ref": SRC, "origins": {}}
 
 
 def test_site(seeded):

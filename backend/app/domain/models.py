@@ -14,6 +14,8 @@ StoredRelation = Literal["ADJACENT", "BELOW"]
 # QUEUED: 열린 Case 중 접수. CANCELLED: 담당자가 계획에 있던 작업을 없앰 (AG-31)
 Lifecycle = Literal["DRAFT", "NEEDS_INFO", "READY", "QUEUED", "CANCELLED"]
 FieldStatus = Literal["PROPOSED", "CONFIRMED"]
+# 값의 출처: STATED 사람이 말한 값, DECIDED Agent가 정한 값 (AG-32)
+Origin = Literal["STATED", "DECIDED"]
 # MOVE·REMOVE: 담당자가 타임라인에서 자기 작업을 직접 옮기거나 없앤 것 (AG-31)
 CandidateKind = Literal["REPLAN", "RECONFIRM", "MOVE", "REMOVE"]
 ValidationStatus = Literal["PASS", "FAIL", "INCOMPLETE"]
@@ -185,11 +187,15 @@ class TaskMovable(Frozen):
 
 
 class FieldRecord(Frozen):
-    """critical field 하나의 확인 기록."""
+    """critical field 하나의 확인 기록.
+
+    origins는 값 이름 → 출처이고 Agent가 정한 값(DECIDED)만 적는다. 없는 값은 사람이 말한 값이다.
+    시간창처럼 값이 여럿인 필드는 값마다 따로 적힌다 (AG-32)."""
 
     value: Any
     status: FieldStatus
     source_ref: str
+    origins: dict[str, Origin] = {}
 
 
 class Task(Frozen):
@@ -214,6 +220,18 @@ class Task(Frozen):
     movable: TaskMovable
     fields: dict[str, FieldRecord]
     lifecycle: Lifecycle
+
+    @property
+    def decided_values(self) -> tuple[str, ...]:
+        """Agent가 정한 값의 이름 (요청자가 확인하거나 고치기 전, AG-32)."""
+        return tuple(
+            sorted(
+                name
+                for record in self.fields.values()
+                for name, origin in record.origins.items()
+                if origin == "DECIDED"
+            )
+        )
 
     @property
     def requirements(self) -> tuple[Requirement, ...]:

@@ -5,7 +5,7 @@ from conftest import add_run
 from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 from scripted import Router, ScriptedChatModel, blocked, call, done, solve
-from test_intake import _complete, _intake, _messages, _reply, _request, _runs, _steps, _task
+from test_intake import VALUES_A, _complete, _intake, _messages, _runs, _steps, _task
 
 from app.agents import runtime
 from app.agents.observers import replanning as replanning_observer
@@ -205,29 +205,27 @@ def test_child_run_result_is_not_mapped_to_old_ending(with_a):
 def test_intake_blocked_ends_as_incomplete_and_notifies_requester(seeded):
     pack = seeded
     assert _intake(pack).status == "APPLIED"
-    run_until_idle(pack, model_factory=Router(intake=[_request()]).factory())
-    [confirm] = _messages("CONFIRMATION")
-    assert _reply(pack, confirm["message_id"], "DECLINE", "취소합니다").status == "APPLIED"
     need = {"kind": "HUMAN_INFO", "actor_id": "planner_a", "task_id": "A"}
     wrong = {"kind": "HUMAN_INFO", "actor_id": "planner_b", "task_id": "A"}
     replies = [
+        _complete({**VALUES_A, "requested_resource_id": "B-CR-01"}),
         blocked("요청자가 아닌 사람", [{"needs": [wrong]}]),
-        blocked("요청자가 값 확인을 거절했다", [{"needs": [need]}]),
+        blocked("쓸 수 있는 자원을 찾지 못했다", [{"needs": [need]}]),
     ]
     run_until_idle(pack, model_factory=Router(intake=replies).factory())
     [run] = _runs("INTAKE")
     steps = _steps(run.run_id)
     assert steps[1]["tool_result"]["invalid_needs"][0]["reason"] == "ACTOR_MISMATCH"
     assert (run.status, run.end_reason) == ("BLOCKED", "RETURN_BLOCKED")
-    assert steps[-1]["tool_result"]["reason_codes"] == ["REQUESTER_DECLINED"]
+    assert steps[-1]["tool_result"]["reason_codes"] == ["RESOURCE_NOT_AUTHORIZED"]
     [notice] = _messages("NOTICE")
     assert (notice["to_actor_id"], notice["run_id"], notice["status"]) == (
         "planner_a",
         run.run_id,
         "OPEN",
     )
-    assert "A 접수가 완료되지 않았습니다(사유: REQUESTER_DECLINED)" in notice["body"]
-    assert notice["agent_text"] == "요청자가 값 확인을 거절했다"
+    assert "A 접수가 완료되지 않았습니다(사유: RESOURCE_NOT_AUTHORIZED)" in notice["body"]
+    assert notice["agent_text"] == "쓸 수 있는 자원을 찾지 못했다"
     # 작업도, 메인에게 갈 사건도, 재검사도 생기지 않는다
     assert _task(pack, "A") is None
     with db.read() as conn:
@@ -236,34 +234,6 @@ def test_intake_blocked_ends_as_incomplete_and_notifies_requester(seeded):
             conn.execute("SELECT COUNT(*) FROM dispatch_job WHERE kind = 'RECHECK'").fetchone()[0]
             == 0
         )
-
-
-def test_intake_observation_says_when_completion_is_possible(seeded):
-    """완료 가능은 완료 도구의 유효성과 같은 사실이다. 남은 사람 라운드가 0이어도 true면 완료된다."""
-    pack = seeded
-    assert _intake(pack).status == "APPLIED"
-    ask = call(
-        "ASK_CLARIFICATION",
-        fields={
-            f: {"status": "MISSING" if f == "zone_id" else "RECEIVED", "value": None}
-            for f in ("work_type", "zone_id", "duration", "window", "resource")
-        },
-        question="구역을 알려 주세요.",
-    )
-    for _ in range(2):
-        run_until_idle(pack, model_factory=Router(intake=[ask]).factory())
-        [q] = [m for m in _messages("QUESTION") if m["status"] == "OPEN"]
-        assert _reply(pack, q["message_id"], "ANSWER", "B 구역").status == "APPLIED"
-    run_until_idle(pack, model_factory=Router(intake=[_request()]).factory())
-    [confirm] = _messages("CONFIRMATION")
-    assert _reply(pack, confirm["message_id"]).status == "APPLIED"
-    run_until_idle(pack, model_factory=Router(intake=[_complete()]).factory())
-    [run] = _runs("INTAKE")
-    steps = _steps(run.run_id)
-    assert [s["observation"]["can_complete"] for s in steps] == [False, False, False, True]
-    last = steps[-1]["observation"]
-    assert (last["human_rounds"]["remaining"], last["can_complete"]) == (0, True)
-    assert (run.status, _task(pack, "A").lifecycle) == ("SUCCEEDED", "READY")
 
 
 def test_intake_server_ended_runs_also_notify_requester(seeded, monkeypatch):

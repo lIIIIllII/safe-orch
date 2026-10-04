@@ -85,7 +85,10 @@ def _asks(conn: sqlite3.Connection, pack: LoadedPack, run: AgentRun) -> list[dic
     asked = {a["need_id"]: a for a in list_owner_asks(conn, run.run_id)}
     waiting = open_owner_asks(conn, pack.site_id)
     refusals = ask_refusals(
-        conn, pack, run, [Need(**{k: v for k, v in n.items() if k != "need_id"}) for n in needs]
+        conn,
+        pack,
+        run,
+        [Need(**{k: v for k, v in n.items() if k not in ("need_id", "decided")}) for n in needs],
     )
     owners = {t.task_id: t.owner_actor_id for t in list_current_tasks(conn, pack.site_id, pack)}
     out = []

@@ -145,6 +145,13 @@ def try_search_key(
 FACT_BY_EXCLUSION = {"NOT_ALLOWED": "PERMISSION", "NO_AVAILABILITY": "AVAILABILITY"}
 
 
+# 정한 값 → 요청자가 고치면 바뀌는 사실(FACT_CHANGE의 필드)
+DECIDED_FACTS = {
+    "WINDOW": {"earliest_start", "latest_start", "latest_end"},
+    "DURATION": {"duration"},
+}
+
+
 def openers(
     conn: sqlite3.Connection,
     pack: LoadedPack,
@@ -161,7 +168,8 @@ def openers(
       작업은 뺀다 (AG-09).
     - 다른 Unit(OTHER_UNIT): 이 그룹에 움직일 수 있는 작업을 가진 다른 Unit.
     - 사실(FACT_CHANGE): 풀 초과 충돌의 풀(QUANTITY), 그룹 안 주체 작업의 자원 제외 사유(권한 없음 →
-      PERMISSION, 가용 없음 → AVAILABILITY), 모든 범위가 INFEASIBLE인 요청 작업의 시간창(WINDOW).
+      PERMISSION, 가용 없음 → AVAILABILITY), 모든 범위가 INFEASIBLE인 요청 작업의 시간창(WINDOW),
+      접수 Agent가 정한 시간창·작업 시간(decided 표시: 요청자가 작업 카드에서 고치면 열림, AG-32).
     """
     unit = run.acting_unit_id
     tasks = facts.task_map()
@@ -200,10 +208,17 @@ def openers(
                         )
         if all_infeasible and tid not in in_plan:
             changes.append({"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": tid})
+    # 접수 Agent가 정한 값: 요청자가 작업 카드에서 고치면 열릴 수 있다. 재계획은 바꾸지 못한다 (CV-24)
+    decided: list[dict[str, Any]] = []
+    for tid in sorted(group.units.get(unit, ())):
+        names = set(tasks[tid].decided_values)
+        for field, values in DECIDED_FACTS.items():
+            if names & values:
+                decided.append({"kind": "FACT_CHANGE", "field": field, "task_id": tid})
     for change in changes:
-        if change not in out:
+        if change not in out and change not in decided:
             out.append(change)
-    return out
+    return out + [{**d, "decided": True} for d in decided]
 
 
 def condition_args(pack: LoadedPack, conditions: dict[str, Any]) -> list[dict[str, Any]]:
@@ -285,6 +300,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "required_resource_type": t.required_resource_type,
             "demands": t.demands,
             "movable": t.movable.model_dump(),
+            # 접수 Agent가 정한 값(요청자가 아직 확인하거나 고치지 않았다, AG-32)
+            "decided_values": list(t.decided_values),
             # 사람이 건 고정(누가). 고정된 작업은 시각·자원 모두 움직이지 않는다 (AG-27)
             "pinned": None
             if t.task_id not in pins

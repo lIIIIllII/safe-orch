@@ -22,7 +22,7 @@ from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "replanning-p18"
+PROMPT_VERSION = "replanning-p19"
 
 
 def tool_catalog() -> str:
@@ -80,7 +80,7 @@ Goal: {goal}
 - 담당자 이견(objections): 이 Case의 협의에서 작업 담당자가 변경 요청에 낸 이견 전부다. 이견이 난 변경(작업, 변경 전·후 before·after)과 quoted_comment(인용)가 있다. 거절과 이견은 Case가 끝날 때까지 쌓인다.
 - 살아 있는 후보(live_candidates): 이 Case의 살아 있는 후보와, 그 후보가 담은 거절·이견된 변경(contested: 작업과 REJECTION 거절된 후보의 대상 작업 변경과 같음, OBJECTION 이견이 난 변경과 같음)이다. 서버가 같은 변경인지만 계산한 것이고 사유를 해석한 것이 아니다.
 - 자원 조회 결과(assignable_resources): 작업별로 쓸 수 있는 자원(assignable), 쓸 수 없는 자원과 이유(excluded의 reasons: NOT_ALLOWED 이 Unit 사용 권한 없음, NO_AVAILABILITY 가용 구간 없음, ZONE_NOT_ALLOWED 작업 구역에서 쓸 수 없음, REQUIREMENT_NOT_MET 작업의 자원 요구 조건을 맞추지 못함이고 attribute가 어느 속성인지다), 현재 자원(current), 아직 시도하지 않은 대체 자원(untried_alternatives)이다. 대체 자원은 자원 축이 열린 작업에서만 시도할 수 있고, 서버는 쓸 수 있는 자원만 받는다.
-- 열 수 있는 것(openers): 지금 계산으로는 열 수 없지만 충족되면 해가 열릴 수 있는 것을 서버가 계산해 필요한 것의 모양(kind와 참조)으로 준 것이다. OWNER_CONSENT는 자원 축이 확인되지 않은 작업과 담당자에게 허용을 물을 수 있는 대체 자원이고(담당자가 이미 거절한 값은 빠져 있다), OTHER_UNIT은 이 그룹에 움직일 수 있는 작업을 가진 다른 Unit, FACT_CHANGE는 바뀌면 열릴 수 있는 사실(초과한 풀의 수량, 사용 권한·가용 구간 때문에 제외된 자원, 모든 범위에서 해가 없는 요청 작업의 시간창)이다. 서버는 이것들을 엮지 않는다.
+- 열 수 있는 것(openers): 지금 계산으로는 열 수 없지만 충족되면 해가 열릴 수 있는 것을 서버가 계산해 필요한 것의 모양(kind와 참조)으로 준 것이다. OWNER_CONSENT는 자원 축이 확인되지 않은 작업과 담당자에게 허용을 물을 수 있는 대체 자원이고(담당자가 이미 거절한 값은 빠져 있다), OTHER_UNIT은 이 그룹에 움직일 수 있는 작업을 가진 다른 Unit, FACT_CHANGE는 바뀌면 열릴 수 있는 사실(초과한 풀의 수량, 사용 권한·가용 구간 때문에 제외된 자원, 모든 범위에서 해가 없는 요청 작업의 시간창)이다. decided가 붙은 FACT_CHANGE는 접수 Agent가 정한 값이라 요청자가 작업 카드에서 고치면 바뀌는 사실이다. 너는 정한 값을 바꿀 수 없다(조건은 좁히기만 한다). 서버는 이것들을 엮지 않는다.
 - 남은 예산(budget_remaining): 남은 step·LLM 시도·Solver 호출 수다.
 - 결과(RETURN_RESULT): 상태(status)와 요약(summary), 막혔을 때 풀 수 있는 길(paths)이다. 길 하나는 그 길에 필요한 것(needs)의 묶음이고, 필요한 것은 종류(kind)와 그 종류의 참조만 쓴다. 길은 열 수 있는 것 가운데 함께 충족되면 해가 열린다고 판단한 것을 묶어 만들고, 방법이 다르면 길을 나눈다. 풀 길을 찾지 못했으면 길을 비운다. 서버는 참조가 실제로 있는지 검사하고, 없으면 거절한다(NEED_INVALID).
 - 열린 스킬(open_skills): 지금 조건이 맞아 열린 스킬 ID다.
@@ -181,4 +181,5 @@ PROMPT_FINGERPRINTS = {
     "replanning-p16": "d8005602e69ea2587c5ea05d497d5663f0cf94261f21e820165e3ff9b1371f50",  # 고정(pinned)·희망 영역(preferred_window), 제약(constraints) 삭제 (AG-27)
     "replanning-p17": "362df5b67acc319b0cb528c2ea8cdc536fdf2a26a425e90272ff5bbb7e6d1829",  # 조건을 걸고 풀기(SOLVE_WITH_CONDITIONS), 담당자 이견·살아 있는 후보의 거절·이견된 변경, 현장 시각 clock (CV-24·25·26)
     "replanning-p18": "b33fd7cbcceccbe69db05b2377741bfede093a5a31248487ae76577d2ae5fc9d",  # 접근(approach)·접근별 후보, 목적 순서, 이전 계산의 조건을 도구 인자 모양으로 (AG-28·CV-27)
+    "replanning-p19": "1e5ce6753a85d871e24b77b2079f03049b977ee5b783b277b62755a89981b7cd",  # 접수 Agent가 정한 값(decided_values)과 열 수 있는 것의 decided 표시 (AG-32)
 }

@@ -45,6 +45,7 @@ from app.commands.pins import (
 )
 from app.commands.runs import CancelRun, cancel_run
 from app.commands.service import Body
+from app.commands.task_edit import EditRequest, edit_task
 from app.commands.task_request import (
     TaskRequestForm,
     TaskWithdraw,
@@ -98,6 +99,19 @@ class WindowBody(Body):
 
 class MoveBody(Body):
     start: int
+
+
+class EditBody(Body):
+    """작업 카드에서 고친 값(준 것만 바뀐다)과 정한 값 확인."""
+
+    zone_id: str | None = None
+    duration: int | None = Field(default=None, gt=0)
+    earliest_start: int | None = None
+    latest_start: int | None = None
+    latest_end: int | None = None
+    required_resource_type: str | None = None
+    requested_resource_id: str | None = None
+    confirm: bool = False
 
 
 class ReleaseBody(Body):
@@ -167,6 +181,15 @@ def post_move(
     """담당자의 직접 이동: 자기 작업의 시각을 옮기고 바로 확정한다 (AG-31)."""
     req = MoveRequest(task_id=task_id, **body.model_dump())
     return respond(move_task(pack, actor.actor_id, key, req))
+
+
+@router.post("/tasks/{task_id}/edit")
+def post_edit(
+    task_id: str, body: EditBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """담당자가 작업 카드에서 자기 작업의 값을 고치거나 Agent가 정한 값을 확인한다 (AG-33)."""
+    req = EditRequest(task_id=task_id, **body.model_dump())
+    return respond(edit_task(pack, actor.actor_id, key, req))
 
 
 @router.post("/tasks/{task_id}/remove")

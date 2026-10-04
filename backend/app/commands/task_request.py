@@ -77,14 +77,24 @@ EXCLUSION_CODES = {
 
 
 def validate_task_request(
-    tx: sqlite3.Connection, pack: LoadedPack, site: Site, actor: Actor, form: TaskRequestForm
+    tx: sqlite3.Connection,
+    pack: LoadedPack,
+    site: Site,
+    actor: Actor,
+    form: TaskRequestForm,
+    existing: bool = False,
 ) -> list[str]:
-    """폼 검증. 폼과 Work Intake가 같이 쓴다. 사유를 검사 순서대로 모은다."""
+    """폼 검증. 폼과 Work Intake, 작업 카드에서 고치기가 같이 쓴다. 사유를 검사 순서대로 모은다.
+
+    existing: 이미 있는 작업의 값을 고치는 검증이다(작업 ID 중복을 보지 않는다)."""
     r = Result()
     site_id = site.site_id
-    if tx.execute(
-        "SELECT 1 FROM task WHERE site_id = ? AND task_id = ?", (site_id, form.task_id)
-    ).fetchone():
+    if (
+        not existing
+        and tx.execute(
+            "SELECT 1 FROM task WHERE site_id = ? AND task_id = ?", (site_id, form.task_id)
+        ).fetchone()
+    ):
         r.reject("TASK_ID_EXISTS")
     wt = pack.work_types.get(form.work_type)
     if wt is None:
@@ -158,6 +168,37 @@ def validate_task_request(
     return r.reason_codes
 
 
+def stated_consents(task: Task, source_ref: str) -> list[Consent]:
+    """사람이 말한 시작 범위·요청 자원의 Consent. Agent가 정한 값에는 만들지 않는다 (AG-33)."""
+    decided = set(task.decided_values)
+    out = []
+    if not decided & {"earliest_start", "latest_start"}:
+        out.append(
+            Consent(
+                consent_id=new_id("cns"),
+                task_id=task.task_id,
+                task_revision=task.revision,
+                owner_actor_id=task.owner_actor_id,
+                axis="TIME",
+                scope={"start_min": task.earliest_start, "start_max": task.latest_start},
+                source_ref=source_ref,
+            )
+        )
+    if task.requested_resource_id is not None and "requested_resource_id" not in decided:
+        out.append(
+            Consent(
+                consent_id=new_id("cns"),
+                task_id=task.task_id,
+                task_revision=task.revision,
+                owner_actor_id=task.owner_actor_id,
+                axis="RESOURCE",
+                scope={"resource_ids": [task.requested_resource_id]},
+                source_ref=source_ref,
+            )
+        )
+    return out
+
+
 def create_requested_task(
     tx: sqlite3.Connection,
     pack: LoadedPack,
@@ -166,11 +207,14 @@ def create_requested_task(
     form: TaskRequestForm,
     source_ref: str,
     cause_kind: str = "FORM",
+    origins: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """검증을 통과한 요청으로 작업을 만든다. 폼과 Work Intake가 같이 쓴다.
 
     critical field CONFIRMED(source_ref), Consent(시작 범위, 요청 자원), 자원 축 닫힘,
     대기열 판단, Context +1, RECHECK. source_ref만 다르면 같은 작업이 된다.
+    origins(값 이름 → 출처, Work Intake): Agent가 정한 값은 기록에 적고, Consent는 사람이 말한 시작
+    범위·요청 자원에만 만든다. 정한 값의 동의는 요청자가 작업 카드에서 확인할 때 생긴다 (AG-33).
     """
     site_id = site.site_id
     wt = pack.work_types[form.work_type]
@@ -184,7 +228,7 @@ def create_requested_task(
         default_requirements=pack.default_requirements(form.work_type),
         default_demands=pack.default_demands(form.work_type),
         movable=TaskMovable(resource=False),  # 자원 축은 MOVABILITY로만 연다
-        fields=confirmed_fields(data, wt.critical_fields, source_ref),
+        fields=confirmed_fields(data, wt.critical_fields, source_ref, origins),
         lifecycle="READY",
     )
     # 열린 메인(Case)이 있거나 먼저 접수된 대기 요청이 있으면 대기열(QUEUED): Snapshot·충돌
@@ -196,29 +240,7 @@ def create_requested_task(
     insert_task_revision(tx, site_id, task)
     context_version = site.context_version if queued else bump_context_version(tx, site_id)
 
-    consents = [
-        Consent(
-            consent_id=new_id("cns"),
-            task_id=task.task_id,
-            task_revision=1,
-            owner_actor_id=actor.actor_id,
-            axis="TIME",
-            scope={"start_min": form.earliest_start, "start_max": form.latest_start},
-            source_ref=source_ref,
-        )
-    ]
-    if form.requested_resource_id is not None:
-        consents.append(
-            Consent(
-                consent_id=new_id("cns"),
-                task_id=task.task_id,
-                task_revision=1,
-                owner_actor_id=actor.actor_id,
-                axis="RESOURCE",
-                scope={"resource_ids": [form.requested_resource_id]},
-                source_ref=source_ref,
-            )
-        )
+    consents = stated_consents(task, source_ref)
     for c in consents:
         insert_consent(tx, site_id, c, context_version)
     if not queued:

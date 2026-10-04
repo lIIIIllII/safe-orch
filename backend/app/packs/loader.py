@@ -277,13 +277,28 @@ def _duplicates(where: str, ids: list[Any], reasons: list[str]) -> None:
             reasons.append(f"{where}: duplicate id {key!r}")
 
 
+# critical field → 그 필드에 든 값 이름 (출처는 값마다 적는다, AG-32)
+FIELD_VALUES: dict[str, tuple[str, ...]] = {
+    "zone_id": ("zone_id",),
+    "duration": ("duration",),
+    "window": ("earliest_start", "latest_start", "latest_end"),
+    "resource": ("required_resource_type", "requested_resource_id"),
+}
+
+
 def confirmed_fields(
-    task: dict[str, Any], critical: tuple[str, ...], source_ref: str
+    task: dict[str, Any],
+    critical: tuple[str, ...],
+    source_ref: str,
+    origins: dict[str, str] | None = None,
 ) -> dict[str, FieldRecord]:
     """critical field별 CONFIRMED 확인 기록. 값이 없는 필드는 키를 두지 않는다.
 
     task의 resource_requirements는 검증된 값이어야 한다(Requirement 또는 같은 모양의 dict).
+    origins(값 이름 → 출처)를 주면 Agent가 정한 값(DECIDED)을 그 필드 기록에 적는다. 작업 유형을
+    정했으면 work_type 기록을 더한다(critical field가 아니라 C11은 보지 않는다).
     """
+    decided = {name for name, origin in (origins or {}).items() if origin == "DECIDED"}
     values: dict[str, Any] = {
         "zone_id": task.get("zone_id"),
         "duration": task.get("duration"),
@@ -304,11 +319,24 @@ def confirmed_fields(
             ],
         },
     }
-    return {
-        name: FieldRecord(value=values[name], status="CONFIRMED", source_ref=source_ref)
+    out = {
+        name: FieldRecord(
+            value=values[name],
+            status="CONFIRMED",
+            source_ref=source_ref,
+            origins={v: "DECIDED" for v in FIELD_VALUES[name] if v in decided},
+        )
         for name in critical
         if values.get(name) is not None
     }
+    if "work_type" in decided:
+        out["work_type"] = FieldRecord(
+            value=task.get("work_type"),
+            status="CONFIRMED",
+            source_ref=source_ref,
+            origins={"work_type": "DECIDED"},
+        )
+    return out
 
 
 def _requirements(

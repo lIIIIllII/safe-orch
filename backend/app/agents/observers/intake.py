@@ -1,7 +1,7 @@
 """Work Intake Observation과 자원 조회 계산.
 
-읽기 전용이다. 요청 문장·답·거절 사유는 인용 데이터(quoted_*)로만 들어간다. 구역·작업 유형·critical field는
-Pack 데이터로 준다. 확인 값은 확인 메시지를 만든 AgentStep의 결과(values)다(스키마 변경 없음).
+읽기 전용이다. 요청 문장은 인용 데이터(quoted_text)로만 들어간다. 구역·작업 유형·critical field는
+Pack 데이터로 준다. 요청자에게 묻지 않으므로 질문·확인 항목은 없다 (AG-32).
 같은 조건의 자원 조회는 마지막 결과 하나만 둔다.
 이 모듈을 import하는 곳은 registry(와 테스트)뿐이고, 실행기는 binding을 거쳐 쓴다.
 """
@@ -16,12 +16,11 @@ from app.clock import site_now
 from app.domain.calendar import now_view, site_time
 from app.domain.eligibility import ResourceNeed, exclusion_reasons
 from app.packs.loader import LoadedPack
-from app.store.repos.messages import list_run_messages
 from app.store.repos.resources import list_resources
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
 
-CHECK_REASONS = ("TASKSPEC_INVALID", "CONFIRMED_VALUE_MISMATCH", "TIME_INVALID")
+CHECK_REASONS = ("TASKSPEC_INVALID", "TIME_INVALID")
 
 
 def _at(pack: LoadedPack, minute: int) -> str:
@@ -93,9 +92,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     if run is None or site is None:
         raise LookupError(f"run {run_id} or site not found")
     ref = run.input_ref
-    all_steps = list_steps(conn, run_id)
-    by_no = {s["step_no"]: s for s in all_steps}
-    steps = [s for s in all_steps if s["status"] == "COMPLETED"]
+    steps = [s for s in list_steps(conn, run_id) if s["status"] == "COMPLETED"]
     accepted = [s for s in steps if (s["guard"] or {}).get("verdict") == "ACCEPTED"]
     by_filters: dict[str, dict[str, Any]] = {}
     for s in accepted:
@@ -103,44 +100,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             key = json.dumps(s["tool_result"]["filters"], sort_keys=True)
             by_filters.pop(key, None)
             by_filters[key] = s["tool_result"]
-    questions, confirmations = [], []
-    for m in list_run_messages(conn, run_id):
-        reply = m["reply"] or {}
-        step = by_no.get(m["step_no"]) or {}
-        if m["type"] == "QUESTION":
-            questions.append(
-                {
-                    "message_id": m["message_id"],
-                    # 서버가 필드별 판단에서 도출한 물은 필드(모호·빠짐 전부)
-                    "field_ids": (result := step.get("tool_result") or {}).get("field_ids"),
-                    # 그때의 필드별 판단(상태·값)과, 앞 질문에서 받음으로 적었다가 바뀐 필드
-                    "fields": result.get("fields"),
-                    "regressed_field_ids": result.get("regressed_field_ids"),
-                    # 이 Run이 물은 문장(모델 작성, 인용). 같은 질문 반복을 알아볼 수 있게
-                    "question": m["agent_text"],
-                    "status": m["status"],
-                    # 요청자가 쓴 답은 인용 데이터다. 서버는 값을 뽑지 않는다
-                    "quoted_answer": reply.get("comment")
-                    if reply.get("decision") == "ANSWER"
-                    else None,
-                }
-            )
-        elif m["type"] == "CONFIRMATION":
-            confirmations.append(
-                {
-                    "message_id": m["message_id"],
-                    "values": (values := (step.get("tool_result") or {}).get("values")),
-                    # 값 확인은 서버 검증(폼과 같은 검사)을 통과해야 나간다
-                    "server_validated": True,
-                    # 같은 값의 현장 날짜·시각 (도구의 시각 인자와 같은 형식)
-                    "values_local": None
-                    if not values
-                    else {k: _at(pack, values[k]) for k in spec.TIME_FIELDS},
-                    "status": m["status"],
-                    "decision": reply.get("decision"),
-                    "quoted_comment": reply.get("comment") or None,
-                }
-            )
     checks = [s for s in steps if (s["guard"] or {}).get("reason_code") in CHECK_REASONS]
     last_check = None
     if checks:
@@ -150,9 +109,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "reason_code": s["guard"]["reason_code"],
             "detail": s["tool_result"],
         }
-    remaining = budget_remaining(run, spec.SPEC)
-    rounds = int(remaining.get("human_rounds", 0))
-    confirmed = bool(confirmations) and confirmations[-1]["decision"] == "ACCEPT"
     data = {
         "run": {"run_id": run.run_id, "agent_type": run.agent_type, "goal": spec.GOAL},
         "versions": {
@@ -197,8 +153,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         # Pack이 선언한 수량 풀 종류(수요의 종류 코드)
         "pool_kinds": [k.model_dump() for k in pack.pool_kinds.values()],
         "resource_lookups": list(by_filters.values()),
-        "questions": questions,
-        "confirmations": confirmations,
         "last_check": last_check,
         # 현장의 지금. 상대 날짜·날짜 없는 시각을 푸는 근거로만 준다
         "site_now": now_view(
@@ -208,16 +162,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "work_hours": _spans(pack, pack.work_intervals),
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),
-        "budget_remaining": remaining,
-        # 사람 확인 라운드의 사실(서버 계산). 완료에는 요청자가 확인한 값 확인 1라운드가 필요하다
-        "human_rounds": {
-            "remaining": rounds,
-            "needed_for_completion": 0 if confirmed else 1,
-            "questions_left": max(0, rounds - 1),
-        },
+        "budget_remaining": budget_remaining(run, spec.SPEC),
     }
-    # 완료 가능: 완료 도구의 유효성과 같은 조건이다. 사람 확인 라운드를 쓰지 않는다
-    data["can_complete"] = bool(spec.choices(data)["COMPLETE"])
     data["open_skills"] = spec.open_skills(data)
     return Observation(
         run=run,

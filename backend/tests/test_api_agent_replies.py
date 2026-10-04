@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 from scripted import Router, call
 from test_coordination import _alpha_consulting
 from test_event_response import _lookup, _r1, _report, _to_proposal
-from test_intake import _ask, _intake
 from test_resume import _ask_waiting
 
 from app.api.commands import (
@@ -70,32 +69,23 @@ def _reasons(res):
 # ── 자유 텍스트 답 (ANSWER) ───────────────────────────────────
 
 
-def test_answer_intake_question_via_api(seeded, client):
-    """Intake 확인 질문: ACCEPT → 409 INVALID_DECISION, 빈 답 → 409 COMMENT_REQUIRED, ANSWER → 200 APPLIED."""
-    assert _intake(seeded, seeded.demo_intakes[1].text).status == "APPLIED"
-    run_until_idle(seeded, model_factory=Router(intake=[_ask()]).factory())
-    q = _open_question()
-    assert q["proposal_id"] is None
-    assert _reasons(_reply(client, "planner_a", q["message_id"], "ACCEPT")) == (
-        409,
-        ["INVALID_DECISION"],
-    )
-    assert _reasons(_reply(client, "planner_a", q["message_id"], "ANSWER", " ")) == (
-        409,
-        ["COMMENT_REQUIRED"],
-    )
-    res = _reply(client, "planner_a", q["message_id"], "ANSWER", seeded.demo_intakes[1].answer)
-    assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
-
-
 def test_answer_reporter_question_via_api(seeded, client, main_on):
-    """신고자 확인 질문(ER ASK_REPORTER)에 ANSWER → 200 APPLIED."""
+    """신고자 확인 질문(ER ASK_REPORTER): ACCEPT → 409 INVALID_DECISION, 빈 답 → 409 COMMENT_REQUIRED,
+    ANSWER → 200 APPLIED."""
     _r1(seeded)
     _report(seeded, seeded.demo_events[1].text)
     ask = call("ASK_REPORTER", "이유: 시각이 없다/다음: 답을 본다", question="몇 시부터인가요?")
     run_until_idle(seeded, model_factory=Router(event_response=[_lookup(), ask]).factory())
     q = _open_question()
-    assert q["to_actor_id"] == "reporter"
+    assert q["to_actor_id"] == "reporter" and q["proposal_id"] is None
+    assert _reasons(_reply(client, "reporter", q["message_id"], "ACCEPT")) == (
+        409,
+        ["INVALID_DECISION"],
+    )
+    assert _reasons(_reply(client, "reporter", q["message_id"], "ANSWER", " ")) == (
+        409,
+        ["COMMENT_REQUIRED"],
+    )
     res = _reply(client, "reporter", q["message_id"], "ANSWER", seeded.demo_events[1].answer)
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
 

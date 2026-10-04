@@ -40,7 +40,7 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=replanning_prompt,
         observer=replanning_observer,
         executor=ReplanningExecutor,
-        exec_contract_version="replanning-c5",  # 기록만. 사람 도구 없음, 열 수 있는 것 (AG-23)
+        exec_contract_version="replanning-c6",  # 기록만. 열 수 있는 것에 접수 Agent가 정한 값 (AG-32)
     ),
     coordination_spec.AGENT_TYPE: AgentBinding(
         spec=coordination_spec.SPEC,
@@ -61,6 +61,6 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-c9",  # 기록만. 결과의 OTHER_UNIT에 충돌 그룹 참조 (AG-23)
+        exec_contract_version="intake-c10",  # 기록만. 묻지 않고 완료, 값마다 출처 (AG-32)
     ),
 }

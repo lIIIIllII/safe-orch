@@ -340,7 +340,7 @@ CREATE TABLE case_event (
                                                           'TASK_REQUEST_WITHDRAWN',
                                                           'TASK_PINNED', 'TASK_UNPINNED',
                                                           'CANDIDATE_CHOSEN', 'TASK_MOVED',
-                                                          'TASK_REMOVED')),
+                                                          'TASK_REMOVED', 'TASK_EDITED')),
     ref                     TEXT NOT NULL CHECK (json_valid(ref)),
     case_id                 TEXT NOT NULL,
     dedupe_key              TEXT NOT NULL,
