@@ -42,6 +42,7 @@ BASIC_TO_CHECK = {
 }
 RULE_TYPE_TO_CHECK = {"CAPACITY": "C09", "SEPARATION": "C10"}
 NOT_MOVABLE = Movable(time=False, resource=False)
+TIME_ONLY = Movable(time=True, resource=False)  # 직접 이동(MOVE)은 시각만 바꾼다 (AG-31)
 
 Violation = tuple[str, tuple[str, ...], str]  # (check_id, task_ids, reason_code)
 
@@ -76,7 +77,7 @@ def _c01(
         out.append("PLAN_REVISION_MISMATCH")
     if candidate.kind == "REPLAN" and spec is None:
         out.append("SEARCH_SPEC_MISSING")
-    if candidate.kind == "RECONFIRM" and spec is not None:
+    if candidate.kind != "REPLAN" and spec is not None:
         out.append("SEARCH_SPEC_UNEXPECTED")
         spec = None  # C06과 같이 spec이 없는 것으로 본다. 한 원인은 한 번만 보고한다.
     if spec is not None:
@@ -102,6 +103,9 @@ def _c01(
 def _c02(facts: SnapshotContent, candidate: Candidate) -> list[Violation]:
     counts = Counter(a.task_id for a in candidate.assignments)
     ready = {t.task_id for t in facts.tasks}
+    if candidate.kind == "MOVE":
+        # 직접 이동은 현재 Plan의 작업만 담는다. Plan 밖 요청은 넣지 않는다 (AG-31)
+        ready &= {a.task_id for a in facts.plan.assignments}
     out: list[Violation] = []
     out += [("C02", (t,), "TASK_MISSING") for t in sorted(ready - set(counts))]
     out += [("C02", (t,), "TASK_UNKNOWN") for t in sorted(set(counts) - ready)]
@@ -120,9 +124,20 @@ def _c06(
     axes = spec.axes if spec is not None and candidate.kind == "REPLAN" else {}
     alternatives = spec.resource_alternatives if spec is not None else {}
     out: list[Violation] = []
+    moved = candidate.kind == "MOVE"
+    if moved:
+        # 바뀐 작업은 하나이고, 옮긴 사람이 그 작업의 담당자다 (AG-31)
+        changed = sorted(tid for tid, a in usable.items() if a != base[tid])
+        if len(changed) > 1:
+            out.append(("C06", tuple(changed), "MOVE_NOT_SINGLE_TASK"))
+        out += [
+            ("C06", (tid,), "MOVE_NOT_OWNER")
+            for tid in changed
+            if tasks[tid].owner_actor_id != candidate.moved_by
+        ]
     for tid, a in usable.items():
         ref = base[tid]
-        ax = axes.get(tid, NOT_MOVABLE)
+        ax = axes.get(tid, TIME_ONLY if moved else NOT_MOVABLE)
         if not ax.time and a.start != ref.start:
             out.append(("C06", (tid,), "TIME_AXIS_NOT_ALLOWED"))
         if not ax.resource and a.resource_id != ref.resource_id:

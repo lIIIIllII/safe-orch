@@ -34,6 +34,7 @@ from app.commands.messages import (
     discard_proposal,
     reply_message,
 )
+from app.commands.moves import MoveRequest, move_task
 from app.commands.pins import (
     PreferredWindow,
     TaskRef,
@@ -95,6 +96,10 @@ class WindowBody(Body):
     end: int
 
 
+class MoveBody(Body):
+    start: int
+
+
 class ReleaseBody(Body):
     resolution: Resolution
     expected_context_version: int
@@ -153,6 +158,15 @@ def post_clear_preferred_window(
 ) -> JSONResponse:
     req = TaskRef(task_id=task_id)
     return respond(clear_preferred_window_command(pack, actor.actor_id, key, req))
+
+
+@router.post("/tasks/{task_id}/move")
+def post_move(
+    task_id: str, body: MoveBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """담당자의 직접 이동: 자기 작업의 시각을 옮기고 바로 확정한다 (AG-31)."""
+    req = MoveRequest(task_id=task_id, **body.model_dump())
+    return respond(move_task(pack, actor.actor_id, key, req))
 
 
 @router.post("/candidates/{candidate_id}/approve")

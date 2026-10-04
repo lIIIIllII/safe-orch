@@ -48,8 +48,8 @@ def insert_message(
     site_id: str,
     message_id: str,
     *,
-    run_id: str,
-    step_no: int,
+    run_id: str | None,
+    step_no: int | None,
     to_actor_id: str,
     type_: str,
     proposal_id: str | None,
@@ -59,7 +59,9 @@ def insert_message(
     candidate_id: str | None = None,
     change_hash: str | None = None,
 ) -> None:
-    """candidate_id·change_hash는 변경 요청(CHANGE_REQUEST)을 후보의 그 변경에 묶는다."""
+    """candidate_id·change_hash는 변경 요청(CHANGE_REQUEST)을 후보의 그 변경에 묶는다.
+
+    Run 없이 서버가 보내는 통지(직접 이동)는 run_id·step_no가 None이다."""
     tx.execute(
         "INSERT INTO message (message_id, site_id, run_id, step_no, to_actor_id, type,"
         " proposal_id, body, agent_text, created_context_version, candidate_id, change_hash)"

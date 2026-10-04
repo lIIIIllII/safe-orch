@@ -69,7 +69,8 @@ def insert_candidate(tx: sqlite3.Connection, site_id: str, candidate: Candidate)
     tx.execute(
         "INSERT INTO candidate (candidate_id, site_id, snapshot_id, search_spec_id,"
         " search_spec_hash, solver_result_id, base_plan_revision, context_version, pack_hash,"
-        " assignments, candidate_hash, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " assignments, candidate_hash, kind, moved_by)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             candidate.candidate_id,
             site_id,
@@ -83,6 +84,7 @@ def insert_candidate(tx: sqlite3.Connection, site_id: str, candidate: Candidate)
             dumps([a.model_dump() for a in candidate.assignments]),
             candidate.candidate_hash,
             candidate.kind,
+            candidate.moved_by,
         ),
     )
 

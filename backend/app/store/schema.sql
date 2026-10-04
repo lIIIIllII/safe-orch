@@ -169,10 +169,13 @@ CREATE TABLE candidate (
     pack_hash          TEXT NOT NULL,
     assignments        TEXT NOT NULL CHECK (json_valid(assignments)),
     candidate_hash     TEXT NOT NULL,
-    kind               TEXT NOT NULL CHECK (kind IN ('REPLAN', 'RECONFIRM')),
-    CHECK (kind = 'RECONFIRM'
+    kind               TEXT NOT NULL CHECK (kind IN ('REPLAN', 'RECONFIRM', 'MOVE')),
+    -- MOVE: 담당자가 직접 옮긴 것. 옮긴 사람을 적는다
+    moved_by           TEXT,
+    CHECK (kind <> 'REPLAN'
            OR (search_spec_id IS NOT NULL AND search_spec_hash IS NOT NULL
-               AND solver_result_id IS NOT NULL))
+               AND solver_result_id IS NOT NULL)),
+    CHECK ((kind = 'MOVE') = (moved_by IS NOT NULL))
 );
 
 -- STALE은 저장하지 않는다(조회 시 계산).
@@ -335,7 +338,7 @@ CREATE TABLE case_event (
                                                           'CHILD_RUN_ENDED',
                                                           'TASK_REQUEST_WITHDRAWN',
                                                           'TASK_PINNED', 'TASK_UNPINNED',
-                                                          'CANDIDATE_CHOSEN')),
+                                                          'CANDIDATE_CHOSEN', 'TASK_MOVED')),
     ref                     TEXT NOT NULL CHECK (json_valid(ref)),
     case_id                 TEXT NOT NULL,
     dedupe_key              TEXT NOT NULL,
@@ -504,8 +507,9 @@ CREATE TABLE proposal (
 CREATE TABLE message (
     message_id                TEXT PRIMARY KEY,
     site_id                   TEXT NOT NULL REFERENCES site (site_id),
-    run_id                    TEXT NOT NULL REFERENCES agent_run (run_id),
-    step_no                   INTEGER NOT NULL CHECK (step_no >= 1),
+    -- Run 없이 서버가 보내는 통지(직접 이동)는 run_id·step_no가 없다
+    run_id                    TEXT REFERENCES agent_run (run_id),
+    step_no                   INTEGER CHECK (step_no >= 1),
     to_actor_id               TEXT NOT NULL,
     type                      TEXT NOT NULL CHECK (type IN ('QUESTION', 'CONFIRMATION',
                                                             'CHANGE_REQUEST', 'NOTICE', 'REMINDER')),
@@ -520,7 +524,9 @@ CREATE TABLE message (
     created_context_version   INTEGER NOT NULL CHECK (created_context_version >= 0),
     answered_context_version  INTEGER,
     created_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    UNIQUE (run_id, step_no)
+    UNIQUE (run_id, step_no),
+    CHECK ((run_id IS NULL) = (step_no IS NULL)),
+    CHECK (run_id IS NOT NULL OR type = 'NOTICE')
 );
 
 -- 제안은 PENDING에서 한 번만 바뀐다. 메시지는 OPEN → ANSWERED·CANCELLED, CANCELLED → LATE만.

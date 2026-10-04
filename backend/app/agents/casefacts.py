@@ -259,8 +259,8 @@ def rejection_facts(conn: sqlite3.Connection, case_id: str) -> dict[str, Any]:
 def human_work(conn: sqlite3.Connection, site_id: str, case_id: str) -> int:
     """이 Case에서 사람이 새 일을 만든 횟수 (AG-30). 저장하지 않고 사건·기록에서 센다.
 
-    사람에게 막힌 안(Supervisor 거절이나 담당자 이견) 하나, 작업 고정·고정 해제 한 번, Supervisor가
-    고른 안을 다른 안으로 바꾼 것 한 번이 각각 1이다. 막힌 안을 떠나 새로 고른 것은 그 안에서 이미
+    사람에게 막힌 안(Supervisor 거절이나 담당자 이견) 하나, 작업 고정·고정 해제·직접 이동 한 번,
+    Supervisor가 고른 안을 다른 안으로 바꾼 것 한 번이 각각 1이다. 막힌 안을 떠나 새로 고른 것은 그 안에서 이미
     셌으므로 세지 않는다. Agent의 행동(재호출, 가드 거절, 재계획 결과)은 여기 들어오지 않는다.
     """
     turned_down = {r["candidate_id"] for r in list_case_rejections(conn, case_id)}
@@ -269,7 +269,7 @@ def human_work(conn: sqlite3.Connection, site_id: str, case_id: str) -> int:
     for e in list_case_events(conn, site_id):
         if e["case_id"] != case_id:
             continue
-        if e["kind"] in ("TASK_PINNED", "TASK_UNPINNED"):
+        if e["kind"] in ("TASK_PINNED", "TASK_UNPINNED", "TASK_MOVED"):
             count += 1
         elif e["kind"] == "CANDIDATE_CHOSEN":
             if chosen not in (None, e["ref"]["candidate_id"]) and chosen not in turned_down:

@@ -34,7 +34,7 @@ def _insert_chain(tx: sqlite3.Connection, site_id: str) -> None:
     )
     tx.execute(
         "INSERT INTO candidate VALUES"
-        " ('cand1', ?, 'snap1', 'ss1', 'h-ss', 'sr1', 0, 0, 'ph', '[]', 'h-cand', 'REPLAN')",
+        " ('cand1', ?, 'snap1', 'ss1', 'h-ss', 'sr1', 0, 0, 'ph', '[]', 'h-cand', 'REPLAN', NULL)",
         (site_id,),
     )
     tx.execute("INSERT INTO validation VALUES ('val1', ?, 'cand1', 'PASS', '[]')", (site_id,))
@@ -45,7 +45,7 @@ def _insert_chain(tx: sqlite3.Connection, site_id: str) -> None:
 
 def test_init_db_creates_v5_tables(temp_db):
     with db.read() as conn:
-        assert db.get_schema_version(conn) == db.SCHEMA_VERSION == 12
+        assert db.get_schema_version(conn) == db.SCHEMA_VERSION == 13
         assert {
             "schema_meta",
             "site",
@@ -150,7 +150,7 @@ def test_replan_candidate_requires_search_spec_and_result(seeded):
         tx.execute("INSERT INTO snapshot VALUES ('snap1', ?, 'h', '{}')", (seeded.site_id,))
         tx.execute(
             "INSERT INTO candidate VALUES"
-            " ('c', ?, 'snap1', NULL, NULL, NULL, 0, 0, 'ph', '[]', 'h', 'REPLAN')",
+            " ('c', ?, 'snap1', NULL, NULL, NULL, 0, 0, 'ph', '[]', 'h', 'REPLAN', NULL)",
             (seeded.site_id,),
         )
 

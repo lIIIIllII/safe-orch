@@ -11,6 +11,7 @@ from fastapi import APIRouter
 
 from app.agents import casefacts
 from app.api.deps import ActorDep, ApiError, PackDep, check_site
+from app.commands.moves import move_check, move_range
 from app.domain.calendar import work_delay
 from app.domain.canonical import canonical_hash
 from app.domain.models import AgentRun, Assignment, Plan, Snapshot, SnapshotContent, Task
@@ -438,6 +439,20 @@ def get_state(site_id: str, pack: PackDep, actor: ActorDep) -> dict[str, Any]:
     check_site(site_id, pack)
     with db.read_tx() as conn:
         return build_state(conn, pack, actor.actor_id)
+
+
+@router.get("/tasks/{task_id}/move-range")
+def get_move_range(task_id: str, pack: PackDep, actor: ActorDep) -> dict[str, Any]:
+    """그 작업을 놓을 수 있는 시작 구간. 화면은 이 구간만 칠한다 (CV-28)."""
+    with db.read_tx() as conn:
+        return move_range(conn, pack, actor.actor_id, task_id)
+
+
+@router.get("/tasks/{task_id}/move-check")
+def get_move_check(task_id: str, start: int, pack: PackDep, actor: ActorDep) -> dict[str, Any]:
+    """놓은 자리의 판정. 확정과 같은 판정이다 (CV-28)."""
+    with db.read_tx() as conn:
+        return move_check(conn, pack, actor.actor_id, task_id, start)
 
 
 @router.get("/runs/{run_id}")
