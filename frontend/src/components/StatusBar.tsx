@@ -16,8 +16,6 @@ export function StatusBar({ state, actorId, onActor, lastOk, connected, onReset,
   const site = state?.site
   const holds = state?.holds.length ?? 0
   const actors = state?.actors ?? [{ actor_id: actorId, name: actorId, unit_id: '', roles: [] }]
-  const tasksOf = (id: string) =>
-    (state?.tasks ?? []).filter((t) => t.owner_actor_id === id).map((t) => t.task_id)
   return (
     <header className="statusbar">
       <span className="brand">SAFE-ORCH</span>
@@ -44,16 +42,9 @@ export function StatusBar({ state, actorId, onActor, lastOk, connected, onReset,
         <select value={actorId} onChange={(e) => onActor(e.target.value)}>
           {actors.map((a) => {
             const roles = a.roles.map((r) => ROLE[r] ?? r)
-            const owns = tasksOf(a.actor_id)
-            const tail = [
-              roles.length ? roles.join('·') : '역할 없음',
-              owns.length ? `${owns.join('·')} 담당` : '',
-            ]
-              .filter(Boolean)
-              .join(', ')
             return (
               <option key={a.actor_id} value={a.actor_id}>
-                {a.name} ({tail})
+                {a.name} ({roles.length ? roles.join('·') : '역할 없음'})
               </option>
             )
           })}
