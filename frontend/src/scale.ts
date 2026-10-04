@@ -63,6 +63,17 @@ export class Scale {
     return px
   }
 
+  /** x(px) → 분. x()의 역이다(희망 영역 그리기). 범위 밖은 가장자리로 붙인다. */
+  minute(px: number): number {
+    let left = Math.min(Math.max(px, 0), this.width)
+    for (const s of this.segs) {
+      const w = s.fixedPx ?? (s.hi - s.lo) * this.pxPerMin
+      if (left <= w) return s.lo + (w === 0 ? 0 : (left / w) * (s.hi - s.lo))
+      left -= w
+    }
+    return this.end
+  }
+
   /** [start, end)의 left·width(px). 범위와 겹치지 않으면 null. 아주 짧으면 최소 폭. */
   box(start: number, end: number): Box | null {
     if (end <= this.start || start >= this.end) return null

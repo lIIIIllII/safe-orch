@@ -24,8 +24,11 @@ export const REASON: Record<string, string> = {
   COMMENT_REQUIRED: '사유 필요(수용·이견)',
   // 거절
   INVALID_REASON_CODE: '거절 사유 코드 오류',
-  TARGET_REQUIRED: '작업 고정 거절은 대상 작업과 축 필요',
   TASK_NOT_FOUND: '대상 작업 없음',
+  // 고정·희망 영역
+  ALREADY_PINNED: '이미 고정된 작업',
+  PIN_NOT_FOUND: '고정되지 않은 작업',
+  PREFERRED_WINDOW_NOT_FOUND: '희망 영역이 없는 작업',
   // 요청 철회
   TASK_IN_PLAN: '확정 계획에 있는 작업은 철회 불가',
   TASK_HAS_SUCCESSORS: '이 작업을 선행으로 둔 요청이 있음(후속 요청을 먼저 철회)',
@@ -143,7 +146,7 @@ export const REASON: Record<string, string> = {
   PRECEDENCE: '선후행 위반',
   PREDECESSOR_MISSING: '선행 작업이 계획 대상에 없음',
   OUTSIDE_ACTING_UNIT: '다른 Unit 작업 변경',
-  FROZEN_BY_CONSTRAINT: '확인된 제약으로 고정된 축 변경',
+  TASK_PINNED: '고정된 작업 변경',
   RESOURCE_NOT_IN_SPEC: '허용 대안 밖 자원',
   RESOURCE_MISSING: '필요 자원 미배정',
   RESOURCE_TYPE: '자원 유형 부적격',
@@ -278,7 +281,6 @@ export const ITEM_STATUS: Record<string, string> = {
   WAIVED: 'Supervisor 수용',
   ACCEPTED: '담당자 수용',
   OBJECTED: '담당자 이견',
-  OBJECTION_DRAFT_PENDING: '이견 제약 초안 확인 대기',
   CANCELLED: '협의 취소',
 }
 
@@ -345,7 +347,6 @@ export const ROLE: Record<string, string> = {
 }
 
 export const REJECT_REASON: Record<string, string> = {
-  TASK_IMMOVABLE: '작업 이동 불가(제약 생성)',
   RESOURCE_UNAVAILABLE: '자원 사용 불가',
   TIME_WINDOW_UNACCEPTABLE: '시간 수용 불가',
   PREFERENCE: '선호',
@@ -382,17 +383,15 @@ export const DECISION: Record<string, string> = {
 export const MESSAGE_TYPE: Record<string, string> = {
   QUESTION: '담당자 확인 질문',
   CHANGE_REQUEST: '변경 요청',
-  CONFIRMATION: '제약 초안 확인',
   FACT_UPDATE: '사실 수정 확인',
   FREE_QUESTION: '확인 질문(답 입력)',
   TASKSPEC: '작업 요청 값 확인',
   NOTICE: '확정 통지',
 }
 
-/** 유형별 답 버튼·답 표시 문구. 변경 요청의 DECLINE은 이견, 제약 초안의 ACCEPT는 확정이다. */
+/** 유형별 답 버튼·답 표시 문구. 변경 요청의 DECLINE은 이견, 사실 수정의 ACCEPT는 확정이다. */
 export const DECISION_BY_TYPE: Record<string, Record<string, string>> = {
   CHANGE_REQUEST: { ACCEPT: '수락', DECLINE: '이견' },
-  CONFIRMATION: { ACCEPT: '확정', DECLINE: '폐기' },
   FACT_UPDATE: { ACCEPT: '확정', DECLINE: '폐기' },
   TASKSPEC: { ACCEPT: '확인', DECLINE: '거절' },
 }

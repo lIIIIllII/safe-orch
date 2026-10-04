@@ -219,6 +219,10 @@ function Site({ env, firstActor }: { env: Env; firstActor: string }) {
             onOverlay={setOverlay}
             wide={wide}
             onWide={changeWide}
+            actorId={actorId}
+            isSupervisor={isSupervisor}
+            busy={busy}
+            run={run}
           />
           <div className="left-bottom">
             <Activity

@@ -104,7 +104,12 @@ export interface Task {
   default_demands: Demand[]
   /** 작업 값 수요. 기본 수요보다 큰 것만 반영된다 */
   pool_demands: Demand[]
-  movable: { time: boolean; resource: boolean }
+  /** 자원 축이 담당자 확인으로 열렸는가. 시각이 움직이는지는 고정 여부로 정한다 */
+  movable: { resource: boolean }
+  /** 사람이 건 고정(누가·언제). 없으면 고정되지 않았다 */
+  pin: { pin_id: string; pinned_by: string; by_role: 'OWNER' | 'SUPERVISOR'; pinned_at: string } | null
+  /** 담당자가 그린 희망 영역 [start, end) (분). 서버는 강제하지 않는다 */
+  preferred_window: { start: number; end: number; set_by: string; set_at: string } | null
   lifecycle: string
   gate: 'ALLOW' | 'HOLD' | 'STALE'
   reasons: string[]
@@ -166,7 +171,6 @@ export interface ConsultationItem {
     status: string
     decision: string | null
     quoted_comment: string | null
-    draft: { proposal_id: string; status: string; axes: string[] } | null
   } | null
   /** 상태를 만든 담당자 답의 출처. prior면 같은 변경에 다른 후보에서 한 답이 적용된 것이다. */
   answer_source: {
@@ -178,16 +182,14 @@ export interface ConsultationItem {
   } | null
 }
 
-/** 거절된 후보의 거절 사유와 그 거절로 생긴 제약. */
+/** 거절된 후보의 거절 사유. */
 export interface RejectionView {
   decision_id: string
   actor_id: string
   reason_code: string
   target_task_ids: string[]
-  axes: string[]
   comment: string
   context_version: number
-  constraints: { constraint_id: string; task_id: string; frozen_axes: string[]; created_context_version: number }[]
 }
 
 export interface CandidateView {
@@ -312,8 +314,6 @@ export interface InboxItem {
   allowed_values: string[]
   /** 변경 요청이 묶인 후보 (CHANGE_REQUEST) */
   candidate_id: string | null
-  /** 제약 초안의 고정 축 (CONFIRMATION + FEEDBACK_CONSTRAINT) */
-  axes: string[]
   /** 사실 수정안 (CONFIRMATION + FACT_UPDATE). 값은 Horizon 원점 기준 분 */
   fact: { field: string; old_value: number; new_value: number } | null
   /** 작업 요청 값 확인 (제안 없는 CONFIRMATION, Work Intake). 시간은 분 */
@@ -435,7 +435,7 @@ export interface Scenario {
   }[]
   rejections: {
     label: string
-    body: { reason_code: string; target_task_ids: string[]; axes: string[]; comment: string }
+    body: { reason_code: string; target_task_ids: string[]; comment: string }
   }[]
   /** 자연어 작업 요청 시연값 */
   intake_requests?: { label: string; requester: string; body: { task_id: string; text: string }; answer: string }[]

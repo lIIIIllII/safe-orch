@@ -4,14 +4,12 @@
 import { useState } from 'react'
 import type { CandidateView, CommandOutcome, CommandResponse, SiteState } from '../types'
 import {
-  AXIS,
   CANDIDATE_KIND,
   CANDIDATE_STATUS,
   CHECK_NAME,
   CHECK_STATUS,
   CONSULTATION_STATUS,
   ITEM_STATUS,
-  PROPOSAL_STATUS,
   REJECT_REASON,
   SCOPE_LEVEL,
   SOLVER_STATUS,
@@ -106,7 +104,6 @@ function CandidateDetail({
   const [waiveComment, setWaiveComment] = useState('')
   const [rejReason, setRejReason] = useState('')
   const [rejTargets, setRejTargets] = useState<string[]>([])
-  const [rejAxes, setRejAxes] = useState<string[]>([])
   const [rejComment, setRejComment] = useState('')
   const needSup = isSupervisor ? undefined : 'Supervisor 권한 필요'
   const assign = (a: { start: number; end: number; resource_id: string | null }) =>
@@ -141,21 +138,12 @@ function CandidateDetail({
             {actorName.get(c.rejection.actor_id) ?? c.rejection.actor_id} · Context v{c.rejection.context_version}
           </p>
           {c.rejection.target_task_ids.length > 0 && (
-            <p className="small">
-              대상 {c.rejection.target_task_ids.join(', ')} · 축{' '}
-              {c.rejection.axes.map((a) => AXIS[a] ?? a).join('·') || '—'}
-            </p>
+            <p className="small">대상 {c.rejection.target_task_ids.join(', ')}</p>
           )}
           {c.rejection.comment && <p className="small">사유 “{c.rejection.comment}”</p>}
           <p className="small">
-            생성된 제약{' '}
-            {c.rejection.constraints.length === 0
-              ? '없음(같은 배정만 다시 제안하지 않음)'
-              : c.rejection.constraints.map((k) => (
-                  <span key={k.constraint_id} className="tag">
-                    {k.task_id} {k.frozen_axes.map((a) => AXIS[a] ?? a).join('·')} 고정
-                  </span>
-                ))}
+            거절은 작업을 고정하지 않습니다(같은 배정만 다시 제안하지 않음). 작업을 그대로 두려면 타임라인에서
+            고정하세요.
           </p>
         </div>
       )}
@@ -279,12 +267,6 @@ function CandidateDetail({
                     {it.request?.quoted_comment && (
                       <div className="small muted">이견(인용): “{it.request.quoted_comment}”</div>
                     )}
-                    {it.request?.draft && (
-                      <div className="small muted">
-                        제약 초안 {it.request.draft.axes.map((a) => AXIS[a] ?? a).join('·')} 고정 ·{' '}
-                        {PROPOSAL_STATUS[it.request.draft.status] ?? it.request.draft.status}
-                      </div>
-                    )}
                   </td>
                 </tr>
               ))}
@@ -362,19 +344,6 @@ function CandidateDetail({
               </label>
             ))}
           </fieldset>
-          <fieldset>
-            <legend>고정할 축</legend>
-            {['TIME', 'RESOURCE'].map((a) => (
-              <label key={a} className="inline">
-                <input
-                  type="checkbox"
-                  checked={rejAxes.includes(a)}
-                  onChange={() => setRejAxes(toggle(rejAxes, a))}
-                />
-                {a === 'TIME' ? '시간' : '자원'} ({a})
-              </label>
-            ))}
-          </fieldset>
           <label>
             사유
             <input value={rejComment} onChange={(e) => setRejComment(e.target.value)} />
@@ -389,7 +358,6 @@ function CandidateDetail({
               onClick={() => {
                 setRejReason(x.body.reason_code)
                 setRejTargets(x.body.target_task_ids)
-                setRejAxes(x.body.axes)
                 setRejComment(x.body.comment)
               }}
             >
@@ -405,7 +373,6 @@ function CandidateDetail({
                 validation_id: v?.validation_id ?? '',
                 reason_code: rejReason,
                 target_task_ids: rejTargets,
-                axes: rejAxes,
                 comment: rejComment,
               })
             }

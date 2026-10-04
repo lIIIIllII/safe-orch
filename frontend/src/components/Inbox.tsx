@@ -37,7 +37,7 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
   const [comment, setComment] = useState('')
   const { clock, meta } = useEnv()
   const answerable = ANSWERABLE.includes(m.type)
-  // 확인 메시지는 제안 유형으로 나눈다: 제약 초안과 사실 수정
+  // 확인 메시지는 제안 유형으로 나눈다: 사실 수정
   // 제안 없는 질문은 자유 텍스트 답, 제안 없는 확인은 작업 요청 값 확인이다
   const kind =
     m.proposal_type === 'FACT_UPDATE'
@@ -132,14 +132,6 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
               <th>{FACT_FIELD[m.fact.field] ?? m.fact.field}</th>
               <td>
                 {m.task_id ?? '—'} · {clock.format(m.fact.old_value)} → <b>{clock.format(m.fact.new_value)}</b>
-              </td>
-            </tr>
-          )}
-          {kind === 'CONFIRMATION' && (
-            <tr>
-              <th>고정</th>
-              <td>
-                {m.task_id ?? '—'} · {m.axes.map((a) => AXIS[a] ?? a).join('·') || '—'} 축
               </td>
             </tr>
           )}

@@ -488,6 +488,16 @@ textarea {
   border: 2px solid #111;
 }
 
+.lg-pinned::before {
+  background: var(--ua-bg);
+  border: 2.5px solid var(--ua);
+}
+
+.lg-hope::before {
+  background: var(--ua);
+  opacity: 0.2;
+}
+
 .lg-conflict::before {
   background: repeating-linear-gradient(45deg, rgba(221, 51, 51, 0.35) 0 3px, transparent 3px 6px);
 }
@@ -667,7 +677,69 @@ textarea {
   flex-direction: column;
   justify-content: center;
   border: 1px solid;
-  cursor: default;
+  cursor: pointer;
+}
+
+/* 사람이 고정한 작업: 굵은 테두리(자물쇠는 라벨 앞에 붙는다). 누른 작업은 바깥 테 */
+.bar-pinned {
+  border-width: 2.5px;
+  border-style: solid;
+}
+
+.bar-selected {
+  box-shadow: 0 0 0 2px #111;
+  z-index: 3;
+}
+
+/* 담당자가 그린 희망 영역: 막대 뒤 Unit 색의 옅은 띠 */
+.tl-hope {
+  position: absolute;
+  z-index: 0;
+  border-radius: 5px;
+  background: var(--c);
+  opacity: 0.18;
+  pointer-events: none;
+}
+
+/* 누른 작업의 시간창: 막대 아래 가는 괄호 */
+.tl-window {
+  position: absolute;
+  z-index: 2;
+  height: 6px;
+  border: 1.5px solid #4b5563;
+  border-top: none;
+  pointer-events: none;
+}
+
+.tl-window-clip-l {
+  border-left-style: dotted;
+}
+
+.tl-window-clip-r {
+  border-right-style: dotted;
+}
+
+/* 희망 영역 그리기: 그 작업의 행에서만 끈다. 막대는 끌리지 않는다 */
+.tl-draw {
+  cursor: crosshair;
+  outline: 1.5px dashed #111;
+  outline-offset: -1px;
+  touch-action: none;
+}
+
+.tl-draw .bar,
+.tl-draw .bar-out {
+  pointer-events: none;
+}
+
+.tl-drag {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 4;
+  background: rgba(17, 17, 17, 0.12);
+  border: 1px dashed #111;
+  pointer-events: none;
 }
 
 /* 막대 라벨 2줄: 작업 ID·유형 / 시각 범위 */
@@ -742,6 +814,29 @@ textarea {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 4px;
+}
+
+/* 막대를 눌러 연 카드: 고정되어 열리고 버튼을 쓸 수 있다 */
+.tl-card-fixed {
+  pointer-events: auto;
+  border-color: #111;
+}
+
+.tl-card-close {
+  margin-left: 8px;
+  padding: 0 6px;
+  line-height: 1.2;
+}
+
+.tl-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tl-card-note {
+  margin: 4px 0 0;
 }
 
 /* Unit 색은 state.units 순서로 받는다(Pack의 Unit ID를 쓰지 않음) */
