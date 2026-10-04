@@ -69,7 +69,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p21",
+        "replanning-p22",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -150,7 +150,8 @@ def test_repeated_scope_returns_previous_result_then_escalate(with_a):
     }
     # 다음 관찰에 그 결과가 보이고, 되풀이한 호출은 계산·Snapshot·탐색 기록을 남기지 않는다
     assert steps[2]["observation"]["last_guard"]["previous"] == steps[1]["tool_result"]
-    assert (_count("solver_job"), _count("search_spec"), _count("snapshot")) == (1, 1, 1)
+    # Snapshot은 seed 때의 것 하나와 첫 계산의 것 하나다
+    assert (_count("solver_job"), _count("search_spec"), _count("snapshot")) == (1, 1, 2)
     assert (run.status, run.end_reason, run.solver_calls_used) == (
         "BLOCKED",
         "RETURN_BLOCKED",
@@ -390,11 +391,11 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
         "llm_attempts": spec.MAX_LLM_ATTEMPTS,
         "solver_calls": spec.MAX_SOLVER_CALLS,
     }
-    assert binding.prompt.PROMPT_VERSION == "replanning-p21"
+    assert binding.prompt.PROMPT_VERSION == "replanning-p22"
     assert runtime.exec_contract_version("REPLANNING") == "replanning-c7"
     assert runtime.exec_contract_version("COORDINATION") == "coordination-c7"
     assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c6"
-    assert runtime.exec_contract_version("INTAKE") == "intake-c10"
+    assert runtime.exec_contract_version("INTAKE") == "intake-c11"
     assert runtime.exec_contract_version("ASSISTANT") == "AGENT_TYPE_NOT_REGISTERED"
 
 

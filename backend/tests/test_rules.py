@@ -87,7 +87,7 @@ def test_snapshot_content(with_a):
     assert set(content) == {
         "site_id", "pack_hash", "horizon_minutes", "work_intervals", "context_version",
         "plan_revision", "tasks", "resources", "pools", "zones", "zone_relations", "plan",
-        "holds", "pins", "consents",
+        "holds", "pins", "consents", "preferred_windows",
     }  # fmt: skip
     assert (content["site_id"], content["context_version"], content["plan_revision"]) == (
         "YARD-01",

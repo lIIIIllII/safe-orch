@@ -74,11 +74,11 @@ class CallAgent(Action):
     acting_unit_id: str | None = Field(
         default=None, description="재계획의 주체 Unit. 그 그룹에 작업을 가진 Unit (REPLANNING)"
     )
-    approach: Literal["MIN_CHANGE", "MIN_DELAY", "PREFER_WINDOW"] | None = Field(
+    approach: Literal["MIN_CHANGE", "PREFER_WINDOW"] | None = Field(
         default=None,
         description=(
-            "재계획이 우선할 것 (REPLANNING). MIN_CHANGE 변경 작업 수를 줄인다, MIN_DELAY 총 지연을 "
-            "줄인다, PREFER_WINDOW 담당자의 희망 영역을 살린다"
+            "재계획이 우선할 것 (REPLANNING). MIN_CHANGE 변경 작업 수를 줄인다, PREFER_WINDOW "
+            "담당자의 희망에서 가장 덜 벗어나게 한다"
         ),
     )
     approach_note: str | None = Field(

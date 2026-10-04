@@ -4,6 +4,7 @@ ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 모�
 begin_step(활성·차감·STALE_OBSERVATION·재관찰·허용 판정) → 효과 → step 완료.
 값 검증과 작업 생성은 폼과 같은 함수(validate_task_request·create_requested_task)를 쓴다.
 요청자에게 묻지 않는다: 완료는 값과 값마다의 출처(말함·정함)를 받고, 서버는 출처를 검사하지 않는다 (AG-32).
+완료가 낸 시각은 가능 범위(Hard)가 아니라 희망 영역이 된다. 시간창은 서버가 Horizon 전체로 채운다 (ST-22).
 승인·확정·Hold 해제·Proposal 확인 함수는 없다.
 """
 
@@ -147,7 +148,24 @@ class IntakeExecutor:
         return self._done(tx, run_id, step_no, meta, parsed, outcome, detail, verdict=REJECTED)
 
     def _form(self, obs: Observation, values: dict[str, Any]) -> TaskRequestForm:
-        return TaskRequestForm(task_id=obs.data["request"]["task_id"], **values)
+        """작업 요청 값. 시간창은 Horizon 전체다: 자연어에서 읽은 시각은 희망 영역으로만 간다 (ST-22)."""
+        horizon = self.pack.horizon_minutes
+        window = {
+            "earliest_start": 0,
+            "latest_start": max(0, horizon - values["duration"]),
+            "latest_end": horizon,
+        }
+        return TaskRequestForm(task_id=obs.data["request"]["task_id"], **{**values, **window})
+
+    def _hope(self, values: dict[str, Any]) -> tuple[int, int] | None:
+        """완료가 낸 시각(분)의 희망 영역 [시작, 끝): 희망 시작 범위의 처음부터, 가장 늦게 시작해 끝나는
+        시각과 종료 한도 중 이른 쪽까지. 모양이 맞지 않으면 None."""
+        first, last, end = (values[k] for k in spec.TIME_FIELDS)
+        if not 0 <= first <= last or first + values["duration"] > end:
+            return None
+        if end > self.pack.horizon_minutes:
+            return None
+        return first, min(last + values["duration"], end)
 
     def _complete_spec(
         self,
@@ -162,6 +180,8 @@ class IntakeExecutor:
         """폼과 같은 검증을 통과하면 폼과 같은 함수로 작업을 만든다(source_ref intake:<intake_id>).
 
         출처는 Agent가 적은 그대로 작업 기록에 남긴다. 자원이 있는데 출처를 적지 않았으면 정함으로 본다.
+        시각은 희망 영역 기록이 되고(세 시각 가운데 하나라도 정함이면 정한 희망), 작업의 시간창 기록에는
+        출처를 적지 않는다(서버가 Horizon 전체로 채운 값이다).
         """
         submitted = self._minutes(action.values)
         if submitted is None:
@@ -170,8 +190,11 @@ class IntakeExecutor:
         assert site is not None
         actor = self._requester(tx, obs)
         form = self._form(obs, submitted)
+        hope = self._hope(submitted)
         codes = validate_task_request(tx, self.pack, site, actor, form)
-        if codes:
+        if hope is None and "INVALID_WINDOW" not in codes:
+            codes = [*codes, "INVALID_WINDOW"]
+        if codes or hope is None:
             outcome = GatewayResult("REJECTED", "TASKSPEC_INVALID")
             detail = {"reason_codes": codes, "values": submitted}
             return self._done(tx, run_id, step_no, meta, parsed, outcome, detail, verdict=REJECTED)
@@ -180,10 +203,22 @@ class IntakeExecutor:
             for name, origin in action.origins.model_dump().items()
             if submitted.get(name) is not None
         }
+        hope_origin = (
+            "DECIDED" if any(origins[k] == "DECIDED" for k in spec.TIME_FIELDS) else "STATED"
+        )
+        task_origins = {k: v for k, v in origins.items() if k not in spec.TIME_FIELDS}
         source = f"intake:{obs.data['request']['intake_id']}"
-        refs = create_requested_task(tx, self.pack, site, actor, form, source, "INTAKE", origins)
+        refs = create_requested_task(
+            tx, self.pack, site, actor, form, source, "INTAKE", task_origins, (*hope, hope_origin)
+        )
         outcome = GatewayResult("DONE", None, "SUCCEEDED", f"TASKSPEC_COMPLETE:{form.task_id}")
-        result = {**refs, "values": submitted, "origins": origins}
+        result = {
+            **refs,
+            "values": submitted,
+            "origins": origins,
+            # 낸 시각은 희망 영역이 되었다. 시간창은 Horizon 전체다
+            "preferred_window": {"start": hope[0], "end": hope[1], "origin": hope_origin},
+        }
         return self._done(
             tx, run_id, step_no, meta, parsed, outcome, result, {"task_id": form.task_id}
         )

@@ -19,7 +19,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p16"
+PROMPT_VERSION = "event-response-p17"
 
 
 def tool_catalog() -> str:
@@ -65,7 +65,7 @@ Goal: {goal}
 - 신고(event): 유형(event_type), 신고 문장(quoted_text, 인용), 서버가 건 Hold(hold)다.
 - 작업 유형(work_types): 코드와 현장 표시 이름이다. 신고의 작업 표현을 코드로 이을 때 쓴다. 구역(zones)은 구역 ID 목록이다.
 - 조회 결과(lookups): 작업별 담당·시간창(earliest_start 시작 가능 시각, latest_start, latest_end)·현재 배정(assignment)·\
-고정(pinned_by: 고정한 사람, 없으면 고정되지 않음)·희망 영역(preferred_window: 담당자가 바라는 시각 구간, 서버는 강제하지 않는다)이다. \
+고정(pinned_by: 고정한 사람, 없으면 고정되지 않음)·희망 영역(preferred_window: 그 작업이 바라는 시각 구간. 서버는 강제하지 않고 재계획에서 지연의 기준이 된다)이다. \
 start_slack은 시작 가능 시각을 늦출 수 있는 최대 분이다. 0이면 시작 가능 시각을 늦추는 수정안은 영향 분석을 통과하지 못한다. \
 같은 Context에서 같은 조건의 LOOKUP_TASKS는 같은 결과를 돌려준다. 지금까지의 조회 결과는 lookups에 모두 있다.
 - 영향 분석(analyses): 새 시작 가능 시각에서의 검사(checks)와 통과 여부(ok), 현재 값보다 늦추는 분(delay_minutes), 현재 배정이 새 창을 어기는지(plan_window_violation), \
@@ -151,4 +151,5 @@ PROMPT_FINGERPRINTS = {
     "event-response-p14": "43a0642c3ea495c7c3358a2cb764e25f7826a7db6437e7e67ab980521bce7c36",  # 결과의 OTHER_UNIT에 충돌 그룹 참조
     "event-response-p15": "07cca8c45e301930dd505b4463da05959d12b056888d2a2bd76f4d389b4540da",  # 조회 결과에 고정·희망 영역, 스킬 지침의 제약 문구 정리 (AG-27)
     "event-response-p16": "d535abf2764d19d04bed726153f81208a60f2aff8f31c9ac42f7d69845f6bb56",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
+    "event-response-p17": "7a9027b1ae95db67286a0a02898eb0198b094f91be15cda9fe6edc02ea9b09ac",  # 희망 영역은 재계획에서 지연의 기준 (ST-22)
 }

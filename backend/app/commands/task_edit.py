@@ -3,8 +3,11 @@
 담당자(요청자)가 자기 작업의 critical field 값을 고치거나, Work Intake가 정한 값을 그대로 확인한다.
 - 고치면 새 revision이고 고친 값은 사람이 말한 값이 된다. 검증은 폼과 같다(validate_task_request).
 - 확인(confirm)하면 남은 정한 값이 모두 말한 값이 된다. 작업 유형은 고칠 수 없고 확인만 한다.
-- 동의: 바뀌지 않은 축의 Consent는 새 revision으로 복사하고, 사람이 말한 시작 범위·요청 자원에 Consent가
-  없으면 만든다. 정한 값이 남아 있는 축에는 만들지 않는다.
+  Work Intake가 정한 희망 영역도 확인으로 말한 희망이 된다(그때부터 그 범위 안은 묻지 않는다, ST-22).
+  정한 값이 희망 영역뿐이면 새 revision을 만들지 않는다.
+- 카드에서 고치는 시간창은 가능 범위(Hard)다. 희망 영역은 타임라인에서 그리고 지운다.
+- 동의: 바뀌지 않은 축의 Consent는 새 revision으로 복사한다. 시작 범위를 고치면 그 범위의 Consent를,
+  사람이 말한 요청 자원에 Consent가 없으면 그 Consent를 만든다. 정한 값이 남아 있는 축에는 만들지 않는다.
 - 계획에 있는 작업도 지금 배치가 깨지는 값으로 고칠 수 있다. 막지 않고 Agent가 다시 풀게 한다.
 - context +1, 열린 재계획·협의 Run 깨우기, 재확인 등록. 사건(TASK_EDITED)은 고친 뒤 충돌이 있거나 계획 밖
   READY 작업이 남으면 작업 준비됨과 같은 방식으로 전하고(열린 메인이 없으면 메인이 뜬다), 그렇지 않으면
@@ -17,6 +20,7 @@ from typing import Any
 
 from pydantic import Field
 
+from app.commands.pins import confirm_preferred_window
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
 from app.commands.task_request import TaskRequestForm, stated_consents, validate_task_request
 from app.domain.canonical import canonical_hash
@@ -32,6 +36,7 @@ from app.store.repos.cases import (
     wake_run,
 )
 from app.store.repos.consents import insert_consent, list_current_consents
+from app.store.repos.pins import preferred_windows
 from app.store.repos.runs import list_active_runs
 from app.store.repos.site import bump_context_version
 from app.store.repos.snapshots import build_snapshot_content
@@ -110,7 +115,11 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         return r
     given = {k: getattr(body, k) for k in EDITABLE if getattr(body, k) is not None}
     changes = {k: v for k, v in given.items() if v != getattr(task, k)}
-    if not changes and not (body.confirm and task.decided_values):
+    hope = preferred_windows(tx, site_id).get(task.task_id)
+    confirm_hope = body.confirm and hope is not None and hope["origin"] == "DECIDED"
+    # 새 revision은 값이 바뀌거나 정한 값을 확인할 때만. 정한 희망만 확인하면 작업 값은 그대로다
+    revise = bool(changes) or (body.confirm and bool(task.decided_values))
+    if not revise and not confirm_hope:
         r.reject("NO_CHANGE")
         return r
 
@@ -122,37 +131,40 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         return r
 
     ready = task.lifecycle == "READY"
-    revision = task.revision + 1
+    revision = task.revision + 1 if revise else task.revision
     edit_id = new_id("edit")
     source = f"card:{edit_id}"
     changed = set(changes)
-    updated = task.model_copy(
-        update={
-            **changes,
-            "revision": revision,
-            "fields": edited_fields(task, data, changed, body.confirm, source),
-        }
-    )
-    insert_task_revision(tx, site_id, updated)
     context_version = bump_context_version(tx, site_id) if ready else ctx.site.context_version
-
-    # 동의: 값이 바뀌지 않은 축은 복사하고, 사람이 말한 값에 동의가 없으면 만든다
-    axes = tuple(
-        axis
-        for axis, names in (
-            ("TIME", {"earliest_start", "latest_start"}),
-            ("RESOURCE", {"requested_resource_id"}),
+    consent_ids: list[str] = []
+    if revise:
+        updated = task.model_copy(
+            update={
+                **changes,
+                "revision": revision,
+                "fields": edited_fields(task, data, changed, body.confirm, source),
+            }
         )
-        if not names & changed
-    )
-    consent_ids = copy_consents(
-        tx, site_id, task.task_id, task.revision, revision, context_version, axes
-    )
-    have = [c for c in list_current_consents(tx, site_id) if c.task_id == task.task_id]
-    for consent in stated_consents(updated, source):
-        if not any(c.axis == consent.axis and c.scope == consent.scope for c in have):
-            insert_consent(tx, site_id, consent, context_version)
-            consent_ids.append(consent.consent_id)
+        insert_task_revision(tx, site_id, updated)
+
+        # 동의: 값이 바뀌지 않은 축은 복사한다. 시작 범위는 사람이 고쳤을 때만, 요청 자원은 말한 값에
+        # 동의가 없으면 만든다(자연어 요청의 시간창은 사람이 넣은 값이 아니다, ST-22)
+        timed = bool({"earliest_start", "latest_start"} & changed)
+        axes = tuple(
+            axis
+            for axis, moved in (("TIME", timed), ("RESOURCE", "requested_resource_id" in changed))
+            if not moved
+        )
+        consent_ids = copy_consents(
+            tx, site_id, task.task_id, task.revision, revision, context_version, axes
+        )
+        have = [c for c in list_current_consents(tx, site_id) if c.task_id == task.task_id]
+        for consent in stated_consents(updated, source, time=timed):
+            if not any(c.axis == consent.axis and c.scope == consent.scope for c in have):
+                insert_consent(tx, site_id, consent, context_version)
+                consent_ids.append(consent.consent_id)
+    if confirm_hope:
+        confirm_preferred_window(tx, ctx, task.task_id)
 
     r.refs = {
         "task_id": task.task_id,
@@ -162,6 +174,7 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         "confirmed": body.confirm,
         "consent_ids": consent_ids,
         "queued": not ready,
+        "preferred_window_confirmed": confirm_hope,
     }
     if not ready:
         return r
@@ -176,7 +189,8 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         "changed": sorted(changed),
         "confirmed": body.confirm,
     }
-    key = f"TASK_EDITED:{task.task_id}:{revision}"
+    # 희망만 확인하면 revision이 그대로라 현장 버전으로 구분한다
+    key = f"TASK_EDITED:{task.task_id}:{revision}" + ("" if revise else f":{context_version}")
     if _needs_agent(tx, ctx):
         # 풀 일이 남았다: 작업 준비됨과 같은 방식으로 전한다(열린 메인이 없으면 메인이 뜬다)
         deliver_event(tx, ctx.pack, "TASK_EDITED", key, ref)

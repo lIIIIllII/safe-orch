@@ -177,8 +177,8 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
     _submit_a(pack)
     group = _group_id(pack)
     assert call_key(
-        "REPLANNING", {"group_id": group, "acting_unit_id": "UA", "approach": "MIN_DELAY"}
-    ) == (f"REPLANNING:{group}:UA:MIN_DELAY")
+        "REPLANNING", {"group_id": group, "acting_unit_id": "UA", "approach": "PREFER_WINDOW"}
+    ) == (f"REPLANNING:{group}:UA:PREFER_WINDOW")
 
     def replan(approach=None, note=None):
         refs = {"group_id": group, "acting_unit_id": "UA"}
@@ -193,7 +193,8 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
         main=[
             replan("MIN_CHANGE"),
             replan("MIN_CHANGE"),
-            replan("MIN_DELAY", "늦어지는 작업이 없게"),
+            replan("PREFER_WINDOW", "늦어지는 작업이 없게"),
+            replan("MIN_DELAY"),  # 접근은 둘뿐이다 (AG-28)
             replan(),
             consult_unchosen,
             main_wait(),
@@ -214,6 +215,7 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
         ("CALL_AGENT", None),
         ("CALL_AGENT", "SAME_FACTS"),  # 같은 접근, 사실이 그대로
         ("CALL_AGENT", None),  # 접근이 다르면 받아들여진다
+        ("CALL_AGENT", "MALFORMED"),
         ("CALL_AGENT", "APPROACH_REQUIRED"),
         ("CALL_AGENT", "CANDIDATE_NOT_CHOSEN"),
         ("WAIT", None),
@@ -226,12 +228,12 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
     first, second = _runs("REPLANNING")
     assert [r.input_ref["call_key"].rsplit(":", 1)[1] for r in (first, second)] == [
         "MIN_CHANGE",
-        "MIN_DELAY",
+        "PREFER_WINDOW",
     ]
     [cid] = _candidate_ids()  # 두 접근이 같은 배치를 냈다
     s1 = _steps(second.run_id)[0]
     obs = s1["observation"]
-    assert obs["approach"] == {"approach": "MIN_DELAY", "quoted_note": "늦어지는 작업이 없게"}
+    assert obs["approach"] == {"approach": "PREFER_WINDOW", "quoted_note": "늦어지는 작업이 없게"}
     assert obs["approach_candidates"] == [
         {"no": 1, "approach": "MIN_CHANGE", "candidate_id": cid, "same": False}
     ]
@@ -240,14 +242,14 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
     # 메인 관찰과 화면 상태: 그 후보에 접근 둘, 고르지 않음, 협의 호출 없음
     waiting = _steps(main.run_id)[-1]["observation"]
     [seen] = waiting["candidates"]
-    assert (seen["approaches"], seen["chosen"]) == (["MIN_CHANGE", "MIN_DELAY"], False)
+    assert (seen["approaches"], seen["chosen"]) == (["MIN_CHANGE", "PREFER_WINDOW"], False)
     assert not [c for c in waiting["calls"] if c["agent"] == "COORDINATION"]
     with db.read() as conn:
         state = build_state(conn, pack, "supervisor")
     view = next(c for c in state["candidates"] if c["candidate_id"] == cid)
     assert [(a["no"], a["approach"], a["same"]) for a in view["approaches"]] == [
         (1, "MIN_CHANGE", False),
-        (2, "MIN_DELAY", True),
+        (2, "PREFER_WINDOW", True),
     ]
     assert view["approaches"][1]["quoted_reason"] == "이유: 지연을 먼저 줄인다/다음: 검증"
     assert (view["chosen"], view["case_id"], view["solver"]["objective"]) == (

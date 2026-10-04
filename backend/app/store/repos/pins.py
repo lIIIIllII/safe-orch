@@ -1,13 +1,13 @@
 """task_pin(작업 고정)·preferred_window(희망 영역) 기록과 조회.
 
 고정은 ACTIVE → RELEASED만, 희망 영역은 ACTIVE → CLEARED만(트리거). 작업당 ACTIVE는 하나다.
-고정은 Snapshot에 들어가는 사실이고, 희망 영역은 Agent 관찰과 화면에만 보인다 (AG-27).
+고정과 희망 영역은 모두 Snapshot에 들어가는 사실이다 (AG-27, ST-22).
 """
 
 import sqlite3
 from typing import Any
 
-from app.domain.models import Pin
+from app.domain.models import Pin, PreferredWindow
 from app.store.repos._rows import rows
 
 
@@ -87,27 +87,48 @@ def insert_preferred_window(
     end: int,
     set_by: str,
     set_at: str,
+    origin: str = "STATED",
+    made_by: str = "OWNER",
 ) -> None:
+    """origin: 말한 희망 STATED·Intake가 정한 희망 DECIDED. made_by: 담당자 OWNER·Work Intake INTAKE.
+    set_by는 그 작업의 담당자(요청자)다."""
     tx.execute(
         "INSERT INTO preferred_window (window_id, site_id, task_id, start_min, end_min, status,"
-        " set_by, set_at) VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?)",
-        (window_id, site_id, task_id, start, end, set_by, set_at),
+        " origin, made_by, set_by, set_at) VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)",
+        (window_id, site_id, task_id, start, end, origin, made_by, set_by, set_at),
     )
 
 
 def preferred_windows(conn: sqlite3.Connection, site_id: str) -> dict[str, dict[str, Any]]:
-    """작업 → 희망 영역 {start, end, set_by, set_at}."""
+    """작업 → 희망 영역 {start, end, origin, made_by, set_by, set_at}."""
     return {
         r["task_id"]: {
             "start": r["start_min"],
             "end": r["end_min"],
+            "origin": r["origin"],
+            "made_by": r["made_by"],
             "set_by": r["set_by"],
             "set_at": r["set_at"],
         }
         for r in rows(
             conn,
-            "SELECT task_id, start_min, end_min, set_by, set_at FROM preferred_window"
-            " WHERE site_id = ? AND status = 'ACTIVE' ORDER BY rowid",
+            "SELECT task_id, start_min, end_min, origin, made_by, set_by, set_at"
+            " FROM preferred_window WHERE site_id = ? AND status = 'ACTIVE' ORDER BY rowid",
             (site_id,),
         )
     }
+
+
+def list_preferred_windows(conn: sqlite3.Connection, site_id: str) -> list[PreferredWindow]:
+    """ACTIVE 희망 영역 (작업 ID순). Snapshot에 들어간다."""
+    found = preferred_windows(conn, site_id)
+    return [
+        PreferredWindow(
+            task_id=tid,
+            start=w["start"],
+            end=w["end"],
+            origin=w["origin"],
+            made_by=w["made_by"],
+        )
+        for tid, w in sorted(found.items())
+    ]

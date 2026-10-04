@@ -24,7 +24,6 @@ from app.rules.engine import detect_conflicts
 from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store.repos.consultations import candidate_state, case_objections, contested_changes
 from app.store.repos.decisions import list_case_rejections
-from app.store.repos.pins import preferred_windows
 from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.runs import (
     approach_attempts,
@@ -135,7 +134,6 @@ FACT_BY_EXCLUSION = {"NOT_ALLOWED": "PERMISSION", "NO_AVAILABILITY": "AVAILABILI
 
 # 정한 값 → 요청자가 고치면 바뀌는 사실(FACT_CHANGE의 필드)
 DECIDED_FACTS = {
-    "WINDOW": {"earliest_start", "latest_start", "latest_end"},
     "DURATION": {"duration"},
 }
 
@@ -153,7 +151,8 @@ def openers(
     - 다른 Unit(OTHER_UNIT): 이 그룹에 움직일 수 있는 작업을 가진 다른 Unit.
     - 사실(FACT_CHANGE): 풀 초과 충돌의 풀(QUANTITY), 그룹 안 주체 작업의 자원 제외 사유(권한 없음 →
       PERMISSION, 가용 없음 → AVAILABILITY), 모든 범위가 INFEASIBLE인 요청 작업의 시간창(WINDOW),
-      접수 Agent가 정한 시간창·작업 시간(decided 표시: 요청자가 작업 카드에서 고치면 열림, AG-32).
+      접수 Agent가 정한 작업 시간(decided 표시: 요청자가 작업 카드에서 고치면 열림, AG-32). 정한 희망
+      영역은 Hard가 아니라 해를 막지 않으므로 넣지 않는다 (ST-22).
     """
     unit = run.acting_unit_id
     tasks = facts.task_map()
@@ -259,7 +258,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         return site_time(pack.horizon_start_utc, pack.timezone, minute)
 
     pins = {p.task_id: p for p in facts.pins}
-    windows = preferred_windows(conn, pack.site_id)
+    windows = facts.preferred_map()
     acting_tasks = [
         {
             "task_id": t.task_id,
@@ -281,10 +280,15 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 "pinned_by": pins[t.task_id].pinned_by,
                 "by_role": pins[t.task_id].by_role,
             },
-            # 담당자가 그린 희망 영역 [start, end). 서버는 강제하지 않는다
+            # 희망 영역 [start, end)와 그 시작 범위·출처. 강제하지 않지만 지연의 기준이다 (ST-22)
             "preferred_window": None
             if t.task_id not in windows
-            else {k: windows[t.task_id][k] for k in ("start", "end")},
+            else {
+                "start": windows[t.task_id].start,
+                "end": windows[t.task_id].end,
+                "start_range": list(windows[t.task_id].start_range(t.duration)),
+                "origin": windows[t.task_id].origin,
+            },
             "base": base[t.task_id].model_dump(),
             # 같은 값의 현장 날짜·시각. 조건 도구의 시각 인자가 이 형식이다 (AG-21)
             "clock": {

@@ -116,7 +116,7 @@ def test_call_agent_starts_child_and_result_wakes_main(with_a):
     group_id = last["observation"]["groups"][0]["group_id"]
     assert last["observation"]["calls"] == [
         {"agent": "REPLANNING", "group_id": group_id, "acting_unit_id": "UA", "approach": a}
-        for a in ("MIN_DELAY", "PREFER_WINDOW")
+        for a in ("PREFER_WINDOW",)
     ]
     with db.read() as conn:
         [notice] = conn.execute(

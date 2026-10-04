@@ -21,7 +21,7 @@ CandidateKind = Literal["REPLAN", "RECONFIRM", "MOVE", "REMOVE"]
 ValidationStatus = Literal["PASS", "FAIL", "INCOMPLETE"]
 ScopeLevel = Literal["L0", "L1", "L2"]
 Axis = Literal["TIME", "RESOURCE"]
-# 목적 순서: 변경 작업 수를 먼저 줄일지, 총 지연을 먼저 줄일지 (CV-27)
+# 목적 순서: 변경 작업 수를 먼저 줄일지, 희망에서 벗어난 정도(지연)를 먼저 줄일지 (CV-27)
 Objective = Literal["CHANGE_FIRST", "DELAY_FIRST"]
 AttributeType = Literal["NUMBER", "LIST"]
 RequirementOp = Literal["GTE", "LTE", "CONTAINS"]  # 코어가 아는 비교는 이 셋뿐이다 (CV-17)
@@ -285,6 +285,29 @@ class Pin(Frozen):
     by_role: Literal["OWNER", "SUPERVISOR"]
 
 
+class PreferredWindow(Frozen):
+    """작업의 희망 영역 [start, end). 계산에 들어가는 사실이다: 지연의 기준이고 동의 범위다 (ST-22).
+
+    origin은 사람이 말한(그리거나 확인한) 희망인지 Work Intake가 정한 희망인지, made_by는 만든 주체다.
+    task revision에 묶지 않는다."""
+
+    task_id: str
+    start: int
+    end: int
+    origin: Origin = "STATED"
+    made_by: Literal["OWNER", "INTAKE"] = "OWNER"
+
+    def start_range(self, duration: int) -> tuple[int, int]:
+        """희망 시작 범위 [lo, hi]: 이 안에서 시작하면 희망 영역 안에서 끝난다. 영역이 작업 시간보다
+        짧으면 희망 시작 한 점이다."""
+        return self.start, max(self.start, self.end - duration)
+
+    def deviation(self, start: int, duration: int) -> int:
+        """희망에서 벗어난 정도(분): 희망 시작 범위 밖으로 벗어난 거리. 앞뒤 모두, 안이면 0."""
+        lo, hi = self.start_range(duration)
+        return max(0, lo - start, start - hi)
+
+
 class HoldRef(Frozen):
     """Snapshot에 넣는 ACTIVE Hold."""
 
@@ -378,9 +401,13 @@ class SnapshotContent(Frozen):
     holds: tuple[HoldRef, ...] = ()
     pins: tuple[Pin, ...] = ()
     consents: tuple[Consent, ...] = ()
+    preferred_windows: tuple[PreferredWindow, ...] = ()  # READY 작업의 희망 영역 (ST-22)
 
     def task_map(self) -> dict[str, Task]:
         return {t.task_id: t for t in self.tasks}
+
+    def preferred_map(self) -> dict[str, PreferredWindow]:
+        return {w.task_id: w for w in self.preferred_windows}
 
     def pinned_task_ids(self) -> set[str]:
         return {p.task_id for p in self.pins}
@@ -398,18 +425,33 @@ class SnapshotContent(Frozen):
         return None
 
     def base_assignments(self) -> dict[str, Assignment]:
-        """READY 작업의 기준 배정. Plan에 있으면 Plan 값, 없으면 (earliest_start, 요청 자원)."""
+        """READY 작업의 기준 배정. Plan에 있으면 Plan 값, 없으면 (기준 시작, 요청 자원).
+
+        Plan에 없는 작업의 기준 시작은 희망 영역이 있으면 희망 시작(시간창 안으로 맞춘 값), 없으면
+        earliest_start다."""
         in_plan = {a.task_id: a for a in self.plan.assignments}
-        return {
-            t.task_id: in_plan.get(t.task_id)
-            or Assignment(
+        wanted = self.preferred_map()
+        out = {}
+        for t in sorted(self.tasks, key=lambda t: t.task_id):
+            start = t.earliest_start
+            if t.task_id in wanted:
+                start = min(max(wanted[t.task_id].start, t.earliest_start), t.latest_start)
+            out[t.task_id] = in_plan.get(t.task_id) or Assignment(
                 task_id=t.task_id,
-                start=t.earliest_start,
-                end=t.earliest_start + t.duration,
+                start=start,
+                end=start + t.duration,
                 resource_id=t.requested_resource_id,
             )
-            for t in sorted(self.tasks, key=lambda t: t.task_id)
-        }
+        return out
+
+    def deviation(self, task_id: str, start: int) -> int:
+        """그 작업을 start에 놓았을 때 희망에서 벗어난 정도(분). 희망 영역이 있으면 희망 시작 범위
+        밖으로 벗어난 거리(앞뒤 모두), 없으면 기준 시작보다 늦어진 만큼이다."""
+        task = self.task_map()[task_id]
+        wanted = self.preferred_map().get(task_id)
+        if wanted is not None:
+            return wanted.deviation(start, task.duration)
+        return max(0, start - self.base_assignments()[task_id].start)
 
     def check_assignments(self) -> tuple[Assignment, ...]:
         """검사 대상 배정 = 현재 Plan 배정 + Plan에 없는 READY 작업의 기준 배정."""
@@ -429,7 +471,7 @@ class Snapshot(Frozen):
 
 class Condition(Frozen):
     """Agent가 한 작업에 건 탐색 조건 (CV-24). 좁히기만 한다: 시작 범위 [start_min, start_max](분),
-    자원 지정. preferred는 시작 범위가 희망 영역에서 왔다는 표시다."""
+    자원 지정. preferred는 시작 범위가 희망 영역에서 왔다는 표시다(그 탐색에서는 희망을 반드시 지킨다)."""
 
     start_min: int | None = None
     start_max: int | None = None

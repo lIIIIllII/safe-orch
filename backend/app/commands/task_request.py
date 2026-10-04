@@ -2,9 +2,12 @@
 
 critical field를 CONFIRMED(source_ref form:<form_id>)로 기록하고 Consent(시작 범위, 요청 자원)를
 만든다. Agent(Work Intake)를 대신하는 결정론 입력이며 값을 추정하지 않는다.
+폼의 시간창은 사람이 구조화된 입력으로 넣은 가능 범위(Hard)다. 자연어 요청(Work Intake)의 시간은 희망
+영역이 되고 시간창은 Horizon 전체로 채워진다 (ST-22).
 """
 
 import sqlite3
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import Field
@@ -31,7 +34,7 @@ from app.store.repos.cases import (
     wake_run,
 )
 from app.store.repos.consents import insert_consent
-from app.store.repos.pins import list_active_pins
+from app.store.repos.pins import insert_preferred_window, list_active_pins
 from app.store.repos.plans import get_current_plan
 from app.store.repos.resources import list_pools, list_resources
 from app.store.repos.runs import has_open_case, list_active_runs
@@ -168,11 +171,14 @@ def validate_task_request(
     return r.reason_codes
 
 
-def stated_consents(task: Task, source_ref: str) -> list[Consent]:
-    """사람이 말한 시작 범위·요청 자원의 Consent. Agent가 정한 값에는 만들지 않는다 (AG-33)."""
+def stated_consents(task: Task, source_ref: str, time: bool = True) -> list[Consent]:
+    """사람이 말한 시작 범위·요청 자원의 Consent. Agent가 정한 값에는 만들지 않는다 (AG-33).
+
+    time이 False면 시작 범위 Consent를 만들지 않는다: 시간창을 사람이 넣지 않은 작업(자연어 요청)은
+    희망 영역이 동의 범위다 (ST-22)."""
     decided = set(task.decided_values)
     out = []
-    if not decided & {"earliest_start", "latest_start"}:
+    if time and not decided & {"earliest_start", "latest_start"}:
         out.append(
             Consent(
                 consent_id=new_id("cns"),
@@ -208,6 +214,7 @@ def create_requested_task(
     source_ref: str,
     cause_kind: str = "FORM",
     origins: dict[str, str] | None = None,
+    hope: tuple[int, int, str] | None = None,
 ) -> dict[str, Any]:
     """검증을 통과한 요청으로 작업을 만든다. 폼과 Work Intake가 같이 쓴다.
 
@@ -215,6 +222,8 @@ def create_requested_task(
     대기열 판단, Context +1, RECHECK. source_ref만 다르면 같은 작업이 된다.
     origins(값 이름 → 출처, Work Intake): Agent가 정한 값은 기록에 적고, Consent는 사람이 말한 시작
     범위·요청 자원에만 만든다. 정한 값의 동의는 요청자가 작업 카드에서 확인할 때 생긴다 (AG-33).
+    hope((시작, 끝, 출처), Work Intake): 요청 문장에서 읽은 시간이다. 희망 영역 기록을 만들고(만든 주체
+    INTAKE) 시작 범위 Consent는 만들지 않는다. 그 작업의 동의 범위는 희망 영역이다 (ST-22).
     """
     site_id = site.site_id
     wt = pack.work_types[form.work_type]
@@ -239,9 +248,23 @@ def create_requested_task(
     insert_task_revision(tx, site_id, task)
     context_version = site.context_version if queued else bump_context_version(tx, site_id)
 
-    consents = stated_consents(task, source_ref)
+    consents = stated_consents(task, source_ref, time=hope is None)
     for c in consents:
         insert_consent(tx, site_id, c, context_version)
+    if hope is not None:
+        start, end, origin = hope
+        insert_preferred_window(
+            tx,
+            site_id,
+            new_id("pw"),
+            task.task_id,
+            start,
+            end,
+            actor.actor_id,
+            datetime.now(UTC).isoformat(timespec="seconds"),
+            origin,
+            "INTAKE",
+        )
     if not queued:
         cause = {"kind": cause_kind, "task_id": task.task_id, "actor_id": actor.actor_id}
         register_recheck(tx, site_id, cause)

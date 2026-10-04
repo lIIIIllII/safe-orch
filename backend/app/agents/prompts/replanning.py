@@ -22,7 +22,7 @@ from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "replanning-p21"
+PROMPT_VERSION = "replanning-p22"
 
 
 def tool_catalog() -> str:
@@ -44,7 +44,7 @@ Goal: {goal}
 
 규칙
 - 매 턴 도구를 정확히 1개 호출한다. 호출할 수 있는 도구는 지금 주어진 것뿐이다. 텍스트로 답하지 않는다.
-- Hard 안전 규칙, 시간창, 사람이 건 고정은 완화하지 않는다. 서버가 허용한 범위 안에서만 계산한다.
+- Hard 안전 규칙, 시간창(가능 범위), 사람이 건 고정은 완화하지 않는다. 서버가 허용한 범위 안에서만 계산한다. 희망 영역은 Hard가 아니다: 벗어난 안도 만들 수 있고, 벗어난 만큼이 지연으로 계산된다.
 - 한 범위의 INFEASIBLE은 그 범위에서 해가 없다는 뜻일 뿐이다. UNKNOWN은 불가능이 아니다.
 - 전략에는 탐색 범위 확대뿐 아니라 조건 걸기와 자원 조회도 있다. 사람에게 묻는 일은 하지 않는다. \
 다른 Unit, 사실 변경이 있어야 열리는 해는 막힌 결과의 길로 돌려준다.
@@ -65,16 +65,17 @@ Goal: {goal}
 관찰 읽는 법 (괄호 안이 키 이름이다. 설명과 decision_summary에는 키 이름 대신 앞의 한국어 이름만 쓴다)
 - 시간은 Horizon 원점(첫날 {origin_time})을 0으로 하는 정수 분이고(1440분 = 하루), 점유는 [start, end)다.
 - 근무 구간(work_intervals): 모든 작업은 근무 구간 하나 안에 있어야 한다(CALENDAR). 같은 날 자리가 없으면 해가 다음 근무일로 갈 수 있다.
-- 접근(approach): 메인이 이번 호출에 준 우선할 것이다. MIN_CHANGE 변경 작업 수를 줄인다, MIN_DELAY 총 지연을 줄인다, PREFER_WINDOW 담당자의 희망 영역을 살린다. quoted_note는 메인이 덧붙인 문장이고 인용이다. 접근은 무엇을 우선할지만 정하고, 방식(범위 탐색, 조건 걸기, 직접 배치, 목적 순서)은 네가 고른다. 사람이 남긴 사유는 접근과 관계없이 지킨다.
+- 접근(approach): 메인이 이번 호출에 준 우선할 것이다. MIN_CHANGE 변경 작업 수를 줄인다, PREFER_WINDOW 담당자의 희망에서 가장 덜 벗어나게 한다(목적 순서의 지연 먼저가 이 뜻이다). quoted_note는 메인이 덧붙인 문장이고 인용이다. 접근은 무엇을 우선할지만 정하고, 방식(범위 탐색, 조건 걸기, 직접 배치, 목적 순서)은 네가 고른다. 사람이 남긴 사유는 접근과 관계없이 지킨다.
 - 접근별 후보(approach_candidates): 이 Case에서 접근을 받은 재계획이 낸 후보다(no는 호출 순번). same이면 새 후보가 아니라 기존 후보와 같은 배치에 도달한 것이다. 앞 접근과 같은 배치는 새 안이 되지 않는다.
 - 현재 충돌(conflicts)은 전부, 맡은 충돌(primary_conflict)은 이 Run이 해소할 충돌이다. 충돌 그룹(group)은 맡은 충돌과 작업을 공유하는 충돌의 묶음이고, 그 그룹에 작업을 가진 Unit(unit_ids)이 있다. 이 Run은 acting_unit의 작업만 움직인다.
 - 수량 풀 초과(POOL_CAPACITY) 충돌에는 pool이 붙는다: 어느 풀(pool_id)·종류(kind)가 언제(at, 분) 겹친 작업의 수요 합(demand)이 수량(quantity)을 넘었는지다. 인원처럼 여러 작업이 나눠 쓰는 수량이라, 겹치는 작업의 시간을 옮겨야 풀린다.
 - 움직일 수 있는 작업의 수요(demands)는 종류별로 그 작업이 풀에서 쓰는 수량이다.
-- acting_unit의 작업(acting_tasks): 고정(pinned: 사람이 걸었고 누가 걸었는지다. 고정된 작업은 시각·자원 모두 움직이지 않고, 고정되지 않은 작업은 시각도 자원도 움직인다: 범위 안의 고정되지 않은 작업은 서버가 채운 적격 자원 가운데서 계산이 고른다), 희망 영역(preferred_window: 담당자가 바라는 시각 구간이다. 서버는 강제하지 않는다), 기준 배정(base), 필요한 자원 유형(required_resource_type), 같은 값의 현장 날짜·시각(clock: 시작 가능 시각·시작 한도·기준 시작)이 있다.
+- acting_unit의 작업(acting_tasks): 고정(pinned: 사람이 걸었고 누가 걸었는지다. 고정된 작업은 시각·자원 모두 움직이지 않고, 고정되지 않은 작업은 시각도 자원도 움직인다: 범위 안의 고정되지 않은 작업은 서버가 채운 적격 자원 가운데서 계산이 고른다), 희망 영역(preferred_window: 그 작업이 바라는 시각 구간 [start, end)와, 그 안에서 끝나는 시작 범위 start_range, 출처 origin이다. STATED는 담당자가 말하거나 그리거나 확인한 희망, DECIDED는 접수 Agent가 정했고 담당자가 아직 확인하지 않은 희망이다. 서버는 강제하지 않지만 지연의 기준이다), 기준 배정(base: 계획에 없는 작업은 희망 시작, 희망 영역이 없으면 시작 가능 시각이다), 필요한 자원 유형(required_resource_type), 같은 값의 현장 날짜·시각(clock: 시작 가능 시각·시작 한도·기준 시작)이 있다.
+- 지연은 희망에서 벗어난 정도다. 희망 영역이 있는 작업은 희망 시작 범위 밖으로 벗어난 거리(앞뒤 모두, 안이면 0)이고, 희망 영역이 없는 작업은 기준 시작보다 늦어진 만큼이다. 계획에 없는 작업은 희망 시작 범위 안이면 어디에 놓여도 변경으로 세지 않는다. 시간창은 가능 범위(Hard)이고, 자연어로 접수된 작업은 시간창이 Horizon 전체다.
 - 조건 도구의 시각 인자는 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다. 분으로 바꾸지 않는다(서버가 바꾼다). clock의 값이 같은 형식이다.
-- 동의 범위(consents)는 작업 담당자가 동의한 시작 범위·자원이다. 동의 범위 밖의 시각·자원으로 바뀐 안은 Supervisor가 고른 뒤 협의에서 담당자에게 간다.
+- 동의 범위(consents)는 작업 담당자가 동의한 시작 범위·자원이다. 희망 영역이 있는 작업의 시각은 말한 희망(STATED)의 시작 범위가 동의 범위이고, 정한 희망(DECIDED)은 담당자가 확인하기 전까지 동의가 아니다. 동의 범위 밖의 시각·자원으로 바뀐 안은 Supervisor가 고른 뒤 협의에서 담당자에게 간다.
 - 아직 시도하지 않은 탐색 범위(untried_levels): L0은 충돌 당사자만, L1은 같은 구역·같은 자원의 작업까지, L2는 acting_unit 작업 전부를 움직일 수 있게 한다. 범위가 넓을수록 바뀌는 작업이 늘 수 있다.
-- 이전 계산(attempts): 이 Case에서 acting_unit으로 한 계산 전부다(this_run이 false면 같은 Case의 앞 Run이 한 것). 1단계(stage1)는 변경 작업 수 최소화, 2단계(stage2)는 총 지연 최소화 결과다. 조건(conditions)이 있으면 작업별로 건 시작 범위(start_min·start_max, 분)·자원을 넣은 계산이고, conditions_as_args는 같은 조건을 조건 도구의 인자 모양(현장 날짜·시각 문자열)으로 적은 것이다. 같은 범위·같은 조건·같은 목적 순서(objective)는 다시 계산되지 않는다: 다시 부르면 Solver를 돌리지 않고 ALREADY_TRIED와 함께 그때의 결과를 돌려준다(어느 Run의 몇 번째 step이었는지 first). 다른 결과를 얻으려면 범위·조건·목적 순서 가운데 하나를 실제로 바꿔야 한다. 지연 먼저(DELAY_FIRST)로 푼 계산은 1단계가 총 지연, 2단계가 변경 작업 수다. same_as_candidate_id가 있으면 해가 살아 있는 기존 후보와 같은 배치라 새 후보를 만들지 않았다.
+- 이전 계산(attempts): 이 Case에서 acting_unit으로 한 계산 전부다(this_run이 false면 같은 Case의 앞 Run이 한 것). 1단계(stage1)는 변경 작업 수 최소화, 2단계(stage2)는 지연(희망에서 벗어난 정도의 합) 최소화 결과다. 조건(conditions)이 있으면 작업별로 건 시작 범위(start_min·start_max, 분)·자원을 넣은 계산이고, conditions_as_args는 같은 조건을 조건 도구의 인자 모양(현장 날짜·시각 문자열)으로 적은 것이다. 같은 범위·같은 조건·같은 목적 순서(objective)는 다시 계산되지 않는다: 다시 부르면 Solver를 돌리지 않고 ALREADY_TRIED와 함께 그때의 결과를 돌려준다(어느 Run의 몇 번째 step이었는지 first). 다른 결과를 얻으려면 범위·조건·목적 순서 가운데 하나를 실제로 바꿔야 한다. 지연 먼저(DELAY_FIRST)로 푼 계산은 1단계가 지연, 2단계가 변경 작업 수다. same_as_candidate_id가 있으면 해가 살아 있는 기존 후보와 같은 배치라 새 후보를 만들지 않았다.
 - 마지막 검증(latest_validation)은 마지막 후보의 독립 검증이고 live가 false면 그 후보는 무효가 되었거나 거절·확정되었다. 직전 거절 사유(last_guard)는 직전 행동이 받아들여지지 않은 이유다. ALREADY_TRIED면 previous에 이미 한 그 계산의 결과(Solver 상태, 변경 수·지연, 후보 candidate_id 또는 같은 배치였던 기존 후보 same_as_candidate_id, 건 조건 conditions_as_args)가 있다.
 - 후보 거절(rejections): 이 Case 후보에 대한 Supervisor 거절이다. 거절된 배정과 같은 배정은 다시 후보가 되지 않는다. quoted_comment는 인용이다. 거절 사실(rejection_facts)은 거절 수, 마지막 거절, 미시도 범위가 남았는지(untried_remaining)다.
 - 담당자 이견(objections): 이 Case의 협의에서 작업 담당자가 변경 요청에 낸 이견 전부다. 이견이 난 변경(작업, 변경 전·후 before·after)과 quoted_comment(인용)가 있다. 거절과 이견은 Case가 끝날 때까지 쌓인다.
@@ -184,4 +185,5 @@ PROMPT_FINGERPRINTS = {
     "replanning-p19": "1e5ce6753a85d871e24b77b2079f03049b977ee5b783b277b62755a89981b7cd",  # 접수 Agent가 정한 값(decided_values)과 열 수 있는 것의 decided 표시 (AG-32)
     "replanning-p20": "6876d6dbc25a414bb8ecb185439e940af045c324556a601ddcc79eca0e2b99a6",  # 이미 한 탐색은 그때의 결과를 돌려준다(last_guard.previous), 이전 계산에 run_id (CV-13)
     "replanning-p21": "3e5a6fd103d48c1f39032178ee5bdb7be9131c43db82f7e06797e07e40523241",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
+    "replanning-p22": "6c7850a500ebe1311a512b9ffb2b8e01217d019c9a387fdee517b6bd7d031f72",  # 희망 영역은 지연의 기준이고 동의 범위, 접근 둘(변경 최소·희망 우선), 정한 시간창 opener 삭제 (ST-22, AG-28)
 }

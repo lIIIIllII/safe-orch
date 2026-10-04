@@ -1,9 +1,9 @@
 """Work Intake Agent — 묻지 않고 완료한다 (AG-32).
 
-자연어 요청 → Intake Run(자원 조회 → 완료) → 폼과 같은 작업(READY·RECHECK) → Replanning.
+자연어 요청 → Intake Run(자원 조회 → 완료) → 작업(READY·RECHECK) → Replanning.
 요청자에게 묻는 도구는 없다. 값마다 출처(말함·정함)를 Agent가 적고, 정한 값은 작업 기록에 남는다.
-같은 값이면 폼으로 낸 A와 source_ref만 다르고 같은 작업·같은 Replanning 결과가 나와야 한다.
-스크립트 모델(Router)로 돌린다.
+완료가 낸 시각은 가능 범위(Hard)가 아니라 희망 영역이 되고, 작업의 시간창은 Horizon 전체다 (ST-22).
+폼으로 낸 작업은 시간창이 Hard 그대로다. 스크립트 모델(Router)로 돌린다.
 """
 
 import json
@@ -97,6 +97,26 @@ def _consents(task_id):
     return rows
 
 
+def _hope(task_id):
+    """그 작업의 ACTIVE 희망 영역 기록. 없으면 None."""
+    with db.read() as conn:
+        cur = conn.execute(
+            "SELECT start_min, end_min, origin, made_by, set_by FROM preferred_window"
+            " WHERE task_id = ? AND status = 'ACTIVE'",
+            (task_id,),
+        )
+        cols = [d[0] for d in cur.description]
+        row = cur.fetchone()
+    return None if row is None else dict(zip(cols, row, strict=True))
+
+
+def _window(task):
+    return (task.earliest_start, task.latest_start, task.latest_end)
+
+
+NOT_TIME = [k for k in VALUES_A if k not in spec.TIME_FIELDS]
+
+
 def _intake(pack, text=None, task_id="A", actor="planner_a"):
     body = IntakeRequest(task_id=task_id, text=text or pack.demo_intakes[0].text)
     return submit_intake(pack, actor, _key(), body)
@@ -128,14 +148,14 @@ def _run_intake(pack, replies=None, text=None):
     return run
 
 
-# ── 명확한 요청: 묻지 않고 완료, 폼과 같은 작업·같은 Replanning ──
+# ── 명확한 요청: 묻지 않고 완료, 시각은 희망 영역이 된다 ────────
 
 
-def test_clear_request_completes_without_asking_and_matches_form_path(seeded, main_on):
+def test_clear_request_completes_without_asking_and_time_becomes_hope(seeded, main_on):
     pack = seeded
     ctx = _site(pack).context_version
     assert _intake(pack).status == "APPLIED"
-    router = Router(intake=[_lookup(), _complete()], replanning=[solve("L0"), solve("L1")])
+    router = Router(intake=[_lookup(), _complete()], replanning=[solve("L0")])
     run_until_idle(pack, model_factory=router.factory())
     [run] = _runs("INTAKE")
     assert (run.status, run.end_reason, run.acting_unit_id, run.acting_actor_id) == (
@@ -159,43 +179,60 @@ def test_clear_request_completes_without_asking_and_matches_form_path(seeded, ma
     a = _task(pack, "A")
     nt = pack.new_task
     assert (a.revision, a.lifecycle, a.unit_id, a.owner_actor_id) == (1, "READY", "UA", "planner_a")
-    assert {k: getattr(a, k) for k in VALUES_A} == {k: getattr(nt, k) for k in VALUES_A}
+    assert {k: getattr(a, k) for k in NOT_TIME} == {k: getattr(nt, k) for k in NOT_TIME}
+    # 문장의 시각은 희망 영역이 되고(말한 희망, 만든 주체는 Intake), 시간창은 Horizon 전체다 (ST-22)
+    horizon = pack.horizon_minutes
+    assert _window(a) == (0, horizon - a.duration, horizon)
+    assert _hope("A") == {
+        "start_min": 0,
+        "end_min": 90,
+        "origin": "STATED",
+        "made_by": "INTAKE",
+        "set_by": "planner_a",
+    }
     assert a.hazard_tags == ("LIFTING",)
     source = f"intake:{run.input_ref['intake_id']}"
     assert {f.status for f in a.fields.values()} == {"CONFIRMED"}
     assert {f.source_ref for f in a.fields.values()} == {source}
     assert sorted(a.fields) == ["duration", "resource", "window", "zone_id"]
-    # 모두 말한 값이면 정한 값이 없고, 폼처럼 시작 범위·요청 자원에 Consent가 생긴다
+    # 모두 말한 값이면 정한 값이 없다. 시작 범위 Consent는 만들지 않고(희망 영역이 동의 범위다) 요청
+    # 자원의 Consent만 생긴다
     assert a.decided_values == () and all(f.origins == {} for f in a.fields.values())
     consents = [(c[0], c[2]) for c in _consents("A")]
-    assert consents == [("TIME", source), ("RESOURCE", source)]
+    assert consents == [("RESOURCE", source)]
     assert _site(pack).context_version == ctx + 1
     assert steps[-1]["tool_result"]["origins"] == _origins()
+    assert steps[-1]["tool_result"]["preferred_window"] == {
+        "start": 0,
+        "end": 90,
+        "origin": "STATED",
+    }
 
-    # 폼 A와 같은 Replanning: L0 INFEASIBLE → L1 Alpha(A 10:00 A-CR-01, C 10:30), 변경 2·지연 90
+    # 시간창이 넓어 충돌 당사자만 움직이는 범위(L0)에서도 해가 나온다: A가 한 자리에 묶이지 않는다
     [rp] = _runs("REPLANNING")
-    steps = _steps(rp.run_id)[:2]  # 세 번째 step은 검증 뒤의 DONE이다
-    assert [s["tool_result"]["stage1"]["status"] for s in steps] == ["INFEASIBLE", "OPTIMAL"]
-    assert (
-        steps[1]["tool_result"]["stage1"]["changed"],
-        steps[1]["tool_result"]["stage2"]["delay"],
-    ) == (
-        2,
-        90,
-    )
+    first = _steps(rp.run_id)[0]
+    assert first["tool_result"]["stage1"]["status"] == "OPTIMAL"
+    acting = {t["task_id"]: t for t in first["observation"]["acting_tasks"]}
+    assert acting["A"]["preferred_window"] == {
+        "start": 0,
+        "end": 90,
+        "start_range": [0, 60],
+        "origin": "STATED",
+    }
+    assert acting["A"]["base"]["start"] == 0  # 계획에 없는 작업의 기준 위치는 희망 시작이다
     with db.read() as conn:
-        cand = get_candidate(conn, pack.site_id, steps[1]["tool_result"]["candidate_id"])
+        cand = get_candidate(conn, pack.site_id, first["tool_result"]["candidate_id"])
         [ready] = conn.execute(
             "SELECT json_extract(ref, '$.kind') FROM case_event WHERE kind = 'TASK_READY'"
         ).fetchall()
-    placed = {x.task_id: (x.start, x.resource_id) for x in cand.assignments}
-    assert (placed["A"], placed["C"]) == ((60, "A-CR-01"), (90, "A-CR-01"))
+    assert "A" in {x.task_id for x in cand.assignments}
     # 접수 완료는 "작업 준비됨" 사건이 되어 메인에게 가고, 메인이 요청자의 Unit으로 재계획을 부른다
     assert ready[0] == "INTAKE" and rp.acting_actor_id == "planner_a"
 
 
-def test_form_and_intake_produce_same_task_values(seeded):
-    """폼으로 낸 작업과 비교: source_ref를 빼면 같다(모두 말한 값일 때)."""
+def test_form_window_stays_hard_and_intake_time_becomes_hope(seeded):
+    """같은 값을 폼과 자연어로 내면 시간만 다르게 남는다: 폼의 시간창은 가능 범위(Hard) 그대로이고 희망
+    영역이 없다. 자연어의 시각은 희망 영역이 되고 시간창은 Horizon 전체다 (ST-22)."""
     pack = seeded
     form = TaskRequestForm(task_id="A2", **VALUES_A)
     assert submit_task_request(pack, "planner_a", _key(), form).status == "APPLIED"
@@ -203,15 +240,21 @@ def test_form_and_intake_produce_same_task_values(seeded):
     _run_intake(pack, [_complete()])
     by_intake = _task(pack, "A")
 
-    def strip(t):
-        data = t.model_dump(exclude={"task_id", "fields"})
-        fields = {k: (v.value, v.status, v.origins) for k, v in t.fields.items()}
-        return data, fields
-
-    assert strip(by_form) == strip(by_intake)
-    form_c = [(c[0], c[1]) for c in _consents("A2")]
-    intake_c = [(c[0], c[1]) for c in _consents("A")]
-    assert form_c == intake_c
+    assert {k: getattr(by_form, k) for k in NOT_TIME} == {
+        k: getattr(by_intake, k) for k in NOT_TIME
+    }
+    assert _window(by_form) == (0, 60, 90) and _hope("A2") is None
+    assert [c[0] for c in _consents("A2")] == ["TIME", "RESOURCE"]
+    horizon = pack.horizon_minutes
+    assert _window(by_intake) == (0, horizon - 30, horizon)
+    assert (_hope("A")["start_min"], _hope("A")["end_min"]) == (0, 90)
+    assert [c[0] for c in _consents("A")] == ["RESOURCE"]
+    # 확인 기록의 값은 작업 값과 같다 (C11)
+    assert by_intake.fields["window"].value == {
+        "earliest_start": 0,
+        "latest_start": horizon - 30,
+        "latest_end": horizon,
+    }
 
 
 # ── 값마다의 출처와 동의 (AG-32·AG-33) ─────────────────────────
@@ -219,7 +262,7 @@ def test_form_and_intake_produce_same_task_values(seeded):
 
 def test_decided_values_are_recorded_per_value_and_get_no_consent(seeded):
     """문장에 없는 값은 Agent가 정한다(작업 시간 추정, 자원은 조회에서 고름). 정한 값은 값마다 기록에
-    남고, Consent는 사람이 말한 시작 범위·요청 자원에만 생긴다."""
+    남고, Consent는 사람이 말한 요청 자원에만 생긴다. 시각을 하나라도 정했으면 정한 희망이다."""
     pack = seeded
     text = "B구역 인양 해 주세요. 첫날 9시부터 시작할 수 있어요."
     decided = ("duration", "latest_start", "latest_end", "requested_resource_id")
@@ -230,21 +273,23 @@ def test_decided_values_are_recorded_per_value_and_get_no_consent(seeded):
     assert {name: f.origins for name, f in a.fields.items()} == {
         "zone_id": {},
         "duration": {"duration": "DECIDED"},
-        # 시간창은 세 값이 한 필드다: 값마다 따로 적힌다
-        "window": {"latest_start": "DECIDED", "latest_end": "DECIDED"},
+        # 시간창은 서버가 Horizon 전체로 채운 값이라 출처를 적지 않는다. 시각의 출처는 희망 영역에 남는다
+        "window": {},
         "resource": {"requested_resource_id": "DECIDED"},
     }
     assert {f.status for f in a.fields.values()} == {"CONFIRMED"}  # C11은 그대로다
-    assert a.decided_values == tuple(sorted(decided))
-    assert _consents("A") == []  # 시작 범위와 요청 자원을 Agent가 정했다
+    assert a.decided_values == ("duration", "requested_resource_id")
+    assert (_hope("A")["origin"], _hope("A")["made_by"]) == ("DECIDED", "INTAKE")
+    assert _consents("A") == []  # 요청 자원을 Agent가 정했다
 
 
-def test_consent_only_for_stated_start_range_and_resource(seeded):
-    """작업 시간만 정했으면 시작 범위·요청 자원의 Consent는 폼처럼 생긴다. 출처는 서버가 검사하지 않는다."""
+def test_consent_only_for_stated_resource_and_hope_is_stated(seeded):
+    """작업 시간만 정했으면 요청 자원의 Consent가 생기고 희망은 말한 희망이다. 출처는 서버가 검사하지 않는다."""
     pack = seeded
     _run_intake(pack, [_complete(decided=("duration", "work_type"))])
     a = _task(pack, "A")
-    assert [c[0] for c in _consents("A")] == ["TIME", "RESOURCE"]
+    assert [c[0] for c in _consents("A")] == ["RESOURCE"]
+    assert _hope("A")["origin"] == "STATED"
     # 작업 유형을 정했으면 그 기록이 따로 남는다(critical field가 아니다)
     assert a.fields["work_type"].origins == {"work_type": "DECIDED"}
     assert a.fields["work_type"].value == "LIFTING"
@@ -258,7 +303,18 @@ def test_resource_without_origin_counts_as_decided(seeded):
     _run_intake(pack, [_complete(origins=origins)])
     a = _task(pack, "A")
     assert a.decided_values == ("requested_resource_id", "required_resource_type")
-    assert [c[0] for c in _consents("A")] == ["TIME"]
+    assert _consents("A") == []
+
+
+def test_hope_times_must_be_ordered(seeded):
+    """희망 시각의 순서가 맞지 않으면 INVALID_WINDOW로 막히고 작업이 생기지 않는다."""
+    pack = seeded
+    bad = {**VALUES_A, "earliest_start": 60, "latest_start": 30}
+    run = _run_intake(pack, [_complete(bad), _complete()])
+    s0, s1 = _steps(run.run_id)
+    assert (s0["result_kind"], s0["guard"]["reason_code"]) == ("REJECTED", "TASKSPEC_INVALID")
+    assert s0["tool_result"]["reason_codes"] == ["INVALID_WINDOW"]
+    assert s1["result_kind"] == "DONE" and _hope("A")["end_min"] == 90
 
 
 # ── 서버 검사 ──────────────────────────────────────────────────
@@ -428,7 +484,9 @@ def test_time_arguments_are_site_time_strings(seeded):
     assert obs["work_hours"][0] == ["2026-10-12(월) 09:00", "2026-10-12(월) 17:00"]
     assert obs["work_intervals"][0] == [0, 480]
     task = _task(pack, "A")
-    assert (task.earliest_start, task.latest_start, task.latest_end) == (0, 60, 90)
+    # 낸 시각은 희망 영역으로 가고 시간창은 Horizon 전체다 (ST-22)
+    assert (_hope("A")["start_min"], _hope("A")["end_min"]) == (0, 90)
+    assert _window(task) == (0, pack.horizon_minutes - 30, pack.horizon_minutes)
 
 
 def test_time_invalid_is_rejected(seeded):

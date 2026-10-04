@@ -12,9 +12,10 @@ from fastapi import APIRouter
 from app.agents import casefacts
 from app.api.deps import ActorDep, ApiError, PackDep, check_site
 from app.commands.moves import move_check, move_range, remove_check, resource_check
-from app.domain.calendar import work_delay
+from app.domain.calendar import work_delay, work_minutes
 from app.domain.canonical import canonical_hash
-from app.domain.models import AgentRun, Assignment, Plan, Snapshot, SnapshotContent, Task
+from app.domain.factdiff import fact_changes
+from app.domain.models import AgentRun, Plan, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.store import db
@@ -39,7 +40,7 @@ from app.store.repos.records import (
 from app.store.repos.resources import list_resources
 from app.store.repos.runs import approach_attempts, get_run, list_steps, run_for_solver_result
 from app.store.repos.site import get_site, list_actors, list_zone_relations
-from app.store.repos.snapshots import build_snapshot_content
+from app.store.repos.snapshots import build_snapshot_content, plan_facts
 from app.store.repos.tasks import list_current_tasks
 
 router = APIRouter()
@@ -77,23 +78,60 @@ def gate(
 # ── 후보 ───────────────────────────────────────────────────────
 
 
+def work_deviation(facts: SnapshotContent, task_id: str, start: int) -> int:
+    """희망에서 벗어난 정도의 근무 분. 달력 분(facts.deviation)과 같은 정의다: 희망 영역이 있으면 희망
+    시작 범위 밖으로 벗어난 구간(앞뒤 모두)의 근무 분, 없으면 기준 시작보다 늦어진 근무 분 (ST-22)."""
+    task = facts.task_map()[task_id]
+    wanted = facts.preferred_map().get(task_id)
+    if wanted is None:
+        return work_delay(facts.base_assignments()[task_id].start, start, facts.work_intervals)
+    lo, hi = wanted.start_range(task.duration)
+    if start > hi:
+        return work_minutes(hi, start, facts.work_intervals)
+    if start < lo:
+        return work_minutes(start, lo, facts.work_intervals)
+    return 0
+
+
 def _work_delay_sum(
-    solution: list[dict[str, Any]] | None, base: dict[str, Assignment], intervals: Any
+    solution: list[dict[str, Any]] | None, facts: SnapshotContent | None
 ) -> int | None:
-    """해의 근무 분 지연 합. 저장하지 않고 조회 시 계산한다."""
-    if solution is None:
+    """해의 근무 분 지연(희망에서 벗어난 정도) 합. 저장하지 않고 조회 시 계산한다."""
+    if solution is None or facts is None:
         return None
+    tasks = facts.task_map()
     return sum(
-        work_delay(base[a["task_id"]].start, a["start"], intervals)
-        for a in solution
-        if a["task_id"] in base
+        work_deviation(facts, a["task_id"], a["start"]) for a in solution if a["task_id"] in tasks
     )
+
+
+def off_hope(facts: SnapshotContent | None, assignments: Any) -> list[dict[str, Any]]:
+    """그 배치에서 희망 영역 밖에 놓인 작업과 정도 (서버 계산). 바뀐 작업만이 아니라 희망 영역이 있는
+    작업 전부를 본다. direction은 희망보다 이른지(EARLY) 늦은지(LATE)다."""
+    if facts is None:
+        return []
+    tasks, wanted = facts.task_map(), facts.preferred_map()
+    out = []
+    for a in sorted(assignments, key=lambda a: a.task_id):
+        if a.task_id not in wanted or a.task_id not in tasks:
+            continue
+        delay = facts.deviation(a.task_id, a.start)
+        if delay:
+            out.append(
+                {
+                    "task_id": a.task_id,
+                    "delay": delay,
+                    "work_delay": work_deviation(facts, a.task_id, a.start),
+                    "direction": "EARLY" if a.start < wanted[a.task_id].start else "LATE",
+                }
+            )
+    return out
 
 
 def _solver(
     conn: sqlite3.Connection, solver_result_id: str | None, facts: SnapshotContent | None
 ) -> dict[str, Any] | None:
-    """stage2.delay는 목적함수 값(달력 분), work_delay는 같은 해의 근무 분 지연."""
+    """stage2.delay는 목적함수 값(달력 분, 희망에서 벗어난 정도의 합), work_delay는 같은 해의 근무 분."""
     if solver_result_id is None:
         return None
     found = rows(
@@ -108,12 +146,10 @@ def _solver(
     r = found[0]
     s1, s2 = loads(r["stage1"]), loads(r["stage2"])
     solution = s1 if r["chosen_stage"] == 1 else s2
-    base = facts.base_assignments() if facts else {}
-    intervals = facts.work_intervals if facts else ()
     delay_first = r["objective"] == "DELAY_FIRST"
     return {
         "scope_level": r["scope_level"],
-        # 목적 순서. 지연 먼저면 1단계가 총 지연, 2단계가 변경 작업 수다 (CV-27)
+        # 목적 순서. 지연 먼저면 1단계가 지연(희망에서 벗어난 정도), 2단계가 변경 작업 수다 (CV-27)
         "objective": r["objective"],
         "stage1": {"status": s1["status"], "changed": s1["changed"], "delay": s1.get("delay")},
         "stage2": None
@@ -122,7 +158,7 @@ def _solver(
             "status": s2["status"],
             "delay": s2["delay"],
             "changed": s2.get("changed"),
-            "work_delay": _work_delay_sum(s2.get("solution"), base, intervals),
+            "work_delay": _work_delay_sum(s2.get("solution"), facts),
         },
         "chosen_stage": r["chosen_stage"],
         "minimal_change": s1["status"] == "OPTIMAL" and not delay_first,
@@ -148,20 +184,22 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
     snapshot = get_snapshot(conn, cand.snapshot_id)
     facts = snapshot.facts() if snapshot else None
     base = facts.base_assignments() if facts else {}
-    intervals = facts.work_intervals if facts else ()
-    # delay = 달력 분, work_delay = 근무 분. 조회 시 계산하고 저장하지 않는다.
+    # delay = 희망에서 벗어난 정도(달력 분), work_delay = 같은 값의 근무 분. 조회 시 계산하고 저장하지 않는다.
     changes = [
         {
             "task_id": a.task_id,
             "before": base[a.task_id].model_dump(),
             "after": a.model_dump(),
-            "delay": max(0, a.start - base[a.task_id].start),
-            "work_delay": work_delay(base[a.task_id].start, a.start, intervals),
+            "delay": facts.deviation(a.task_id, a.start),
+            "work_delay": work_deviation(facts, a.task_id, a.start),
         }
         for a in cand.assignments
-        if a.task_id in base
+        if facts is not None
+        and a.task_id in base
         and (a.start, a.resource_id) != (base[a.task_id].start, base[a.task_id].resource_id)
     ]
+    # 이 안의 기준 계획을 확정할 때의 사실과 이 안이 계산된 사실의 차이 (서버 계산)
+    basis = plan_facts(conn, site_id, cand.base_plan_revision)
     validations = list_validations(conn, site_id, candidate_id)
     validation = None
     if validations:
@@ -210,6 +248,10 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "display_status": display,
         "assignments": [a.model_dump() for a in cand.assignments],
         "changes": changes,
+        # 희망 영역 밖에 놓인 작업과 정도 (ST-22)
+        "off_hope": off_hope(facts, cand.assignments),
+        # 기준 계획을 확정한 뒤 사람이 바꾼 사실: 무엇 때문에 다시 계획·확정하는가
+        "fact_changes": fact_changes(basis, facts) if basis and facts else [],
         "solver": _solver(conn, cand.solver_result_id, facts),
         # Agent가 건 조건(서버가 받은 값, 분)과 거절·이견된 변경(서버 계산) (CV-24·CV-26)
         "conditions": _conditions(conn, cand.search_spec_id),
@@ -265,10 +307,7 @@ def step_work_delays(conn: sqlite3.Connection, run_id: str) -> dict[int, int | N
         snapshot = get_snapshot(conn, r["snapshot_id"])
         if stage2 is None or snapshot is None:
             continue
-        facts = snapshot.facts()
-        out[r["step_no"]] = _work_delay_sum(
-            stage2.get("solution"), facts.base_assignments(), facts.work_intervals
-        )
+        out[r["step_no"]] = _work_delay_sum(stage2.get("solution"), snapshot.facts())
     return out
 
 
@@ -347,6 +386,7 @@ def build_state(
     content = build_snapshot_content(conn, site_id, pack)
     snapshot = Snapshot(snapshot_id="state", snapshot_hash=canonical_hash(content), content=content)
     conflicts = detect_conflicts(snapshot, snapshot.facts().check_assignments(), pack)
+    base = snapshot.facts().base_assignments()
 
     live = rows(
         conn,
@@ -396,9 +436,11 @@ def build_state(
             {
                 **t.model_dump(mode="json"),
                 **gate(t, plan, site.context_version, holds),
-                # 사람이 건 고정(누가·언제)과 담당자가 그린 희망 영역 (AG-27)
+                # 사람이 건 고정(누가·언제)과 희망 영역(구간·출처·만든 주체) (AG-27, ST-22)
                 "pin": pins.get(t.task_id),
                 "preferred_window": windows.get(t.task_id),
+                # 기준 시작: 계획에 있으면 지금 배치, 없으면 희망 시작(없으면 가장 이른 시작). READY만
+                "base_start": base[t.task_id].start if t.task_id in base else None,
             }
             for t in tasks
         ],

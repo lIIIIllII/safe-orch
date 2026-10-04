@@ -2,8 +2,12 @@
 
 import sqlite3
 
+from app.domain.canonical import canonical_hash
+from app.domain.models import Snapshot
 from app.packs.loader import LoadedPack
 from app.store.repos._rows import dumps
+from app.store.repos.records import insert_snapshot
+from app.store.repos.snapshots import build_snapshot_content, seed_snapshot_id
 
 
 class SeedError(RuntimeError):
@@ -108,6 +112,17 @@ def seed_pack(tx: sqlite3.Connection, pack: LoadedPack) -> None:
         "INSERT INTO plan (site_id, plan_revision, assignments, candidate_id,"
         " committed_context_version) VALUES (?, 0, ?, NULL, 0)",
         (sid, dumps([a.model_dump() for a in pack.plan_r0])),
+    )
+    # R0를 확정할 때의 사실. 사실 변경 표시의 기준이다(뒤의 Plan은 그 후보의 Snapshot이 기준)
+    content = build_snapshot_content(tx, sid, pack)
+    insert_snapshot(
+        tx,
+        sid,
+        Snapshot(
+            snapshot_id=seed_snapshot_id(sid),
+            snapshot_hash=canonical_hash(content),
+            content=content,
+        ),
     )
     tx.execute(
         "INSERT INTO audit (site_id, command, actor_id, before_context_version,"

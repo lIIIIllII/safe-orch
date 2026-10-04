@@ -275,8 +275,11 @@ CREATE TABLE task_pin (
 -- 작업당 ACTIVE 고정 하나
 CREATE UNIQUE INDEX task_pin_one_active ON task_pin (site_id, task_id) WHERE status = 'ACTIVE';
 
--- 담당자가 그린 희망 영역(작업당 시각 구간 하나, [start_min, end_min)). 서버는 강제하지 않고 현장 버전도
--- 올리지 않는다. 다시 그리거나 지우면 앞의 것이 CLEARED가 된다. 삭제 금지.
+-- 희망 영역(작업당 시각 구간 하나, [start_min, end_min)). 계산에 들어가는 사실이다: 지연의 기준이고 동의
+-- 범위다. 서버는 강제하지 않는다(Hard가 아니다). 바뀌면 현장 버전을 올린다 (ST-22).
+-- origin: 사람이 말한(그리거나 확인한) 희망 STATED, Work Intake가 정한 희망 DECIDED.
+-- made_by: 담당자가 그렸거나 확인함 OWNER, Work Intake가 요청 문장에서 만듦 INTAKE.
+-- 다시 그리거나 확인하거나 지우면 앞의 것이 CLEARED가 된다. 삭제 금지.
 CREATE TABLE preferred_window (
     window_id  TEXT PRIMARY KEY,
     site_id    TEXT NOT NULL REFERENCES site (site_id),
@@ -284,6 +287,8 @@ CREATE TABLE preferred_window (
     start_min  INTEGER NOT NULL CHECK (start_min >= 0),
     end_min    INTEGER NOT NULL,
     status     TEXT NOT NULL CHECK (status IN ('ACTIVE', 'CLEARED')),
+    origin     TEXT NOT NULL CHECK (origin IN ('STATED', 'DECIDED')),
+    made_by    TEXT NOT NULL CHECK (made_by IN ('OWNER', 'INTAKE')),
     set_by     TEXT NOT NULL,
     set_at     TEXT NOT NULL,
     cleared_by TEXT,
@@ -339,7 +344,9 @@ CREATE TABLE case_event (
                                                           'TASK_REQUEST_WITHDRAWN',
                                                           'TASK_PINNED', 'TASK_UNPINNED',
                                                           'CANDIDATE_CHOSEN', 'TASK_MOVED',
-                                                          'TASK_REMOVED', 'TASK_EDITED')),
+                                                          'TASK_REMOVED', 'TASK_EDITED',
+                                                          'PREFERRED_WINDOW_SET',
+                                                          'PREFERRED_WINDOW_CLEARED')),
     ref                     TEXT NOT NULL CHECK (json_valid(ref)),
     case_id                 TEXT NOT NULL,
     dedupe_key              TEXT NOT NULL,
@@ -602,6 +609,7 @@ CREATE TRIGGER preferred_window_clear_only BEFORE UPDATE ON preferred_window
 WHEN OLD.status <> 'ACTIVE' OR NEW.status <> 'CLEARED'
      OR NEW.window_id <> OLD.window_id OR NEW.site_id <> OLD.site_id OR NEW.task_id <> OLD.task_id
      OR NEW.start_min <> OLD.start_min OR NEW.end_min <> OLD.end_min
+     OR NEW.origin <> OLD.origin OR NEW.made_by <> OLD.made_by
      OR NEW.set_by <> OLD.set_by OR NEW.set_at <> OLD.set_at
 BEGIN SELECT RAISE(ABORT, 'preferred_window: only ACTIVE -> CLEARED'); END;
 CREATE TRIGGER preferred_window_no_delete BEFORE DELETE ON preferred_window

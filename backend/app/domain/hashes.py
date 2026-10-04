@@ -50,6 +50,8 @@ def search_key(
     무결성 hash(search_spec_hash)와 다르다. snapshot_hash 대신 Solver가 읽는 사실만 넣으므로
     context_version·plan_revision 번호, Consent, fields, revision 번호, Hold가 바뀌어도 같다.
     - 작업(READY): 구역, duration, 시간창, 필요 자원 유형, 자원 요구 조건, 기준 배정, 선후행, hazard_tags
+    - 희망 영역의 시작 범위: 지연(희망에서 벗어난 정도)과 변경 수의 기준이다. 희망 영역이 있는 작업에만
+      넣는다. 출처(말함·정함)는 Solver 입력이 아니므로 넣지 않는다 (ST-22)
     - 자원(유형·허용 Unit·사용 가능 구역·속성 값·가용 구간), 구역 관계, pack_hash(Rule), 근무 구간, Horizon
     - 풀(종류·허용 Unit·수량)과 작업의 수요·필수 직종. 누적 제약의 입력이다 (CV-04)
     - 자원·풀의 표시 이름·메모·비용은 Solver 입력이 아니므로 넣지 않는다 (CV-04)
@@ -59,6 +61,7 @@ def search_key(
     - Agent가 건 조건은 Solver 입력이다. 같은 범위라도 조건이 다르면 다른 키다 (CV-24)
     """
     base = facts.base_assignments()
+    wanted = facts.preferred_map()
     effective = {}
     for tid, ax in axes.items():
         resource = ax.resource and bool(resource_alternatives.get(tid))
@@ -83,6 +86,11 @@ def search_key(
                     "base": base[t.task_id].model_dump(),
                     "predecessors": [p.model_dump() for p in t.predecessors],
                     "hazard_tags": sorted(t.hazard_tags),
+                    **(
+                        {"hope": list(wanted[t.task_id].start_range(t.duration))}
+                        if t.task_id in wanted
+                        else {}
+                    ),
                 }
                 for t in sorted(facts.tasks, key=lambda t: t.task_id)
             ],

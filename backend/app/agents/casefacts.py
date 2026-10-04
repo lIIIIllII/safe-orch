@@ -39,7 +39,15 @@ LEVELS = ("L0", "L1", "L2")
 OPEN_ITEM = ("PENDING", "OBJECTED")
 CHILD_RESULTS = 3  # 관찰에 보이는 최근 하위 Run 결과 수
 # 사람이 직접 한 조작의 사건: 한 번마다 사람이 만든 일 하나다 (AG-30)
-HUMAN_EVENTS = ("TASK_PINNED", "TASK_UNPINNED", "TASK_MOVED", "TASK_REMOVED", "TASK_EDITED")
+HUMAN_EVENTS = (
+    "TASK_PINNED",
+    "TASK_UNPINNED",
+    "TASK_MOVED",
+    "TASK_REMOVED",
+    "TASK_EDITED",
+    "PREFERRED_WINDOW_SET",
+    "PREFERRED_WINDOW_CLEARED",
+)
 
 
 def current_snapshot(conn: sqlite3.Connection, pack: LoadedPack) -> Snapshot:
@@ -260,7 +268,8 @@ def rejection_facts(conn: sqlite3.Connection, case_id: str) -> dict[str, Any]:
 def human_work(conn: sqlite3.Connection, site_id: str, case_id: str) -> int:
     """이 Case에서 사람이 새 일을 만든 횟수 (AG-30). 저장하지 않고 사건·기록에서 센다.
 
-    사람에게 막힌 안(Supervisor 거절이나 담당자 이견) 하나, 작업 고정·고정 해제·직접 이동·없애기·카드에서 값 고치기(확인) 한 번,
+    사람에게 막힌 안(Supervisor 거절이나 담당자 이견) 하나, 작업 고정·고정 해제·직접 이동·없애기·카드에서 값
+    고치기(확인)·희망 영역 그리기·지우기 한 번,
     Supervisor가 고른 안을 다른 안으로 바꾼 것 한 번이 각각 1이다. 막힌 안을 떠나 새로 고른 것은 그 안에서 이미
     셌으므로 세지 않는다. Agent의 행동(재호출, 가드 거절, 재계획 결과)은 여기 들어오지 않는다.
     """
@@ -494,7 +503,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                     # 고정되지 않아 움직일 수 있는 작업 (재계획은 이것만 옮긴다)
                     "movable_task_ids": movable,
                     "request_task_ids": [t for t in task_ids if t not in in_plan],
-                    # 담당자가 희망 영역을 그려 둔 작업 (희망 영역 우선 접근이 쓸 수 있는 것)
+                    # 희망 영역이 있는 작업 (지연의 기준이다. 희망 우선 접근이 먼저 줄이는 것, ST-22)
                     "preferred_task_ids": [t for t in task_ids if t in wanted],
                     "untried_levels": untried_levels(
                         snapshot, primary_for(g, facts, unit), unit, tried

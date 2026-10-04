@@ -19,7 +19,7 @@ from app.domain.needs import ResultFields
 AGENT_TYPE = "REPLANNING"
 GOAL = (
     "Hard 제약과 확인된 조건을 지키면서 충돌을 해소하는 검증 가능한 대안을 찾는다. "
-    "변경 작업 수를 먼저, 총 지연을 그다음으로 최소화한다."
+    "변경 작업 수를 먼저, 희망에서 벗어난 정도(지연)를 그다음으로 최소화한다."
 )
 
 MAX_STEPS = 15
@@ -82,15 +82,18 @@ class TaskCondition(BaseModel):
     )
     use_preferred_window: bool = Field(
         default=False,
-        description="담당자가 그린 희망 영역 안에서 시작하고 끝나게 한다. 다른 시각 조건과 같이 쓰지 않는다",
+        description=(
+            "그 작업의 희망 영역 안에서 시작하고 끝나게 한다(이 계산에서는 희망을 반드시 지킨다). "
+            "다른 시각 조건과 같이 쓰지 않는다"
+        ),
     )
 
 
 class SolveWithConditions(Action):
     """탐색 범위에 작업별 조건을 걸어 CP-SAT로 계산한다. 조건은 시작 이후·이전, 시작 지정, 자원 지정,
     희망 영역을 시작 범위로 쓰기다. 조건은 좁히기만 하고, 걸지 않은 작업은 계산이 정한다. 범위 안
-    작업을 모두 지정하면 그 배치 그대로를 검사한다. 목적 순서(objective)로 변경 작업 수와 총 지연 가운데
-    무엇을 먼저 줄일지 고른다. 해가 있으면 후보가 등록되고 검증을 기다린다. 해가 없으면 계산 상태를
+    작업을 모두 지정하면 그 배치 그대로를 검사한다. 목적 순서(objective)로 변경 작업 수와 희망에서 벗어난
+    정도(지연) 가운데 무엇을 먼저 줄일지 고른다. 해가 있으면 후보가 등록되고 검증을 기다린다. 해가 없으면 계산 상태를
     돌려주고, 모두 지정한 배치였으면 그 배치가 어긴 규칙을 붙인다."""
 
     OPENS = (
@@ -110,8 +113,8 @@ class SolveWithConditions(Action):
     objective: Literal["CHANGE_FIRST", "DELAY_FIRST"] = Field(
         default="CHANGE_FIRST",
         description=(
-            "목적 순서. CHANGE_FIRST 변경 작업 수를 먼저 줄이고 그 안에서 총 지연을 줄인다(기본). "
-            "DELAY_FIRST 총 지연을 먼저 줄이고 그 안에서 변경 작업 수를 줄인다"
+            "목적 순서. CHANGE_FIRST 변경 작업 수를 먼저 줄이고 그 안에서 희망에서 벗어난 정도(지연)를 "
+            "줄인다(기본). DELAY_FIRST 희망에서 벗어난 정도를 먼저 줄이고 그 안에서 변경 작업 수를 줄인다"
         ),
     )
 

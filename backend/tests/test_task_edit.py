@@ -1,8 +1,8 @@
 """작업 카드에서 값 고치기·정한 값 확인 (AG-33)과 재계획이 보는 정한 값 (AG-32).
 
 Work Intake가 정한 값은 작업 기록에 남는다. 요청자(담당자)가 카드에서 고치면 새 revision이고 그 값은
-사람이 말한 값이 된다. [확인]하면 남은 정한 값이 모두 말한 값이 되고 Consent가 생긴다. 재계획은 정한
-값을 바꾸지 못하고, 막히면 결과의 열 수 있는 것에 올린다.
+사람이 말한 값이 된다. [확인]하면 남은 정한 값이 모두 말한 값이 되고 Consent가 생긴다. 정한 희망 영역도
+[확인]으로 말한 희망이 된다 (ST-22). 재계획은 정한 값을 바꾸지 못하고, 막히면 결과의 열 수 있는 것에 올린다.
 """
 
 from fastapi.testclient import TestClient
@@ -10,6 +10,7 @@ from scripted import Router, blocked, solve
 from test_intake import (
     _complete,
     _consents,
+    _hope,
     _intake,
     _key,
     _run_intake,
@@ -42,7 +43,7 @@ def _origins(task):
 
 def test_owner_edits_and_confirms_decided_values_on_card(seeded):
     """고치면 새 revision이고 고친 값만 말한 값이 된다. 검증은 폼과 같다. [확인]하면 남은 정한 값이 모두
-    말한 값이 되고 시작 범위·요청 자원의 Consent가 생긴다."""
+    말한 값이 되고 요청 자원의 Consent가 생기며, 정한 희망은 말한 희망이 된다."""
     pack = seeded
     run = _run_intake(pack, [_complete(decided=DECIDED)])
     intake_source = f"intake:{run.input_ref['intake_id']}"
@@ -66,7 +67,7 @@ def test_owner_edits_and_confirms_decided_values_on_card(seeded):
     assert _origins(a) == {
         "zone_id": {},
         "duration": {},
-        "window": {"latest_start": "DECIDED"},
+        "window": {},
         "resource": {"requested_resource_id": "DECIDED"},
     }
     card = f"card:{out.result_refs['edit_id']}"
@@ -81,8 +82,8 @@ def test_owner_edits_and_confirms_decided_values_on_card(seeded):
     assert a.fields["duration"].value == 45
     assert a.fields["window"].value["latest_end"] == 105
     assert _site(pack).context_version == ctx + 1
-    # 시작 범위와 요청 자원에는 정한 값이 남아 있어 Consent가 없다
-    assert _consents("A") == []
+    # 요청 자원은 정한 값이 남아 있고 시작 범위는 고치지 않아 Consent가 없다. 희망은 아직 정한 희망이다
+    assert _consents("A") == [] and _hope("A")["origin"] == "DECIDED"
     # A는 아직 계획 밖 요청이라 사건이 남는다(자동 시작이 꺼져 있어 메인은 뜨지 않는다)
     with db.read() as conn:
         [event] = [e for e in list_case_events(conn, pack.site_id) if e["kind"] == "TASK_EDITED"]
@@ -90,8 +91,17 @@ def test_owner_edits_and_confirms_decided_values_on_card(seeded):
 
     out = _edit(pack, "planner_a", confirm=True)
     assert out.status == "APPLIED" and out.result_refs["confirmed"] is True
+    assert out.result_refs["preferred_window_confirmed"] is True
     a = _task(pack, "A")
     assert (a.revision, a.decided_values) == (3, ())
+    # 같은 구간의 말한 희망이 된다(만든 주체는 그대로 Intake)
+    assert _hope("A") == {
+        "start_min": 0,
+        "end_min": 90,
+        "origin": "STATED",
+        "made_by": "INTAKE",
+        "set_by": "planner_a",
+    }
     assert all(f.origins == {} for f in a.fields.values())
     confirm = f"card:{out.result_refs['edit_id']}"
     with db.read() as conn:
@@ -99,17 +109,34 @@ def test_owner_edits_and_confirms_decided_values_on_card(seeded):
             "SELECT axis, scope, source_ref FROM consent WHERE task_id = 'A' AND task_revision = 3"
             " ORDER BY rowid"
         ).fetchall()
-    assert [(c[0], c[2]) for c in current] == [("TIME", confirm), ("RESOURCE", confirm)]
-    assert '"start_max":60' in current[0][1].replace(" ", "")
+    # 시작 범위 Consent는 만들지 않는다: 그 작업의 동의 범위는 희망 영역이다
+    assert [(c[0], c[2]) for c in current] == [("RESOURCE", confirm)]
     # 더 확인할 것이 없다
     assert _edit(pack, "planner_a", confirm=True).reason_codes == ("NO_CHANGE",)
 
 
+def test_confirming_only_a_decided_hope_keeps_the_revision(seeded):
+    """정한 값이 희망 영역뿐이면 [확인]은 새 revision을 만들지 않는다. 현장 버전은 오르고 사건이 남는다."""
+    pack = seeded
+    _run_intake(pack, [_complete(decided=("latest_start",))])
+    ctx = _site(pack).context_version
+    assert (_task(pack, "A").decided_values, _hope("A")["origin"]) == ((), "DECIDED")
+    out = _edit(pack, "planner_a", confirm=True)
+    assert out.status == "APPLIED" and out.result_refs["preferred_window_confirmed"] is True
+    assert (_task(pack, "A").revision, out.result_refs["revision"]) == (1, 1)
+    assert (_hope("A")["origin"], _site(pack).context_version) == ("STATED", ctx + 1)
+    with db.read() as conn:
+        [event] = [e for e in list_case_events(conn, pack.site_id) if e["kind"] == "TASK_EDITED"]
+    assert (event["ref"]["confirmed"], event["ref"]["changed"]) == (True, [])
+    assert _edit(pack, "planner_a", confirm=True).reason_codes == ("NO_CHANGE",)
+
+
 def test_edit_keeps_consent_of_unchanged_axis_and_drops_changed_one(seeded):
-    """값이 바뀌지 않은 축의 Consent는 새 revision으로 간다. 시작 범위를 고치면 새 범위의 Consent가 된다."""
+    """값이 바뀌지 않은 축의 Consent는 새 revision으로 간다. 카드에서 시작 범위를 고치면 사람이 넣은 가능
+    범위가 되어 그 범위의 Consent가 생긴다."""
     pack = seeded
     _run_intake(pack, [_complete(decided=("duration",))])
-    assert [c[0] for c in _consents("A")] == ["TIME", "RESOURCE"]
+    assert [c[0] for c in _consents("A")] == ["RESOURCE"]
     out = _edit(pack, "planner_a", latest_start=30, latest_end=60)
     assert out.status == "APPLIED"
     with db.read() as conn:
@@ -207,18 +234,19 @@ def test_replanning_sees_decided_values_and_cannot_change_them(seeded, main_on):
     [rp] = _runs("REPLANNING")
     [step] = _steps(rp.run_id)
     acting = {t["task_id"]: t for t in step["observation"]["acting_tasks"]}
-    assert acting["A"]["decided_values"] == ["duration", "latest_start"]
+    assert acting["A"]["decided_values"] == ["duration"]
     assert acting["C"]["decided_values"] == []
+    # 정한 시각은 정한 희망으로 보인다. Hard가 아니라 해를 막지 않으므로 열 수 있는 것에 오르지 않는다
+    assert acting["A"]["preferred_window"]["origin"] == "DECIDED"
     decided = [o for o in step["observation"]["openers"] if o.get("decided")]
     assert decided == [
-        {"kind": "FACT_CHANGE", "field": "WINDOW", "task_id": "A", "decided": True},
         {"kind": "FACT_CHANGE", "field": "DURATION", "task_id": "A", "decided": True},
     ]
     result = [o for o in step["tool_result"]["openers"] if o.get("decided")]
-    assert [(o["field"], o["task_id"]) for o in result] == [("WINDOW", "A"), ("DURATION", "A")]
+    assert [(o["field"], o["task_id"]) for o in result] == [("DURATION", "A")]
     assert all("need_id" in o for o in result)
     a = _task(pack, "A")
-    assert (a.revision, a.duration, a.decided_values) == (1, 30, ("duration", "latest_start"))
+    assert (a.revision, a.duration, a.decided_values) == (1, 30, ("duration",))
     # 메인은 정한 값 표시가 붙은 결과를 읽고 이어 간다
     assert _runs("MAIN")[0].status != "ERROR"
 

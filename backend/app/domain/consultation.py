@@ -7,7 +7,13 @@ from collections.abc import Iterable, Mapping
 from typing import Literal
 
 from app.domain.canonical import canonical_hash
-from app.domain.models import Assignment, Candidate, ConsultationItem, SnapshotContent
+from app.domain.models import (
+    Assignment,
+    Candidate,
+    ConsultationItem,
+    PreferredWindow,
+    SnapshotContent,
+)
 
 ItemStatus = Literal["COVERED", "PENDING", "ACCEPTED", "OBJECTED", "WAIVED"]
 ConsultationStatus = Literal["COMPLETE", "BLOCKED", "OPEN", "CANCELLED"]
@@ -31,9 +37,12 @@ def build_items(facts: SnapshotContent, candidate: Candidate) -> tuple[Consultat
     """기준(snapshot.base_assignments()) 대비 시작이나 자원이 바뀐 작업마다 item 1개.
 
     바뀐 축마다 그 작업 현재 revision의 같은 축 Consent가 새 값을 덮어야 COVERED다.
+    희망 영역이 있는 작업의 시각은 Consent 대신 희망 영역을 본다: 사람이 말한(그리거나 확인한) 희망의
+    시작 범위 안이면 덮인 것이고, Work Intake가 정한 희망은 확인 전까지 덮지 않는다 (ST-22, AG-33).
     """
     base = facts.base_assignments()
     tasks = facts.task_map()
+    wanted = facts.preferred_map()
     items = []
     for after in sorted(candidate.assignments, key=lambda a: a.task_id):
         task = tasks.get(after.task_id)
@@ -52,8 +61,12 @@ def build_items(facts: SnapshotContent, candidate: Candidate) -> tuple[Consultat
             for c in facts.consents
             if c.task_id == task.task_id and c.task_revision == task.revision
         ]
+        hope = wanted.get(task.task_id)
         covered = all(
-            any(c.axis == axis and c.covers(value) for c in consents) for axis, value in needed
+            _hope_covers(hope, task.duration, value)
+            if axis == "TIME" and hope is not None
+            else any(c.axis == axis and c.covers(value) for c in consents)
+            for axis, value in needed
         )
         items.append(
             ConsultationItem(
@@ -67,6 +80,11 @@ def build_items(facts: SnapshotContent, candidate: Candidate) -> tuple[Consultat
             )
         )
     return tuple(items)
+
+
+def _hope_covers(hope: PreferredWindow, duration: int, start: int | str | None) -> bool:
+    lo, hi = hope.start_range(duration)
+    return hope.origin == "STATED" and isinstance(start, int) and lo <= start <= hi
 
 
 def item_statuses(

@@ -3,8 +3,11 @@
 - 고정: 담당자는 자기 작업, Supervisor는 모든 작업. 고정된 작업은 시각·자원 모두 기준 배정에 묶인다.
   Supervisor가 건 고정은 Supervisor만 푼다. 고정·해제는 context +1(검토 중인 후보는 STALE)이고, 열린
   메인이 있으면 사건으로 전한다(없으면 사건을 만들지 않는다). 열린 재계획·협의 Run은 다시 관찰하게 깨운다.
-- 희망 영역: 담당자만 그리고 지운다. 작업당 시각 구간 하나. context를 올리지 않고 사건도 없다.
-  서버는 강제하지 않는다.
+- 희망 영역: 담당자만 그리고 지운다. 작업당 시각 구간 하나. 서버는 강제하지 않지만(Hard가 아니다) 계산에
+  들어가는 사실이다: 지연의 기준이고 동의 범위다 (ST-22). 그리거나 지우면 고정과 같은 방식으로 context +1,
+  열린 재계획·협의 Run 깨우기, 열린 메인에만 사건(PREFERRED_WINDOW_SET·CLEARED), 그리고 재확인을 등록한다
+  (Plan에 없는 작업은 기준 위치가 희망 시작이라 충돌이 달라질 수 있다). 그린 희망은 사람이 말한 희망이다.
+  Work Intake가 정한 희망의 확인은 작업 카드의 [확인](task_edit)이 confirm_preferred_window로 한다.
 """
 
 import sqlite3
@@ -16,12 +19,13 @@ from app.commands.service import Body, CommandContext, CommandOutcome, Result, r
 from app.domain.ids import new_id
 from app.domain.models import Pin, Task
 from app.packs.loader import LoadedPack
-from app.store.repos.cases import deliver_to_open_main, wake_run
+from app.store.repos.cases import deliver_to_open_main, register_recheck, wake_run
 from app.store.repos.pins import (
     clear_preferred_window,
     insert_pin,
     insert_preferred_window,
     list_active_pins,
+    preferred_windows,
     release_pin,
 )
 from app.store.repos.runs import list_active_runs
@@ -54,11 +58,16 @@ def _ready_task(tx: sqlite3.Connection, ctx: CommandContext, task_id: str) -> Ta
     )
 
 
-def _notify(tx: sqlite3.Connection, ctx: CommandContext, kind: str, pin: Pin) -> None:
-    """고정·해제 뒤: 열린 재계획·협의 Run은 다시 관찰하게 깨우고, 열린 메인에 사건을 전한다."""
+def _wake_open_runs(tx: sqlite3.Connection, ctx: CommandContext) -> None:
+    """열린 재계획·협의 Run은 다시 관찰하게 깨운다."""
     for run in list_active_runs(tx, ctx.site_id):
         if run.agent_type in ("REPLANNING", "COORDINATION"):
             wake_run(tx, ctx.site_id, run.run_id)
+
+
+def _notify(tx: sqlite3.Connection, ctx: CommandContext, kind: str, pin: Pin) -> None:
+    """고정·해제 뒤: 열린 재계획·협의 Run은 다시 관찰하게 깨우고, 열린 메인에 사건을 전한다."""
+    _wake_open_runs(tx, ctx)
     deliver_to_open_main(
         tx,
         ctx.pack,
@@ -135,6 +144,52 @@ def unpin_task(
 # ── 희망 영역 ──────────────────────────────────────────────────
 
 
+def replace_preferred_window(
+    tx: sqlite3.Connection,
+    ctx: CommandContext,
+    task_id: str,
+    start: int,
+    end: int,
+    origin: str = "STATED",
+    made_by: str = "OWNER",
+) -> str:
+    """그 작업의 희망 영역을 새 기록으로 바꾼다(앞의 것은 CLEARED). 새 window_id."""
+    now = _now()
+    clear_preferred_window(tx, ctx.site_id, task_id, ctx.actor_id, now)
+    window_id = new_id("pw")
+    insert_preferred_window(
+        tx, ctx.site_id, window_id, task_id, start, end, ctx.actor_id, now, origin, made_by
+    )
+    return window_id
+
+
+def confirm_preferred_window(tx: sqlite3.Connection, ctx: CommandContext, task_id: str) -> bool:
+    """Work Intake가 정한 희망을 담당자가 그대로 확인한다: 같은 구간의 말한 희망이 된다 (AG-33).
+    정한 희망이 없으면 False. 현장 버전·사건은 부르는 쪽(작업 카드의 확인)이 한다."""
+    hope = preferred_windows(tx, ctx.site_id).get(task_id)
+    if hope is None or hope["origin"] != "DECIDED":
+        return False
+    replace_preferred_window(
+        tx, ctx, task_id, hope["start"], hope["end"], "STATED", hope["made_by"]
+    )
+    return True
+
+
+def _window_changed(
+    tx: sqlite3.Connection, ctx: CommandContext, kind: str, task_id: str, context_version: int
+) -> None:
+    """희망 영역이 바뀐 뒤 (ST-22): 열린 재계획·협의 Run 깨우기, 열린 메인에만 사건, 재확인 등록."""
+    _wake_open_runs(tx, ctx)
+    deliver_to_open_main(
+        tx,
+        ctx.pack,
+        kind,
+        f"{kind}:{task_id}:{context_version}",
+        {"task_id": task_id, "actor_id": ctx.actor_id},
+    )
+    register_recheck(tx, ctx.site_id, {"kind": "PREFERRED_WINDOW", "task_id": task_id})
+
+
 def _set_window(tx: sqlite3.Connection, ctx: CommandContext, body: PreferredWindow) -> Result:
     r = Result()
     task = _ready_task(tx, ctx, body.task_id)
@@ -147,12 +202,17 @@ def _set_window(tx: sqlite3.Connection, ctx: CommandContext, body: PreferredWind
     if not 0 <= body.start < body.end <= ctx.site.horizon_minutes:
         r.reject("INVALID_WINDOW")
         return r
-    now = _now()
-    clear_preferred_window(tx, ctx.site_id, task.task_id, ctx.actor_id, now)
-    window_id = new_id("pw")
-    insert_preferred_window(
-        tx, ctx.site_id, window_id, task.task_id, body.start, body.end, ctx.actor_id, now
-    )
+    current = preferred_windows(tx, ctx.site_id).get(task.task_id)
+    if current is not None and (current["start"], current["end"], current["origin"]) == (
+        body.start,
+        body.end,
+        "STATED",
+    ):
+        r.reject("NO_CHANGE")
+        return r
+    context_version = bump_context_version(tx, ctx.site_id)
+    window_id = replace_preferred_window(tx, ctx, task.task_id, body.start, body.end)
+    _window_changed(tx, ctx, "PREFERRED_WINDOW_SET", task.task_id, context_version)
     r.refs = {"window_id": window_id, "task_id": task.task_id}
     return r
 
@@ -175,6 +235,8 @@ def _clear_window(tx: sqlite3.Connection, ctx: CommandContext, body: TaskRef) ->
     if not clear_preferred_window(tx, ctx.site_id, task.task_id, ctx.actor_id, _now()):
         r.reject("PREFERRED_WINDOW_NOT_FOUND")
         return r
+    context_version = bump_context_version(tx, ctx.site_id)
+    _window_changed(tx, ctx, "PREFERRED_WINDOW_CLEARED", task.task_id, context_version)
     r.refs = {"task_id": task.task_id}
     return r
 

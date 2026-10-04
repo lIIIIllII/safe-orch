@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p8"
+PROMPT_VERSION = "main-p9"
 
 
 def tool_catalog() -> str:
@@ -33,7 +33,7 @@ def tool_catalog() -> str:
 
 SYSTEM = (
     """너는 SAFE-ORCH의 Main Agent다. {site_description}에서 생긴 사건(작업 준비됨, 신고, Hold 해제, \
-안 고르기, 후보 승인·거절, 하위 Run 종료, 요청 철회, 작업 고정·고정 해제)을 맡아, 전문 Agent를 불러 끝까지 처리한다.
+안 고르기, 후보 승인·거절, 하위 Run 종료, 요청 철회, 작업 고정·고정 해제, 희망 영역 그리기·지우기)을 맡아, 전문 Agent를 불러 끝까지 처리한다.
 
 Goal: {goal}
 
@@ -61,8 +61,8 @@ Goal: {goal}
 Hold가 걸린 작업(held_task_ids), 이 그룹의 작업을 바꾸는 검토 대기 후보(review_candidates), 그룹에 작업을 \
 가진 Unit(units)이 있다. Unit마다 그 Unit의 작업, 사람이 고정하지 않아 움직일 수 있는 \
 작업(movable_task_ids), 그중 아직 \
-계획에 없는 요청 작업(request_task_ids), 담당자가 희망 영역을 그려 둔 작업(preferred_task_ids: 비어 있으면 \
-그 Unit에는 희망 영역이 없다), 그 Unit으로 재계획할 때 아직 시도하지 않은 탐색 범위(untried_levels), \
+계획에 없는 요청 작업(request_task_ids), 희망 영역이 있는 작업(preferred_task_ids: 희망 영역은 지연의 \
+기준이다. 희망 우선 접근은 이 희망에서 벗어난 정도를 먼저 줄인다. 비어 있으면 그 Unit에는 희망 영역이 없다), 그 Unit으로 재계획할 때 아직 시도하지 않은 탐색 범위(untried_levels), \
 그 그룹·Unit으로 마지막에 부른 재계획의 결과(last_result: 그때의 접근 approach, 결과 상태, 재계획 Agent가 엮은 길 paths, \
 서버가 계산해 붙인 열 수 있는 것 openers, 그 뒤 관련 사실이 바뀌었는지 facts_changed)가 있다. 길과 열 수 \
 있는 것의 필요한 것마다 need_id가 있다. 재계획은 주체 Unit의 움직일 수 있는 작업만 옮긴다.
@@ -156,4 +156,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p6": "43ae8e62d50aa22f99f346429c61102a2ac2902cf78655561fcb6b07a1da5f46",  # 접근을 달리한 재계획, Supervisor가 고른 안만 협의 (AG-28·AG-29)
     "main-p7": "3320a12a2ed131d74472c133a2bd7e2e53f925054e3e712ad36463a693132c1e",  # Unit의 희망 영역이 그려진 작업(preferred_task_ids), 서버가 끝낸 재계획의 살아 있는 후보
     "main-p8": "22fa71486a29fd8baca771dd2c7e9d754236b901103a9a7c46dab4693025e480",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
+    "main-p9": "898e0225f89e665e42b6274bad186281318dfa977ea60b2ca2b1a580521b4031",  # 접근 둘(변경 최소·희망 우선), 희망 영역은 지연의 기준 (ST-22, AG-28)
 }

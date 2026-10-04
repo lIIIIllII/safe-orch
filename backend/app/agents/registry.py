@@ -61,6 +61,6 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-c10",  # 기록만. 묻지 않고 완료, 값마다 출처 (AG-32)
+        exec_contract_version="intake-c11",  # 기록만. 완료의 시각은 희망 영역이 된다 (ST-22)
     ),
 }
