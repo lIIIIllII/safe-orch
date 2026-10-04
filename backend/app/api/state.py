@@ -80,12 +80,14 @@ def gate(
 
 
 def work_deviation(facts: SnapshotContent, task_id: str, start: int) -> int:
-    """희망에서 벗어난 정도의 근무 분. 달력 분(facts.deviation)과 같은 정의다: 희망 영역이 있으면 희망
-    시작 범위 밖으로 벗어난 구간(앞뒤 모두)의 근무 분, 없으면 기준 시작보다 늦어진 근무 분 (ST-22)."""
+    """지연의 근무 분. 달력 분(facts.deviation)과 같은 정의다: 희망 영역이 있으면 희망 시작 범위 밖으로
+    벗어난 구간(앞뒤 모두)의 근무 분, 없으면 계획의 시작에서 옮긴 구간(앞뒤 모두)의 근무 분, 계획에도
+    없으면 0 (CV-29)."""
     task = facts.task_map()[task_id]
     wanted = facts.preferred_map().get(task_id)
     if wanted is None:
-        return work_delay(facts.base_assignments()[task_id].start, start, facts.work_intervals)
+        placed = next((a for a in facts.plan.assignments if a.task_id == task_id), None)
+        return 0 if placed is None else work_delay(placed.start, start, facts.work_intervals)
     lo, hi = wanted.start_range(task.duration)
     if start > hi:
         return work_minutes(hi, start, facts.work_intervals)

@@ -241,7 +241,7 @@ export interface CandidateView {
   display_status: 'COMMITTED' | 'REJECTED' | 'STALE' | 'OPEN'
   assignments: Assignment[]
   /** delay = 희망에서 벗어난 정도(달력 분), work_delay = 같은 값의 근무 분. 서버가 조회 시 계산한다.
-   *  희망 영역이 있는 작업은 희망 범위 밖으로 벗어난 거리(앞뒤 모두), 없는 작업은 기준보다 늦어진 만큼이다. */
+   *  희망 영역이 있는 작업은 희망 범위 밖으로 벗어난 거리(앞뒤 모두), 없고 계획에 있는 작업은 계획의 시작에서 옮긴 거리(앞뒤 모두), 계획에도 없는 작업은 0이다. */
   changes: {
     task_id: string
     before: Assignment

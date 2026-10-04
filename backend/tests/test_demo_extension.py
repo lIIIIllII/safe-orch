@@ -12,7 +12,13 @@ from fastapi.testclient import TestClient
 from scripted import Router, escalate, solve
 
 from app.commands.approval import ApproveRequest, WaiveRequest, approve_and_commit, waive
-from app.commands.pins import TaskRef, pin_task, unpin_task
+from app.commands.pins import (
+    PreferredWindow,
+    TaskRef,
+    pin_task,
+    set_preferred_window,
+    unpin_task,
+)
 from app.commands.task_request import (
     TaskRequestForm,
     TaskWithdraw,
@@ -27,6 +33,7 @@ from app.domain.calendar import (
     work_delay,
     work_minutes,
 )
+from app.domain.models import Assignment
 from app.main import app
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
@@ -54,17 +61,14 @@ FORM_FIELDS = (
     "requested_resource_id",
 )
 
-# 시연 요청 표: 충돌, 요청자의 Unit(참고), L0 결과 (상태, 변경 수, 달력 지연, 근무 지연, 새 시작, 자원)
+# 시연 요청 표: 충돌과 Solver 상태. 요청 작업은 계획 밖이고 희망 영역이 없어 시간창 안 어디에 놓여도
+# 변경도 지연도 아니다 (CV-29). 상대 작업은 기준 상태에서 모두 고정이다.
 EXPECTED = {
-    "N1": ([("CAP-RESOURCE", ("K", "N1"))], "UA", ("OPTIMAL", 1, 60, 60, 1560, "SITE-GC-01")),
-    "N2": ([("SEP-HOT-FLAM", ("N2", "P"))], "UA", ("OPTIMAL", 1, 45, 45, 1575, None)),
-    "N3": (
-        [("CAP-RESOURCE", ("N3", "Q")), ("SEP-LIFT-BELOW", ("M", "N3"))],
-        "UB",
-        ("OPTIMAL", 1, 120, 120, 3000, "SITE-GC-01"),
-    ),
-    "N4": ([("SEP-HOT-FLAM", ("N4", "W"))], "UA", ("OPTIMAL", 1, 1140, 180, 2880, None)),
-    "N5": ([("SEP-LIFT-BELOW", ("K", "N5"))], "UB", ("INFEASIBLE", None, None, None, None, None)),
+    "N1": ([("CAP-RESOURCE", ("K", "N1"))], "OPTIMAL"),
+    "N2": ([("SEP-HOT-FLAM", ("N2", "P"))], "OPTIMAL"),
+    "N3": ([("CAP-RESOURCE", ("N3", "Q")), ("SEP-LIFT-BELOW", ("M", "N3"))], "OPTIMAL"),
+    "N4": ([("SEP-HOT-FLAM", ("N4", "W"))], "OPTIMAL"),
+    "N5": ([("SEP-LIFT-BELOW", ("K", "N5"))], "INFEASIBLE"),
 }
 
 
@@ -122,7 +126,7 @@ def test_calendar_functions():
     assert work_minutes(1740, 2880, CAL) == 180
     # N4: 10/13 14:00 → 10/14 09:00 = 달력 1140분, 근무 180분
     assert (max(0, 2880 - 1740), work_delay(1740, 2880, CAL)) == (1140, 180)
-    assert work_delay(2880, 1740, CAL) == 0  # 앞당김은 지연 0
+    assert work_delay(2880, 1740, CAL) == 180  # 앞당겨도 같은 구간의 근무 분이다 (CV-29)
     assert work_delay(1500, 1560, CAL) == 60
 
 
@@ -136,13 +140,14 @@ def test_extended_r0_has_no_conflict(seeded):
 
 
 def test_section15_values_on_extended_fixture(with_a):
-    """L0 INFEASIBLE, Alpha 변경 2·지연 90, Beta 변경 1·지연 60 (test_solver와 같은 값, 확장 fixture)."""
+    """L0 INFEASIBLE, Alpha 변경 1·지연 30, Beta 변경 1·지연 0 (test_solver와 같은 값, 확장 fixture).
+    계획 밖이고 희망 영역이 없는 A의 시각은 변경도 지연도 아니다 (CV-29)."""
     snap = take_snapshot(with_a)
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), with_a)[0]
     l0 = cpsat.solve(snap, build_search_spec(snap, [conflict], "L0"), with_a)
     assert l0.stage1["status"] == "INFEASIBLE"
     l1 = cpsat.solve(snap, build_search_spec(snap, [conflict], "L1"), with_a)
-    assert (l1.stage1["changed"], l1.stage2["delay"]) == (2, 90)
+    assert (l1.stage1["changed"], l1.stage2["delay"]) == (1, 30)  # C만: 10:00 → 10:30
     placed = {a["task_id"]: (a["start"], a["resource_id"]) for a in l1.solution}
     assert (placed["A"], placed["C"]) == ((60, "A-CR-01"), (90, "A-CR-01"))
     # 공용 크레인을 첫날에도 쓸 수 있으면 L0에서 A가 자원을 바꿔 풀린다 (AG-34)
@@ -157,7 +162,7 @@ def test_section15_values_on_extended_fixture(with_a):
     )
     spec = build_search_spec(beta, [conflict], "L0")
     r = cpsat.solve(beta, spec, with_a)
-    assert (r.stage1["changed"], r.stage2["delay"]) == (1, 60)
+    assert (r.stage1["changed"], r.stage2["delay"]) == (1, 0)  # 요청 자원이 아닌 자원이라 변경 하나
     assert {a["task_id"]: (a["start"], a["resource_id"]) for a in r.solution}["A"] == (
         60,
         "SITE-CR-01",
@@ -171,13 +176,12 @@ def test_section15_values_on_extended_fixture(with_a):
 def test_demo_request_expected_values(seeded, task_id):
     pack = seeded
     d = _submit(pack, task_id)
-    conflicts_exp, _unit, (status, changed, delay, wdelay, start, res) = EXPECTED[task_id]
+    conflicts_exp, status = EXPECTED[task_id]
     snap = take_snapshot(pack)
     facts = snap.facts()
     conflicts = detect_conflicts(snap, facts.check_assignments(), pack)
     assert [(c.rule_id, c.task_ids) for c in conflicts] == conflicts_exp
-    assert d.task_id == task_id
-    base = facts.base_assignments()[task_id].start
+    task = facts.task_map()[d.task_id]
     # 충돌 전체를 한 번에 푼다. 상대 작업이 모두 고정이라 L1·L2로 넓혀도 같은 결과다
     for level in ("L0", "L1", "L2"):
         r = cpsat.solve(snap, build_search_spec(snap, conflicts, level), pack)
@@ -186,11 +190,14 @@ def test_demo_request_expected_values(seeded, task_id):
             assert r.solution is None
             continue
         placed = {a["task_id"]: a for a in r.solution}
-        assert (r.stage1["changed"], r.stage2["delay"]) == (changed, delay), level
-        assert (placed[task_id]["start"], placed[task_id]["resource_id"]) == (start, res)
-        assert work_delay(base, placed[task_id]["start"], facts.work_intervals) == wdelay
+        # 요청 작업만 시간창 안의 빈 자리로 간다. 계획 작업은 그대로라 변경 수도 지연도 0이다
+        assert (r.stage1["changed"], r.stage2["delay"]) == (0, 0), level
+        start = placed[task_id]["start"]
+        assert task.earliest_start <= start <= task.latest_start, level
+        assert placed[task_id]["resource_id"] == task.requested_resource_id
         moved = [a["task_id"] for a in r.solution if a["start"] != base_of(facts, a["task_id"])]
         assert moved == [task_id], level
+        assert detect_conflicts(snap, [Assignment(**a) for a in r.solution], pack) == []
 
 
 def base_of(facts, task_id):
@@ -261,8 +268,15 @@ def test_sequence_alpha_then_n1_to_n4(seeded):
 # ── 근무 분 지연: state의 changes와 Solver 요약 ────────────────
 
 
+def _hope_n4(pack):
+    """N4를 요청하고 담당자가 희망 영역(10/13 14:00–16:00)을 그린다: 지연은 이 희망에서 벗어난 정도다."""
+    _submit(pack, "N4")
+    window = PreferredWindow(task_id="N4", start=1740, end=1860)
+    assert set_preferred_window(pack, "planner_a", _key(), window).status == "APPLIED"
+
+
 def test_state_reports_calendar_and_work_delay(seeded):
-    _submit(seeded, "N4")
+    _hope_n4(seeded)
     run_until_idle(seeded, model_factory=_factory(solve("L0")))
     with TestClient(app) as client:
         res = client.get(f"/api/sites/{SITE}/state", headers={"X-Actor": "supervisor"})
@@ -640,7 +654,7 @@ def test_demo_rejection_target_must_exist(pack_copy):
 
 def test_steps_api_reports_work_delay_without_storing(client, seeded):
     """GET /runs/{rid}/steps의 SOLVE step에 근무 분 지연을 조회 시 붙인다. AgentStep에는 없다."""
-    _submit(seeded, "N4")
+    _hope_n4(seeded)
     run_until_idle(seeded, model_factory=_factory(solve("L0")))
     [run] = _runs()
     res = client.get(f"/api/runs/{run.run_id}/steps", headers={"X-Actor": "supervisor"})

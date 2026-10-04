@@ -42,11 +42,11 @@ def work_minutes(start: int, end: int, work_intervals: Intervals) -> int:
 
 
 def work_delay(base_start: int, start: int, work_intervals: Intervals) -> int:
-    """근무 분 지연: 기준 시작에서 새 시작까지의 근무 분(늦어질 때만). 저장하지 않고 조회 시 계산한다.
+    """근무 분 지연: 기준 시작과 새 시작 사이의 근무 분(앞뒤 모두). 저장하지 않고 조회 시 계산한다.
 
-    달력 분 지연은 max(0, start − base_start)다.
+    달력 분 지연은 |start − base_start|다 (CV-29).
     """
-    return work_minutes(base_start, start, work_intervals) if start > base_start else 0
+    return work_minutes(min(base_start, start), max(base_start, start), work_intervals)
 
 
 WEEKDAYS = "월화수목금토일"

@@ -118,11 +118,12 @@ def test_delay_first_swaps_stages_and_is_a_different_search(seeded_real):
     assert spec.search_key != plain.search_key and spec.hash != plain.hash
 
     result = cpsat.solve(snap, spec, pack)
-    # 1단계가 총 지연, 2단계가 그 지연 안에서 변경 작업 수다 (A 09:00→10:00, C 10:00→10:30)
-    assert (result.stage1["status"], result.stage1["delay"]) == ("OPTIMAL", 90)
-    assert (result.stage2["delay"], result.stage2["changed"]) == (90, 2)
+    # 1단계가 총 지연, 2단계가 그 지연 안에서 변경 작업 수다. 계획 밖이고 희망 영역이 없는 A는 어느
+    # 쪽에도 세지 않는다: 계획에 있던 C(10:00→10:30)만 변경 하나에 지연 30분이다 (CV-29)
+    assert (result.stage1["status"], result.stage1["delay"]) == ("OPTIMAL", 30)
+    assert (result.stage2["delay"], result.stage2["changed"]) == (30, 1)
     change_first = cpsat.solve(snap, plain, pack)
-    assert (change_first.stage1["changed"], change_first.stage2["delay"]) == (2, 90)
+    assert (change_first.stage1["changed"], change_first.stage2["delay"]) == (1, 30)
     assert "delay" not in change_first.stage1  # 변경 먼저의 결과 모양은 그대로다
     candidate = build_candidate(snap, spec, result)
     assert validate(snap, candidate, spec, pack).status == "PASS"
@@ -151,8 +152,8 @@ def test_objective_argument_through_the_tool(seeded_real):
     result = steps[3]["tool_result"]
     assert (result["objective"], result["stage1"]["delay"], result["stage2"]["changed"]) == (
         "DELAY_FIRST",
-        90,
-        2,
+        30,
+        1,
     )
     assert run.solver_calls_used == 2
     # 이전 계산에 목적 순서와, 건 조건이 도구 인자와 같은 모양(현장 날짜·시각 문자열)으로 보인다
@@ -165,7 +166,7 @@ def test_objective_argument_through_the_tool(seeded_real):
         ("DELAY_FIRST", []),
         ("DELAY_FIRST", [{"task_id": "C", "start_from": "2026-10-12(월) 10:00"}]),
     ]
-    assert attempts[1]["stage1"] == {"status": "OPTIMAL", "changed": None, "delay": 90}
+    assert attempts[1]["stage1"] == {"status": "OPTIMAL", "changed": None, "delay": 30}
 
 
 # ── 접근을 달리한 재계획과 같은 안 ─────────────────────────────
@@ -175,6 +176,9 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
     """같은 접근·같은 사실의 재호출은 거절되고 다른 접근은 받아들여진다. 다른 접근이 같은 배치를 내면
     새 후보 없이 그 후보에 접근이 더해진다. 고르기 전에는 협의가 나가지 않는다."""
     pack = seeded_real
+    # 두 접근이 같은 배치에 닿는 장면: C를 고정해 두면 A가 10:00에 공용 크레인을 쓰는 해 하나뿐이다
+    # (C가 풀려 있으면 A와 C가 크레인을 맞바꾸는 해가 변경 수·지연이 같아 접근마다 다른 해가 나올 수 있다)
+    pin_tasks(pack, ["C"])
     _submit_a(pack)
     # 호출 키는 접근뿐이다: 재계획은 현장의 충돌 전체를 푼다 (AG-24)
     assert call_key("REPLANNING", {"approach": "PREFER_WINDOW"}) == "REPLANNING:PREFER_WINDOW"

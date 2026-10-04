@@ -445,13 +445,17 @@ class SnapshotContent(Frozen):
         return out
 
     def deviation(self, task_id: str, start: int) -> int:
-        """그 작업을 start에 놓았을 때 희망에서 벗어난 정도(분). 희망 영역이 있으면 희망 시작 범위
-        밖으로 벗어난 거리(앞뒤 모두), 없으면 기준 시작보다 늦어진 만큼이다."""
+        """그 작업을 start에 놓았을 때의 지연(분). 세 경우다 (CV-29).
+
+        희망 영역이 있으면 희망 시작 범위 밖으로 벗어난 거리(앞뒤 모두, 안이면 0). 희망 영역이 없고
+        계획에 있으면 계획의 시작에서 옮긴 거리(앞뒤 모두). 희망 영역도 없고 계획에도 없으면 0이다:
+        아직 자기 자리가 없으므로 재지 않는다."""
         task = self.task_map()[task_id]
         wanted = self.preferred_map().get(task_id)
         if wanted is not None:
             return wanted.deviation(start, task.duration)
-        return max(0, start - self.base_assignments()[task_id].start)
+        placed = next((a for a in self.plan.assignments if a.task_id == task_id), None)
+        return 0 if placed is None else abs(start - placed.start)
 
     def check_assignments(self) -> tuple[Assignment, ...]:
         """검사 대상 배정 = 현재 Plan 배정 + Plan에 없는 READY 작업의 기준 배정."""

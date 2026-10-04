@@ -149,7 +149,10 @@ def test_one_search_resolves_two_conflict_groups(seeded_real):
     spec = build_search_spec(snap, conflicts, "L0")
     assert list(spec.axes) == ["K", "Q", "X", "Y"]
     result = cpsat.solve(snap, spec, pack)
-    assert (result.stage1["status"], result.stage1["changed"]) == ("OPTIMAL", 2)
+    # 계획 밖이고 희망 영역이 없는 X·Y가 시간창 안의 빈 자리로 간다. 계획 작업은 그대로라 변경이 0이다
+    assert (result.stage1["status"], result.stage1["changed"]) == ("OPTIMAL", 0)
+    placed = {a["task_id"]: a["start"] for a in result.solution}
+    assert (placed["K"], placed["Q"]) == (1440, 2910)
     candidate = build_candidate(snap, spec, result)
     assert validate(snap, candidate, spec, pack).status == "PASS"
     assert detect_conflicts(snap, candidate.assignments, pack) == []

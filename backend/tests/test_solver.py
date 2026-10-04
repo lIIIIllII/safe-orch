@@ -74,8 +74,10 @@ def test_l1_alpha(with_a):
     spec, result = _run(with_a, snap, "L1")
     # C: 같은 기준 자원 A-CR-01. B는 고정되어 축이 닫혀 있다
     assert [t for t, ax in spec.axes.items() if ax.time] == ["A", "C"]
-    assert (result.stage1["status"], result.stage1["changed"]) == ("OPTIMAL", 2)
-    assert (result.stage2["status"], result.stage2["delay"]) == ("OPTIMAL", 90)
+    # 계획 밖이고 희망 영역이 없는 A는 시간창 안 어디든 변경도 지연도 아니다. 계획에 있던 C만
+    # 변경 하나이고, 계획의 시작에서 옮긴 30분이 지연이다 (CV-29)
+    assert (result.stage1["status"], result.stage1["changed"]) == ("OPTIMAL", 1)
+    assert (result.stage2["status"], result.stage2["delay"]) == ("OPTIMAL", 30)
     assert result.chosen_stage == 2
     assert _placed(result, "A", "C") == [("A", 60, "A-CR-01"), ("C", 90, "A-CR-01")]
     assert _placed(result, "B", "D", "E") == [("B", 0, None), ("D", 0, None), ("E", 45, None)]
@@ -94,7 +96,8 @@ def test_unpinned_task_moves_to_eligible_resource(with_a):
     spec, result = _run(pack, snap, "L0")
     assert spec.axes["A"] == Movable(time=True, resource=True)
     assert spec.resource_alternatives == {"A": ("SITE-CR-01",)}  # B-CR-01은 UA가 쓸 수 없다
-    assert (result.stage1["changed"], result.stage2["delay"]) == (1, 60)
+    # 요청 자원이 아닌 자원을 쓰므로 변경 하나다. 계획 밖 A의 시각은 지연으로 재지 않는다 (CV-29)
+    assert (result.stage1["changed"], result.stage2["delay"]) == (1, 0)
     assert _placed(result, "A", "C") == [("A", 60, "SITE-CR-01"), ("C", 60, "A-CR-01")]
 
 
@@ -355,7 +358,7 @@ def test_t32_stage2_unknown_keeps_stage1(with_a, monkeypatch):
     calls = _patch_stages(monkeypatch, [None, "UNKNOWN"])
     spec, result = _run(with_a, snap, "L1")
     assert len(calls) == 2
-    assert (result.stage1["status"], result.stage1["changed"]) == ("OPTIMAL", 2)
+    assert (result.stage1["status"], result.stage1["changed"]) == ("OPTIMAL", 1)  # C만 변경이다
     assert result.stage2 == {"status": "UNKNOWN", "delay": None, "solution": None}
     assert result.chosen_stage == 1
     assert result.solution == result.stage1["solution"]

@@ -88,11 +88,13 @@ def _guards(steps):
 
 
 def test_condition_moves_c_after_ten_instead_of_before(real_a):
-    """목표 장면: 조건이 없으면 C는 09:00으로 가고, "C 시작 ≥ 10:00"을 걸면 A 10:00, C 10:30이 된다."""
+    """목표 장면: 조건이 없으면 C는 앞으로든 뒤로든 30분 옮겨지고(앞당겨도 그만큼 지연이라 둘이 같다,
+    CV-29), "C 시작 ≥ 10:00"을 걸면 A 10:00, C 10:30이 된다."""
     pack = real_a
     snap = take_snapshot(pack)
     plain = _spec(pack, snap, "L1")
-    assert _starts(cpsat.solve(snap, plain, pack), "A", "C") == [60, 0]
+    a_start, c_start = _starts(cpsat.solve(snap, plain, pack), "A", "C")
+    assert (a_start, abs(c_start - 60)) == (60, 30)
 
     spec = _spec(pack, snap, "L1", {"C": Condition(start_min=60)})
     result = cpsat.solve(snap, spec, pack)

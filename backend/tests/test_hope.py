@@ -7,7 +7,7 @@
 
 import uuid
 
-from conftest import take_snapshot, with_facts
+from conftest import add_task, make_task, take_snapshot, with_facts
 from scripted import Router
 
 from app.api.state import build_state, off_hope, work_deviation
@@ -80,12 +80,26 @@ def test_deviation_is_the_distance_outside_the_hope_range_both_ways():
     assert (short.deviation(60, 30), short.deviation(75, 30)) == (0, 15)
 
 
-def test_task_without_hope_keeps_the_old_delay(with_a):
-    """희망 영역이 없는 작업은 지금처럼 기준 시작보다 늦어진 만큼이다(앞당기면 0)."""
+def test_task_without_hope_is_measured_from_its_plan_start_or_not_at_all(with_a):
+    """희망 영역이 없는 작업 (CV-29): 계획에 있으면 계획의 시작에서 옮긴 거리(앞뒤 모두)가 지연이고,
+    계획에 없으면 아직 자기 자리가 없어 시간창 안 어디서나 0이다. 근무 분도 같은 정의다."""
     facts = take_snapshot(with_a).facts()
     base = facts.base_assignments()
-    assert base["A"].start == 0  # 계획에 없는 폼 작업의 기준 시작은 가장 이른 시작
-    assert (facts.deviation("C", base["C"].start + 30), facts.deviation("C", 0)) == (30, 0)
+    assert base["C"].start == 60  # 계획의 시작 10:00
+    assert (facts.deviation("C", 90), facts.deviation("C", 60), facts.deviation("C", 0)) == (
+        30,
+        0,
+        60,
+    )
+    assert (work_deviation(facts, "C", 90), work_deviation(facts, "C", 0)) == (30, 60)
+    # 하루 앞이나 뒤로 옮기면 달력 분은 하루지만 근무 분은 그 사이의 근무 구간만이다
+    k = base["K"].start
+    assert (facts.deviation("K", k - 1440), work_deviation(facts, "K", k - 1440)) == (1440, 480)
+    # 계획에 없는 폼 작업 A: 가장 이른 시작(0)을 자리로 보지 않는다
+    assert "A" not in {a.task_id for a in facts.plan.assignments}
+    a = facts.task_map()["A"]
+    assert [facts.deviation("A", s) for s in (a.earliest_start, 30, a.latest_start)] == [0, 0, 0]
+    assert work_deviation(facts, "A", a.latest_start) == 0
 
 
 def test_work_deviation_counts_work_minutes_on_both_sides(with_a):
@@ -170,15 +184,53 @@ def test_planned_task_counts_change_against_the_plan_and_delay_against_its_hope(
     plain = take_snapshot(pack)
     spec = build_search_spec(plain, [_first_conflict(pack, plain)], "L1")
     before = cpsat.solve(plain, spec, pack)
-    # 희망이 없으면 둘 다 늦어진 만큼이다: A 09:00→10:00, C 10:00→10:30
-    assert (before.stage1["changed"], before.stage2["delay"]) == (2, 90)
+    # 희망이 없으면: 계획 밖 A는 변경도 지연도 아니고, 계획에 있던 C(10:00→10:30)만 변경 하나에
+    # 지연 30분이다 (CV-29)
+    assert (_start(before, "A"), _start(before, "C")) == (60, 90)
+    assert (before.stage1["changed"], before.stage2["delay"]) == (1, 30)
 
     snap = _hoped(plain, "C", 90, 150)  # C의 희망 시작 10:30–11:00
     spec = build_search_spec(snap, [_first_conflict(pack, snap)], "L1")
     result = cpsat.solve(snap, spec, pack)
     # 같은 배치지만 C는 희망 범위 안이라 지연이 0이다. 지금 자리에서 옮겼으므로 변경으로는 센다
     assert (_start(result, "A"), _start(result, "C")) == (60, 90)
-    assert (result.stage1["changed"], result.stage2["delay"]) == (2, 60)
+    assert (result.stage1["changed"], result.stage2["delay"]) == (1, 0)
+
+
+def test_moving_a_planned_task_earlier_is_not_free(seeded_real):
+    """희망 영역이 없는 계획 작업은 계획의 시작에서 옮긴 거리가 지연이다(앞뒤 모두, CV-29).
+    K(10/13 09:00–11:00)의 자리를 X가 차지하면 K는 하루 앞으로 가지 않고 가장 가까운 11:00으로 간다."""
+    pack = seeded_real
+    gantry = {
+        "zone_id": "F",
+        "required_resource_type": "GANTRY",
+        "requested_resource_id": "SITE-GC-01",
+    }
+    # X: 10/13 09:00에만 시작할 수 있는 2시간 작업(계획 밖, 희망 영역 없음)
+    x = make_task(
+        pack, task_id="X", duration=120, earliest_start=1440, latest_start=1440, latest_end=1560
+    )
+    add_task(pack, x.model_copy(update=gantry))
+    snap = take_snapshot(pack)
+    facts = snap.facts()
+    conflicts = detect_conflicts(snap, facts.check_assignments(), pack)
+    assert [c.task_ids for c in conflicts] == [("K", "X")]
+    assert facts.task_map()["K"].earliest_start == 0  # K는 첫날로도 갈 수 있다
+    for objective in ("CHANGE_FIRST", "DELAY_FIRST"):
+        spec = build_search_spec(snap, conflicts, "L0", None, objective)
+        result = cpsat.solve(snap, spec, pack)
+        assert (_start(result, "X"), _start(result, "K")) == (1440, 1560), objective
+        # X는 계획 밖이고 희망 영역이 없어 세지 않는다. K는 변경 하나에 지연 120분이다
+        assert (result.stage1["status"], result.stage2["status"]) == ("OPTIMAL", "OPTIMAL")
+        assert (
+            result.stage2["changed"] if objective == "DELAY_FIRST" else result.stage1["changed"]
+        ) == 1
+        assert result.stage2["delay"] == 120
+    assert (facts.deviation("K", 1560), facts.deviation("K", 0), facts.deviation("X", 1440)) == (
+        120,
+        1440,
+        0,
+    )
 
 
 # ── 협의: 말한 희망의 범위 안이면 묻지 않는다 ──────────────────
