@@ -156,5 +156,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p3": "745ef85c552fdff4e018f85c7f389344d1dddc809e6df3e473501b864f1c555a",  # 사전 확인 호출(need_ids), 길과 열 수 있는 것, askable 삭제 (AG-09·AG-23)
     "main-p4": "9a270fdcd800ecd3cfad0173c714b619d82c4fc3e8706255261478f850f58598",  # 고정·해제 사건, 고정되지 않은 작업이 움직인다, 제약 삭제 (AG-27)
     "main-p5": "fd9fdc255292ca861058682bf294f058371ccafa8d7614defc8dd4f49c0d60a5",  # 후보의 거절·이견된 변경(contested): 협의로 보내지 않고 재계획 (CV-26)
-    "main-p6": "43ae8e62d50aa22f99f346429c61102a2ac2902cf78655561fcb6b07a1da5f46",  # 접근을 달리한 재계획, Supervisor가 고른 안만 협의 (AG-28)
+    "main-p6": "43ae8e62d50aa22f99f346429c61102a2ac2902cf78655561fcb6b07a1da5f46",  # 접근을 달리한 재계획, Supervisor가 고른 안만 협의 (AG-28·AG-29)
 }

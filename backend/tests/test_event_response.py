@@ -294,7 +294,7 @@ def test_er_with_coordination_to_notice(seeded, main_on):
     wait = call("WAIT_FOR_REPLIES", "대기")
     router = Router(replanning=[solve("L0")], coordination=[request_e, wait])
     run_until_idle(pack, model_factory=router.factory())
-    choose(pack)  # Supervisor가 고른 안만 협의한다 (AG-28)
+    choose(pack)  # Supervisor가 고른 안만 협의한다 (AG-29)
     run_until_idle(pack, model_factory=router.factory())
     cr = [m for m in _messages("CHANGE_REQUEST") if m["to_actor_id"] == "planner_b"]
     assert len(cr) == 1 and "10/12 09:45 → 10/12 10:00" in cr[0]["body"]

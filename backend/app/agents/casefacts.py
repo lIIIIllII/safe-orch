@@ -216,7 +216,7 @@ def candidate_view(
         # 이 후보가 지금 계획에서 바꾸거나 새로 배치하는 작업
         "changed_task_ids": changed,
         "validation": validations[-1].status if validations else None,
-        # 이 후보에 도달한 접근(같은 배치면 여럿)과 Supervisor가 골랐는가. 고른 안만 협의한다 (AG-28)
+        # 이 후보에 도달한 접근(같은 배치면 여럿)과 Supervisor가 골랐는가. 고른 안만 협의한다 (AG-28·AG-29)
         "approaches": sorted(
             {a["approach"] for a in approach_attempts(conn, candidate_id=candidate_id)}
         ),
@@ -487,7 +487,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
         ]
     for c in candidates:
         cid = c["candidate_id"]
-        # 협의는 Supervisor가 고른 안만 한다 (AG-28)
+        # 협의는 Supervisor가 고른 안만 한다 (AG-29)
         consult = c["chosen"] and c["validation"] == "PASS" and c["live"] and c["open_items"]
         if consult and not hold_active:
             key = call_key("COORDINATION", {"phase": "CONSULT", "candidate_id": cid})

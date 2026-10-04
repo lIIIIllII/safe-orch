@@ -92,7 +92,7 @@ def list_case_rejections(conn: sqlite3.Connection, case_id: str) -> list[dict[st
 
 
 def chosen_by_case(conn: sqlite3.Connection, site_id: str) -> dict[str, str]:
-    """Case마다 Supervisor가 마지막으로 고른 후보 (AG-28). Case = 그 후보를 만든 Run의 Case이고,
+    """Case마다 Supervisor가 마지막으로 고른 후보 (AG-29). Case = 그 후보를 만든 Run의 Case이고,
     만든 Run이 없는 후보(재확인)는 후보 자신이 키다."""
     out: dict[str, str] = {}
     for r in rows(

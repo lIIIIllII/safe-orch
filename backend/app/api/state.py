@@ -196,7 +196,7 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "kind": cand.kind,
         "rejection": _rejection(conn, site_id, cand.candidate_id),
         "run_id": run_id,
-        # 이 후보를 만든 Case, 이 후보에 도달한 접근들(같은 배치면 여럿), Supervisor가 골랐는가 (AG-28)
+        # 이 후보를 만든 Case, 이 후보에 도달한 접근들(같은 배치면 여럿), Supervisor가 골랐는가 (AG-28·AG-29)
         "case_id": None if maker is None else maker.case_id,
         "approaches": [
             {k: a[k] for k in ("no", "approach", "quoted_note", "run_id", "same", "quoted_reason")}

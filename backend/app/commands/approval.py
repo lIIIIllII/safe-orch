@@ -267,7 +267,7 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
 
 
 def _choose(tx: sqlite3.Connection, ctx: CommandContext, body: ChooseRequest) -> Result:
-    """Supervisor가 검토 대기 안 가운데 하나를 고른다. 고른 안만 협의한다 (AG-28).
+    """Supervisor가 검토 대기 안 가운데 하나를 고른다. 고른 안만 협의한다 (AG-29).
 
     고르는 것은 승인이 아니다: 계획과 현장 버전은 그대로다. 같은 Case에서 앞서 고른 안이 있으면 그 안의
     열린 협의 Run을 끝낸다(보낸 요청 정리). 고른 결과는 사건으로 메인에게 간다.

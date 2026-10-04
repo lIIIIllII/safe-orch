@@ -167,7 +167,7 @@ def _alpha_waiting(pack):
     run_id = 후보를 만든 Replanning Run, wait_ref = Alpha 후보, main_id·consult_id = 메인과 협의 Run."""
     assert _submit_a(pack).status == "APPLIED"
     run_until_idle(pack, model_factory=_factory(solve("L0"), solve("L1")))
-    choose(pack)  # Supervisor가 고른 안만 협의한다 (AG-28)
+    choose(pack)  # Supervisor가 고른 안만 협의한다 (AG-29)
     run_until_idle(pack, model_factory=_factory())
     run, main, consult = _last(), _last("MAIN"), _last("COORDINATION")
     assert (run.status, run.end_reason) == ("SUCCEEDED", "RETURN_DONE")

@@ -231,7 +231,7 @@ CREATE TABLE command_result (
 );
 
 -- reason_code는 REJECT만. WAIVE의 comment 필수는 명령에서 검사한다.
--- CHOOSE: Supervisor가 그 안을 골랐다. 고른 안만 협의한다 (AG-28).
+-- CHOOSE: Supervisor가 그 안을 골랐다. 고른 안만 협의한다 (AG-29).
 CREATE TABLE decision (
     decision_id     TEXT PRIMARY KEY,
     site_id         TEXT NOT NULL REFERENCES site (site_id),

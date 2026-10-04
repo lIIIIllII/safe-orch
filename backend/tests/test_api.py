@@ -56,7 +56,7 @@ def _alpha_ready(client, pack):
     res = client.post(f"/api/sites/{SITE}/task-requests", json=_form(pack), headers=_h("planner_a"))
     assert res.status_code == 200, res.text
     run_until_idle(pack, model_factory=lambda: ScriptedChatModel(list(GATE_SCRIPT)))
-    # Supervisor가 안을 고른다(API). Supervisor가 아니면 고르지 못하고, 고른 안만 협의가 나간다 (AG-28)
+    # Supervisor가 안을 고른다(API). Supervisor가 아니면 고르지 못하고, 고른 안만 협의가 나간다 (AG-29)
     [first] = _state(client)["review_queue"]
     found = next(c for c in _state(client)["candidates"] if c["candidate_id"] == first)
     assert (found["chosen"], found["approaches"][0]["approach"]) == (False, "MIN_CHANGE")

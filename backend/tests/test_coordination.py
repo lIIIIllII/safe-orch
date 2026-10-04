@@ -135,7 +135,7 @@ def _alpha_consulting(pack):
     _submit_a(pack)
     router = Router(replanning=[solve("L0"), solve("L1")], coordination=[_request_c(), _wait()])
     run_until_idle(pack, model_factory=router.factory())
-    assert _runs("COORDINATION") == []  # 고르기 전에는 협의가 나가지 않는다 (AG-28)
+    assert _runs("COORDINATION") == []  # 고르기 전에는 협의가 나가지 않는다 (AG-29)
     choose(pack)
     run_until_idle(pack, model_factory=router.factory())
     assert router.left() == {"REPLANNING": 0, "COORDINATION": 0, "EVENT_RESPONSE": 0, "INTAKE": 0}
@@ -405,7 +405,7 @@ def _replan_after_release(pack, coordination=()):
     run_until_idle(pack, model_factory=router.factory())
     assert router.left()["REPLANNING"] == 0
     if coordination:
-        choose(pack)  # 새 후보를 골라야 협의가 나간다 (AG-28)
+        choose(pack)  # 새 후보를 골라야 협의가 나간다 (AG-29)
         run_until_idle(pack, model_factory=router.factory())
     [main] = _runs("MAIN")
     first, second = _runs("REPLANNING")

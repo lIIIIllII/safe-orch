@@ -227,7 +227,7 @@ def with_facts(snapshot, **updates):
 
 
 def choose(pack, candidate_id=None):
-    """Supervisor가 안을 고른다(주지 않으면 검토 대기 첫 후보). 고른 안만 협의가 나간다 (AG-28)."""
+    """Supervisor가 안을 고른다(주지 않으면 검토 대기 첫 후보). 고른 안만 협의가 나간다 (AG-29)."""
     from app.commands.approval import ChooseRequest, choose_candidate
     from app.store.repos.consultations import list_review_queue
     from app.store.repos.records import list_validations

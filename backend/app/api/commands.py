@@ -167,7 +167,7 @@ def post_approve(
 def post_choose(
     candidate_id: str, body: ChooseBody, pack: PackDep, actor: ActorDep, key: KeyDep
 ) -> JSONResponse:
-    """Supervisor가 이 안을 고른다. 고른 안만 협의한다 (AG-28)."""
+    """Supervisor가 이 안을 고른다. 고른 안만 협의한다 (AG-29)."""
     req = ChooseRequest(candidate_id=candidate_id, **body.model_dump())
     return respond(choose_candidate(pack, actor.actor_id, key, req))
 

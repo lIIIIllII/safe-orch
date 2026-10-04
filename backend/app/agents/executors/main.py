@@ -139,7 +139,7 @@ class MainExecutor:
                 return "ACTION_NOT_AVAILABLE"
             if refs["phase"] == "CONSULT" and candidate["live"] and candidate["open_items"]:
                 if not candidate["chosen"]:
-                    return "CANDIDATE_NOT_CHOSEN"  # 협의는 Supervisor가 고른 안만 한다 (AG-28)
+                    return "CANDIDATE_NOT_CHOSEN"  # 협의는 Supervisor가 고른 안만 한다 (AG-29)
                 return "HOLD_ACTIVE" if holds else "SAME_FACTS"
             return "ACTION_NOT_AVAILABLE"
         hold = next((h for h in data["holds"] if h["event_id"] == refs.get("event_id")), None)
