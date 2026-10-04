@@ -341,7 +341,8 @@ export interface RunSummary {
   case_id: string
   /** 부른 메인 Run. 메인과 Intake는 null */
   parent_run_id: string | null
-  acting_unit_id: string
+  /** 재계획 Run은 null: 주체 Unit 없이 충돌 전체를 푼다 */
+  acting_unit_id: string | null
   status: string
   wait_kind: string | null
   wait_ref: string | null
