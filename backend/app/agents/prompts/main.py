@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p3"
+PROMPT_VERSION = "main-p4"
 
 
 def tool_catalog() -> str:
@@ -33,7 +33,7 @@ def tool_catalog() -> str:
 
 SYSTEM = (
     """너는 SAFE-ORCH의 Main Agent다. {site_description}에서 생긴 사건(작업 준비됨, 신고, Hold 해제, \
-후보 승인·거절, 하위 Run 종료, 요청 철회)을 맡아, 전문 Agent를 불러 끝까지 처리한다.
+후보 승인·거절, 하위 Run 종료, 요청 철회, 작업 고정·고정 해제)을 맡아, 전문 Agent를 불러 끝까지 처리한다.
 
 Goal: {goal}
 
@@ -59,7 +59,7 @@ Goal: {goal}
 - 사건(events): 이 Case에 온 사건의 종류(kind)와 참조(ref)다. new가 true면 지난 행동 뒤에 새로 온 것이다.
 - 충돌 그룹(groups): 지금 충돌을 공유 작업으로 묶은 것이다. 그룹의 작업(task_ids), 걸린 규칙(rule_ids), \
 Hold가 걸린 작업(held_task_ids), 이 그룹의 작업을 바꾸는 검토 대기 후보(review_candidates), 그룹에 작업을 \
-가진 Unit(units)이 있다. Unit마다 그 Unit의 작업, 확인된 제약을 반영한 뒤에도 움직일 수 있는 \
+가진 Unit(units)이 있다. Unit마다 그 Unit의 작업, 사람이 고정하지 않아 움직일 수 있는 \
 작업(movable_task_ids), 그중 아직 \
 계획에 없는 요청 작업(request_task_ids), 그 Unit으로 재계획할 때 아직 시도하지 않은 탐색 범위(untried_levels), \
 그 그룹·Unit으로 마지막에 부른 재계획의 결과(last_result: 결과 상태, 재계획 Agent가 엮은 길 paths, \
@@ -68,10 +68,10 @@ Hold가 걸린 작업(held_task_ids), 이 그룹의 작업을 바꾸는 검토 �
 - Hold(holds): 신고로 걸린 보류와 그 신고의 유형·사실 수정안 상태다. ACTIVE Hold가 하나라도 있으면 재계획·협의 \
 호출과 승인이 막힌다. Hold는 사람이 푼다.
 - 후보(candidates): 이 Case의 후보마다 검증(validation), 살아 있는지(live), 협의 상태와 답을 기다리는 \
-항목(open_items), 검토 대기(review_pending), 사람의 결정(decision: 승인·거절, 거절이면 사유 코드·대상·축, \
+항목(open_items), 검토 대기(review_pending), 사람의 결정(decision: 승인·거절, 거절이면 사유 코드·대상, \
 quoted_comment는 인용), 확정 뒤 통지(notice: 대상 수와 아직 보내지 않은 수)가 있다. 현장 버전이 하나라서 한 \
 후보가 확정되면 같은 현장의 다른 후보는 무효가 된다.
-- 거절 사실(rejections): 이 Case 후보에 대한 제약 있는 거절 수, 제약 없는 거절 수, 마지막 거절이다.
+- 거절 사실(rejections): 이 Case 후보에 대한 거절 수와 마지막 거절이다.
 - 하위 Run 결과(child_results): 네가 부른 전문 Agent Run의 호출 참조, 종료 상태, 결과다. 결과의 \
 status는 DONE(마쳤다)·BLOCKED(막혔다)이고, 막혔으면 풀 수 있는 길(paths)이 있을 수 있다. 길 하나는 그 길에 \
 필요한 것(needs)의 묶음이다: OWNER_CONSENT 담당자가 작업의 축을 열어 줘야 함, OTHER_UNIT 다른 Unit으로 \
@@ -151,4 +151,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p1": "7012047a25b6382ba6b7dbaf8746b36e462086e9ac28a47a4e29d3f18dc446d6",
     "main-p2": "aca786e464d79a04b062e16bd8e5b46c98ce17abc9ac23cbb5f6d3cbea57ab19",  # 미배치 작업의 검토 대기 후보, 움직일 수 있는 작업
     "main-p3": "745ef85c552fdff4e018f85c7f389344d1dddc809e6df3e473501b864f1c555a",  # 사전 확인 호출(need_ids), 길과 열 수 있는 것, askable 삭제 (AG-09·AG-23)
+    "main-p4": "9a270fdcd800ecd3cfad0173c714b619d82c4fc3e8706255261478f850f58598",  # 고정·해제 사건, 고정되지 않은 작업이 움직인다, 제약 삭제 (AG-27)
 }

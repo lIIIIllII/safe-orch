@@ -24,6 +24,7 @@ from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store.repos.consultations import candidate_state
 from app.store.repos.decisions import list_case_rejections
 from app.store.repos.messages import declined_values, open_owner_asks
+from app.store.repos.pins import preferred_windows
 from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.runs import get_run, list_attempts, list_steps, tried_search_keys
 from app.store.repos.site import get_site
@@ -148,7 +149,7 @@ def openers(
 ) -> list[dict[str, Any]]:
     """열 수 있는 것 (서버가 계산한 사실, need 모양). 길은 모델이 엮는다 (AG-23).
 
-    - 담당자 확인(OWNER_CONSENT): 자원 축이 확인되지 않았고 제약으로 고정되지 않은 주체 Unit 작업과,
+    - 담당자 확인(OWNER_CONSENT): 자원 축이 확인되지 않았고 고정되지 않은 주체 Unit 작업과,
       물을 수 있는 적격 대체 자원. 담당자가 그 작업 revision에 거절한 값과 답을 기다리는 질문이 있는
       작업은 뺀다 (AG-09).
     - 다른 Unit(OTHER_UNIT): 이 그룹에 움직일 수 있는 작업을 가진 다른 Unit.
@@ -157,12 +158,12 @@ def openers(
     """
     unit = run.acting_unit_id
     tasks = facts.task_map()
-    frozen = {(c.task_id, axis) for c in facts.constraints for axis in c.frozen_axes}
+    pinned = facts.pinned_task_ids()
     waiting = open_owner_asks(conn, pack.site_id)
     out: list[dict[str, Any]] = []
     for tid in sorted(eligible):
         t = tasks[tid]
-        if t.movable.resource or (tid, "RESOURCE") in frozen or tid in waiting:
+        if t.movable.resource or tid in pinned or tid in waiting:
             continue
         declined = declined_values(conn, pack.site_id, tid, t.revision)
         values = [v for v in eligible[tid]["alternatives"] if v not in declined]
@@ -173,7 +174,7 @@ def openers(
     if group is None:
         return out
     for other in sorted(group.units):
-        if other != unit and movable_task_ids(group, other, tasks, facts.constraints):
+        if other != unit and movable_task_ids(group, other, facts.pins):
             out.append({"kind": "OTHER_UNIT", "group_id": group.group_id, "unit_id": other})
     changes: list[dict[str, Any]] = []
     for c in group.conflicts:
@@ -182,7 +183,7 @@ def openers(
     in_plan = {a.task_id for a in facts.plan.assignments}
     for tid in sorted(group.units.get(unit, ())):
         t = tasks[tid]
-        if t.required_resource_type and (tid, "RESOURCE") not in frozen:
+        if t.required_resource_type and tid not in pinned:
             for r in assignable_resources(facts, t, unit)["excluded"]:
                 for e in r["reasons"]:
                     field = FACT_BY_EXCLUSION.get(e["reason"])
@@ -213,6 +214,8 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     untried = [lv for lv, k in keys.items() if k not in tried]
 
     base = facts.base_assignments()
+    pins = {p.task_id: p for p in facts.pins}
+    windows = preferred_windows(conn, pack.site_id)
     acting_tasks = [
         {
             "task_id": t.task_id,
@@ -226,6 +229,17 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "required_resource_type": t.required_resource_type,
             "demands": t.demands,
             "movable": t.movable.model_dump(),
+            # 사람이 건 고정(누가). 고정된 작업은 시각·자원 모두 움직이지 않는다 (AG-27)
+            "pinned": None
+            if t.task_id not in pins
+            else {
+                "pinned_by": pins[t.task_id].pinned_by,
+                "by_role": pins[t.task_id].by_role,
+            },
+            # 담당자가 그린 희망 영역 [start, end). 서버는 강제하지 않는다
+            "preferred_window": None
+            if t.task_id not in windows
+            else {k: windows[t.task_id][k] for k in ("start", "end")},
             "base": base[t.task_id].model_dump(),
         }
         for t in sorted(facts.tasks, key=lambda t: t.task_id)
@@ -343,7 +357,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             "unit_ids": sorted(group.units),
         },
         "acting_tasks": acting_tasks,
-        "constraints": [c.model_dump(mode="json") for c in facts.constraints],
         "consents": [c.model_dump(mode="json") for c in facts.consents if c.task_id in acting_ids],
         "untried_levels": untried,
         # search_key는 내부 계산(시도 여부)에만 쓰고 모델에는 보이지 않는다
@@ -351,7 +364,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "latest_validation": latest_validation,
         # 이 Case 후보에 대한 Supervisor 거절. comment는 인용 데이터다
         "rejections": list_case_rejections(conn, run.case_id),
-        # 거절 사실(서버 계산): 제약 있는·없는 거절 수, 마지막 거절, 미시도 범위가 남았는지
+        # 거절 사실(서버 계산): 거절 수, 마지막 거절, 미시도 범위가 남았는지
         "rejection_facts": {
             **casefacts.rejection_facts(conn, run.case_id),
             "untried_remaining": bool(untried),

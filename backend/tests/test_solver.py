@@ -8,10 +8,11 @@ from conftest import add_task, make_task, take_snapshot, with_facts
 from app.domain.hashes import candidate_hash
 from app.domain.models import (
     Conflict,
-    FeedbackConstraint,
     Movable,
+    Pin,
     Requirement,
     SolverResult,
+    TaskMovable,
 )
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
@@ -42,22 +43,17 @@ def _placed(result, *task_ids):
 @pytest.fixture
 def resource_movable_a(with_a):
     """A를 movable.resource = true인 새 revision으로 바꾼다 (이동 축 확인 가정)."""
-    add_task(with_a, make_task(with_a, revision=2, movable={"time": True, "resource": True}))
+    add_task(with_a, make_task(with_a, revision=2, movable={"resource": True}))
     return with_a
 
 
-def _fix(snapshot, *task_ids, axes=("TIME", "RESOURCE")):
-    constraints = tuple(
-        FeedbackConstraint(
-            constraint_id=f"fc_{t}",
-            task_id=t,
-            frozen_axes=axes,
-            source_type="DECISION",
-            source_id="dec_test",
-        )
+def _fix(snapshot, *task_ids):
+    """그 작업들을 고정한 Snapshot (메모리)."""
+    pins = tuple(
+        Pin(pin_id=f"pin_{t}", task_id=t, pinned_by="supervisor", by_role="SUPERVISOR")
         for t in task_ids
     )
-    return with_facts(snapshot, constraints=constraints)
+    return with_facts(snapshot, pins=(*snapshot.facts().pins, *pins))
 
 
 def _forbid_solver(monkeypatch):
@@ -246,7 +242,7 @@ def test_search_spec_hash_depends_on_snapshot_hash_not_id(with_a):
 
 
 def test_t31_time_fixed_resource_moves(seeded):
-    """X: 시간 고정·자원 이동 가능. C와 A-CR-01을 두고 겹친다 → 자원만 바꾼다."""
+    """X: 시간창이 한 점·자원 축 열림. C와 A-CR-01을 두고 겹친다 → 자원만 바꾼다."""
     pack = seeded
     x = make_task(
         pack,
@@ -255,7 +251,7 @@ def test_t31_time_fixed_resource_moves(seeded):
         earliest_start=60,
         latest_start=60,
         latest_end=90,
-        movable={"time": False, "resource": True},
+        movable={"resource": True},
     )
     add_task(pack, x)
     snap = take_snapshot(pack)
@@ -265,7 +261,7 @@ def test_t31_time_fixed_resource_moves(seeded):
         if c.rule_id == "CAP-RESOURCE" and "X" in c.task_ids
     )
     spec = build_search_spec(snap, cap, "UA", "L0", {"X": ["SITE-CR-01"]})
-    assert spec.axes["X"] == Movable(time=False, resource=True)
+    assert spec.axes["X"] == Movable(time=True, resource=True)  # 시각은 시간창(60–60)이 묶는다
     result = cpsat.solve(snap, spec, pack)
     assert list(spec.axes) == ["C", "X"]
     assert (result.stage1["changed"], result.stage2["delay"]) == (1, 0)
@@ -273,22 +269,32 @@ def test_t31_time_fixed_resource_moves(seeded):
     assert _placed(result, "C", "X") == [("C", 60, "A-CR-01"), ("X", 60, "SITE-CR-01")]
 
 
-def test_t31_time_constraint_does_not_block_resource(resource_movable_a):
-    """A에 TIME 제약만 있으면 시간은 기준값(0), 자원 축은 여전히 열려 있다."""
-    snap = _fix(take_snapshot(resource_movable_a), "A", axes=("TIME",))
-    spec = build_search_spec(
-        snap, _conflict(resource_movable_a, snap), "UA", "L0", {"A": ["SITE-CR-01"]}
-    )
-    assert spec.axes["A"] == Movable(time=False, resource=True)
-    assert spec.resource_alternatives == {"A": ("SITE-CR-01",)}
-    result = cpsat.solve(snap, spec, resource_movable_a)
-    assert result.stage1["status"] == "INFEASIBLE"  # 0–30은 B 아래라 자원만으로는 풀 수 없다
-
-    snap_r = _fix(take_snapshot(resource_movable_a), "A", axes=("RESOURCE",))
+def test_pinned_task_closes_both_axes(resource_movable_a):
+    """고정된 A는 시각·자원 모두 닫힌다. 자원 축이 열려 있어도 대체 자원을 시도할 수 없다 (AG-27)."""
+    pack = resource_movable_a
+    snap = _fix(take_snapshot(pack), "A")
+    spec = build_search_spec(snap, _conflict(pack, snap), "UA", "L2")
+    assert spec.axes["A"] == Movable(time=False, resource=False)
+    result = cpsat.solve(snap, spec, pack)
+    assert result.stage1["status"] == "INFEASIBLE"  # A가 0–30에 묶이면 B 아래를 벗어날 수 없다
     with pytest.raises(SearchSpecError, match="RESOURCE_AXIS_NOT_ALLOWED"):
-        build_search_spec(
-            snap_r, _conflict(resource_movable_a, snap_r), "UA", "L0", {"A": ["SITE-CR-01"]}
-        )
+        build_search_spec(snap, _conflict(pack, snap), "UA", "L0", {"A": ["SITE-CR-01"]})
+
+
+def test_solver_keeps_pinned_task_and_moves_unpinned(with_a):
+    """고정된 작업은 상수로 남고, 고정되지 않은 작업만 움직인다 (AG-27)."""
+    snap = take_snapshot(with_a)
+    spec = build_search_spec(snap, _conflict(with_a, snap), "UA", "L1")
+    assert spec.axes == {
+        "A": Movable(time=True, resource=False),
+        "C": Movable(time=True, resource=False),
+    }
+    pinned = _fix(snap, "C")
+    spec_c = build_search_spec(pinned, _conflict(with_a, pinned), "UA", "L1")
+    assert spec_c.axes["C"] == Movable(time=False, resource=False)
+    result = cpsat.solve(pinned, spec_c, with_a)
+    if result.solution is not None:
+        assert _placed(result, "C") == [("C", 60, "A-CR-01")]
 
 
 # ── T16·T32 상태 구분 ──────────────────────────────────────────
@@ -455,7 +461,7 @@ def test_search_key_normalizes_resource_axis_without_alternatives(with_a, resour
     closed = with_facts(
         snapshot,
         tasks=tuple(
-            t.model_copy(update={"movable": Movable(time=t.movable.time, resource=False)})
+            t.model_copy(update={"movable": TaskMovable(resource=False)})
             for t in snapshot.facts().tasks
         ),
     )
@@ -472,7 +478,7 @@ def test_search_key_changes_with_ready_set_and_in_scope_constraints(with_a):
     assert _key(with_a, withdrawn)[0] != key
     # 제약은 axes로만 Solver 입력에 들어간다: 범위 안 작업(A)의 축을 막으면 그 범위의 키가 바뀌고,
     # 범위 밖 작업(C)의 제약은 L0 키를 바꾸지 않는다. C가 들어 있는 L1 키는 바뀐다
-    assert _key(with_a, _fix(snapshot, "A", axes=("TIME",)))[0] != key
+    assert _key(with_a, _fix(snapshot, "A"))[0] != key
     assert _key(with_a, _fix(snapshot, "C"))[0] == key
     assert _key(with_a, _fix(snapshot, "C"), "L1")[0] != _key(with_a, snapshot, "L1")[0]
 

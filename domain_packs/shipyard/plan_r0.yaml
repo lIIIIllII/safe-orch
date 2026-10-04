@@ -1,81 +1,83 @@
 # 기존 작업과 Plan R0. 시간은 10/12 09:00 기준 정수 분(1440분 = 하루).
 # 로더가 revision 1, lifecycle READY, critical field CONFIRMED(source_ref "fixture:plan_r0")로 만든다.
-# 가정: latest_end는 latest_start + duration.
+# 시간창은 모든 작업이 Horizon 전체다(earliest_start 0, latest_end = Horizon 끝 3360,
+# latest_start = 3360 - duration). 근무 시간 밖은 근무 달력(CALENDAR)이 막는다.
+# 고정 없이 시작한다. 작업을 그 자리에 묶으려면 사람이 타임라인에서 고정한다. movable은 자원 축만 적는다.
 # E의 "D 종료 후 15분"은 SEP-HOT-FLAM(gap 15)으로만 표현한다. predecessors는 모두 빈 배열.
 # resource_requirements는 작업 값이다(작업 유형 기본값에 더해진다). 골리앗 인양(K, Q)만 둔다.
 tasks:
-  - task_id: B                  # B구역 하부 작업, 고정
+  - task_id: B                  # B구역 하부 작업
     unit_id: UB
     owner_actor_id: planner_b
     work_type: WORK_BELOW
     zone_id: B
     duration: 60
-    earliest_start: 0           # 09:00
-    latest_start: 0             # 09:00
-    latest_end: 60              # 10:00
+    earliest_start: 0
+    latest_start: 3300
+    latest_end: 3360
     required_resource_type: null
     requested_resource_id: null
     predecessors: []
-    movable: { time: false, resource: false }
+    movable: { resource: false }
 
-  - task_id: C                  # C구역 크레인 작업, 시작 10:00–10:30 이동 가능
+  - task_id: C                  # C구역 크레인 작업
     unit_id: UA
     owner_actor_id: foreman_a2
     work_type: LIFTING          # 가정
     zone_id: C
     duration: 30
-    earliest_start: 60          # 10:00
-    latest_start: 90            # 10:30
-    latest_end: 120             # 11:00, 가정
+    earliest_start: 0
+    latest_start: 3330
+    latest_end: 3360
     required_resource_type: CRANE
     requested_resource_id: A-CR-01
     predecessors: []
-    movable: { time: true, resource: false }
+    movable: { resource: false }
 
-  - task_id: D                  # D구역 화기, 고정
+  - task_id: D                  # D구역 화기
     unit_id: UB
     owner_actor_id: planner_b
     work_type: HOT_WORK
     zone_id: D
     duration: 30
-    earliest_start: 0           # 09:00
-    latest_start: 0             # 09:00
-    latest_end: 30              # 09:30
+    earliest_start: 0
+    latest_start: 3330
+    latest_end: 3360
     required_resource_type: null
     requested_resource_id: null
     predecessors: []
-    movable: { time: false, resource: false }
+    movable: { resource: false }
 
-  - task_id: E                  # D2 도장, 시작 09:45–11:00
+  - task_id: E                  # D2 도장
     unit_id: UB
     owner_actor_id: planner_b
     work_type: PAINTING
     zone_id: D2
     duration: 30
-    earliest_start: 45          # 09:45
-    latest_start: 120           # 11:00
-    latest_end: 150             # 11:30, 가정
+    earliest_start: 0
+    latest_start: 3330
+    latest_end: 3360
     required_resource_type: null
     requested_resource_id: null
     predecessors: []
-    movable: { time: true, resource: false }
+    movable: { resource: false }
 
   # ── 시연 확장 작업 (가정) ──
-  # 기존 구역·자원과 엮이지 않는다. 모두 고정(F, F)이라 UA·UB의 SearchSpec hash(L2 포함)를 바꾸지 않는다.
+  # 기존 구역·자원과 엮이지 않는다.
   - task_id: K                  # F 안벽 골리앗 인양 (N1 장비 이중 배정 상대)
     unit_id: UB
     owner_actor_id: planner_b
     work_type: LIFTING
     zone_id: F
     duration: 120
-    earliest_start: 1440        # 10/13(화) 09:00
-    latest_start: 1440
-    latest_end: 1560            # 10/13(화) 11:00
+    earliest_start: 0
+    latest_start: 3240
+    latest_end: 3360
     required_resource_type: GANTRY
     requested_resource_id: SITE-GC-01
     resource_requirements: [{ attribute: max_load, op: GTE, value: 100 }, { attribute: usage, op: CONTAINS, value: 블록 }]
     predecessors: []
-    movable: { time: false, resource: false }
+    movable: { resource: false }
 
   - task_id: P                  # G2 도장 오전 (N2 화기–도장 상대)
     unit_id: UB
@@ -83,13 +85,13 @@ tasks:
     work_type: PAINTING
     zone_id: G2
     duration: 60
-    earliest_start: 1500        # 10/13(화) 10:00
-    latest_start: 1500
-    latest_end: 1560            # 10/13(화) 11:00
+    earliest_start: 0
+    latest_start: 3300
+    latest_end: 3360
     required_resource_type: null
     requested_resource_id: null
     predecessors: []
-    movable: { time: false, resource: false }
+    movable: { resource: false }
 
   - task_id: W                  # G2 도장 오후 (N4 다음 날 이동 상대)
     unit_id: UB
@@ -97,13 +99,13 @@ tasks:
     work_type: PAINTING
     zone_id: G2
     duration: 240
-    earliest_start: 1680        # 10/13(화) 13:00
-    latest_start: 1680
-    latest_end: 1920            # 10/13(화) 17:00
+    earliest_start: 0
+    latest_start: 3120
+    latest_end: 3360
     required_resource_type: null
     requested_resource_id: null
     predecessors: []
-    movable: { time: false, resource: false }
+    movable: { resource: false }
 
   - task_id: Q                  # F 안벽 골리앗 인양 (N3 장비 이중 배정 상대)
     unit_id: UA
@@ -111,14 +113,14 @@ tasks:
     work_type: LIFTING
     zone_id: F
     duration: 60
-    earliest_start: 2910        # 10/14(수) 09:30
-    latest_start: 2910
-    latest_end: 2970            # 10/14(수) 10:30
+    earliest_start: 0
+    latest_start: 3300
+    latest_end: 3360
     required_resource_type: GANTRY
     requested_resource_id: SITE-GC-01
     resource_requirements: [{ attribute: max_load, op: GTE, value: 100 }, { attribute: usage, op: CONTAINS, value: 블록 }]
     predecessors: []
-    movable: { time: false, resource: false }
+    movable: { resource: false }
 
   - task_id: M                  # H 하부 작업 (N3 인양–하부 분리 상대)
     unit_id: UA
@@ -126,13 +128,13 @@ tasks:
     work_type: WORK_BELOW
     zone_id: H
     duration: 90
-    earliest_start: 2910        # 10/14(수) 09:30
-    latest_start: 2910
-    latest_end: 3000            # 10/14(수) 11:00
+    earliest_start: 0
+    latest_start: 3270
+    latest_end: 3360
     required_resource_type: null
     requested_resource_id: null
     predecessors: []
-    movable: { time: false, resource: false }
+    movable: { resource: false }
 
 assignments:
   - { task_id: B, start: 0,  end: 60, resource_id: null }      # 09:00–10:00

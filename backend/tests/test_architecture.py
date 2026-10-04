@@ -176,8 +176,8 @@ def test_executor_is_called_only_inside_tool_gateway_execute():
 
 
 def test_gateway_and_executors_have_no_authority_functions():
-    """승인·확정·Hold 해제·Proposal 확인·미응답 수용 함수가 코드상 없다."""
-    words = ("approve", "commit", "release", "confirm", "waive")
+    """승인·확정·Hold 해제·Proposal 확인·미응답 수용·고정·고정 해제 함수가 코드상 없다."""
+    words = ("approve", "commit", "release", "confirm", "waive", "pin")
     bad = []
     for f in _py_files(AGENTS / "tool_gateway.py", AGENTS / "executors"):
         for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):

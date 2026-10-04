@@ -19,6 +19,7 @@ from app.commands.approval import (
 )
 from app.commands.consultation import build_consultation
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
+from app.commands.pins import TaskRef, pin_task
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.domain.consultation import build_items
 from app.domain.hashes import candidate_hash
@@ -128,13 +129,12 @@ def _waive(pack, cand, task_ids=("C",), comment="작업발판 일정 확인됨",
     return waive(pack, actor, _key(), body)
 
 
-def _reject(pack, cand, v, reason, targets=(), axes=(), comment=""):
+def _reject(pack, cand, v, reason, targets=(), comment=""):
     body = RejectRequest(
         candidate_id=cand.candidate_id,
         validation_id=v.validation_id,
         reason_code=reason,
         target_task_ids=targets,
-        axes=axes,
         comment=comment,
     )
     return reject_candidate(pack, "supervisor", _key(), body)
@@ -215,20 +215,21 @@ def test_gate_path(seeded):
     assert _queue(pack) == []
 
 
-# ── 기본안 B: 구조화 거절 → 제약 → 재탐색 ──────────────────────
+# ── 기본안 B: 거절 → Supervisor가 C 고정 → 재탐색 ──────────────
 
 
-def test_plan_b_reject_immovable_c_then_l1_infeasible(alpha):
+def test_plan_b_reject_then_pin_c_then_l1_infeasible(alpha):
     pack, _, _, cand, v = alpha
     before = _site(pack).context_version
-    out = _reject(pack, cand, v, "TASK_IMMOVABLE", ("C",), ("TIME", "RESOURCE"), "작업발판 연계")
-    assert out.status == "APPLIED" and len(out.result_refs["constraint_ids"]) == 1
+    out = _reject(pack, cand, v, "TIME_WINDOW_UNACCEPTABLE", ("C",), "작업발판 연계")
+    assert out.status == "APPLIED" and _site(pack).context_version == before  # 거절은 고정이 아니다
+    assert pin_task(pack, "supervisor", _key(), TaskRef(task_id="C")).status == "APPLIED"
     assert _site(pack).context_version == before + 1
     assert _view(pack, cand).status == "CANCELLED"
 
     snap = take_snapshot(pack)
-    [fc] = snap.facts().constraints
-    assert (fc.task_id, fc.frozen_axes, fc.source_type) == ("C", ("RESOURCE", "TIME"), "DECISION")
+    pin = next(p for p in snap.facts().pins if p.task_id == "C")
+    assert (pin.pinned_by, pin.by_role) == ("supervisor", "SUPERVISOR")
     spec, result, none = _solve(pack, snap, "L1")
     assert spec.axes["C"].time is False and spec.axes["C"].resource is False
     assert result.stage1["status"] == "INFEASIBLE" and none is None  # T17 일부
@@ -238,19 +239,17 @@ def test_reject_without_constraint_keeps_context_and_blocks_approval(alpha_waive
     pack, _, _, cand, v = alpha_waived
     before = _site(pack).context_version
     out = _reject(pack, cand, v, "PREFERENCE", comment="오전 중 인양은 피하고 싶다")
-    assert out.status == "APPLIED" and out.result_refs["constraint_ids"] == []
+    assert out.status == "APPLIED"
     assert _site(pack).context_version == before
     assert _view(pack, cand).status == "CANCELLED" and _queue(pack) == []
     assert _approve(pack, cand, v).reason_codes == ("CANDIDATE_REJECTED",)
 
 
-def test_reject_task_immovable_requires_target_and_axes(alpha):
+def test_reject_checks_reason_code_and_targets(alpha):
     pack, _, _, cand, v = alpha
-    assert _reject(pack, cand, v, "TASK_IMMOVABLE").reason_codes == ("TARGET_REQUIRED",)
-    assert _reject(pack, cand, v, "TASK_IMMOVABLE", ("C",)).reason_codes == ("TARGET_REQUIRED",)
     assert _reject(pack, cand, v, "NOPE").reason_codes == ("INVALID_REASON_CODE",)
-    assert _reject(pack, cand, v, "OTHER", ("Z",), ("TIME",)).reason_codes == ("TASK_NOT_FOUND",)
-    assert _count("feedback_constraint") == 0 and _count("decision") == 0
+    assert _reject(pack, cand, v, "OTHER", ("Z",)).reason_codes == ("TASK_NOT_FOUND",)
+    assert _count("decision") == 0
 
 
 # ── T01·폼 ─────────────────────────────────────────────────────
@@ -276,7 +275,7 @@ def test_form_records_confirmed_fields_movable_and_consents(seeded):
     a = snap.facts().task_map()["A"]
     assert (a.unit_id, a.owner_actor_id, a.lifecycle, a.revision) == ("UA", "planner_a", "READY", 1)
     assert a.hazard_tags == ("LIFTING",)  # 입력 태그는 버리고 도출
-    assert (a.movable.time, a.movable.resource) == (True, False)
+    assert a.movable.resource is False
     assert set(a.fields) == {"zone_id", "duration", "window", "resource"}
     assert {(f.status, f.source_ref) for f in a.fields.values()} == {("CONFIRMED", source_ref)}
     consents = {c.axis: c.scope for c in snap.facts().consents}
@@ -631,7 +630,6 @@ def test_t45_same_key_other_body_or_command(seeded):
 NEW_IMMUTABLE = (
     "command_result",
     "decision",
-    "feedback_constraint",
     "event",
     "consent",
     "consultation",
@@ -642,7 +640,7 @@ NEW_IMMUTABLE = (
 @pytest.mark.parametrize("op", ["UPDATE", "DELETE"])
 def test_t51_new_immutable_tables(alpha, table, op):
     pack, _, _, cand, v = alpha
-    _reject(pack, cand, v, "TASK_IMMOVABLE", ("C",), ("TIME",))
+    _reject(pack, cand, v, "OTHER", ("C",))
     _event(pack)
     sql = f"UPDATE {table} SET site_id = site_id" if op == "UPDATE" else f"DELETE FROM {table}"
     with pytest.raises(sqlite3.IntegrityError, match=f"immutable: {table}"), db.write() as tx:

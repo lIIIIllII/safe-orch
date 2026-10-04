@@ -30,7 +30,7 @@ from app.store.repos.tasks import list_current_tasks
 
 
 def changed_axes(before: Assignment, after: Assignment) -> list[str]:
-    """협의 항목에서 바뀐 축 (제약 초안의 축은 이 중 하나 이상을 포함해야 한다)."""
+    """협의 항목에서 바뀐 축."""
     axes = []
     if before.start != after.start:
         axes.append("TIME")
@@ -47,7 +47,6 @@ def _items(conn: sqlite3.Connection, pack: LoadedPack, run_id: str, candidate_id
     for r in list_change_requests(conn, pack.site_id, candidate_id):
         if r["run_id"] != run_id:
             continue
-        draft = r["draft"]
         reply = r["reply"] or {}
         mine.setdefault(r["change_hash"], []).append(
             {
@@ -55,14 +54,6 @@ def _items(conn: sqlite3.Connection, pack: LoadedPack, run_id: str, candidate_id
                 "status": r["status"],
                 "decision": reply.get("decision"),
                 "quoted_comment": reply.get("comment"),
-                "draft": None
-                if draft is None
-                else {
-                    "proposal_id": draft["proposal_id"],
-                    "status": draft["status"],
-                    "reason_code": draft["payload"].get("reason_code"),
-                    "axes": draft["payload"].get("axes"),
-                },
             }
         )
     return [
@@ -87,7 +78,7 @@ ASK_STATUS = {"ACCEPT": "ACCEPTED", "DECLINE": "DECLINED"}
 def _asks(conn: sqlite3.Connection, pack: LoadedPack, run: AgentRun) -> list[dict[str, Any]]:
     """사전 확인할 need와 지금 상태, 담당자별로 정렬한다.
 
-    UNASKED 물을 수 있다, NOT_ASKABLE 지금은 물을 수 없다(reason: 담당자가 거절한 값, 고정된 축, 같은
+    UNASKED 물을 수 있다, NOT_ASKABLE 지금은 물을 수 없다(reason: 담당자가 거절한 값, 고정된 작업, 같은
     작업에 답을 기다리는 질문 등), OPEN 답 대기, ACCEPTED·DECLINED 담당자의 답.
     """
     needs = run.input_ref.get("needs") or []

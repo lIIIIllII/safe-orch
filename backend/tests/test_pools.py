@@ -181,7 +181,7 @@ def test_validator_catches_pool_conflicts_through_rule_engine(seeded):
 
 @pytest.fixture
 def resource_movable_a(with_a):
-    add_task(with_a, make_task(with_a, revision=2, movable={"time": True, "resource": True}))
+    add_task(with_a, make_task(with_a, revision=2, movable={"resource": True}))
     return with_a
 
 

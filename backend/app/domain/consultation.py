@@ -9,13 +9,11 @@ from typing import Literal
 from app.domain.canonical import canonical_hash
 from app.domain.models import Assignment, Candidate, ConsultationItem, SnapshotContent
 
-ItemStatus = Literal[
-    "COVERED", "PENDING", "ACCEPTED", "OBJECTED", "OBJECTION_DRAFT_PENDING", "WAIVED"
-]
+ItemStatus = Literal["COVERED", "PENDING", "ACCEPTED", "OBJECTED", "WAIVED"]
 ConsultationStatus = Literal["COMPLETE", "BLOCKED", "OPEN", "CANCELLED"]
 
 DONE = {"COVERED", "ACCEPTED", "WAIVED"}
-BLOCKING = {"OBJECTED", "OBJECTION_DRAFT_PENDING"}
+BLOCKING = {"OBJECTED"}
 
 
 def change_hash(task_id: str, task_revision: int, before: Assignment, after: Assignment) -> str:
@@ -78,7 +76,7 @@ def item_statuses(
 ) -> dict[str, ItemStatus]:
     """item의 실효 상태. WAIVE decision이 덮으면 WAIVED, 그다음 담당자 답, 아니면 base_status.
 
-    answers: change_hash → ACCEPTED·OBJECTED·OBJECTION_DRAFT_PENDING (변경 요청의 답과 제약 초안).
+    answers: change_hash → ACCEPTED·OBJECTED (변경 요청의 답).
     """
     waived = set(waived_task_ids)
     answered = answers or {}

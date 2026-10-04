@@ -13,8 +13,8 @@ from app.domain.models import (
     Assignment,
     Candidate,
     Conflict,
-    FeedbackConstraint,
     FieldRecord,
+    Pin,
     Predecessor,
     Requirement,
 )
@@ -101,15 +101,11 @@ def _failed_checks(validation):
     return sorted({c.check_id for c in validation.checks if c.status != "PASS"})
 
 
-def _constrain(snap, task_id, axes):
-    fc = FeedbackConstraint(
-        constraint_id=f"fc_{task_id}",
-        task_id=task_id,
-        frozen_axes=axes,
-        source_type="DECISION",
-        source_id="dec_test",
+def _pin(snap, task_id):
+    pin = Pin(
+        pin_id=f"pin_{task_id}", task_id=task_id, pinned_by="supervisor", by_role="SUPERVISOR"
     )
-    return with_facts(snap, constraints=(fc,))
+    return with_facts(snap, pins=(*snap.facts().pins, pin))
 
 
 def _retask(snap, task_id, **changes):
@@ -128,7 +124,7 @@ def alpha(with_a):
 
 @pytest.fixture
 def beta(with_a):
-    add_task(with_a, make_task(with_a, revision=2, movable={"time": True, "resource": True}))
+    add_task(with_a, make_task(with_a, revision=2, movable={"resource": True}))
     snap = take_snapshot(with_a)
     spec, cand = _solve(with_a, snap, "L0", {"A": ["SITE-CR-01"]})
     return with_a, snap, spec, cand
@@ -262,7 +258,7 @@ def test_c06_resource_axis_not_allowed(alpha):
 
 
 def test_c06_resource_not_in_spec_without_try(with_a):
-    add_task(with_a, make_task(with_a, revision=2, movable={"time": True, "resource": True}))
+    add_task(with_a, make_task(with_a, revision=2, movable={"resource": True}))
     snap = take_snapshot(with_a)
     spec, cand = _solve(with_a, snap, "L1")  # try 없음 → 대안 없음
     changed = _reshape(cand, snap, _asg("A", 60, 90, "SITE-CR-01"), _asg("C", 60, 90, "A-CR-01"))
@@ -278,8 +274,9 @@ def test_c06_reconfirm_change_fails(with_a):
     assert ("C06", "TIME_AXIS_NOT_ALLOWED", ("C",)) in _bad(v)
 
 
-def test_c06_frozen_by_constraint(with_a):
-    snap = _constrain(take_snapshot(with_a), "C", ("TIME",))
+def test_c06_task_pinned(with_a):
+    """고정된 C를 옮긴 후보는 SearchSpec과 관계없이 걸린다 (AG-27)."""
+    snap = _pin(take_snapshot(with_a), "C")
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), with_a)[0]
     spec = build_search_spec(snap, conflict, "UA", "L1")
     alpha_like = _rehash(
@@ -305,7 +302,7 @@ def test_c06_frozen_by_constraint(with_a):
         snap,
     )
     bad = _bad(validate(snap, alpha_like, spec, with_a))
-    assert ("C06", "FROZEN_BY_CONSTRAINT", ("C",)) in bad
+    assert ("C06", "TASK_PINNED", ("C",)) in bad
 
 
 def test_c06_outside_acting_unit(alpha):
@@ -451,7 +448,7 @@ def test_t31_time_fixed_resource_moved_pass(seeded):
         earliest_start=60,
         latest_start=60,
         latest_end=90,
-        movable={"time": False, "resource": True},
+        movable={"resource": True},
     )
     add_task(seeded, x)
     snap = take_snapshot(seeded)
@@ -463,31 +460,6 @@ def test_t31_time_fixed_resource_moved_pass(seeded):
     spec, cand = _solve(seeded, snap, "L0", {"X": ["SITE-CR-01"]}, conflict=cap)
     assert _asg("X", 60, 90, "SITE-CR-01") in cand.assignments
     v = validate(snap, cand, spec, seeded)
-    assert v.status == "PASS"
-
-
-def test_t31_time_constraint_only_resource_change_pass(seeded):
-    x = make_task(
-        seeded,
-        task_id="X",
-        zone_id="C",
-        earliest_start=60,
-        latest_start=90,
-        latest_end=120,
-        movable={"time": True, "resource": True},
-    )
-    add_task(seeded, x)
-    snap = _constrain(take_snapshot(seeded), "X", ("TIME",))
-    cap = next(
-        c
-        for c in detect_conflicts(snap, snap.facts().check_assignments(), seeded)
-        if c.rule_id == "CAP-RESOURCE"
-    )
-    spec, cand = _solve(seeded, snap, "L0", {"X": ["SITE-CR-01"]}, conflict=cap)
-    assert spec.axes["X"].time is False and spec.axes["X"].resource is True
-    assert _asg("X", 60, 90, "SITE-CR-01") in cand.assignments
-    v = validate(snap, cand, spec, seeded)
-    assert [c.status for c in v.checks if c.check_id == "C06"] == ["PASS"]
     assert v.status == "PASS"
 
 

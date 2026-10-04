@@ -2,10 +2,9 @@
 
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 모든 Action은 tx 하나다:
 begin_step(활성·차감·STALE_OBSERVATION·재관찰·허용 판정) → 효과 → step 완료.
-변경 요청·제약 초안·통지의 서버 문구(body)는 여기서 서버 값으로 만들고, 모델 문장은 agent_text다.
-제약은 만들지 않는다. 초안(FEEDBACK_CONSTRAINT 제안)을 담당자가 확정하는 명령이 만든다.
+변경 요청·통지의 서버 문구(body)는 여기서 서버 값으로 만들고, 모델 문장은 agent_text다.
 사전 확인(ASK_OWNER)은 MOVABILITY 제안과 질문을 만든다. 동의 효과는 담당자의 답 명령이 만든다.
-승인·확정·Hold 해제·Proposal 확인·미응답 수용 함수는 없다.
+승인·확정·Hold 해제·Proposal 확인·미응답 수용·고정·고정 해제 함수는 없다.
 """
 
 import sqlite3
@@ -22,12 +21,10 @@ from app.domain.models import Task
 from app.packs.loader import LoadedPack
 from app.store import db
 from app.store.repos.consultations import get_consultation_items
-from app.store.repos.messages import get_message, insert_message, insert_proposal
+from app.store.repos.messages import insert_message, insert_proposal
 from app.store.repos.plans import get_current_plan
 from app.store.repos.site import get_site
 from app.store.repos.tasks import list_current_tasks
-
-AXIS_NAMES = {"TIME": "시간", "RESOURCE": "자원"}
 
 
 class CoordinationExecutor:
@@ -63,8 +60,6 @@ class CoordinationExecutor:
                 outcome = self.wait_or_continue(tx, run_id, step_no, kind, ref)
                 self._done(tx, run_id, step_no, meta, parsed, outcome, None)
                 return outcome
-            if isinstance(action, spec.DraftConstraint):
-                return self._draft(tx, run_id, step_no, meta, parsed, obs, action)
             if isinstance(action, spec.SendNotice):
                 return self._notice(tx, run_id, step_no, meta, parsed, obs, action)
             assert isinstance(action, spec.ReturnResult)
@@ -77,7 +72,7 @@ class CoordinationExecutor:
         if isinstance(action, spec.AskOwner):
             ask = next((a for a in obs.data["asks"] if a["need_id"] == action.need_id), None)
             if ask is not None and ask["status"] == "NOT_ASKABLE":
-                return str(ask["reason"])  # 거절한 값(VALUE_DECLINED), 고정된 축 등 사실 조건
+                return str(ask["reason"])  # 거절한 값(VALUE_DECLINED), 고정된 작업 등 사실 조건
             return "ASK_OWNER" in available and action.need_id in c["ASK"]
         if isinstance(action, spec.ReturnResult):
             return action.status in available["RETURN_RESULT"].get("status", ["DONE", "BLOCKED"])
@@ -85,16 +80,6 @@ class CoordinationExecutor:
             return "SEND_CHANGE_REQUEST" in available and action.task_id in c["REQUEST"]
         if isinstance(action, spec.WaitForReplies):
             return "WAIT_FOR_REPLIES" in available
-        if isinstance(action, spec.DraftConstraint):
-            target = c["DRAFT"].get(action.message_id)
-            return (
-                "DRAFT_CONSTRAINT" in available
-                and target is not None
-                and action.task_id == target["task_id"]
-                and action.reason_code in spec.REASON_CODES
-                # 그 항목에서 바뀐 축을 하나 이상 고정해야 이견 대상인 변경을 막는다
-                and bool(set(action.axes) & set(target["changed_axes"]))
-            )
         if isinstance(action, spec.SendNotice):
             allowed = c["NOTICE"].get(action.actor_id)
             return (
@@ -232,69 +217,6 @@ class CoordinationExecutor:
         self._done(tx, run_id, step_no, meta, parsed, outcome, result, changes)
         return outcome
 
-    def _draft(
-        self,
-        tx: sqlite3.Connection,
-        run_id: str,
-        step_no: int,
-        meta: StepMeta,
-        parsed: _Parsed,
-        obs: Observation,
-        action: spec.DraftConstraint,
-    ) -> GatewayResult:
-        """제약 초안: FEEDBACK_CONSTRAINT 제안 + 확인 요청(CONFIRMATION). 확인자는 이견을 낸 담당자다."""
-        source = get_message(tx, self.pack.site_id, action.message_id)
-        assert source is not None
-        site = get_site(tx, self.pack.site_id)
-        assert site is not None
-        task = self._task(tx, action.task_id)
-        axes = sorted(set(action.axes))
-        proposal_id, message_id = new_id("prop"), new_id("msg")
-        candidate_id = obs.data["candidate"]["candidate_id"]
-        insert_proposal(
-            tx,
-            self.pack.site_id,
-            proposal_id,
-            type_="FEEDBACK_CONSTRAINT",
-            run_id=run_id,
-            step_no=step_no,
-            target_task_id=task.task_id,
-            base_task_revision=task.revision,
-            context_version=site.context_version,
-            payload={
-                "reason_code": action.reason_code,
-                "axes": axes,
-                "candidate_id": candidate_id,
-                "change_hash": source["change_hash"],
-                "source_message_id": action.message_id,
-            },
-            confirmer_actor_id=source["to_actor_id"],
-        )
-        body = constraint_text(self.pack, task, axes)
-        insert_message(
-            tx,
-            self.pack.site_id,
-            message_id,
-            run_id=run_id,
-            step_no=step_no,
-            to_actor_id=source["to_actor_id"],
-            type_="CONFIRMATION",
-            proposal_id=proposal_id,
-            body=body,
-            agent_text=action.message,
-            context_version=site.context_version,
-        )
-        outcome = GatewayResult("CONTINUE")
-        result = {
-            "proposal_id": proposal_id,
-            "message_id": message_id,
-            "to_actor_id": source["to_actor_id"],
-            "body": body,
-        }
-        changes = {"proposal_id": proposal_id, "message_id": message_id}
-        self._done(tx, run_id, step_no, meta, parsed, outcome, result, changes)
-        return outcome
-
     def _notice(
         self,
         tx: sqlite3.Connection,
@@ -398,14 +320,6 @@ def movability_text(pack: LoadedPack, task: Task, values: list[str]) -> str:
         f"{_work(pack, task)} 작업에 {', '.join(values)}도 쓸 수 있게 허용하시겠습니까? "
         f"현재 요청 자원 {task.requested_resource_id}. "
         "허용하면 재계획이 이 자원을 대안으로 검토합니다."
-    )
-
-
-def constraint_text(pack: LoadedPack, task: Task, axes: list[str]) -> str:
-    names = "·".join(AXIS_NAMES[a] for a in axes)
-    return (
-        f"{_work(pack, task)} 작업의 {names}을(를) 고정하는 제약으로 확정하시겠습니까? "
-        "확정하면 이 후보는 무효가 되고, 재계획이 이 작업을 움직이지 않고 다시 찾습니다."
     )
 
 

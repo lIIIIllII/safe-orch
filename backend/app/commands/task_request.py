@@ -17,10 +17,10 @@ from app.domain.models import (
     Actor,
     Consent,
     Demand,
-    Movable,
     Requirement,
     Site,
     Task,
+    TaskMovable,
     pool_for,
 )
 from app.packs.loader import LoadedPack, confirmed_fields
@@ -169,7 +169,7 @@ def create_requested_task(
 ) -> dict[str, Any]:
     """검증을 통과한 요청으로 작업을 만든다. 폼과 Work Intake가 같이 쓴다.
 
-    critical field CONFIRMED(source_ref), Consent(시작 범위, 요청 자원), movable {time, not resource},
+    critical field CONFIRMED(source_ref), Consent(시작 범위, 요청 자원), 자원 축 닫힘,
     대기열 판단, Context +1, RECHECK. source_ref만 다르면 같은 작업이 된다.
     """
     site_id = site.site_id
@@ -183,7 +183,7 @@ def create_requested_task(
         hazard_tags=pack.hazard_tags(form.work_type),
         default_requirements=pack.default_requirements(form.work_type),
         default_demands=pack.default_demands(form.work_type),
-        movable=Movable(time=True, resource=False),  # 자원 축은 MOVABILITY로만 연다
+        movable=TaskMovable(resource=False),  # 자원 축은 MOVABILITY로만 연다
         fields=confirmed_fields(data, wt.critical_fields, source_ref),
         lifecycle="READY",
     )

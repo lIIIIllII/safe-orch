@@ -17,6 +17,7 @@ from app.packs.loader import LoadedPack
 from app.rules.engine import separation_links
 from app.store.repos.events import get_event, get_hold
 from app.store.repos.messages import list_fact_updates, list_run_messages
+from app.store.repos.pins import list_active_pins, preferred_windows
 from app.store.repos.plans import get_current_plan
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
@@ -53,6 +54,8 @@ def lookup_tasks(
 ) -> dict[str, Any]:
     """LOOKUP_TASKS 결과: 현재 READY 작업을 작업 유형·구역으로 거른다."""
     placed = _placed(conn, pack)
+    pins = {p.task_id: p.pinned_by for p in list_active_pins(conn, pack.site_id)}
+    windows = preferred_windows(conn, pack.site_id)
     tasks = [
         {
             "task_id": t.task_id,
@@ -70,6 +73,16 @@ def lookup_tasks(
             # 시작 가능 시각을 늦출 수 있는 최대 분. 0이면 늦추는 수정안은 분석을 통과하지 못한다
             "start_slack": t.latest_start - t.earliest_start,
             "assignment": _assignment(pack, placed.get(t.task_id)),
+            # 사람이 건 고정(누가)과 담당자가 그린 희망 영역 (AG-27)
+            "pinned_by": pins.get(t.task_id),
+            "preferred_window": None
+            if t.task_id not in windows
+            else {
+                "start": windows[t.task_id]["start"],
+                "end": windows[t.task_id]["end"],
+                "start_clock": clock(pack, windows[t.task_id]["start"]),
+                "end_clock": clock(pack, windows[t.task_id]["end"]),
+            },
         }
         for t in sorted(_ready(conn, pack), key=lambda t: t.task_id)
         if (work_type is None or t.work_type == work_type)

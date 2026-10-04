@@ -86,7 +86,6 @@ def scenario_view(pack: LoadedPack) -> dict[str, Any]:
             "body": {
                 "reason_code": x.reason_code,
                 "target_task_ids": list(x.target_task_ids),
-                "axes": list(x.axes),
                 "comment": x.comment,
             },
         }

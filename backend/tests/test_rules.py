@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from conftest import add_task, make_task, take_snapshot, with_facts
+from conftest import LEGACY_PINNED, add_task, make_task, take_snapshot, with_facts
 
 from app.domain.canonical import canonical_hash
 from app.domain.models import Assignment, Predecessor, Requirement, ZoneRelation
@@ -87,7 +87,7 @@ def test_snapshot_content(with_a):
     assert set(content) == {
         "site_id", "pack_hash", "horizon_minutes", "work_intervals", "context_version",
         "plan_revision", "tasks", "resources", "pools", "zones", "zone_relations", "plan",
-        "holds", "constraints", "consents",
+        "holds", "pins", "consents",
     }  # fmt: skip
     assert (content["site_id"], content["context_version"], content["plan_revision"]) == (
         "YARD-01",
@@ -108,7 +108,8 @@ def test_snapshot_content(with_a):
         ("G2", "G"),
     ]
     assert content["plan"]["plan_revision"] == 0
-    assert (content["holds"], content["constraints"], content["consents"]) == ([], [], [])
+    assert (content["holds"], content["consents"]) == ([], [])
+    assert sorted(p["task_id"] for p in content["pins"]) == sorted(LEGACY_PINNED)
     with db.read() as conn:
         stored = conn.execute(
             "SELECT snapshot_hash, content FROM snapshot WHERE snapshot_id = ?",

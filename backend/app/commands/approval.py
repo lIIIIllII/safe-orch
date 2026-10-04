@@ -10,20 +10,19 @@ from pydantic import Field
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
 from app.domain.ids import new_id
-from app.domain.models import Axis, Candidate, FeedbackConstraint, Plan, Validation
+from app.domain.models import Candidate, Plan, Validation
 from app.packs.loader import LoadedPack
 from app.store.repos.cases import deliver_event, end_candidate_runs, register_recheck, wake_run
 from app.store.repos.consultations import CandidateState, candidate_state, consultation_view
-from app.store.repos.decisions import insert_constraint, insert_decision
+from app.store.repos.decisions import insert_decision
 from app.store.repos.events import list_active_holds
 from app.store.repos.plans import get_plan_by_candidate, insert_plan
 from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.runs import get_run, run_for_solver_result
-from app.store.repos.site import bump_context_version, bump_plan_revision
+from app.store.repos.site import bump_plan_revision
 from app.store.repos.tasks import list_current_tasks
 
 REJECT_REASONS = (
-    "TASK_IMMOVABLE",
     "RESOURCE_UNAVAILABLE",
     "TIME_WINDOW_UNACCEPTABLE",
     "PREFERENCE",
@@ -48,7 +47,6 @@ class RejectRequest(Body):
     validation_id: str
     reason_code: str
     target_task_ids: tuple[str, ...] = ()
-    axes: tuple[Axis, ...] = ()
     comment: str = ""
 
 
@@ -228,9 +226,6 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
     _stale(r, candidate_state(tx, site_id, candidate))
     if body.reason_code not in REJECT_REASONS:
         r.reject("INVALID_REASON_CODE")
-    immovable = body.reason_code == "TASK_IMMOVABLE"
-    if immovable and not (body.target_task_ids and body.axes):
-        r.reject("TARGET_REQUIRED")
     ready = {t.task_id for t in list_current_tasks(tx, site_id, ctx.pack) if t.lifecycle == "READY"}
     if any(t not in ready for t in body.target_task_ids):
         r.reject("TASK_NOT_FOUND")
@@ -238,7 +233,6 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
         return r
 
     targets = tuple(sorted(set(body.target_task_ids)))
-    axes = tuple(sorted(set(body.axes)))
     decision_id = new_id("dec")
     insert_decision(
         tx,
@@ -251,23 +245,9 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
         ctx.site.context_version,
         reason_code=body.reason_code,
         target_task_ids=targets,
-        axes=axes,
         comment=body.comment,
     )
-    constraint_ids = []
-    if immovable:
-        context_version = bump_context_version(tx, site_id)
-        for tid in targets:
-            fc = FeedbackConstraint(
-                constraint_id=new_id("fc"),
-                task_id=tid,
-                frozen_axes=axes,
-                source_type="DECISION",
-                source_id=decision_id,
-            )
-            insert_constraint(tx, site_id, fc, context_version)
-            constraint_ids.append(fc.constraint_id)
-    r.refs = {"decision_id": decision_id, "constraint_ids": constraint_ids}
+    r.refs = {"decision_id": decision_id}
     r.audit_reason = body.reason_code
     # 후보가 거절되었으므로 그 후보의 협의 Run을 끝낸다(보낸 요청 정리)
     end_candidate_runs(

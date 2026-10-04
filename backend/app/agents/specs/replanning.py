@@ -61,10 +61,7 @@ class ListAssignableResources(Action):
     """작업에 쓸 수 있는 자원을 조회한다(유형·사용 권한·가용 구간 기준). 결과는 자원 사실이 같은 동안
     유효하다. 대체 자원 시도는 서버가 같은 기준으로 쓸 수 있는 자원만 받는다."""
 
-    OPENS = (
-        "필요한 자원이 있고 자원 축이 확인된 제약으로 고정되지 않은 작업을 현재 자원 사실에서 "
-        "아직 조회하지 않았을 때"
-    )
+    OPENS = "필요한 자원이 있고 고정되지 않은 작업을 현재 자원 사실에서 아직 조회하지 않았을 때"
 
     task_id: str = Field(description="자원을 조회할 작업 (자원이 필요한 acting_unit 작업)")
 
@@ -115,7 +112,7 @@ def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
     """스킬이 열리는 사실. 순서 조건은 없다."""
     return {
         "has_conflict": bool(obs["conflicts"]),
-        "has_rejection": bool(obs["rejections"]) or bool(obs["constraints"]),
+        "has_rejection": bool(obs["rejections"]),
     }
 
 
@@ -129,16 +126,16 @@ def choices(obs: dict[str, Any], hidden: dict[str, Any] | None = None) -> dict[s
     hidden["eligible"]은 서버가 계산한 자원 적격성이다(유형·사용 권한·가용 구간·구역·요구 조건, CV-15):
     {작업: {"alternatives": 현재 자원 말고 쓸 수 있는 자원, "untried": 그중 아직 시도하지 않은 것}}.
     자원 조회를 했는지는 보지 않는다.
-    LIST: 필요 자원이 있고 RESOURCE 축이 제약으로 막히지 않았으며 같은 자원 사실에서 아직 조회하지 않은 작업.
-    TRY: 자원 축 허용(movable.resource ∧ RESOURCE 제약 없음) 작업의 미시도 대체 자원.
+    LIST: 필요 자원이 있고 고정되지 않았으며 같은 자원 사실에서 아직 조회하지 않은 작업.
+    TRY: 자원 축이 열렸고(movable.resource) 고정되지 않은 작업의 미시도 대체 자원.
     """
     eligible = (hidden or {}).get("eligible", {})
     acting = {t["task_id"]: t for t in obs["acting_tasks"]}
-    frozen = {(c["task_id"], axis) for c in obs["constraints"] for axis in c["frozen_axes"]}
+    pinned = {tid for tid, t in acting.items() if t["pinned"]}
     listed = {r["task_id"] for r in obs["assignable_resources"] if r["task_id"] in acting}
     try_: dict[str, list[str]] = {}
     for tid, e in eligible.items():
-        if tid not in acting or (tid, "RESOURCE") in frozen:
+        if tid not in acting or tid in pinned:
             continue
         if acting[tid]["movable"]["resource"] and e["untried"]:
             try_[tid] = list(e["untried"])
@@ -146,7 +143,7 @@ def choices(obs: dict[str, Any], hidden: dict[str, Any] | None = None) -> dict[s
         "LIST": [
             tid
             for tid, t in acting.items()
-            if t["required_resource_type"] and (tid, "RESOURCE") not in frozen and tid not in listed
+            if t["required_resource_type"] and tid not in pinned and tid not in listed
         ],
         "TRY": try_,
     }

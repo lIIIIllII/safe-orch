@@ -69,7 +69,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p15",
+        "replanning-p16",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -381,7 +381,7 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
         "llm_attempts": spec.MAX_LLM_ATTEMPTS,
         "solver_calls": spec.MAX_SOLVER_CALLS,
     }
-    assert binding.prompt.PROMPT_VERSION == "replanning-p15"
+    assert binding.prompt.PROMPT_VERSION == "replanning-p16"
     assert runtime.exec_contract_version("REPLANNING") == "replanning-c5"
     assert runtime.exec_contract_version("COORDINATION") == "coordination-c6"
     assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c6"

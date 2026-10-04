@@ -30,7 +30,7 @@ from app.store.repos.snapshots import build_snapshot_content
 from app.store.repos.tasks import list_current_tasks
 
 LEVELS = ("L0", "L1", "L2")
-OPEN_ITEM = ("PENDING", "OBJECTED", "OBJECTION_DRAFT_PENDING")
+OPEN_ITEM = ("PENDING", "OBJECTED")
 CHILD_RESULTS = 3  # 관찰에 보이는 최근 하위 Run 결과 수
 
 
@@ -222,7 +222,6 @@ def candidate_view(
             "type": last["type"],
             "reason_code": last["reason_code"],
             "target_task_ids": last["target_task_ids"],
-            "axes": last["axes"],
             # Supervisor가 쓴 문장은 인용 데이터다
             "quoted_comment": last["comment"] or None,
         },
@@ -231,15 +230,14 @@ def candidate_view(
 
 
 def rejection_facts(conn: sqlite3.Connection, case_id: str) -> dict[str, Any]:
-    """이 Case 후보에 대한 거절 사실: 제약 있는·없는 거절 수와 마지막 거절."""
+    """이 Case 후보에 대한 거절 사실: 거절 수와 마지막 거절."""
     found = list_case_rejections(conn, case_id)
     last = found[-1] if found else None
     return {
-        "with_constraint": sum(1 for r in found if r["has_constraint"]),
-        "without_constraint": sum(1 for r in found if not r["has_constraint"]),
+        "count": len(found),
         "last": None
         if last is None
-        else {k: last[k] for k in ("candidate_id", "reason_code", "target_task_ids", "axes")},
+        else {k: last[k] for k in ("candidate_id", "reason_code", "target_task_ids")},
     }
 
 
@@ -398,7 +396,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
             key = call_key("REPLANNING", {"group_id": g.group_id, "acting_unit_id": unit})
             last = last_result(conn, site_id, key)
             unchanged = same_facts(conn, site_id, key)
-            movable = movable_task_ids(g, unit, facts.task_map(), facts.constraints)
+            movable = movable_task_ids(g, unit, facts.pins)
             last_view = None
             if last is not None:
                 run = get_run(conn, last["run_id"])
@@ -422,7 +420,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                 {
                     "unit_id": unit,
                     "task_ids": list(task_ids),
-                    # 확인된 제약을 반영한 뒤에도 움직일 수 있는 작업 (재계획은 이것만 옮긴다)
+                    # 고정되지 않아 움직일 수 있는 작업 (재계획은 이것만 옮긴다)
                     "movable_task_ids": movable,
                     "request_task_ids": [t for t in task_ids if t not in in_plan],
                     "untried_levels": untried_levels(

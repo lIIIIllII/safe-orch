@@ -399,7 +399,7 @@ def test_recall_is_allowed_after_plain_rejection_and_refused_when_nothing_change
     run_until_idle(pack, model_factory=router.factory())
     assert _guards(main.run_id)[3:] == [("CALL_AGENT", None), ("ESCALATE", None)]
     woke = _steps(main.run_id)[3]["observation"]
-    assert woke["rejections"]["without_constraint"] == 1
+    assert woke["rejections"]["count"] == 1
     units = {u["unit_id"]: u for u in woke["groups"][0]["units"]}
     assert units["UA"]["last_result"]["facts_changed"] is True
     assert len(_runs("REPLANNING")) == 2

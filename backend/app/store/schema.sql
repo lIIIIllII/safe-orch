@@ -1,4 +1,4 @@
--- SAFE-ORCH schema. schema_version 9.
+-- SAFE-ORCH schema. schema_version 10.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -234,27 +234,58 @@ CREATE TABLE decision (
     validation_id   TEXT NOT NULL REFERENCES validation (validation_id),
     actor_id        TEXT NOT NULL,
     reason_code     TEXT CHECK (reason_code IS NULL OR reason_code IN
-                        ('TASK_IMMOVABLE', 'RESOURCE_UNAVAILABLE', 'TIME_WINDOW_UNACCEPTABLE',
-                         'PREFERENCE', 'OTHER')),
+                        ('RESOURCE_UNAVAILABLE', 'TIME_WINDOW_UNACCEPTABLE', 'PREFERENCE',
+                         'OTHER')),
     target_task_ids TEXT NOT NULL CHECK (json_valid(target_task_ids)),
-    axes            TEXT NOT NULL CHECK (json_valid(axes)),
     comment         TEXT NOT NULL,
     context_version INTEGER NOT NULL CHECK (context_version >= 0),
     CHECK ((type = 'REJECT') = (reason_code IS NOT NULL)),
     FOREIGN KEY (site_id, actor_id) REFERENCES actor (site_id, actor_id)
 );
 
+-- 사람이 건 작업 고정(시각·자원 전체). ACTIVE → RELEASED 한 번만(트리거). 삭제 금지.
 -- task revision에 묶지 않는다. task PK에 revision이 있어 존재는 명령에서 검사한다.
-CREATE TABLE feedback_constraint (
-    constraint_id           TEXT PRIMARY KEY,
-    site_id                 TEXT NOT NULL REFERENCES site (site_id),
-    task_id                 TEXT NOT NULL,
-    frozen_axes             TEXT NOT NULL
-                                CHECK (json_valid(frozen_axes) AND json_array_length(frozen_axes) > 0),
-    source_type             TEXT NOT NULL CHECK (source_type IN ('DECISION', 'PROPOSAL')),
-    source_id               TEXT NOT NULL,
-    created_context_version INTEGER NOT NULL CHECK (created_context_version >= 0)
+-- by_role: 건 사람이 Supervisor면 SUPERVISOR(Supervisor만 푼다), 아니면 OWNER.
+CREATE TABLE task_pin (
+    pin_id                   TEXT PRIMARY KEY,
+    site_id                  TEXT NOT NULL REFERENCES site (site_id),
+    task_id                  TEXT NOT NULL,
+    status                   TEXT NOT NULL CHECK (status IN ('ACTIVE', 'RELEASED')),
+    pinned_by                TEXT NOT NULL,
+    by_role                  TEXT NOT NULL CHECK (by_role IN ('OWNER', 'SUPERVISOR')),
+    pinned_at                TEXT NOT NULL,
+    created_context_version  INTEGER NOT NULL CHECK (created_context_version >= 0),
+    released_by              TEXT,
+    released_at              TEXT,
+    released_context_version INTEGER CHECK (released_context_version >= 0),
+    CHECK ((status = 'RELEASED') = (released_by IS NOT NULL AND released_at IS NOT NULL
+                                     AND released_context_version IS NOT NULL)),
+    FOREIGN KEY (site_id, pinned_by) REFERENCES actor (site_id, actor_id)
 );
+
+-- 작업당 ACTIVE 고정 하나
+CREATE UNIQUE INDEX task_pin_one_active ON task_pin (site_id, task_id) WHERE status = 'ACTIVE';
+
+-- 담당자가 그린 희망 영역(작업당 시각 구간 하나, [start_min, end_min)). 서버는 강제하지 않고 현장 버전도
+-- 올리지 않는다. 다시 그리거나 지우면 앞의 것이 CLEARED가 된다. 삭제 금지.
+CREATE TABLE preferred_window (
+    window_id  TEXT PRIMARY KEY,
+    site_id    TEXT NOT NULL REFERENCES site (site_id),
+    task_id    TEXT NOT NULL,
+    start_min  INTEGER NOT NULL CHECK (start_min >= 0),
+    end_min    INTEGER NOT NULL,
+    status     TEXT NOT NULL CHECK (status IN ('ACTIVE', 'CLEARED')),
+    set_by     TEXT NOT NULL,
+    set_at     TEXT NOT NULL,
+    cleared_by TEXT,
+    cleared_at TEXT,
+    CHECK (start_min < end_min),
+    CHECK ((status = 'CLEARED') = (cleared_by IS NOT NULL AND cleared_at IS NOT NULL)),
+    FOREIGN KEY (site_id, set_by) REFERENCES actor (site_id, actor_id)
+);
+
+CREATE UNIQUE INDEX preferred_window_one_active ON preferred_window (site_id, task_id)
+    WHERE status = 'ACTIVE';
 
 CREATE TABLE event (
     event_id          TEXT PRIMARY KEY,
@@ -289,14 +320,15 @@ CREATE TABLE hold (
 );
 
 -- 메인에게 갈 사건. 생긴 트랜잭션에서 한 번만 적는다(dedupe_key). 처리 상태는 저장하지 않는다.
--- ref: 종류별 참조(task_id·event_id·hold_id·candidate_id·decision_id·run_id).
+-- ref: 종류별 참조(task_id·event_id·hold_id·candidate_id·decision_id·run_id·pin_id).
 CREATE TABLE case_event (
     seq                     INTEGER PRIMARY KEY AUTOINCREMENT,
     site_id                 TEXT NOT NULL REFERENCES site (site_id),
     kind                    TEXT NOT NULL CHECK (kind IN ('TASK_READY', 'EVENT_REPORTED',
                                                           'HOLD_RELEASED', 'CANDIDATE_DECIDED',
                                                           'CHILD_RUN_ENDED',
-                                                          'TASK_REQUEST_WITHDRAWN')),
+                                                          'TASK_REQUEST_WITHDRAWN',
+                                                          'TASK_PINNED', 'TASK_UNPINNED')),
     ref                     TEXT NOT NULL CHECK (json_valid(ref)),
     case_id                 TEXT NOT NULL,
     dedupe_key              TEXT NOT NULL,
@@ -443,8 +475,7 @@ CREATE TABLE solver_job (
 CREATE TABLE proposal (
     proposal_id             TEXT PRIMARY KEY,
     site_id                 TEXT NOT NULL REFERENCES site (site_id),
-    type                    TEXT NOT NULL CHECK (type IN ('FEEDBACK_CONSTRAINT', 'FACT_UPDATE',
-                                                          'MOVABILITY')),
+    type                    TEXT NOT NULL CHECK (type IN ('FACT_UPDATE', 'MOVABILITY')),
     run_id                  TEXT NOT NULL REFERENCES agent_run (run_id),
     step_no                 INTEGER NOT NULL CHECK (step_no >= 1),
     target_task_id          TEXT NOT NULL,
@@ -538,6 +569,27 @@ BEGIN SELECT RAISE(ABORT, 'hold: only ACTIVE -> RELEASED'); END;
 CREATE TRIGGER hold_no_delete BEFORE DELETE ON hold
 BEGIN SELECT RAISE(ABORT, 'hold: no delete'); END;
 
+-- ── 고정·희망 영역 전이 트리거 ────────────────
+
+CREATE TRIGGER task_pin_release_only BEFORE UPDATE ON task_pin
+WHEN OLD.status <> 'ACTIVE' OR NEW.status <> 'RELEASED'
+     OR NEW.pin_id <> OLD.pin_id OR NEW.site_id <> OLD.site_id OR NEW.task_id <> OLD.task_id
+     OR NEW.pinned_by <> OLD.pinned_by OR NEW.by_role <> OLD.by_role
+     OR NEW.pinned_at <> OLD.pinned_at
+     OR NEW.created_context_version <> OLD.created_context_version
+BEGIN SELECT RAISE(ABORT, 'task_pin: only ACTIVE -> RELEASED'); END;
+CREATE TRIGGER task_pin_no_delete BEFORE DELETE ON task_pin
+BEGIN SELECT RAISE(ABORT, 'task_pin: no delete'); END;
+
+CREATE TRIGGER preferred_window_clear_only BEFORE UPDATE ON preferred_window
+WHEN OLD.status <> 'ACTIVE' OR NEW.status <> 'CLEARED'
+     OR NEW.window_id <> OLD.window_id OR NEW.site_id <> OLD.site_id OR NEW.task_id <> OLD.task_id
+     OR NEW.start_min <> OLD.start_min OR NEW.end_min <> OLD.end_min
+     OR NEW.set_by <> OLD.set_by OR NEW.set_at <> OLD.set_at
+BEGIN SELECT RAISE(ABORT, 'preferred_window: only ACTIVE -> CLEARED'); END;
+CREATE TRIGGER preferred_window_no_delete BEFORE DELETE ON preferred_window
+BEGIN SELECT RAISE(ABORT, 'preferred_window: no delete'); END;
+
 -- ── 불변 트리거 ─────────────────────────────────────────
 
 CREATE TRIGGER snapshot_no_update BEFORE UPDATE ON snapshot
@@ -579,11 +631,6 @@ CREATE TRIGGER decision_no_update BEFORE UPDATE ON decision
 BEGIN SELECT RAISE(ABORT, 'immutable: decision'); END;
 CREATE TRIGGER decision_no_delete BEFORE DELETE ON decision
 BEGIN SELECT RAISE(ABORT, 'immutable: decision'); END;
-
-CREATE TRIGGER feedback_constraint_no_update BEFORE UPDATE ON feedback_constraint
-BEGIN SELECT RAISE(ABORT, 'immutable: feedback_constraint'); END;
-CREATE TRIGGER feedback_constraint_no_delete BEFORE DELETE ON feedback_constraint
-BEGIN SELECT RAISE(ABORT, 'immutable: feedback_constraint'); END;
 
 CREATE TRIGGER event_no_update BEFORE UPDATE ON event
 BEGIN SELECT RAISE(ABORT, 'immutable: event'); END;

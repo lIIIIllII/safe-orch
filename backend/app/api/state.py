@@ -25,6 +25,7 @@ from app.store.repos.consultations import (
 )
 from app.store.repos.decisions import list_decisions
 from app.store.repos.messages import list_change_requests, list_fact_updates, list_inbox
+from app.store.repos.pins import active_pin_views, preferred_windows
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import get_candidate, get_snapshot, list_validations
 from app.store.repos.resources import list_resources
@@ -196,26 +197,18 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
 
 
 def _rejection(conn: sqlite3.Connection, site_id: str, candidate_id: str) -> dict[str, Any] | None:
-    """거절된 후보의 거절 사유와 그 거절로 생긴 제약. 거절이 없으면 None."""
+    """거절된 후보의 거절 사유. 거절이 없으면 None."""
     found = list_decisions(conn, site_id, candidate_id, "REJECT")
     if not found:
         return None
     d = found[-1]
-    constraints = rows(
-        conn,
-        "SELECT constraint_id, task_id, frozen_axes, created_context_version"
-        " FROM feedback_constraint WHERE source_type = 'DECISION' AND source_id = ? ORDER BY rowid",
-        (d["decision_id"],),
-    )
     return {
         "decision_id": d["decision_id"],
         "actor_id": d["actor_id"],
         "reason_code": d["reason_code"],
         "target_task_ids": d["target_task_ids"],
-        "axes": d["axes"],
         "comment": d["comment"],
         "context_version": d["context_version"],
-        "constraints": [{**c, "frozen_axes": loads(c["frozen_axes"])} for c in constraints],
     }
 
 
@@ -309,6 +302,8 @@ def build_state(
         (site_id,),
     )
     tasks = list_current_tasks(conn, site_id, pack)
+    pins = active_pin_views(conn, site_id)
+    windows = preferred_windows(conn, site_id)
     content = build_snapshot_content(conn, site_id, pack)
     snapshot = Snapshot(snapshot_id="state", snapshot_hash=canonical_hash(content), content=content)
     conflicts = detect_conflicts(snapshot, snapshot.facts().check_assignments(), pack)
@@ -358,7 +353,13 @@ def build_state(
         "zone_relations": [r.model_dump() for r in list_zone_relations(conn, site_id)],
         "resources": [r.model_dump() for r in list_resources(conn, site_id)],
         "tasks": [
-            {**t.model_dump(mode="json"), **gate(t, plan, site.context_version, holds)}
+            {
+                **t.model_dump(mode="json"),
+                **gate(t, plan, site.context_version, holds),
+                # 사람이 건 고정(누가·언제)과 담당자가 그린 희망 영역 (AG-27)
+                "pin": pins.get(t.task_id),
+                "preferred_window": windows.get(t.task_id),
+            }
             for t in tasks
         ],
         "plan": plan.model_dump(mode="json"),
@@ -437,18 +438,10 @@ def _request_view(r: dict[str, Any] | None) -> dict[str, Any] | None:
     if r is None:
         return None
     reply = r["reply"] or {}
-    draft = r["draft"]
     return {
         "message_id": r["message_id"],
         "to_actor_id": r["to_actor_id"],
         "status": r["status"],
         "decision": reply.get("decision"),
         "quoted_comment": reply.get("comment") or None,
-        "draft": None
-        if draft is None
-        else {
-            "proposal_id": draft["proposal_id"],
-            "status": draft["status"],
-            "axes": draft["payload"].get("axes", []),
-        },
     }

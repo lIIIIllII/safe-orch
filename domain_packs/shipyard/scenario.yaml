@@ -15,13 +15,12 @@ new_task:
   required_resource_type: CRANE
   requested_resource_id: A-CR-01
   predecessors: []
-  movable: { time: true, resource: false }   # 자원 축 미확인
+  movable: { resource: false }               # 자원 축 미확인
   requested: { start: 0, end: 30 }           # 요청 일정 09:00–09:30
 
 # 시연 확장 요청 (가정). 요청자(requester)가 Unit·담당자를 정한다. 하나씩 확정한 뒤 다음을 보낸다.
-# 기대 결과(L0, 변경 수, 달력/근무 지연)는 backend/scripts/verify_demo_values.py로 다시 계산한다.
 demo_requests:
-  - task_id: N1                 # CAP-RESOURCE (K) → 10/13 11:00, 변경 1, 지연 60/60
+  - task_id: N1                 # 골리앗 인양 K와 같은 장비·같은 시간
     label: 장비 이중 배정
     requester: planner_a
     work_type: LIFTING
@@ -34,7 +33,7 @@ demo_requests:
     requested_resource_id: SITE-GC-01
     resource_requirements: [{ attribute: max_load, op: GTE, value: 100 }, { attribute: usage, op: CONTAINS, value: 블록 }]
 
-  - task_id: N2                 # SEP-HOT-FLAM (P) → 10/13 11:15, 변경 1, 지연 45/45
+  - task_id: N2                 # 인접 구역 도장 P와 겹치는 화기
     label: 화기–도장 분리
     requester: planner_a
     work_type: HOT_WORK
@@ -46,7 +45,7 @@ demo_requests:
     required_resource_type: null
     requested_resource_id: null
 
-  - task_id: N3                 # CAP-RESOURCE (Q) + SEP-LIFT-BELOW (M) → 10/14 11:00, 변경 1, 지연 120/120
+  - task_id: N3                 # 골리앗 인양 Q, 하부 작업 M과 겹치는 인양
     label: 충돌 2건
     requester: planner_b
     work_type: LIFTING
@@ -59,8 +58,8 @@ demo_requests:
     requested_resource_id: SITE-GC-01
     resource_requirements: [{ attribute: max_load, op: GTE, value: 100 }, { attribute: usage, op: CONTAINS, value: 블록 }]
 
-  - task_id: N4                 # SEP-HOT-FLAM (W) → 10/14 09:00 (다음 날), 변경 1, 지연 1140/180
-    label: 다음 날 이동
+  - task_id: N4                 # 오후 도장 W와 겹치는 화기
+    label: 화기–도장 분리(오후)
     requester: planner_a
     work_type: HOT_WORK
     zone_id: G
@@ -71,8 +70,8 @@ demo_requests:
     required_resource_type: null
     requested_resource_id: null
 
-  - task_id: N5                 # (선택, 마지막) SEP-LIFT-BELOW (K) → 모든 범위 INFEASIBLE → 이관 → 철회
-    label: 해 없음·이관 (선택)
+  - task_id: N5                 # (선택, 마지막) 골리앗 인양 K 아래의 하부 작업, 시간창이 좁다
+    label: 좁은 시간창 (선택)
     requester: planner_b
     work_type: WORK_BELOW
     zone_id: F
@@ -89,12 +88,13 @@ demo_events:
   - { label: 도장 지연 신고, event_type: DELAY, text: "도장 준비 15분 늦어져 10시부터", target_task_id: null }
   - { label: 도장 추가 지연, event_type: DELAY, text: "도장 또 늦어진대요", target_task_id: null, answer: "도장 준비가 10시 15분부터 됩니다" }
 
-# 구조화 거절 시연값 (Scene 3 기본안 B). 화면의 거절 "시연값 채우기"가 쓴다.
+# 구조화 거절 시연값. 화면의 거절 "시연값 채우기"가 쓴다. 작업을 그대로 두려면 거절이 아니라
+# 타임라인에서 그 작업을 고정한다.
 demo_rejections:
-  - { label: C 작업 고정, reason_code: TASK_IMMOVABLE, target_task_ids: [C], axes: [TIME, RESOURCE], comment: "작업발판 연계 공정 확정" }
+  - { label: C 이동 불가, reason_code: TIME_WINDOW_UNACCEPTABLE, target_task_ids: [C], comment: "작업발판 연계 공정 확정" }
 
 # 자연어 작업 요청 시연값 (Work Intake). 명확한 요청은 new_task A와 같은 값이다.
-# answer는 모호한 요청에서 확인 질문을 받으면 요청자가 답하는 문장이다(live run·테스트의 사람 역할).
+# answer는 모호한 요청에서 확인 질문을 받으면 요청자가 답하는 문장이다(테스트의 사람 역할).
 demo_intakes:
   - label: 자연어 요청(명확)
     requester: planner_a

@@ -46,6 +46,7 @@ from app.commands.messages import (
     discard_proposal,
     reply_message,
 )
+from app.commands.pins import TaskRef, pin_task
 from app.commands.runs import CancelRun, cancel_run
 from app.commands.task_request import (
     TaskRequestForm,
@@ -187,22 +188,23 @@ def _validation(pack, cand_id):
     return v
 
 
-def _reject(pack, cand_id, reason="PREFERENCE", targets=(), axes=(), comment="", key=None):
+def _reject(pack, cand_id, reason="PREFERENCE", targets=(), comment="", key=None):
     body = RejectRequest(
         candidate_id=cand_id,
         validation_id=_validation(pack, cand_id).validation_id,
         reason_code=reason,
         target_task_ids=targets,
-        axes=axes,
         comment=comment,
     )
     return reject_candidate(pack, "supervisor", key or _key(), body)
 
 
 def _reject_demo(pack, cand_id):
-    """scenario의 기본안 B 거절(TASK_IMMOVABLE, C, TIME·RESOURCE)."""
+    """기본안 B: scenario의 거절(C를 옮길 수 없다) 뒤 Supervisor가 C를 고정한다 (AG-27)."""
     x = pack.demo_rejections[0]
-    return _reject(pack, cand_id, x.reason_code, x.target_task_ids, x.axes, x.comment)
+    out = _reject(pack, cand_id, x.reason_code, x.target_task_ids, x.comment)
+    assert pin_task(pack, "supervisor", _key(), TaskRef(task_id="C")).status == "APPLIED"
+    return out
 
 
 def _approve(pack, cand_id):
@@ -217,8 +219,8 @@ def _approve(pack, cand_id):
 # ── 기본안 B ───────────────────────────────────────────────────
 
 
-def test_plan_b_reject_with_constraint_recalls_replanning(seeded):
-    """Alpha를 TASK_IMMOVABLE(C)로 거절 → Context +1, 메인이 깨어나 재계획을 다시 부른다 → 새 Run이 같은
+def test_plan_b_reject_and_pin_recalls_replanning(seeded):
+    """Alpha를 거절하고 Supervisor가 C를 고정 → Context +1, 메인이 깨어나 재계획을 다시 부른다 → 새 Run이 같은
     Case의 이전 계산과 C 고정을 본다 → 미시도 범위 없음.
 
     C 고정으로 L1·L2가 L0와 같은 탐색(같은 실효 탐색 키)이 되므로 계산을 반복하지 않는다. 막힌 결과에
@@ -229,13 +231,16 @@ def test_plan_b_reject_with_constraint_recalls_replanning(seeded):
     ctx = _site(pack).context_version
     out = _reject_demo(pack, run.wait_ref)
     assert out.status == "APPLIED"
-    # 거절로 협의 Run이 끝나 메인이 깨어난다. 거절 결과는 메인의 사건이다
+    # 거절로 협의 Run이 끝나 메인이 깨어난다. 거절 결과와 고정은 메인의 사건이다
     woke = _run(run.main_id)
     assert (_site(pack).context_version, woke.wake_seq, woke.status) == (
         ctx + 1,
-        woke.handled_wake_seq + 1,
+        woke.handled_wake_seq + 1,  # 고정은 재개를 기다리는 메인을 한 번 더 깨우지 않는다
         "WAITING_HUMAN",
     )
+    with db.read() as conn:
+        kinds = [r[0] for r in conn.execute("SELECT kind FROM case_event ORDER BY seq")]
+    assert kinds[-2:] == ["CANDIDATE_DECIDED", "TASK_PINNED"]
     assert _run(run.consult_id).end_reason == f"REJECTED:{run.wait_ref}"
     [resume] = _resumes(pack, run.main_id, "PENDING")
     assert resume["dedupe_key"] == f"RESUME_RUN:{run.main_id}:{woke.wait_generation}"
@@ -250,26 +255,22 @@ def test_plan_b_reject_with_constraint_recalls_replanning(seeded):
     assert obs["rejections"] == [
         {
             "candidate_id": run.wait_ref,
-            "reason_code": "TASK_IMMOVABLE",
+            "reason_code": "TIME_WINDOW_UNACCEPTABLE",
             "target_task_ids": ["C"],
-            "axes": ["RESOURCE", "TIME"],
-            "has_constraint": True,
             "quoted_comment": "작업발판 연계 공정 확정",
         }
     ]
     facts = obs["rejection_facts"]
-    assert (facts["with_constraint"], facts["without_constraint"], facts["untried_remaining"]) == (
-        1,
-        0,
-        False,
-    )
+    assert (facts["count"], facts["untried_remaining"]) == (1, False)
     # 이전 계산은 Case 단위다: 앞 Run의 L0·L1이 보인다
     assert [(a["scope_level"], a["this_run"]) for a in obs["attempts"]] == [
         ("L0", False),
         ("L1", False),
     ]
     assert obs["latest_validation"]["live"] is False
-    assert [c["task_id"] for c in obs["constraints"]] == ["C"]
+    pinned = {t["task_id"]: t["pinned"] for t in obs["acting_tasks"]}
+    assert pinned["C"] == {"pinned_by": "supervisor", "by_role": "SUPERVISOR"}
+    assert pinned["A"] is None
     assert obs["untried_levels"] == []
     assert _names(s3) == ["LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]  # 사람 도구는 없다
     assert s3["action"]["name"] == "RETURN_RESULT"
@@ -392,9 +393,9 @@ def test_plan_b_full_e2e(seeded):
         "excluded": [{"resource_id": "B-CR-01", "reasons": [{"reason": "NOT_ALLOWED"}]}],
         "resources_hash": s_list["tool_result"]["resources_hash"],
     }
-    # LIST 대상은 자원이 필요하고 RESOURCE가 막히지 않은 acting 작업이다(C는 제약 고정이라 빠진다)
+    # LIST 대상은 자원이 필요하고 고정되지 않은 acting 작업이다(C·Q는 고정이라 빠진다)
     assert _names(s_list) == ["LIST_ASSIGNABLE_RESOURCES", "RETURN_RESULT"]
-    assert _enum(s_list, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A", "Q"]
+    assert _enum(s_list, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A"]
     assert s_end["observation"]["untried_levels"] == []
     assert (stuck.human_rounds_used, "human_rounds" in s_end["budget_remaining"]) == (0, False)
 
@@ -444,7 +445,7 @@ def test_plan_b_full_e2e(seeded):
     assert out.status == "APPLIED" and out.result_refs["task_revision"] == 2
     assert _site(pack).context_version == ctx + 1
     a = _task(pack, "A")
-    assert (a.revision, a.movable.resource, a.movable.time) == (2, True, True)
+    assert (a.revision, a.movable.resource) == (2, True)
     # Consent 복사(C1): 같은 source_ref의 TIME·RESOURCE + 수락 values의 RESOURCE
     with db.read() as conn:
         consents = conn.execute(
@@ -574,7 +575,7 @@ def test_t17_moving_fixed_c_fails_c06(seeded):
     )
     result = validate(snapshot, cand.model_copy(update={"assignments": moved}), search_spec, pack)
     assert any(
-        (c.check_id, c.status, c.reason_code) == ("C06", "FAIL", "FROZEN_BY_CONSTRAINT")
+        (c.check_id, c.status, c.reason_code) == ("C06", "FAIL", "TASK_PINNED")
         for c in result.checks
     )
 
@@ -604,9 +605,8 @@ def test_t33_reject_without_constraint_recalls_and_blocks_same_assignments(seede
     second = _last()
     assert second.run_id != run.run_id
     s2, s3 = _steps(second.run_id)
-    assert s2["observation"]["rejections"][0]["has_constraint"] is False
     assert s2["observation"]["rejections"][0]["quoted_comment"] == "오후가 좋다"
-    assert s2["observation"]["rejection_facts"]["without_constraint"] == 1
+    assert s2["observation"]["rejection_facts"]["count"] == 1
     assert s2["guard"] == {"verdict": "REJECTED", "reason_code": "DUPLICATE_REJECTED"}
     assert (s2["result_kind"], s2["tool_result"]["candidate_id"]) == ("CONTINUE", None)
     assert s3["action"]["name"] == "RETURN_RESULT"
@@ -1168,7 +1168,7 @@ def test_server_does_not_order_list_try_or_blocked(seeded):
     assert s_try["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"  # 자원 축 미확인
     assert s_end["observation"]["untried_levels"] == ["L0", "L1", "L2"]
     assert s_end["observation"]["assignable_resources"] == []
-    assert _enum(s_end, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A", "C", "Q"]
+    assert _enum(s_end, "LIST_ASSIGNABLE_RESOURCES", "task_id") == ["A", "C"]  # Q는 고정
     assert (s_end["result_kind"], s_end["guard"]["verdict"], run.status) == (
         "DONE",
         "ACCEPTED",
@@ -1188,7 +1188,7 @@ def test_server_does_not_order_list_try_or_blocked(seeded):
 
 
 def test_owner_consent_needs_and_openers_follow_facts(seeded):
-    """C(RESOURCE 고정)와 쓸 수 없는 자원은 담당자 확인의 need가 될 수 없고 열 수 있는 것에도 없다.
+    """고정된 C와 쓸 수 없는 자원은 담당자 확인의 need가 될 수 없고 열 수 있는 것에도 없다.
     시간 축 담당자 확인은 유효한 need지만 사전 확인 대상이 아니다."""
     pack = seeded
     run = _alpha_waiting(pack)
@@ -1204,11 +1204,11 @@ def test_owner_consent_needs_and_openers_follow_facts(seeded):
     )
     second = _last()
     steps = _steps(second.run_id)
-    # C는 RESOURCE 축이 제약으로 고정돼 자원 조회 대상이 아니다
+    # C는 고정돼 자원 조회 대상이 아니다
     assert steps[1]["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
     assert steps[2]["guard"]["reason_code"] == "NEED_INVALID"
     assert [(n["path"], n["reason"]) for n in steps[2]["tool_result"]["invalid_needs"]] == [
-        (0, "AXIS_FROZEN"),
+        (0, "TASK_PINNED"),  # 동의로 고정을 우회하지 않는다 (AG-27)
         (1, "RESOURCE_NOT_ELIGIBLE"),  # 사용 권한 없음
     ]
     result = steps[3]["tool_result"]
@@ -1226,7 +1226,7 @@ def test_owner_consent_needs_and_openers_follow_facts(seeded):
 
 
 def test_n5_has_no_owner_consent_opener(seeded):
-    """N5: K의 GANTRY 대체 자원이 없어 물을 값이 없다 → 담당자 확인이 열 수 있는 것에 없다, 이관."""
+    """N5: K는 고정이고 GANTRY 대체 자원도 없어 물을 값이 없다 → 담당자 확인이 열 수 있는 것에 없다, 이관."""
     pack = seeded
     assert _submit(pack, "N5").status == "APPLIED"
     run_until_idle(
@@ -1242,12 +1242,9 @@ def test_n5_has_no_owner_consent_opener(seeded):
     [run] = _runs("REPLANNING")
     last = _steps(run.run_id)[-1]
     assert last["observation"]["untried_levels"] == []
-    [listing] = last["observation"]["assignable_resources"]
-    assert (listing["task_id"], listing["current"], listing["assignable"]) == (
-        "K",
-        "SITE-GC-01",
-        [{"resource_id": "SITE-GC-01"}],
-    )
+    # 고정된 K는 자원 조회 대상이 아니다
+    assert _steps(run.run_id)[-2]["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
+    assert last["observation"]["assignable_resources"] == []
     openers = last["tool_result"]["openers"]
     assert "OWNER_CONSENT" not in [n["kind"] for n in openers]
     # 모든 범위에서 해가 없다: 요청 작업의 시간창이 바뀌어야 열린다
@@ -1366,15 +1363,13 @@ def test_state_shows_rejection_resume_count_and_queue(seeded):
         state = build_state(conn, pack, "supervisor")
     view = next(c for c in state["candidates"] if c["candidate_id"] == alpha)
     rej = view["rejection"]
-    assert (rej["reason_code"], rej["target_task_ids"], rej["axes"], rej["actor_id"]) == (
-        "TASK_IMMOVABLE",
+    assert (rej["reason_code"], rej["target_task_ids"], rej["actor_id"]) == (
+        "TIME_WINDOW_UNACCEPTABLE",
         ["C"],
-        ["RESOURCE", "TIME"],
         "supervisor",
     )
-    assert [(c["task_id"], c["frozen_axes"]) for c in rej["constraints"]] == [
-        ("C", ["RESOURCE", "TIME"])
-    ]
+    c = next(t for t in state["tasks"] if t["task_id"] == "C")
+    assert (c["pin"]["pinned_by"], c["pin"]["by_role"]) == ("supervisor", "SUPERVISOR")
     # 메인이 부른 사전 확인 Run(답 대기)
     [summary] = [
         r

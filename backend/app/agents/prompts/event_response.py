@@ -19,7 +19,7 @@ from app.agents.specs import event_response as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "event-response-p14"
+PROMPT_VERSION = "event-response-p15"
 
 
 def tool_catalog() -> str:
@@ -64,7 +64,8 @@ Goal: {goal}
 - 도구의 시각 인자는 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다. 분으로 바꾸지 않는다(서버가 바꾼다). 관찰의 날짜·시각 값(site_now.local, work_hours, *_clock)이 같은 형식이고 요일이 붙어 있다.
 - 신고(event): 유형(event_type), 신고 문장(quoted_text, 인용), 서버가 건 Hold(hold)다.
 - 작업 유형(work_types): 코드와 현장 표시 이름이다. 신고의 작업 표현을 코드로 이을 때 쓴다. 구역(zones)은 구역 ID 목록이다.
-- 조회 결과(lookups): 작업별 담당·시간창(earliest_start 시작 가능 시각, latest_start, latest_end)·현재 배정(assignment)이다. \
+- 조회 결과(lookups): 작업별 담당·시간창(earliest_start 시작 가능 시각, latest_start, latest_end)·현재 배정(assignment)·\
+고정(pinned_by: 고정한 사람, 없으면 고정되지 않음)·희망 영역(preferred_window: 담당자가 바라는 시각 구간, 서버는 강제하지 않는다)이다. \
 start_slack은 시작 가능 시각을 늦출 수 있는 최대 분이다. 0이면 시작 가능 시각을 늦추는 수정안은 영향 분석을 통과하지 못한다. \
 같은 Context에서 같은 조건의 LOOKUP_TASKS는 같은 결과를 돌려준다. 지금까지의 조회 결과는 lookups에 모두 있다.
 - 영향 분석(analyses): 새 시작 가능 시각에서의 검사(checks)와 통과 여부(ok), 현재 값보다 늦추는 분(delay_minutes), 현재 배정이 새 창을 어기는지(plan_window_violation), \
@@ -148,4 +149,5 @@ PROMPT_FINGERPRINTS = {
     "event-response-p12": "5f52f45cd36dfc8c7a1f1d4c7175be7d80ef3013e8b4f8a7522f1548e6e48936",  # System 규칙: 대상 후보는 조회로 찾고 대상은 신고 문장·답으로 정한다(FACT_UPDATE 지침과 맞춤)
     "event-response-p13": "04bb2d49774b061b1ac30ac17528af623c8746c78d5bb850dadab056f0f29630",  # 종료는 RETURN_RESULT: 막힌 결과와 길 묶음 (AG-23)
     "event-response-p14": "43a0642c3ea495c7c3358a2cb764e25f7826a7db6437e7e67ab980521bce7c36",  # 결과의 OTHER_UNIT에 충돌 그룹 참조
+    "event-response-p15": "07cca8c45e301930dd505b4463da05959d12b056888d2a2bd76f4d389b4540da",  # 조회 결과에 고정·희망 영역, 스킬 지침의 제약 문구 정리 (AG-27)
 }

@@ -23,7 +23,6 @@ from app.domain.models import (
     Demand,
     FieldRecord,
     Frozen,
-    Movable,
     Pool,
     PoolDemand,
     PoolKind,
@@ -34,6 +33,7 @@ from app.domain.models import (
     ResourceAttribute,
     Rule,
     Task,
+    TaskMovable,
     WorkType,
     WorkUnit,
     Zone,
@@ -76,7 +76,7 @@ class NewTaskRequest(Frozen):
     resource_requirements: tuple[Requirement, ...] = ()
     pool_demands: tuple[Demand, ...] = ()
     predecessors: tuple[Predecessor, ...] = ()
-    movable: Movable
+    movable: TaskMovable
     requested: Assignment
 
 
@@ -114,7 +114,6 @@ class DemoRejection(Frozen):
     label: str = Field(min_length=1)
     reason_code: str = Field(min_length=1)
     target_task_ids: tuple[str, ...] = ()
-    axes: tuple[Literal["TIME", "RESOURCE"], ...] = ()
     comment: str = ""
 
 

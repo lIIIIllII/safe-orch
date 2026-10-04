@@ -10,7 +10,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 from scripted import Router, call
-from test_coordination import _alpha_consulting, _draft, _objected, _wait
+from test_coordination import _alpha_consulting
 from test_event_response import _lookup, _r1, _report, _to_proposal
 from test_intake import _ask, _intake
 from test_resume import _ask_waiting
@@ -107,7 +107,7 @@ def test_answer_on_proposal_question_is_rejected_via_api(seeded, client, main_on
     assert _reasons(res) == (409, ["INVALID_DECISION"])
 
 
-# ── Coordination: 변경 요청 답, 제약 초안 확정·폐기 ─────
+# ── Coordination: 변경 요청 답 ─────
 
 
 def test_change_request_accept_via_api(seeded, client, main_on):
@@ -127,35 +127,6 @@ def test_change_request_objection_via_api(seeded, client, main_on):
     )
     res = _reply(client, "foreman_a2", cr["message_id"], "DECLINE", "작업발판 연계 공정 확정")
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
-
-
-def _drafted(pack):
-    _alpha_consulting(pack)
-    cr = _objected(pack)
-    run_until_idle(
-        pack, model_factory=Router(coordination=[_draft(cr["message_id"]), _wait()]).factory()
-    )
-    [confirm] = _rows("message", "CONFIRMATION")
-    [draft] = _rows("proposal", "FEEDBACK_CONSTRAINT")
-    return confirm, draft
-
-
-def test_draft_constraint_confirm_via_api(seeded, client, main_on):
-    confirm, _ = _drafted(seeded)
-    res = _reply(client, "foreman_a2", confirm["message_id"], "ACCEPT")
-    assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
-    assert _rows("proposal", "FEEDBACK_CONSTRAINT")[0]["status"] == "CONFIRMED"
-
-
-def test_draft_constraint_discard_via_api(seeded, client, main_on):
-    """제안 폐기 경로(/proposals/{id}/discard)도 reply와 같은 처리다."""
-    _, draft = _drafted(seeded)
-    res = _post(client, f"proposals/{draft['proposal_id']}/discard", "foreman_a2", {"comment": ""})
-    assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
-    assert _rows("proposal", "FEEDBACK_CONSTRAINT")[0]["status"] == "DISCARDED"
-
-
-# ── Event Response: 사실 수정 확인·폐기, FACT_CONFIRMED 해제 ─
 
 
 def _release(client, hold_id, resolution):

@@ -259,7 +259,7 @@ def test_conflict_groups_share_tasks_and_list_units():
             "earliest_start": 0,
             "latest_start": 0,
             "latest_end": 10,
-            "movable": {"time": True, "resource": False},
+            "movable": {"resource": False},
             "fields": {},
             "lifecycle": "READY",
         }

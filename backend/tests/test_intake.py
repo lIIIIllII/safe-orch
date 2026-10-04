@@ -169,7 +169,7 @@ def test_clear_request_matches_form_path(seeded, main_on):
     nt = pack.new_task
     assert (a.revision, a.lifecycle, a.unit_id, a.owner_actor_id) == (1, "READY", "UA", "planner_a")
     assert {k: getattr(a, k) for k in VALUES_A} == {k: getattr(nt, k) for k in VALUES_A}
-    assert (a.movable.time, a.movable.resource, a.hazard_tags) == (True, False, ("LIFTING",))
+    assert (a.movable.resource, a.hazard_tags) == (False, ("LIFTING",))
     source = f"message:{confirm['message_id']}"
     assert {f.status for f in a.fields.values()} == {"CONFIRMED"}
     assert {f.source_ref for f in a.fields.values()} == {source}

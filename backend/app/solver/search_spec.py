@@ -48,11 +48,12 @@ def build_search_spec(
     else:
         raise ValueError(f"unknown scope_level {scope_level!r}")
 
-    frozen = {(c.task_id, axis) for c in facts.constraints for axis in c.frozen_axes}
+    # 고정되지 않은 작업은 시각이 움직인다. 자원 축은 담당자 확인으로 열린 것만 (AG-27)
+    pinned = facts.pinned_task_ids()
     axes = {
         t.task_id: Movable(
-            time=t.movable.time and (t.task_id, "TIME") not in frozen,
-            resource=t.movable.resource and (t.task_id, "RESOURCE") not in frozen,
+            time=t.task_id not in pinned,
+            resource=t.movable.resource and t.task_id not in pinned,
         )
         for t in scope
     }

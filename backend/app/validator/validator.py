@@ -127,16 +127,14 @@ def _c06(
             out.append(("C06", (tid,), "RESOURCE_AXIS_NOT_ALLOWED"))
         if ax.resource and a.resource_id not in {ref.resource_id, *alternatives.get(tid, ())}:
             out.append(("C06", (tid,), "RESOURCE_NOT_IN_SPEC"))
-    # 확인된 제약은 search_spec과 관계없이 따로 확인한다
-    for c in facts.constraints:
-        a = usable.get(c.task_id)
+    # 고정된 작업은 search_spec과 관계없이 따로 확인한다: 시각·자원 모두 기준 배정 그대로 (AG-27)
+    for tid in sorted(facts.pinned_task_ids()):
+        a = usable.get(tid)
         if a is None:
             continue
-        ref = base[c.task_id]
-        if ("TIME" in c.frozen_axes and a.start != ref.start) or (
-            "RESOURCE" in c.frozen_axes and a.resource_id != ref.resource_id
-        ):
-            out.append(("C06", (c.task_id,), "FROZEN_BY_CONSTRAINT"))
+        ref = base[tid]
+        if a.start != ref.start or a.resource_id != ref.resource_id:
+            out.append(("C06", (tid,), "TASK_PINNED"))
     for tid in sorted(axes):
         task = tasks.get(tid)
         if task is not None and task.unit_id != spec.acting_unit_id:

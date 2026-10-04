@@ -24,6 +24,7 @@ from app.commands.approval import (
 )
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.messages import ReplyRequest, reply_message
+from app.commands.pins import TaskRef, pin_task
 from app.commands.task_request import (
     TaskRequestForm,
     TaskWithdraw,
@@ -143,10 +144,10 @@ def _r1(pack):
         validation_id=_pass_id(pack, alpha),
         reason_code=x.reason_code,
         target_task_ids=x.target_task_ids,
-        axes=x.axes,
         comment=x.comment,
     )
     assert reject_candidate(pack, "supervisor", _key(), body).status == "APPLIED"
+    assert pin_task(pack, "supervisor", _key(), TaskRef(task_id="C")).status == "APPLIED"
     listing = call("LIST_ASSIGNABLE_RESOURCES", "조회", task_id="A")
     # 재계획은 막힌 결과를 내고, 메인이 Coordination 사전 확인을 부른다(기본 응답)
     run_until_idle(pack, model_factory=Router(replanning=[listing, blocked()]).factory())
@@ -272,7 +273,7 @@ def test_er_minimal_path_to_r2(seeded, main_on):
         cand = get_candidate(conn, pack.site_id, gamma)
         view = consultation_view(conn, pack.site_id, gamma)
     placed = {a.task_id: a.start for a in cand.assignments}
-    assert placed["E"] == 60  # E 10:00–10:30, 변경 1·지연 15 (verify_demo_values Gamma)
+    assert placed["E"] == 60  # E 10:00–10:30, 변경 1·지연 15
     assert _steps(gamma_run.run_id)[0]["tool_result"]["stage2"]["delay"] == 15
     assert view.item_status == {"E": "PENDING"}  # plan_r0 작업이라 Consent가 없다
     body = WaiveRequest(candidate_id=gamma, task_ids=("E",), comment="Scene 4 수용")

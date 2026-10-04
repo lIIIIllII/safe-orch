@@ -9,8 +9,8 @@ from app.domain.models import Snapshot, SnapshotContent
 from app.packs.loader import LoadedPack
 from app.store.repos._rows import rows
 from app.store.repos.consents import list_current_consents
-from app.store.repos.decisions import list_constraints
 from app.store.repos.events import list_active_holds
+from app.store.repos.pins import list_active_pins
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import insert_snapshot
 from app.store.repos.resources import list_pools, list_resources
@@ -45,7 +45,7 @@ def build_snapshot_content(
         zone_relations=tuple(list_zone_relations(conn, site_id)),
         plan={"plan_revision": plan.plan_revision, "assignments": plan.assignments},
         holds=tuple(list_active_holds(conn, site_id)),
-        constraints=tuple(list_constraints(conn, site_id)),
+        pins=tuple(list_active_pins(conn, site_id)),
         consents=tuple(list_current_consents(conn, site_id)),
     )
     return content.model_dump(mode="json")

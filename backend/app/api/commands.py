@@ -32,6 +32,14 @@ from app.commands.messages import (
     discard_proposal,
     reply_message,
 )
+from app.commands.pins import (
+    PreferredWindow,
+    TaskRef,
+    clear_preferred_window_command,
+    pin_task,
+    set_preferred_window,
+    unpin_task,
+)
 from app.commands.runs import CancelRun, cancel_run
 from app.commands.service import Body
 from app.commands.task_request import (
@@ -40,7 +48,6 @@ from app.commands.task_request import (
     submit_task_request,
     withdraw_task_request,
 )
-from app.domain.models import Axis
 
 router = APIRouter()
 
@@ -54,7 +61,6 @@ class RejectBody(Body):
     validation_id: str
     reason_code: str
     target_task_ids: tuple[str, ...] = ()
-    axes: tuple[Axis, ...] = ()
     comment: str = ""
 
 
@@ -76,6 +82,11 @@ class ReplyBody(Body):
 
 class CommentBody(Body):
     comment: str = ""
+
+
+class WindowBody(Body):
+    start: int
+    end: int
 
 
 class ReleaseBody(Body):
@@ -108,6 +119,34 @@ def post_withdraw(
     """Plan에 없는 READY 작업(해결 못 한 요청) 철회."""
     req = TaskWithdraw(task_id=task_id, **body.model_dump())
     return respond(withdraw_task_request(pack, actor.actor_id, key, req))
+
+
+@router.post("/tasks/{task_id}/pin")
+def post_pin(task_id: str, pack: PackDep, actor: ActorDep, key: KeyDep) -> JSONResponse:
+    """작업 고정. 담당자는 자기 작업, Supervisor는 모든 작업 (AG-27)."""
+    return respond(pin_task(pack, actor.actor_id, key, TaskRef(task_id=task_id)))
+
+
+@router.post("/tasks/{task_id}/unpin")
+def post_unpin(task_id: str, pack: PackDep, actor: ActorDep, key: KeyDep) -> JSONResponse:
+    return respond(unpin_task(pack, actor.actor_id, key, TaskRef(task_id=task_id)))
+
+
+@router.post("/tasks/{task_id}/preferred-window")
+def post_preferred_window(
+    task_id: str, body: WindowBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """희망 영역(작업당 시각 구간 하나). 담당자만. 서버는 강제하지 않는다."""
+    req = PreferredWindow(task_id=task_id, **body.model_dump())
+    return respond(set_preferred_window(pack, actor.actor_id, key, req))
+
+
+@router.post("/tasks/{task_id}/preferred-window/clear")
+def post_clear_preferred_window(
+    task_id: str, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    req = TaskRef(task_id=task_id)
+    return respond(clear_preferred_window_command(pack, actor.actor_id, key, req))
 
 
 @router.post("/candidates/{candidate_id}/approve")

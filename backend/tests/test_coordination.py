@@ -7,7 +7,7 @@
 import uuid
 from types import SimpleNamespace
 
-from conftest import add_task, make_task
+from conftest import LEGACY_PINNED, add_task, make_task
 from langchain_core.messages import AIMessage
 from scripted import Router, ask_owner, blocked, call, done, solve, wait_answers
 
@@ -24,20 +24,20 @@ from app.commands.approval import (
 )
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
 from app.commands.messages import ReplyRequest, reply_message
+from app.commands.pins import TaskRef, pin_task
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.consultation import change_hash, item_statuses
 from app.domain.models import Assignment, ConsultationItem
 from app.store import db
 from app.store.repos.consultations import consultation_view
-from app.store.repos.decisions import list_constraints
 from app.store.repos.dispatch import list_jobs, register_job
 from app.store.repos.records import list_validations
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import bump_context_version, get_site
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
-OBJECTION = "작업발판 연계 공정 확정"  # scenario demo_rejections[0].comment와 같은 문장
+OBJECTION = "작업발판 연계 공정 확정"
 
 
 def _key():
@@ -129,18 +129,6 @@ def _wait():
     return call("WAIT_FOR_REPLIES", "이유: 요청을 보냈다/다음: 답을 본다")
 
 
-def _draft(message_id, axes=("TIME", "RESOURCE"), reason_code="TASK_IMMOVABLE", task_id="C"):
-    return call(
-        "DRAFT_CONSTRAINT",
-        "이유: 담당자가 C 고정을 요구한다/다음: 확인을 기다린다",
-        message_id=message_id,
-        reason_code=reason_code,
-        task_id=task_id,
-        axes=list(axes),
-        message="C를 지금 시각·자원에 고정하는 제약으로 확인해 주세요.",
-    )
-
-
 def _alpha_consulting(pack):
     """폼 A → 메인 → Replanning(L0·L1 → Alpha → 검증 → DONE) → 메인이 협의를 부른다 → Coordination이
     A2에게 변경 요청 → 답 대기. (Replanning Run과 Alpha 후보, 협의 Run)."""
@@ -171,8 +159,8 @@ def _objected(pack, comment=OBJECTION):
 
 
 def test_plan_a_full_e2e(seeded, main_on):
-    """Alpha → 변경 요청 → 이견 → 제약 초안 → A2 확정 → 메인이 재계획을 다시 부름 → Beta → R1 → 통지 2건
-    → 메인 CLOSE."""
+    """Alpha → 변경 요청 → 이견 → A2가 C를 고정 → 협의가 결과를 돌려줌 → 메인이 재계획을 다시 부름 →
+    Beta → R1 → 통지 2건 → 메인 CLOSE."""
     pack = seeded
     rp, coord = _alpha_consulting(pack)
     alpha = rp.wait_ref
@@ -201,47 +189,34 @@ def test_plan_a_full_e2e(seeded, main_on):
     assert _view(pack, alpha).item_status["C"] == "OBJECTED"
     assert _runs("COORDINATION")[0].wake_seq == 1
 
-    router = Router(coordination=[_draft(cr["message_id"]), _wait()])
-    run_until_idle(pack, model_factory=router.factory())
-    s_draft = _steps(coord.run_id)[2]
-    obs_c = next(i for i in s_draft["observation"]["items"] if i["task_id"] == "C")
-    assert obs_c["requests"][0]["quoted_comment"] == OBJECTION
-    assert obs_c["changed_axes"] == ["TIME"]
-    [draft] = _proposals("FEEDBACK_CONSTRAINT")
-    [confirm] = _messages("CONFIRMATION")
-    assert (draft["status"], draft["confirmer_actor_id"], draft["target_task_id"]) == (
-        "PENDING",
-        "foreman_a2",
-        "C",
-    )
-    assert confirm["proposal_id"] == draft["proposal_id"] and confirm["to_actor_id"] == "foreman_a2"
     view = _view(pack, alpha)
-    assert (view.item_status["C"], view.items_status) == ("OBJECTION_DRAFT_PENDING", "BLOCKED")
+    assert (view.item_status["C"], view.items_status) == ("OBJECTED", "BLOCKED")
     assert _approve(pack, alpha).reason_codes == ("CONSULTATION_INCOMPLETE",)
     no_waive = waive(
         pack, "supervisor", _key(), WaiveRequest(candidate_id=alpha, task_ids=("C",), comment="x")
     )
-    assert no_waive.reason_codes == ("ITEM_NOT_WAIVABLE",)  # OBJECTED 계열은 수용 불가
+    assert no_waive.reason_codes == ("ITEM_NOT_WAIVABLE",)  # OBJECTED는 수용 불가
 
+    # 담당자 A2가 타임라인에서 C를 고정한다: context +1, Alpha는 STALE, 협의 Run이 깨어난다 (AG-27)
     ctx = _site(pack).context_version
-    out = _reply(pack, "foreman_a2", confirm["message_id"], "ACCEPT")
+    out = pin_task(pack, "foreman_a2", _key(), TaskRef(task_id="C"))
     assert out.status == "APPLIED"
     assert _site(pack).context_version == ctx + 1
+    assert _runs("COORDINATION")[0].wake_seq == 2
     with db.read() as conn:
-        [fc] = list_constraints(conn, pack.site_id)
-    assert (fc.task_id, fc.frozen_axes, fc.source_type, fc.source_id) == (
-        "C",
-        ("RESOURCE", "TIME"),
-        "PROPOSAL",
-        draft["proposal_id"],
-    )
-    [ended] = _runs("COORDINATION")
-    assert (ended.status, ended.end_reason) == ("STALE", f"CONSTRAINT:{fc.constraint_id}")
+        events = [r[0] for r in conn.execute("SELECT kind FROM case_event ORDER BY seq")]
+    assert events[-1] == "TASK_PINNED"  # 열린 메인의 Case에 사건으로 들어간다
 
-    # 협의 Run이 끝나 메인이 깨어나고 재계획을 다시 부른다(같은 Case의 새 Run).
-    # 이후는 Scene 3과 같다: C 고정 관찰 → LIST → 막힘 → 사전 확인(Coordination) → 수락 → TRY → Beta
+    # 협의는 이견을 결과에 담아 돌려주고(제약을 만들지 않는다), 메인이 깨어나 재계획을 다시 부른다.
+    # 이후: C 고정 관찰 → LIST → 막힘 → 사전 확인(Coordination) → 수락 → TRY → Beta
     listing = call("LIST_ASSIGNABLE_RESOURCES", "A 자원 조회", task_id="A")
     run_until_idle(pack, model_factory=Router(replanning=[listing, blocked()]).factory())
+    ended = _runs("COORDINATION")[0]
+    assert (ended.status, ended.end_reason) == ("SUCCEEDED", "RETURN_DONE")
+    s_back = _steps(coord.run_id)[-1]
+    obs_c = next(i for i in s_back["observation"]["items"] if i["task_id"] == "C")
+    assert obs_c["requests"][0]["quoted_comment"] == OBJECTION
+    assert s_back["observation"]["candidate"]["live"] is False
     [question] = _messages("QUESTION")
     # 담당자 질문은 Coordination 사전 확인 Run에서만 나온다 (AG-09)
     asking = _runs("COORDINATION")[-1]
@@ -261,8 +236,10 @@ def test_plan_a_full_e2e(seeded, main_on):
         ["TRY_ALTERNATIVE_RESOURCE", "RETURN_RESULT"],
     ]
     assert (third.steps_used, third.solver_calls_used, third.human_rounds_used) == (2, 1, 0)
-    assert steps[0]["observation"]["rejections"] == []  # 제약은 거절이 아니라 확인에서 왔다
-    assert [c["source_type"] for c in steps[0]["observation"]["constraints"]] == ["PROPOSAL"]
+    assert steps[0]["observation"]["rejections"] == []  # 고정은 거절이 아니라 사람이 직접 걸었다
+    acting = {t["task_id"]: t for t in steps[0]["observation"]["acting_tasks"]}
+    assert acting["C"]["pinned"] == {"pinned_by": "foreman_a2", "by_role": "OWNER"}
+    assert acting["A"]["pinned"] is None
     assert _view(pack, beta).items_status == "COMPLETE"
     # Beta에는 동의 대기가 없어 협의를 부르지 않는다: 협의(Alpha) + 사전 확인
     assert [r.input_ref["phase"] for r in _runs("COORDINATION")] == ["CONSULT", "ASK"]
@@ -327,7 +304,7 @@ def test_plan_a_full_e2e(seeded, main_on):
 
 
 def test_supervisor_reject_during_consultation_runs_plan_b(seeded, main_on):
-    """협의 중 Supervisor가 Alpha를 구조화 거절하면 협의 Run은 STALE, 이후 기본안 B로 끝까지 간다."""
+    """협의 중 Supervisor가 Alpha를 거절하고 C를 고정하면 협의 Run은 STALE, 이후 기본안 B로 끝까지 간다."""
     pack = seeded
     rp, _ = _alpha_consulting(pack)
     alpha = rp.wait_ref
@@ -337,10 +314,10 @@ def test_supervisor_reject_during_consultation_runs_plan_b(seeded, main_on):
         validation_id=_validation_id(pack, alpha),
         reason_code=x.reason_code,
         target_task_ids=x.target_task_ids,
-        axes=x.axes,
         comment=x.comment,
     )
     assert reject_candidate(pack, "supervisor", _key(), body).status == "APPLIED"
+    assert pin_task(pack, "supervisor", _key(), TaskRef(task_id="C")).status == "APPLIED"
     [ended] = _runs("COORDINATION")
     assert (ended.status, ended.end_reason) == ("STALE", f"REJECTED:{alpha}")
     [cr] = _messages("CHANGE_REQUEST")
@@ -364,11 +341,11 @@ def test_supervisor_reject_during_consultation_runs_plan_b(seeded, main_on):
     assert _runs("MAIN")[0].status == "SUCCEEDED"
 
 
-# ── 이견이 작업 고정 요구가 아닐 때 (Agent 판단 근거) ─────────
+# ── 이견은 결과에 담아 돌려준다 ───────────────────────────────
 
 
-def test_objection_without_fix_request_is_reported_not_drafted(seeded, main_on):
-    """선호·일정 불만 같은 이견에는 초안 대신 Supervisor 보고를 고를 수 있다. 제약은 생기지 않는다."""
+def test_objection_is_returned_in_result(seeded, main_on):
+    """이견은 결과에 담겨 돌아간다. Agent에게는 고정 도구가 없고 고정은 생기지 않는다 (AG-27)."""
     pack = seeded
     rp, coord = _alpha_consulting(pack)
     _objected(pack, "오전에는 다른 일이 겹쳐 가능하면 원래 시간이 좋겠습니다")
@@ -380,13 +357,13 @@ def test_objection_without_fix_request_is_reported_not_drafted(seeded, main_on):
     [done] = _runs("COORDINATION")
     assert (done.status, done.end_reason) == ("SUCCEEDED", "RETURN_DONE")
     s = _steps(coord.run_id)[-1]
-    assert "DRAFT_CONSTRAINT" in [t["function"]["name"] for t in s["available_actions"]]
+    assert [t["function"]["name"] for t in s["available_actions"]] == ["RETURN_RESULT"]
     assert s["action"]["name"] == "RETURN_RESULT"
     # 모델은 요약만 쓰고 협의 상태는 서버가 채운다
     result = s["tool_result"]
     assert (result["status"], result["phase"], result["open_items"]) == ("DONE", "CONSULT", ["C"])
     with db.read() as conn:
-        assert list_constraints(conn, pack.site_id) == []
+        assert conn.execute("SELECT COUNT(*) FROM task_pin").fetchone()[0] == len(LEGACY_PINNED)
     view = _view(pack, rp.wait_ref)
     assert (view.item_status["C"], view.items_status) == ("OBJECTED", "BLOCKED")
     # 메인은 Supervisor의 결정을 기다린다(거절하면 다시 재계획을 부를 수 있다)
@@ -542,57 +519,12 @@ def test_change_hash_covers_revision_and_both_assignments():
 # ── 서버 검사 ──────────────────────────────────────────────────
 
 
-def test_draft_constraint_server_checks(seeded, main_on):
-    """바뀐 축(C는 TIME)이 없는 축, 다른 사유 코드, 다른 작업은 ACTION_NOT_AVAILABLE이다."""
-    pack = seeded
-    _, coord = _alpha_consulting(pack)
-    cr = _objected(pack)
-    mid = cr["message_id"]
-    router = Router(
-        coordination=[
-            _draft(mid, axes=("RESOURCE",)),
-            _draft(mid, reason_code="PREFERENCE"),
-            _draft(mid, task_id="A"),
-            blocked("검사 확인"),
-        ]
-    )
-    run_until_idle(pack, model_factory=router.factory())
-    guards = [(s["result_kind"], s["guard"]["reason_code"]) for s in _steps(coord.run_id)[2:]]
-    assert guards == [
-        ("REJECTED", "ACTION_NOT_AVAILABLE"),
-        ("REJECTED", "ACTION_NOT_AVAILABLE"),
-        ("REJECTED", "ACTION_NOT_AVAILABLE"),
-        ("DONE", None),
-    ]
-    assert _proposals("FEEDBACK_CONSTRAINT") == []
-    assert _runs("COORDINATION")[0].end_reason == "RETURN_BLOCKED"
-
-
 def test_change_request_objection_needs_comment(seeded, main_on):
     pack = seeded
     _alpha_consulting(pack)
     [cr] = _messages("CHANGE_REQUEST")
     out = _reply(pack, "foreman_a2", cr["message_id"], "DECLINE", "  ")
     assert (out.status, out.reason_codes) == ("REJECTED", ("COMMENT_REQUIRED",))
-
-
-def test_draft_discard_returns_to_objected_and_wakes(seeded, main_on):
-    pack = seeded
-    rp, _ = _alpha_consulting(pack)
-    cr = _objected(pack)
-    run_until_idle(
-        pack, model_factory=Router(coordination=[_draft(cr["message_id"]), _wait()]).factory()
-    )
-    [confirm] = _messages("CONFIRMATION")
-    assert _reply(pack, "foreman_a2", confirm["message_id"], "DECLINE").status == "APPLIED"
-    assert _view(pack, rp.wait_ref).item_status["C"] == "OBJECTED"
-    assert _proposals("FEEDBACK_CONSTRAINT")[0]["status"] == "DISCARDED"
-    run_until_idle(pack, model_factory=Router(coordination=[escalate_coord()]).factory())
-    assert _runs("COORDINATION")[0].status == "BLOCKED"
-
-
-def escalate_coord():
-    return blocked("담당자가 초안을 폐기")
 
 
 def test_main_auto_start_off_starts_nothing(seeded):
@@ -624,10 +556,10 @@ def _item(task_id, h):
 
 def test_item_statuses_with_answers():
     items = [_item("A", "ha"), _item("C", "hc"), _item("E", "he")]
-    answers = {"hc": "OBJECTION_DRAFT_PENDING", "he": "ACCEPTED", "ha": "OBJECTED"}
+    answers = {"hc": "OBJECTED", "he": "ACCEPTED", "ha": "OBJECTED"}
     assert item_statuses(items, ["A"], answers) == {
         "A": "WAIVED",  # WAIVE가 먼저
-        "C": "OBJECTION_DRAFT_PENDING",
+        "C": "OBJECTED",
         "E": "ACCEPTED",
     }
     assert item_statuses(items, [], None) == {"A": "PENDING", "C": "PENDING", "E": "PENDING"}
@@ -640,34 +572,26 @@ def test_coordination_prompt_fingerprint_and_keys(seeded, main_on):
     assert tuple(sorted(obs)) == prompt.OBSERVATION_KEYS
     system = prompt.render_system(seeded)
     assert seeded.site_description in system and "첫날 09:00" in system
-    assert "이견이면" not in system  # 초안을 지시하지 않는다
+    assert "제약" not in system  # Agent는 고정·제약을 만들지 않는다 (AG-27)
 
 
 def test_state_shows_item_request_and_inbox_types(seeded, main_on):
-    """state: 검토 패널 항목의 변경 요청·인용된 이견·초안 축, Inbox의 후보·초안 축."""
+    """state: 검토 패널 항목의 변경 요청·인용된 이견, Inbox의 후보."""
 
     pack = seeded
     rp, _ = _alpha_consulting(pack)
-    cr = _objected(pack)
-    run_until_idle(
-        pack, model_factory=Router(coordination=[_draft(cr["message_id"]), _wait()]).factory()
-    )
+    _objected(pack)
     with db.read() as conn:
         a2 = build_state(conn, pack, "foreman_a2")
     cand = next(c for c in a2["candidates"] if c["candidate_id"] == rp.wait_ref)
     item = next(i for i in cand["consultation"]["items"] if i["task_id"] == "C")
-    assert item["item_status"] == "OBJECTION_DRAFT_PENDING"
+    assert item["item_status"] == "OBJECTED"
     assert (item["request"]["decision"], item["request"]["quoted_comment"]) == (
         "DECLINE",
         OBJECTION,
     )
-    assert item["request"]["draft"]["axes"] == ["RESOURCE", "TIME"]
     by_type = {m["type"]: m for m in a2["inbox"]}
     assert by_type["CHANGE_REQUEST"]["candidate_id"] == rp.wait_ref
-    assert (by_type["CONFIRMATION"]["status"], by_type["CONFIRMATION"]["axes"]) == (
-        "OPEN",
-        ["RESOURCE", "TIME"],
-    )
 
 
 # ── 사전 확인 단계 (phase ASK, 후보 없음) ──────────────────────

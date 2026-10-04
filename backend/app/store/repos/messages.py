@@ -242,8 +242,6 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
                 "task_id": r.pop("target_task_id"),
                 "axis": payload.get("axis"),
                 "allowed_values": payload.get("allowed_values", []),
-                # 제약 초안(FEEDBACK_CONSTRAINT)의 고정 축
-                "axes": payload.get("axes", []),
                 # 사실 수정(FACT_UPDATE)의 필드·옛 값·새 값
                 "fact": None
                 if "field" not in payload
@@ -263,7 +261,7 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
 def _change_requests(
     conn: sqlite3.Connection, site_id: str, where: str, params: tuple[Any, ...]
 ) -> list[dict[str, Any]]:
-    """변경 요청과 그 메시지의 제약 초안(FEEDBACK_CONSTRAINT 제안, 마지막 1개)."""
+    """변경 요청과 담당자 답."""
     out = []
     for r in rows(
         conn,
@@ -273,17 +271,7 @@ def _change_requests(
         (site_id, *params),
     ):
         r["reply"] = loads(r["reply"])
-        drafts = rows(
-            conn,
-            "SELECT proposal_id, status, payload FROM proposal"
-            " WHERE site_id = ? AND type = 'FEEDBACK_CONSTRAINT'"
-            " AND json_extract(payload, '$.source_message_id') = ? ORDER BY rowid",
-            (site_id, r["message_id"]),
-        )
-        draft = drafts[-1] if drafts else None
-        if draft is not None:
-            draft["payload"] = loads(draft["payload"])
-        out.append({**r, "draft": draft})
+        out.append(r)
     return out
 
 
@@ -307,8 +295,7 @@ def list_requests_for_changes(
 def change_answers(requests: list[dict[str, Any]]) -> dict[str, str]:
     """change_hash → 담당자 답에 따른 item 상태. 취소된 요청·늦은 답(CANCELLED·LATE)은 세지 않는다 (ST-15).
 
-    ACCEPT → ACCEPTED, DECLINE(이견) → OBJECTED, 그 이견의 제약 초안이 PENDING이면
-    OBJECTION_DRAFT_PENDING. 같은 변경에 답이 여럿이면 마지막 것.
+    ACCEPT → ACCEPTED, DECLINE(이견) → OBJECTED. 같은 변경에 답이 여럿이면 마지막 것.
     """
     out: dict[str, str] = {}
     for r in requests:
@@ -318,8 +305,7 @@ def change_answers(requests: list[dict[str, Any]]) -> dict[str, str]:
         if decision == "ACCEPT":
             out[r["change_hash"]] = "ACCEPTED"
         elif decision == "DECLINE":
-            pending = r["draft"] is not None and r["draft"]["status"] == "PENDING"
-            out[r["change_hash"]] = "OBJECTION_DRAFT_PENDING" if pending else "OBJECTED"
+            out[r["change_hash"]] = "OBJECTED"
     return out
 
 

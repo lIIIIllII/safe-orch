@@ -1,7 +1,7 @@
 """결과에 담긴 needs의 서버 검증 (AG-23). 참조가 가리키는 대상이 지금 사실에 있는지만 본다.
 
 모양(종류별 참조)은 app.domain.needs가 검사한다. 여기서는 DB 사실과 대조한다: 작업·자원·풀·Unit·사람·
-신고·후보·메시지가 있는지, 축이 제약으로 고정되지 않았는지, 자원 값이 적격이고 담당자가 거절한 값이
+신고·후보·메시지가 있는지, 작업이 고정되지 않았는지, 자원 값이 적격이고 담당자가 거절한 값이
 아닌지, Unit이 그 충돌 그룹에 작업을 가졌는지, 물은 상대가 그 Run의 상대인지. 순서는 보지 않는다.
 """
 
@@ -16,9 +16,9 @@ from app.domain.needs import FACT_TARGET, Need, Path
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.store.repos.consents import list_current_consents
-from app.store.repos.decisions import list_constraints
 from app.store.repos.events import get_event
 from app.store.repos.messages import declined_values, get_message
+from app.store.repos.pins import list_active_pins
 from app.store.repos.records import get_candidate
 from app.store.repos.resources import list_pools, list_resources
 from app.store.repos.site import list_actors
@@ -40,9 +40,7 @@ class _Facts:
         self.resources = {r.resource_id: r for r in list_resources(conn, site_id)}
         self.pools = {p.pool_id for p in list_pools(conn, site_id)}
         self.actors = {a.actor_id for a in list_actors(conn, site_id)}
-        self.frozen = {
-            (c.task_id, axis) for c in list_constraints(conn, site_id) for axis in c.frozen_axes
-        }
+        self.pinned = {p.task_id for p in list_active_pins(conn, site_id)}
         self._group_units: dict[str, dict[str, bool]] | None = None
 
     def group_units(self) -> dict[str, dict[str, bool]]:
@@ -55,11 +53,8 @@ class _Facts:
             facts = snapshot.facts()
             conflicts = detect_conflicts(snapshot, facts.check_assignments(), self.pack)
             groups = conflict_groups(conflicts, facts.task_map())
-            tasks = facts.task_map()
             self._group_units = {
-                g.group_id: {
-                    u: bool(movable_task_ids(g, u, tasks, facts.constraints)) for u in g.units
-                }
+                g.group_id: {u: bool(movable_task_ids(g, u, facts.pins)) for u in g.units}
                 for g in groups
             }
         return self._group_units
@@ -82,8 +77,9 @@ def _check(f: _Facts, need: Need) -> str | None:
         task = f.tasks.get(need.task_id or "")
         if task is None:
             return "TASK_NOT_FOUND"
-        if (task.task_id, need.axis) in f.frozen:
-            return "AXIS_FROZEN"
+        # 고정된 작업은 담당자 동의로 열 수 없다(동의로 고정을 우회하지 않는다, AG-27)
+        if task.task_id in f.pinned:
+            return "TASK_PINNED"
         for rid in need.values:
             resource = f.resources.get(rid)
             if resource is None or exclusion_reasons(task, resource, task.unit_id):

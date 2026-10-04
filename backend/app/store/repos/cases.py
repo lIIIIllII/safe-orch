@@ -1,6 +1,7 @@
 """Case 수명: 사건 전달·메인 시작, wake·재개 claim·Case 종료와 대기열.
 
 - deliver_event: 사건을 적고 열린 메인에게 전한다. 열린 메인이 없으면 같은 tx에서 메인을 만든다(AG-07).
+- deliver_to_open_main: 열린 메인이 있을 때만 사건을 적고 전한다(고정·해제, AG-27).
 
 - wake_run: 영향받는 Run의 wake_seq += 1, 대기 중이면 RESUME_RUN 등록(Run당 PENDING 1개).
 - claim_resume: `WAITING_HUMAN ∧ wait_generation 일치` 조건부 claim.
@@ -94,6 +95,23 @@ def deliver_event(
     record_case_event(tx, site_id, kind, dedupe_key, ref, case_id)
     if main is not None and not started and main.wait_kind != "CHILD_RUN":
         wake_run(tx, site_id, main.run_id)
+    return True
+
+
+def deliver_to_open_main(
+    tx: sqlite3.Connection, pack: LoadedPack, kind: str, dedupe_key: str, ref: dict[str, Any]
+) -> bool:
+    """열린 메인이 있을 때만 사건을 적고 전한다(고정·해제). 열린 메인이 없으면 사건을 만들지 않는다.
+
+    깨우는 규칙은 deliver_event와 같다: 메인이 하위 Run을 기다리는 동안에는 깨우지 않는다.
+    """
+    main = open_main(tx, pack.site_id)
+    if main is None:
+        return False
+    if not record_case_event(tx, pack.site_id, kind, dedupe_key, ref, main.case_id):
+        return False
+    if main.wait_kind != "CHILD_RUN":
+        wake_run(tx, pack.site_id, main.run_id)
     return True
 
 

@@ -168,7 +168,15 @@ class Predecessor(Frozen):
 
 
 class Movable(Frozen):
+    """탐색 축(SearchSpec.axes): 그 작업의 시각·자원을 Solver가 바꿀 수 있는가."""
+
     time: bool
+    resource: bool
+
+
+class TaskMovable(Frozen):
+    """작업의 자원 축이 담당자 확인으로 열렸는가. 시각이 움직이는지는 고정 여부로 정한다 (AG-27)."""
+
     resource: bool
 
 
@@ -199,7 +207,7 @@ class Task(Frozen):
     default_demands: tuple[PoolDemand, ...] = ()  # 서버가 Pack의 작업 유형에서 도출 (CV-11)
     pool_demands: tuple[Demand, ...] = ()  # 작업 값. 기본 수요보다 낮출 수 없다 (CV-11)
     predecessors: tuple[Predecessor, ...] = ()
-    movable: Movable
+    movable: TaskMovable
     fields: dict[str, FieldRecord]
     lifecycle: Lifecycle
 
@@ -253,14 +261,13 @@ class Plan(Frozen):
 # ── 계산·검증 기록 (불변) ──────────────────────────────────────
 
 
-class FeedbackConstraint(Frozen):
-    """확인된 작업·축 고정. task revision에 묶지 않는다."""
+class Pin(Frozen):
+    """사람이 건 작업 고정(시각·자원 전체). task revision에 묶지 않는다 (AG-27)."""
 
-    constraint_id: str
+    pin_id: str
     task_id: str
-    frozen_axes: tuple[Axis, ...]
-    source_type: Literal["DECISION", "PROPOSAL"]
-    source_id: str
+    pinned_by: str
+    by_role: Literal["OWNER", "SUPERVISOR"]
 
 
 class HoldRef(Frozen):
@@ -354,11 +361,14 @@ class SnapshotContent(Frozen):
     zone_relations: tuple[ZoneRelation, ...]
     plan: PlanRef
     holds: tuple[HoldRef, ...] = ()
-    constraints: tuple[FeedbackConstraint, ...] = ()
+    pins: tuple[Pin, ...] = ()
     consents: tuple[Consent, ...] = ()
 
     def task_map(self) -> dict[str, Task]:
         return {t.task_id: t for t in self.tasks}
+
+    def pinned_task_ids(self) -> set[str]:
+        return {p.task_id for p in self.pins}
 
     def resource_map(self) -> dict[str, Resource]:
         return {r.resource_id: r for r in self.resources}

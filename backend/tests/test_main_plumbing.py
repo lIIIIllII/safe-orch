@@ -123,7 +123,6 @@ def test_commands_record_each_event_once(seeded):
         validation_id=validation.validation_id,
         reason_code=x.reason_code,
         target_task_ids=x.target_task_ids,
-        axes=x.axes,
         comment=x.comment,
     )
     key = _key()

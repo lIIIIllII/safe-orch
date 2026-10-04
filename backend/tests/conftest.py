@@ -5,9 +5,11 @@ import pytest
 
 from app.config import Settings, get_settings
 from app.domain.canonical import canonical_hash
-from app.domain.models import AgentRun, Snapshot, Task
+from app.domain.ids import new_id
+from app.domain.models import AgentRun, Pin, Snapshot, Task
 from app.packs.loader import confirmed_fields, load_pack, pack_dir
 from app.store import db
+from app.store.repos.pins import insert_pin
 from app.store.repos.runs import insert_run
 from app.store.repos.seed import seed_pack
 from app.store.repos.site import bump_context_version
@@ -77,17 +79,74 @@ def temp_db(tmp_path, monkeypatch):
     get_settings.cache_clear()
 
 
+# 서버 로직 테스트의 기준 상태: 좁은 시간창 + 일곱 작업 고정. Pack의 plan_r0(모든 시간창이 Horizon 전체,
+# 고정 없음)와 따로 둔다. 시연 데이터가 바뀌어도 로직 테스트의 기대값은 그대로다.
+LEGACY_WINDOWS = {  # task_id: (earliest_start, latest_start, latest_end)
+    "B": (0, 0, 60),
+    "C": (60, 90, 120),
+    "D": (0, 0, 30),
+    "E": (45, 120, 150),
+    "K": (1440, 1440, 1560),
+    "P": (1500, 1500, 1560),
+    "W": (1680, 1680, 1920),
+    "Q": (2910, 2910, 2970),
+    "M": (2910, 2910, 3000),
+}
+LEGACY_PINNED = ("B", "D", "K", "M", "P", "Q", "W")
+
+
+def _legacy_task(task):
+    es, ls, le = LEGACY_WINDOWS[task.task_id]
+    window = {"earliest_start": es, "latest_start": ls, "latest_end": le}
+    fields = dict(task.fields)
+    if "window" in fields:
+        fields["window"] = fields["window"].model_copy(update={"value": window})
+    return task.model_copy(update={**window, "fields": fields})
+
+
 @pytest.fixture(scope="session")
-def pack():
+def real_pack():
+    """Pack 파일 그대로(시연 데이터)."""
     return load_pack(pack_dir("shipyard"))
+
+
+@pytest.fixture(scope="session")
+def pack(real_pack):
+    """기준 상태의 Pack: plan_r0 작업의 시간창만 LEGACY_WINDOWS로 바꾼 것."""
+    return real_pack.model_copy(update={"tasks": tuple(_legacy_task(t) for t in real_pack.tasks)})
+
+
+def pin_tasks(pack, task_ids, actor_id=None, by_role="OWNER"):
+    """고정 기록을 직접 넣는다(명령을 거치지 않으므로 context는 그대로). actor_id가 없으면 담당자."""
+    owners = {t.task_id: t.owner_actor_id for t in pack.tasks}
+    owners[pack.new_task.task_id] = pack.new_task.owner_actor_id
+    with db.write() as tx:
+        version = tx.execute("SELECT context_version FROM site").fetchone()[0]
+        for tid in task_ids:
+            pin = Pin(
+                pin_id=new_id("pin"),
+                task_id=tid,
+                pinned_by=actor_id or owners[tid],
+                by_role=by_role,
+            )
+            insert_pin(tx, pack.site_id, pin, "2026-10-12T00:00:00+00:00", version)
 
 
 @pytest.fixture
 def seeded(pack):
-    """임시 DB에 shipyard Pack을 seed한다."""
+    """임시 DB에 기준 상태를 seed한다: shipyard Pack + 옛 시간창 + 일곱 작업 고정."""
     with db.write() as tx:
         seed_pack(tx, pack)
+    pin_tasks(pack, LEGACY_PINNED)
     return pack
+
+
+@pytest.fixture
+def seeded_real(real_pack):
+    """임시 DB에 Pack 파일 그대로 seed한다(고정 없음)."""
+    with db.write() as tx:
+        seed_pack(tx, real_pack)
+    return real_pack
 
 
 @pytest.fixture
