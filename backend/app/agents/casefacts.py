@@ -17,6 +17,7 @@ from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts, separation_links
 from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store.repos._rows import loads, rows
+from app.store.repos.bundles import list_bundle_plans
 from app.store.repos.calls import call_key, fingerprint, last_result
 from app.store.repos.case_events import list_case_events
 from app.store.repos.consultations import (
@@ -488,6 +489,34 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
             if not same_facts(conn, site_id, call_key("REPLANNING", {"approach": a}))
         ]
 
+    # 일정 검토: 일정 넣기 사건이 있는 Case에 충돌이 있을 때만 부를 수 있다(사실 조건, AG-36).
+    # 같은 사실의 재호출은 거절된다 (AG-24)
+    schedule_case = any(e["kind"] == "SCHEDULE_IMPORTED" for e in events)
+    review_key = call_key("SCHEDULE_REVIEW", {})
+    if schedule_case and groups and not hold_active and not same_facts(conn, site_id, review_key):
+        calls.append({"agent": "SCHEDULE_REVIEW"})
+    plans = list_bundle_plans(conn, site_id, case_id=case_id)
+    last_plan = plans[-1] if plans else None
+    schedule_review = {
+        "schedule_case": schedule_case,
+        # 이 Case의 마지막 묶음안 요약(서버 값만): 묶음과 사람만 풀 수 있는 묶음. current가 false면 그 뒤
+        # 현장 사실이 바뀌었다
+        "bundle_plan": None
+        if last_plan is None
+        else {
+            "bundle_plan_id": last_plan["bundle_plan_id"],
+            "current": (last_plan["context_version"], last_plan["plan_revision"])
+            == (site.context_version, site.plan_revision),
+            "bundles": [
+                {k: b[k] for k in ("bundle_id", "group_ids", "task_ids", "human_only")}
+                for b in last_plan["bundles"]
+            ],
+            "human_only_bundle_ids": [
+                b["bundle_id"] for b in last_plan["bundles"] if b["human_only"]
+            ],
+        },
+    }
+
     candidates = [
         candidate_view(conn, pack, cid, facts) for cid in case_candidate_ids(conn, pack, case_id)
     ]
@@ -557,6 +586,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
         "events": events,
         "groups": group_views,
         "replanning": replanning,
+        "schedule_review": schedule_review,
         "holds": holds,
         "candidates": candidates,
         "rejections": rejection_facts(conn, case_id),

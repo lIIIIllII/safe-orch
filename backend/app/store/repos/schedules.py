@@ -54,13 +54,17 @@ def get_schedule(conn: sqlite3.Connection, site_id: str, schedule_id: str) -> di
 
 
 def insert_task_base(
-    tx: sqlite3.Connection, site_id: str, base: TaskBase, schedule_id: str | None = None
+    tx: sqlite3.Connection,
+    site_id: str,
+    base: TaskBase,
+    schedule_id: str | None = None,
+    context_version: int = 0,
 ) -> None:
     """새 작업의 기준 위치 (CV-29). 일정으로 들어온 작업이면 어느 넣기에서 왔는지도 적는다 (ST-24).
     같은 작업에 다시 넣으면 그 행이 지금 값이 된다(카드에서 요청 시작 범위 고치기, AG-33)."""
     tx.execute(
         "INSERT INTO task_base (site_id, task_id, start_min, start_max, resource_id, origin,"
-        " schedule_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        " schedule_id, context_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             site_id,
             base.task_id,
@@ -69,6 +73,7 @@ def insert_task_base(
             base.resource_id,
             base.origin,
             schedule_id,
+            context_version,
         ),
     )
 
@@ -102,6 +107,39 @@ def get_task_base(conn: sqlite3.Connection, site_id: str, task_id: str) -> dict[
         (site_id, task_id),
     )
     return found[0] if found else None
+
+
+def base_range_changes(
+    conn: sqlite3.Connection, site_id: str, since: int, until: int, task_ids: set[str]
+) -> list[dict[str, Any]]:
+    """현장 버전 since 뒤부터 until까지 요청 시작 범위가 고쳐진 작업 (작업 ID순, 사실 변경 표시용).
+
+    before는 since 시점의 범위(그 뒤에 들어온 작업은 처음 요청한 범위), after는 until 시점의 범위다.
+    둘이 같으면 내지 않는다. {kind, task_id, before, after}이고 범위는 {start, start_max, origin}이다."""
+    history: dict[str, list[dict[str, Any]]] = {}
+    for r in rows(
+        conn,
+        "SELECT task_id, start_min AS start, start_max, origin, context_version FROM task_base"
+        " WHERE site_id = ? ORDER BY base_id",
+        (site_id,),
+    ):
+        if r["task_id"] in task_ids and r["context_version"] <= until:
+            history.setdefault(r["task_id"], []).append(r)
+    out = []
+    for task_id, found in sorted(history.items()):
+        earlier = [r for r in found if r["context_version"] <= since]
+        before, after = (earlier or found)[-1 if earlier else 0], found[-1]
+        view = [{k: r[k] for k in ("start", "start_max", "origin")} for r in (before, after)]
+        if view[0] != view[1]:
+            out.append(
+                {
+                    "kind": "BASE_RANGE_CHANGED",
+                    "task_id": task_id,
+                    "before": view[0],
+                    "after": view[1],
+                }
+            )
+    return out
 
 
 def schedule_of_tasks(conn: sqlite3.Connection, site_id: str) -> dict[str, str]:

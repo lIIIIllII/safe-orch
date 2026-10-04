@@ -112,6 +112,12 @@ class MainExecutor:
             if refs.get("approach") is None:
                 return "APPROACH_REQUIRED"
             return "HOLD_ACTIVE" if holds else "SAME_FACTS"
+        if refs["agent"] == "SCHEDULE_REVIEW":
+            if not data["schedule_review"]["schedule_case"]:
+                return "NOT_SCHEDULE_CASE"
+            if not data["groups"]:
+                return "NO_CONFLICT"
+            return "HOLD_ACTIVE" if holds else "SAME_FACTS"
         if refs["agent"] == "COORDINATION":
             candidate = next(
                 (c for c in data["candidates"] if c["candidate_id"] == refs.get("candidate_id")),
@@ -221,6 +227,13 @@ class MainExecutor:
                 # 접근은 호출 키에 들어가고, 문장은 재계획 관찰에 인용으로만 간다
                 "approach": action.approach,
                 "approach_note": action.approach_note,
+            }
+        if action.agent == "SCHEDULE_REVIEW":
+            # 일정 검토도 주체 Unit 없이 현장의 충돌 전체를 본다
+            return {
+                "agent_type": "SCHEDULE_REVIEW",
+                "acting_unit_id": None,
+                "acting_actor_id": None,
             }
         supervisor = supervisor_actor(tx, self.pack)
         if supervisor is None:

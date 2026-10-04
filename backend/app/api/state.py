@@ -21,6 +21,7 @@ from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.store import db
 from app.store.repos._rows import loads, rows
+from app.store.repos.bundles import list_bundle_plans
 from app.store.repos.cases import queued_task_ids
 from app.store.repos.consultations import (
     candidate_state,
@@ -46,7 +47,7 @@ from app.store.repos.runs import (
     plan_labels,
     run_for_solver_result,
 )
-from app.store.repos.schedules import get_schedule, list_task_bases
+from app.store.repos.schedules import base_range_changes, get_schedule, list_task_bases
 from app.store.repos.site import get_site, list_actors, list_zone_relations
 from app.store.repos.snapshots import build_snapshot_content, plan_facts
 from app.store.repos.tasks import list_current_tasks
@@ -306,7 +307,15 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         # 이 안이 기준에서 바꾸는 것: 시각·자원·새 배치·기준에서 옮긴 거리와 방향 (서버 계산)
         "plan_changes": plan_changes(facts, cand.assignments),
         # 기준 계획을 확정한 뒤 사람이 바꾼 사실: 무엇 때문에 다시 계획·확정하는가
-        "fact_changes": fact_changes(basis, facts) if basis and facts else [],
+        "fact_changes": [
+            *fact_changes(basis, facts),
+            # 카드에서 요청 시작 범위를 고친 것 (AG-33)
+            *base_range_changes(
+                conn, site_id, basis.context_version, facts.context_version, set(facts.task_map())
+            ),
+        ]
+        if basis and facts
+        else [],
         "solver": _solver(conn, cand.solver_result_id, facts),
         # Agent가 건 조건(서버가 받은 값, 분)과 거절·이견된 변경(서버 계산) (CV-24·CV-26)
         "conditions": _conditions(conn, cand.search_spec_id),
@@ -515,6 +524,16 @@ def build_state(
         "conflicts": [c.model_dump(mode="json") for c in conflicts],
         "candidates": [candidate_view(conn, site_id, cid) for cid in ids],
         "review_queue": queue,
+        # 일정 검토 Agent가 낸 묶음안 (최근 것). groups·relations·tasks·bundles의 구조는 서버 값이고,
+        # quoted_note·quoted_opinion은 모델 문장이다 (UI-06). current가 false면 그 뒤 사실이 바뀌었다
+        "bundle_plans": [
+            {
+                **p,
+                "current": (p["context_version"], p["plan_revision"])
+                == (site.context_version, site.plan_revision),
+            }
+            for p in list_bundle_plans(conn, site_id)[-RECENT_CANDIDATES:]
+        ],
         # 대기열(QUEUED) 접수 순서
         "task_queue": queued_task_ids(conn, site_id),
         # Hold마다 그 Event의 사실 수정안 (FACT_CONFIRMED 해제 판단)

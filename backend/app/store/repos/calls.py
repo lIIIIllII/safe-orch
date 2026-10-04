@@ -19,11 +19,12 @@ NO_RESULT = ("ERROR", "CANCELLED")
 
 def call_key(agent_type: str, refs: dict[str, Any]) -> str:
     """Agent 종류와 참조로 만든 키. 참조: Replanning approach(현장의 충돌 전체를 푼다), Coordination
-    phase·candidate_id(통지는 plan_revision), Event Response event_id."""
+    phase·candidate_id(통지는 plan_revision), Event Response event_id, Schedule Review 없음."""
     names = {
         "REPLANNING": ("approach",),
         "COORDINATION": ("phase", "candidate_id", "plan_revision"),
         "EVENT_RESPONSE": ("event_id",),
+        "SCHEDULE_REVIEW": (),  # 참조가 없다: 현장의 지금 충돌 전체를 묶음으로 정리한다
     }[agent_type]
 
     def text(value: Any) -> str:

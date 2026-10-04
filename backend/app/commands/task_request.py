@@ -214,7 +214,7 @@ def insert_requested_task(
     )
     insert_task_revision(tx, site_id, task)
     if base is not None:
-        insert_task_base(tx, site_id, base, schedule_id)
+        insert_task_base(tx, site_id, base, schedule_id, context_version)
     return {
         "task_id": task.task_id,
         "revision": 1,

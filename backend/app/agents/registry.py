@@ -10,21 +10,25 @@ from app.agents.executors.event_response import EventResponseExecutor
 from app.agents.executors.intake import IntakeExecutor
 from app.agents.executors.main import MainExecutor
 from app.agents.executors.replanning import ReplanningExecutor
+from app.agents.executors.schedule_review import ScheduleReviewExecutor
 from app.agents.observers import coordination as coordination_observer
 from app.agents.observers import event_response as event_response_observer
 from app.agents.observers import intake as intake_observer
 from app.agents.observers import main as main_observer
 from app.agents.observers import replanning as replanning_observer
+from app.agents.observers import schedule_review as schedule_review_observer
 from app.agents.prompts import coordination as coordination_prompt
 from app.agents.prompts import event_response as event_response_prompt
 from app.agents.prompts import intake as intake_prompt
 from app.agents.prompts import main as main_prompt
 from app.agents.prompts import replanning as replanning_prompt
+from app.agents.prompts import schedule_review as schedule_review_prompt
 from app.agents.specs import coordination as coordination_spec
 from app.agents.specs import event_response as event_response_spec
 from app.agents.specs import intake as intake_spec
 from app.agents.specs import main as main_spec
 from app.agents.specs import replanning as replanning_spec
+from app.agents.specs import schedule_review as schedule_review_spec
 from app.agents.types import AgentBinding
 
 BINDINGS: dict[str, AgentBinding] = {
@@ -33,7 +37,7 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=main_prompt,
         observer=main_observer,
         executor=MainExecutor,
-        exec_contract_version="main-c4",  # 기록만. 재계획 호출은 접근만 넘긴다 (AG-24)
+        exec_contract_version="main-c5",  # 기록만. 일정 Case의 일정 검토 호출 (AG-36)
     ),
     replanning_spec.AGENT_TYPE: AgentBinding(
         spec=replanning_spec.SPEC,
@@ -55,6 +59,13 @@ BINDINGS: dict[str, AgentBinding] = {
         observer=event_response_observer,
         executor=EventResponseExecutor,
         exec_contract_version="event-response-c7",  # 기록만. 신고자 되묻기 삭제
+    ),
+    schedule_review_spec.AGENT_TYPE: AgentBinding(
+        spec=schedule_review_spec.SPEC,
+        prompt=schedule_review_prompt,
+        observer=schedule_review_observer,
+        executor=ScheduleReviewExecutor,
+        exec_contract_version="schedule-review-c1",  # 기록만. 묶음안까지 (AG-36)
     ),
     intake_spec.AGENT_TYPE: AgentBinding(
         spec=intake_spec.SPEC,

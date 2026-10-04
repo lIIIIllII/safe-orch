@@ -175,7 +175,7 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
     if changes:
         revise_task(tx, site_id, task, changes, f"card:{edit_id}")
     if base is not None:
-        insert_task_base(tx, site_id, base, schedule_id)
+        insert_task_base(tx, site_id, base, schedule_id, context_version)
 
     r.refs = {
         "task_id": task.task_id,

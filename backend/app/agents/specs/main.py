@@ -57,15 +57,16 @@ class Action(BaseModel):
 
 
 class CallAgent(Action):
-    """전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다. 재계획(REPLANNING)은 접근(무엇을 우선할지)만 넘기고 현장의 지금 충돌 전체를 푼다. 협의(COORDINATION)는 Supervisor가 고른 후보, 통지는 확정된 후보, 신고 대응(EVENT_RESPONSE)은 신고를 가리킨다."""
+    """전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다. 재계획(REPLANNING)은 접근(무엇을 우선할지)만 넘기고 현장의 지금 충돌 전체를 푼다. 협의(COORDINATION)는 Supervisor가 고른 후보, 통지는 확정된 후보, 신고 대응(EVENT_RESPONSE)은 신고를 가리킨다. 일정 검토(SCHEDULE_REVIEW)는 참조 없이 부르고 일정 Case의 충돌을 묶음으로 정리한다."""
 
     OPENS = (
         "지금 받아들여지는 호출(calls)이 있고 전문 Agent 호출 수가 남아 있을 때. 열린 하위 Run이 있거나, "
         "ACTIVE Hold 중의 재계획·협의이거나, 같은 호출(재계획은 같은 접근)의 마지막 결과 뒤로 관련 사실이 "
-        "바뀌지 않았거나, Supervisor가 고르지 않은 후보의 협의면 받아들여지지 않는다"
+        "바뀌지 않았거나, Supervisor가 고르지 않은 후보의 협의이거나, 일정 넣기 사건이 없는 Case·충돌이 "
+        "없을 때의 일정 검토면 받아들여지지 않는다"
     )
 
-    agent: Literal["REPLANNING", "COORDINATION", "EVENT_RESPONSE"] = Field(
+    agent: Literal["REPLANNING", "COORDINATION", "EVENT_RESPONSE", "SCHEDULE_REVIEW"] = Field(
         description="부를 전문 Agent"
     )
     approach: Literal["MIN_CHANGE", "MIN_DELAY"] | None = Field(

@@ -1,4 +1,4 @@
--- SAFE-ORCH schema. schema_version 22.
+-- SAFE-ORCH schema. schema_version 23.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -155,6 +155,8 @@ CREATE TABLE task_base (
     resource_id TEXT,
     origin      TEXT NOT NULL CHECK (origin IN ('STATED', 'DECIDED')),
     schedule_id TEXT REFERENCES schedule (schedule_id),
+    -- 이 행을 넣을 때의 현장 버전. 안 검토의 "바뀐 사실"에서 요청 시작 범위를 고친 것을 가린다
+    context_version INTEGER NOT NULL DEFAULT 0 CHECK (context_version >= 0),
     CHECK (start_min <= start_max),
     FOREIGN KEY (site_id, resource_id) REFERENCES resource (site_id, resource_id)
 );
@@ -398,7 +400,8 @@ CREATE TABLE agent_run (
     site_id               TEXT NOT NULL REFERENCES site (site_id),
     agent_type            TEXT NOT NULL CHECK (agent_type IN ('REPLANNING', 'COORDINATION',
                                                               'INTAKE', 'EVENT_RESPONSE',
-                                                              'ASSISTANT', 'MAIN')),
+                                                              'ASSISTANT', 'MAIN',
+                                                              'SCHEDULE_REVIEW')),
     case_id               TEXT NOT NULL,
     -- 부른 Run. MAIN은 부모가 없다
     parent_run_id         TEXT REFERENCES agent_run (run_id),
@@ -574,6 +577,27 @@ WHEN OLD.status <> 'RESERVED'
 BEGIN SELECT RAISE(ABORT, 'solver_job: only RESERVED can change'); END;
 CREATE TRIGGER solver_job_no_delete BEFORE DELETE ON solver_job
 BEGIN SELECT RAISE(ABORT, 'solver_job: no delete'); END;
+
+-- 일정 검토 Agent가 낸 묶음안. 불변이고 그때의 Snapshot에 묶인다 (ST-07·AG-36).
+-- content: {groups, relations, tasks, bundles, quoted_opinion}. groups·relations·tasks는 서버가 계산한 최소
+-- 묶음·관계·작업이고, bundles는 Agent가 최소 묶음을 합친 것(서버가 합인지만 검사), 메모와 의견은 모델 문장이다.
+CREATE TABLE bundle_plan (
+    bundle_plan_id  TEXT PRIMARY KEY,
+    site_id         TEXT NOT NULL REFERENCES site (site_id),
+    snapshot_id     TEXT NOT NULL REFERENCES snapshot (snapshot_id),
+    case_id         TEXT NOT NULL,
+    run_id          TEXT NOT NULL,
+    step_no         INTEGER NOT NULL,
+    context_version INTEGER NOT NULL CHECK (context_version >= 0),
+    plan_revision   INTEGER NOT NULL CHECK (plan_revision >= 0),
+    content         TEXT NOT NULL CHECK (json_valid(content)),
+    FOREIGN KEY (run_id, step_no) REFERENCES agent_step (run_id, step_no)
+);
+
+CREATE TRIGGER bundle_plan_no_update BEFORE UPDATE ON bundle_plan
+BEGIN SELECT RAISE(ABORT, 'immutable: bundle_plan'); END;
+CREATE TRIGGER bundle_plan_no_delete BEFORE DELETE ON bundle_plan
+BEGIN SELECT RAISE(ABORT, 'immutable: bundle_plan'); END;
 
 -- ── Hold 전이 트리거 ────────────────
 

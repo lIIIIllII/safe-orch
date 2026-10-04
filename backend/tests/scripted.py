@@ -145,6 +145,7 @@ AGENT_TITLES = {
     "COORDINATION": "Coordination Agent",
     "EVENT_RESPONSE": "Event Response Agent",
     "REPLANNING": "Replanning Agent",
+    "SCHEDULE_REVIEW": "Schedule Review Agent",
 }
 
 
@@ -276,6 +277,7 @@ class Router:
         intake: Sequence[Reply] = (),
         main: Sequence[Reply] = (),
         auto_done: bool = True,
+        schedule_review: Sequence[Reply] = (),
     ):
         self.auto_done = auto_done
         self.scripted = {
@@ -287,6 +289,7 @@ class Router:
             "COORDINATION": list(coordination),
             "EVENT_RESPONSE": list(event_response),
             "INTAKE": list(intake),
+            "SCHEDULE_REVIEW": list(schedule_review),
         }
         self.models: list[RoutedChatModel] = []
 
@@ -299,7 +302,9 @@ class Router:
         return make
 
     def left(self) -> dict[str, int]:
-        return {k: len(v) for k, v in self.queues.items() if k != "MAIN" or v}
+        return {
+            k: len(v) for k, v in self.queues.items() if k not in ("MAIN", "SCHEDULE_REVIEW") or v
+        }
 
 
 class RoutedChatModel(ScriptedChatModel):
