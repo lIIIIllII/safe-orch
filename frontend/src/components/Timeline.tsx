@@ -2,8 +2,9 @@
 // 현재 Plan(실선), Plan 밖 READY 작업(점선 "요청"), 선택한 후보의 변경(굵은 테두리)을 겹쳐 그린다.
 // 막대를 누르면 작업이 선택되고 카드가 고정되어 열린다: 고정·고정 해제, 희망 영역 그리기·지우기(AG-27).
 // 고정은 자물쇠와 굵은 테두리, 희망 영역은 막대 뒤 Unit 색의 옅은 띠(늘 보임, 접수 Agent가 정했고 아직 확인하지
-// 않은 희망은 점선 테두리), 가능 범위(시간창)는 막대 아래 가는 괄호다. 괄호는 사람이 좁힌 작업은 늘 보이고,
-// Horizon 전체인 작업은 선택했을 때만 보인다. 후보 겹쳐 보기에서는 후보가 옮긴 자리에도 둘을 같이 그린다.
+// 않은 희망은 점선 테두리), 가능 범위(시간창)는 막대 아래 가는 괄호다. 괄호는 눌러 선택한 작업에만
+// 보인다(좁힌 작업도 늘 보이지 않는다). 괄호가 지금 보이는 구간 밖으로 이어지면 화면 가장자리에 끝 시각을 적는다.
+// 후보 겹쳐 보기에서는 후보가 옮긴 자리에도 희망 영역을 같이 그리고, 선택하면 가능 범위도 같이 보인다.
 // 후보가 자원을 바꾼 작업은 후보 막대에 "자원 → 새 자원"을 달고, 원래 자원 행의 자리는 흐린 점선 윤곽으로 남긴다.
 // 담당자는 자기 작업의 Plan 막대를 끌어 시각을 옮긴다(AG-31): 놓을 수 있는 구간은 서버가 계산해 주고 화면은 칠하기만
 // 한다. 놓으면 미리보기와 [확정]/[취소]가 뜬다. 조금만 움직이면 선택이다. 희망 영역은 [희망 영역 그리기]를 누른 뒤
@@ -734,8 +735,8 @@ export function Timeline(props: Props) {
           >
             희망 영역
           </span>
-          <span className="lg lg-window" title="가능 범위(반드시 지켜야 하는 시간창). 사람이 좁힌 작업은 늘, 나머지는 눌렀을 때 보인다">
-            가능 범위
+          <span className="lg lg-window" title="가능 범위(반드시 지켜야 하는 시간창). 눌러 선택한 작업만 보인다">
+            가능 범위(선택한 작업만)
           </span>
           <span className="lg lg-conflict">충돌</span>
           <span className="lg lg-off">비근무</span>
@@ -787,7 +788,9 @@ export function Timeline(props: Props) {
             const baseBars = rowBars.filter((d) => d.b.kind !== 'after' && d.t)
             // 희망 영역·가능 범위는 후보가 옮긴 자리(변경 후 막대)에도 같이 그린다
             const rangeBars = rowBars.filter((d) => d.t)
-            const horizon = state.site.horizon_minutes
+            // 지금 화면에 보이는 가로 구간(px). 폭을 아직 모르면 보기 범위 전체로 본다
+            const seenLo = scrollX
+            const seenHi = avail > 0 ? scrollX + avail : scale.width
             const laneTop = (key: string) => strip + 2 + (laneOf.get(key) ?? 0) * LANE_PX
             const drawable = drawing !== null && baseBars.some((d) => d.b.taskId === drawing)
             return (
@@ -816,19 +819,35 @@ export function Timeline(props: Props) {
                     )
                   })}
                   {rangeBars.map((d) => {
-                    if (!d.t) return null
-                    // 사람이 좁힌 가능 범위는 늘, Horizon 전체는 눌렀을 때만. 후보가 옮긴 자리에는 늘 그린다
-                    const narrowed = d.t.earliest_start > 0 || d.t.latest_end < horizon
-                    if (!narrowed && selected?.taskId !== d.b.taskId) return null
+                    // 가능 범위는 눌러 선택한 작업에만 그린다
+                    if (!d.t || selected?.taskId !== d.b.taskId) return null
                     const box = scale.box(d.t.earliest_start, d.t.latest_end)
                     if (!box) return null
+                    const top = laneTop(d.b.key) + BAR_H - 3
+                    // 괄호가 지금 보이는 구간 밖으로 이어지면 화면 가장자리에 끝 시각을 적는다
+                    const outL = box.clipL || box.left < seenLo
+                    const outR = box.clipR || box.left + box.width > seenHi
                     return (
-                      <div
-                        key={`win:${d.b.key}`}
-                        className={`tl-window ${box.clipL ? 'tl-window-clip-l' : ''} ${box.clipR ? 'tl-window-clip-r' : ''}`}
-                        style={{ left: box.left, width: box.width, top: laneTop(d.b.key) + BAR_H - 3 }}
-                        title={`${d.b.taskId} 가능 범위 ${clock.span(d.t.earliest_start, d.t.latest_end)}`}
-                      />
+                      <div key={`win:${d.b.key}`}>
+                        <div
+                          className={`tl-window ${box.clipL ? 'tl-window-clip-l' : ''} ${box.clipR ? 'tl-window-clip-r' : ''}`}
+                          style={{ left: box.left, width: box.width, top }}
+                          title={`${d.b.taskId} 가능 범위 ${clock.span(d.t.earliest_start, d.t.latest_end)}`}
+                        />
+                        {outL && (
+                          <span className="tl-window-end" style={{ left: Math.max(box.left, seenLo) + 2, top: top - 10 }}>
+                            ← {clock.format(d.t.earliest_start)}
+                          </span>
+                        )}
+                        {outR && (
+                          <span
+                            className="tl-window-end tl-window-end-r"
+                            style={{ left: Math.min(box.left + box.width, seenHi) - 2, top: top - 10 }}
+                          >
+                            {clock.format(d.t.latest_end)} →
+                          </span>
+                        )}
+                      </div>
                     )
                   })}
                   {move &&
@@ -1164,7 +1183,7 @@ function BarCard({
               {!t
                 ? '—'
                 : t.earliest_start <= 0 && t.latest_end >= horizon
-                  ? '전체 기간(좁히지 않음)'
+                  ? '전체 기간(제한 없음)'
                   : clock.span(t.earliest_start, t.latest_end)}
             </td>
           </tr>
