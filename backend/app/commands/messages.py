@@ -3,7 +3,7 @@
 reply(ACCEPT|DECLINE)와 proposals/{pid}/confirm·discard는 같은 처리(_answer)를 쓴다. 제안이 붙은
 메시지면 ACCEPT = 확인, DECLINE = 폐기다. 검사 순서(각 단계에서 걸리면 그 사유 하나로 끝난다):
 ① *_NOT_FOUND ② NOT_AUTHORIZED ③ 메시지 CANCELLED·제안 STALE → LATE(기록만, 도메인 변화·wake 없음)
-④ 이미 답함: 같은 결정 REPLAYED, 다른 결정 ALREADY_ANSWERED ⑤ STALE_PROPOSAL ⑥ INVALID_VALUES.
+④ 이미 답함: 같은 결정 REPLAYED, 다른 결정 ALREADY_ANSWERED ⑤ STALE_PROPOSAL.
 comment는 Observation에 quoted_comment로만 들어간다.
 """
 
@@ -33,7 +33,6 @@ Decision = Literal["ACCEPT", "DECLINE", "ANSWER"]
 class ReplyRequest(Body):
     message_id: str
     decision: Decision
-    values: tuple[str, ...] | None = None  # 생략하면 allowed_values 전부
     comment: str = ""
 
 
@@ -42,10 +41,9 @@ class ProposalDecision(Body):
     comment: str = ""
 
 
-def _reply_record(ctx: CommandContext, decision: str, values: list[str], comment: str) -> dict:
+def _reply_record(ctx: CommandContext, decision: str, comment: str) -> dict:
     return {
         "decision": decision,
-        "values": values,
         "comment": comment,
         "actor_id": ctx.actor_id,
         "at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -58,10 +56,9 @@ def _answer(
     message: dict[str, Any],
     proposal: dict[str, Any] | None,
     decision: str,
-    values: tuple[str, ...] | None,
     comment: str,
 ) -> Result:
-    """③–⑥ 검사와 효과. ①·②는 호출한 쪽이 한다."""
+    """③–⑤ 검사와 효과. ①·②는 호출한 쪽이 한다."""
     r = Result()
     # 자유 텍스트 질문(제안 없는 QUESTION)에는 ANSWER만, 다른 메시지에는 ANSWER 불가
     free_text = message["type"] == "QUESTION" and proposal is None
@@ -91,7 +88,7 @@ def _answer(
                 tx,
                 message["message_id"],
                 "LATE",
-                _reply_record(ctx, decision, list(values or ()), comment),
+                _reply_record(ctx, decision, comment),
                 ctx.site.context_version,
             )
         r.refs = {**refs, "late": True}
@@ -105,7 +102,6 @@ def _answer(
         r.refs = {**refs, **((proposal or {}).get("result_ref") or {})}
         return r
     task = None
-    allowed: list[str] = []
     if proposal is not None:
         # ⑤ 제안 이후 작업이 바뀌었다 (T25)
         task = next(
@@ -129,22 +125,12 @@ def _answer(
             if hold is None or hold["status"] != "ACTIVE":
                 r.reject("HOLD_NOT_ACTIVE")
                 return r
-        # ⑥ values는 allowed_values의 비어 있지 않은 부분집합
-        allowed = list(proposal["payload"].get("allowed_values", []))
-        if (
-            decision == "ACCEPT"
-            and values is not None
-            and (not values or not set(values) <= set(allowed))
-        ):
-            r.reject("INVALID_VALUES")
-            return r
 
     # 변경 요청의 이견(DECLINE)에는 사유가 필요하다. 협의 결과에 인용으로 담긴다
     if message["type"] == "CHANGE_REQUEST" and decision == "DECLINE" and not comment.strip():
         r.reject("COMMENT_REQUIRED")
         return r
 
-    chosen = [v for v in allowed if values is None or v in values] if decision == "ACCEPT" else []
     context_version = ctx.site.context_version
     fact = None
     if proposal is not None and decision == "ACCEPT" and proposal["type"] == "FACT_UPDATE":
@@ -161,7 +147,7 @@ def _answer(
         tx,
         message["message_id"],
         "ANSWERED",
-        _reply_record(ctx, decision, chosen, comment),
+        _reply_record(ctx, decision, comment),
         context_version,
     )
     if fact is not None:
@@ -232,7 +218,7 @@ def _reply(tx: sqlite3.Connection, ctx: CommandContext, body: ReplyRequest) -> R
     proposal = (
         get_proposal(tx, ctx.site_id, message["proposal_id"]) if message["proposal_id"] else None
     )
-    return _answer(tx, ctx, message, proposal, body.decision, body.values, body.comment)
+    return _answer(tx, ctx, message, proposal, body.decision, body.comment)
 
 
 def reply_message(
@@ -255,7 +241,7 @@ def _proposal_handler(decision: str):
         if ctx.actor_id != proposal["confirmer_actor_id"]:
             r.reject("NOT_AUTHORIZED")
             return r
-        return _answer(tx, ctx, message, proposal, decision, None, body.comment)
+        return _answer(tx, ctx, message, proposal, decision, body.comment)
 
     return handle
 

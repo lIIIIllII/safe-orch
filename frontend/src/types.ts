@@ -334,7 +334,7 @@ export interface InboxItem {
   status: 'OPEN' | 'ANSWERED' | 'CANCELLED' | 'LATE'
   body: string
   agent_text: string | null
-  reply: { decision: string; values: string[]; comment: string; actor_id: string; at: string } | null
+  reply: { decision: string; comment: string; actor_id: string; at: string } | null
   created_context_version: number
   answered_context_version: number | null
   proposal_id: string | null

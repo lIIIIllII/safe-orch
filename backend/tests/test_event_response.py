@@ -22,7 +22,13 @@ from app.commands.approval import (
     waive,
 )
 from app.commands.events import EventReport, HoldRelease, receive_event, release_hold_command
-from app.commands.messages import ReplyRequest, reply_message
+from app.commands.messages import (
+    ProposalDecision,
+    ReplyRequest,
+    confirm_proposal,
+    discard_proposal,
+    reply_message,
+)
 from app.commands.task_request import (
     TaskRequestForm,
     TaskWithdraw,
@@ -431,6 +437,37 @@ def test_confirm_after_task_changed_is_stale(seeded, main_on):
         insert_task_revision(tx, pack.site_id, e.model_copy(update={"revision": e.revision + 1}))
     [confirm] = _messages("CONFIRMATION")
     assert _reply(pack, "supervisor", confirm["message_id"]).reason_codes == ("STALE_PROPOSAL",)
+
+
+def test_only_recipient_or_confirmer_can_confirm_and_it_applies_once(seeded, main_on):
+    """받는 사람·지정 확인자(Supervisor)만 답한다. 확인자는 proposals 경로로도 확인할 수 있고(같은 처리),
+    같은 결정을 다시 보내면 효과는 한 번이다."""
+    pack = seeded
+    _to_proposal(pack)
+    [confirm] = _messages("CONFIRMATION")
+    [proposal] = _proposals("FACT_UPDATE")
+    body = ProposalDecision(proposal_id=proposal["proposal_id"])
+    for actor in ("planner_b", "reporter"):
+        assert _reply(pack, actor, confirm["message_id"]).reason_codes == ("NOT_AUTHORIZED",)
+        assert confirm_proposal(pack, actor, _key(), body).reason_codes == ("NOT_AUTHORIZED",)
+    missing = ProposalDecision(proposal_id="prop_none")
+    assert confirm_proposal(pack, "supervisor", _key(), missing).reason_codes == (
+        "PROPOSAL_NOT_FOUND",
+    )
+    assert _messages("CONFIRMATION")[0]["status"] == "OPEN"
+    assert _proposals("FACT_UPDATE")[0]["status"] == "PENDING"
+    revision = _task(pack, "E").revision
+
+    first = confirm_proposal(pack, "supervisor", _key(), body)
+    assert first.status == "APPLIED" and first.result_refs["task_revision"] == revision + 1
+    again = _reply(pack, "supervisor", confirm["message_id"])  # 다른 키, 같은 결정
+    assert again.status == "REPLAYED"
+    assert (again.result_refs["task_revision"], again.result_refs["consent_ids"]) == (
+        first.result_refs["task_revision"],
+        first.result_refs["consent_ids"],
+    )
+    assert discard_proposal(pack, "supervisor", _key(), body).reason_codes == ("ALREADY_ANSWERED",)
+    assert _task(pack, "E").revision == revision + 1
 
 
 def test_value_beyond_window_cannot_be_proposed(seeded, main_on):

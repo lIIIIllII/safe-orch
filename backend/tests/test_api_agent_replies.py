@@ -111,6 +111,32 @@ def test_change_request_objection_via_api(seeded, client, main_on):
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
 
 
+def test_answer_on_change_request_is_rejected_via_api(seeded, client, main_on):
+    """자유 텍스트 질문이 아닌 메시지(변경 요청)에는 ANSWER를 쓸 수 없다 → 409 INVALID_DECISION."""
+    _alpha_consulting(seeded)
+    [cr] = _rows("message", "CHANGE_REQUEST")
+    res = _reply(client, "foreman_a2", cr["message_id"], "ANSWER", "옮겨도 됩니다")
+    assert _reasons(res) == (409, ["INVALID_DECISION"])
+
+
+def test_reply_api_route(seeded, client, main_on):
+    """받는 사람이 아니면 403, 없는 메시지 404, 답한 뒤 다른 결정 409, 없는 제안 404."""
+    _alpha_consulting(seeded)
+    [cr] = _rows("message", "CHANGE_REQUEST")
+    assert _reasons(_reply(client, "planner_a", cr["message_id"], "ACCEPT")) == (
+        403,
+        ["NOT_AUTHORIZED"],
+    )
+    assert _reply(client, "foreman_a2", "msg_none", "ACCEPT").status_code == 404
+    res = _reply(client, "foreman_a2", cr["message_id"], "ACCEPT")
+    assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
+    assert _reasons(_reply(client, "foreman_a2", cr["message_id"], "DECLINE", "어렵다")) == (
+        409,
+        ["ALREADY_ANSWERED"],
+    )
+    assert _post(client, "proposals/prop_none/discard", "foreman_a2", {}).status_code == 404
+
+
 def _release(client, hold_id, resolution):
     from app.store.repos.site import get_site
 

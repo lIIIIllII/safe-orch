@@ -292,7 +292,7 @@ def test_plan_b_reject_and_pin_recalls_replanning(seeded):
     assert not [c for c in woke["calls"] if c["agent"] == "COORDINATION"]
 
 
-def _reply(pack, message_id, decision="ACCEPT", actor="planner_a", key=None, **kw):
+def _reply(pack, message_id, decision="ACCEPT", actor="foreman_a2", key=None, **kw):
     body = ReplyRequest(message_id=message_id, decision=decision, **kw)
     return reply_message(pack, actor, key or _key(), body)
 
@@ -621,6 +621,73 @@ def test_withdraw_case_request_stales_child_and_wakes_main(seeded):
 
 
 # ── 2단계: 답변·확인 명령 ────────────────────────
+
+
+def _change_request(pack):
+    """협의 Run이 C 담당자(foreman_a2)에게 보낸 변경 요청."""
+    with db.read() as conn:
+        [mid] = [
+            r[0]
+            for r in conn.execute("SELECT message_id FROM message WHERE type = 'CHANGE_REQUEST'")
+        ]
+    return _message(pack, mid)
+
+
+def test_t24_only_recipient_can_answer(seeded):
+    pack = seeded
+    _alpha_waiting(pack)
+    cr = _change_request(pack)
+    assert cr["to_actor_id"] == "foreman_a2"
+    for actor in ("planner_a", "supervisor", "planner_b"):
+        out = _reply(pack, cr["message_id"], actor=actor)
+        assert out.reason_codes == ("NOT_AUTHORIZED",)
+    assert _reply(pack, "msg_none").reason_codes == ("MESSAGE_NOT_FOUND",)
+    assert _message(pack, cr["message_id"])["status"] == "OPEN"
+    assert _reply(pack, cr["message_id"]).status == "APPLIED"
+
+
+def test_t38_reply_command_replayed_without_wake(seeded):
+    """답변 명령: 같은 키·같은 본문 REPLAYED(wake 없음), 다른 키·같은 결정도 REPLAYED(효과 한 번),
+    같은 키 다른 본문 IDEMPOTENCY_MISMATCH, 다른 키·다른 결정 ALREADY_ANSWERED."""
+    pack = seeded
+    waiting = _alpha_waiting(pack).consult_id
+    mid = _change_request(pack)["message_id"]
+    key = _key()
+    assert _reply(pack, mid, key=key).status == "APPLIED"
+    wake, resumes = _run(waiting).wake_seq, len(_jobs(pack, "RESUME_RUN"))
+    assert _reply(pack, mid, key=key).status == "REPLAYED"
+    assert _reply(pack, mid).status == "REPLAYED"
+    assert (_run(waiting).wake_seq, len(_jobs(pack, "RESUME_RUN"))) == (wake, resumes)
+    other = _reply(pack, mid, "DECLINE", key=key, comment="어렵다")
+    assert other.reason_codes == ("IDEMPOTENCY_MISMATCH",)
+    assert _reply(pack, mid, "DECLINE", comment="어렵다").reason_codes == ("ALREADY_ANSWERED",)
+    message = _message(pack, mid)
+    assert (message["status"], message["reply"]["decision"]) == ("ANSWERED", "ACCEPT")
+
+
+def test_t40_late_reply_is_recorded_without_effect(seeded):
+    pack = seeded
+    run = _alpha_waiting(pack)
+    mid = _change_request(pack)["message_id"]
+    out = cancel_run(pack, "supervisor", _key(), CancelRun(run_id=run.consult_id))
+    assert out.status == "APPLIED"
+    assert _message(pack, mid)["status"] == "CANCELLED"
+
+    def effects():
+        return (
+            _site(pack).context_version,
+            _run(run.main_id).wake_seq,
+            len(_jobs(pack, "RESUME_RUN")),
+        )
+
+    before = effects()
+    late = _reply(pack, mid, comment="늦었습니다")
+    assert late.status == "APPLIED" and late.result_refs["late"] is True
+    message = _message(pack, mid)
+    assert (message["status"], message["reply"]["decision"]) == ("LATE", "ACCEPT")
+    assert _reply(pack, mid).status == "REPLAYED"
+    assert _reply(pack, mid, "DECLINE", comment="어렵다").reason_codes == ("ALREADY_ANSWERED",)
+    assert effects() == before
 
 
 # ── 2단계: LIST·TRY 사용 조건과 사전 확인 ─────────────────

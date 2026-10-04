@@ -79,7 +79,6 @@ export const REASON: Record<string, string> = {
   PROPOSAL_NOT_FOUND: '제안 없음',
   ALREADY_ANSWERED: '이미 다른 결정으로 답함',
   STALE_PROPOSAL: '질문 뒤 작업이 바뀜(오래된 제안)',
-  INVALID_VALUES: '허용 값 밖',
   // Run
   RUN_NOT_FOUND: 'Run 없음',
   RUN_NOT_ACTIVE: '이미 끝난 Run',

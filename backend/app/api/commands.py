@@ -91,7 +91,6 @@ class WithdrawBody(Body):
 # 값 타입은 명령 계층 정의를 그대로 쓴다. 두 곳에 두면 한쪽만 바뀌어 API가 422를 낸다
 class ReplyBody(Body):
     decision: Decision
-    values: tuple[str, ...] | None = None
     comment: str = ""
 
 
