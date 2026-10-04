@@ -3,7 +3,8 @@
 ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 모든 Action은 tx 하나다:
 begin_step(활성·차감·STALE_OBSERVATION·재관찰·허용 판정) → 효과 → step 완료.
 SUBMIT_BUNDLES는 묶음이 최소 묶음의 합인지만 검사하고(모든 최소 묶음이 정확히 한 번, 없는 ID 없음),
-통과하면 그때의 Snapshot과 함께 묶음안을 불변 기록으로 남긴다 (AG-36·ST-07). 서버는 묶음을 대신 정하지 않는다.
+통과하면 그때의 Snapshot과 함께 묶음안을 불변 기록으로 남기고 같은 tx에서 Run을 끝낸다 (AG-36·ST-07). 걸리면
+거절하고 Run은 계속된다. 서버는 묶음을 대신 정하지 않는다. RETURN_RESULT는 막힘(BLOCKED)뿐이다.
 배치·점수 계산, 고정·값 고치기, 사람에게 묻는 함수는 없다.
 """
 
@@ -43,10 +44,7 @@ class ScheduleReviewExecutor:
             if isinstance(action, spec.SubmitBundles):
                 return self._submit(tx, run_id, step_no, meta, parsed, obs, action)
             assert isinstance(action, spec.ReturnResult)
-            # 서버가 채우는 내용: 지금 사실에서 낸 마지막 묶음안의 요약
-            current = [p for p in obs.data["bundle_plans"] if p["current"]]
-            produced = {"bundle_plan": current[-1] if current else None}
-            return self.return_result(tx, run_id, step_no, meta, parsed, produced)
+            return self.return_result(tx, run_id, step_no, meta, parsed, {})
 
     def _permitted(self, obs: Observation, action: Any) -> bool:
         available = obs.available
@@ -117,11 +115,16 @@ class ScheduleReviewExecutor:
                 "quoted_opinion": action.opinion,  # 모델 문장(인용)
             },
         )
+        # 메인에게 돌려주는 결과: 묶음안의 ID와 묶음 구조(서버 값만. 메모와 의견은 넣지 않는다, ST-25)
         result = {
-            "bundle_plan_id": bundle_plan_id,
-            "snapshot_id": snapshot.snapshot_id,
-            "bundles": [{k: v for k, v in b.items() if k != "quoted_note"} for b in bundles],
+            "status": "DONE",
+            "paths": [],
+            "bundle_plan": {
+                "bundle_plan_id": bundle_plan_id,
+                "bundles": [{k: v for k, v in b.items() if k != "quoted_note"} for b in bundles],
+            },
         }
+        outcome = GatewayResult("DONE", None, "SUCCEEDED", f"BUNDLES_SUBMITTED:{bundle_plan_id}")
         self._complete(
             tx,
             run_id,
@@ -130,8 +133,9 @@ class ScheduleReviewExecutor:
             parsed,
             verdict=ACCEPTED,
             reason=None,
-            result_kind="CONTINUE",
+            result_kind="DONE",
             tool_result=result,
             state_changes={"bundle_plan_id": bundle_plan_id, "snapshot_id": snapshot.snapshot_id},
+            end=outcome,
         )
-        return GatewayResult("CONTINUE")
+        return outcome

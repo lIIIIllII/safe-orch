@@ -17,7 +17,6 @@ from app.domain.calendar import site_time
 from app.domain.groups import ConflictGroup
 from app.domain.models import SnapshotContent
 from app.packs.loader import LoadedPack
-from app.store.repos.bundles import list_bundle_plans
 from app.store.repos.case_events import list_case_events
 from app.store.repos.consultations import case_objections
 from app.store.repos.decisions import case_rejection_reasons
@@ -63,20 +62,6 @@ def schedule_events(conn: sqlite3.Connection, site_id: str, case_id: str) -> lis
         for e in list_case_events(conn, site_id)
         if e["case_id"] == case_id and e["kind"] == "SCHEDULE_IMPORTED"
     ]
-
-
-def plan_summary(plan: dict[str, Any], context_version: int, plan_revision: int) -> dict[str, Any]:
-    """묶음안 요약(서버 값만): 묶음과 사람만 풀 수 있는 묶음. 메모와 의견(모델 문장)은 넣지 않는다."""
-    return {
-        "bundle_plan_id": plan["bundle_plan_id"],
-        # 그 묶음안을 낸 뒤 현장 사실이 바뀌지 않았는가
-        "current": (plan["context_version"], plan["plan_revision"])
-        == (context_version, plan_revision),
-        "bundles": [
-            {k: b[k] for k in ("bundle_id", "group_ids", "task_ids", "human_only")}
-            for b in plan["bundles"]
-        ],
-    }
 
 
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:
@@ -128,11 +113,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         # 이 Case에서 사람이 남긴 사유(인용): Supervisor 거절과 담당자 이견
         "rejections": case_rejection_reasons(conn, run.case_id),
         "objections": case_objections(conn, pack.site_id, run.case_id),
-        # 이 Run이 낸 묶음안
-        "bundle_plans": [
-            plan_summary(p, site.context_version, site.plan_revision)
-            for p in list_bundle_plans(conn, pack.site_id, run_id=run_id)
-        ],
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),
         "budget_remaining": budget_remaining(run, spec.SPEC),

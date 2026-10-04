@@ -281,9 +281,10 @@ def run_result(conn: sqlite3.Connection, run: AgentRun) -> dict[str, Any]:
     """끝난 Run의 결과. 스스로 돌려준 결과는 마지막 step에 있고, 서버가 끝낸 Run은 서버가 만든다 (ST-20)."""
     steps = [s for s in list_steps(conn, run.run_id) if s["status"] == "COMPLETED"]
     last = steps[-1] if steps else None
+    # 끝내는 행동: RETURN_RESULT, 일정 검토의 묶음안 내기(AG-36)
     if (
         last is not None
-        and (last["action"] or {}).get("name") == "RETURN_RESULT"
+        and (last["action"] or {}).get("name") in ("RETURN_RESULT", "SUBMIT_BUNDLES")
         and last["guard"]["verdict"] == "ACCEPTED"
     ):
         result = dict(last["tool_result"])

@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 from conftest import add_task, make_task, take_snapshot
-from scripted import Router, call, done, main_call, main_escalate, solve
+from scripted import Router, blocked, call, done, main_call, main_escalate, solve
 from test_intake import _complete, _intake
 from test_schedule_import import _add, _exported, _import
 
@@ -65,7 +65,7 @@ def _submit(*bundles, opinion="도장 구역 옆 화기 작업이 이틀째에 �
     """SUBMIT_BUNDLES. bundles는 최소 묶음 ID 목록들이다."""
     return call(
         "SUBMIT_BUNDLES",
-        "이유: 묶음을 정한다/다음: 결과",
+        "이유: 묶음을 정했다/다음: 종료",
         bundles=[{"group_ids": list(ids), "note": "도장과 화기의 간격"} for ids in bundles],
         opinion=opinion,
     )
@@ -165,7 +165,8 @@ def test_group_with_only_pinned_tasks_is_human_only(seeded_real):
 
 def test_main_calls_schedule_review_and_gets_an_immutable_bundle_plan(seeded_real, main_on):
     """일정 Case에 충돌이 있으면 일정 검토를 부를 수 있다. Agent가 낸 묶음은 서버가 최소 묶음의 합인지만
-    검사하고, 통과하면 묶음안을 불변 기록으로 남긴다. 같은 사실로 다시 부르는 것은 거절한다."""
+    검사한다. 걸리면 거절되고 Run은 계속되며, 통과하면 묶음안을 불변 기록으로 남기고 그 한 번으로 Run이
+    끝나 메인에 결과가 간다. 같은 사실로 다시 부르는 것은 거절한다."""
     pack = seeded_real
     _import_two_conflicts(pack)
     _, groups = _groups(pack)
@@ -176,8 +177,8 @@ def test_main_calls_schedule_review_and_gets_an_immutable_bundle_plan(seeded_rea
             _submit([first]),  # 빠진 최소 묶음
             _submit([first, second], [second]),  # 한 최소 묶음을 두 묶음에
             _submit([first, "grp_none"], [second]),  # 없는 ID
-            _submit([first, second]),  # 합친 묶음은 통과
-            done("묶음안을 냈다"),
+            _submit([first, second]),  # 합친 묶음은 통과: 여기서 끝난다
+            _submit([first, second]),  # 쓰이지 않는다
         ],
     )
     run_until_idle(pack, model_factory=router.factory())
@@ -188,6 +189,7 @@ def test_main_calls_schedule_review_and_gets_an_immutable_bundle_plan(seeded_rea
         main.run_id,
         main.case_id,
     )
+    assert router.left()["SCHEDULE_REVIEW"] == 1  # 묶음안을 낸 뒤에는 LLM을 더 부르지 않는다
     assert (review.acting_unit_id, review.solver_calls_used) == (None, 0)  # 계산하지 않는다
 
     steps = _steps(review.run_id)
@@ -196,8 +198,8 @@ def test_main_calls_schedule_review_and_gets_an_immutable_bundle_plan(seeded_rea
         ("REJECTED", "BUNDLES_INVALID"),
         ("REJECTED", "BUNDLES_INVALID"),
         ("ACCEPTED", None),
-        ("ACCEPTED", None),
     ]
+    assert [s["result_kind"] for s in steps] == ["REJECTED", "REJECTED", "REJECTED", "DONE"]
     assert [s["tool_result"]["violations"][0]["code"] for s in steps[:3]] == [
         "GROUP_MISSING",
         "GROUP_REPEATED",
@@ -216,12 +218,10 @@ def test_main_calls_schedule_review_and_gets_an_immutable_bundle_plan(seeded_rea
         "W": (False, True),
     }
     assert obs["schedule"][0]["task_ids"] == ["S1", "S2"]
-    # DONE은 지금 사실에서 낸 묶음안이 있을 때만 열린다
-    assert spec.valid_actions(obs)["RETURN_RESULT"] == {"status": ["BLOCKED"]}
-    assert spec.valid_actions(steps[4]["observation"])["RETURN_RESULT"]["status"] == [
-        "DONE",
-        "BLOCKED",
-    ]
+    # 거절된 뒤에도 같은 도구가 열려 있다. RETURN_RESULT는 막힘뿐이다
+    for s in steps:
+        assert spec.available_actions(s["observation"])["RETURN_RESULT"]["status"] == ["BLOCKED"]
+        assert "SUBMIT_BUNDLES" in spec.available_actions(s["observation"])
 
     # 묶음안: 그때의 Snapshot에 묶인 불변 기록. 묶음 구조는 서버 값, 메모와 의견은 모델 문장이다
     with db.read() as conn:
@@ -240,7 +240,20 @@ def test_main_calls_schedule_review_and_gets_an_immutable_bundle_plan(seeded_rea
     )
     assert (bundle["human_only"], bundle["quoted_note"]) == (False, "도장과 화기의 간격")
     assert plan["quoted_opinion"] == "도장 구역 옆 화기 작업이 이틀째에 몰려 있다"
-    assert steps[4]["tool_result"]["bundle_plan"]["bundle_plan_id"] == plan["bundle_plan_id"]
+    assert review.end_reason == f"BUNDLES_SUBMITTED:{plan['bundle_plan_id']}"
+    # 메인에게 가는 결과는 그 묶음안이다: ID와 묶음 구조(서버 값). 메모와 의견은 넣지 않는다
+    structure = {
+        "bundle_id": "B1",
+        "group_ids": [first, second],
+        "task_ids": ["P", "S1", "S2", "W"],
+        "human_only_group_ids": [],
+        "human_only": False,
+    }
+    assert steps[3]["tool_result"] == {
+        "status": "DONE",
+        "paths": [],
+        "bundle_plan": {"bundle_plan_id": plan["bundle_plan_id"], "bundles": [structure]},
+    }
     for sql in ("UPDATE bundle_plan SET case_id = 'x'", "DELETE FROM bundle_plan"):
         with (
             pytest.raises(sqlite3.IntegrityError, match="immutable: bundle_plan"),
@@ -252,6 +265,15 @@ def test_main_calls_schedule_review_and_gets_an_immutable_bundle_plan(seeded_rea
     # 재호출은 거절된다. 재계획은 그대로 부를 수 있다
     main_steps = _steps(main.run_id)
     before, after = main_steps[0]["observation"], main_steps[1]["observation"]
+    [child] = after["child_results"]
+    assert (child["run_id"], child["run_status"]) == (review.run_id, "SUCCEEDED")
+    assert child["result"] == {
+        "by": "AGENT",
+        "status": "DONE",
+        "paths": [],
+        "bundle_plan": {"bundle_plan_id": plan["bundle_plan_id"], "bundles": [structure]},
+        "quoted_summary": None,
+    }
     assert {"agent": "SCHEDULE_REVIEW"} in before["calls"]
     assert before["schedule_review"] == {"schedule_case": True, "bundle_plan": None}
     assert {"agent": "SCHEDULE_REVIEW"} not in after["calls"]
@@ -336,7 +358,7 @@ def test_human_only_bundle_is_marked_in_the_plan(seeded_real, main_on):
     pinned, free = (g.group_id for g in groups)
     router = Router(
         main=[main_call("SCHEDULE_REVIEW"), main_escalate()],
-        schedule_review=[_submit([pinned], [free]), done()],
+        schedule_review=[_submit([pinned], [free])],
     )
     run_until_idle(pack, model_factory=router.factory())
     [main] = _runs("MAIN")
@@ -346,6 +368,30 @@ def test_human_only_bundle_is_marked_in_the_plan(seeded_real, main_on):
         ("B2", False),
     ]
     assert seen["human_only_bundle_ids"] == ["B1"]
+
+
+def test_return_result_takes_only_blocked(seeded_real, main_on):
+    """RETURN_RESULT는 묶음안을 낼 수 없을 때만 쓴다: DONE은 받지 않고 Run은 계속된다."""
+    pack = seeded_real
+    _import_two_conflicts(pack)
+    router = Router(
+        main=[main_call("SCHEDULE_REVIEW"), main_escalate()],
+        schedule_review=[done(), blocked("묶음을 정할 수 없다")],
+    )
+    run_until_idle(pack, model_factory=router.factory())
+    [review] = _runs("SCHEDULE_REVIEW")
+    steps = _steps(review.run_id)
+    assert [(s["guard"]["verdict"], s["result_kind"]) for s in steps] == [
+        ("REJECTED", "REJECTED"),
+        ("ACCEPTED", "DONE"),
+    ]
+    assert (review.status, review.end_reason) == ("BLOCKED", "RETURN_BLOCKED")
+    with db.read() as conn:
+        assert list_bundle_plans(conn, pack.site_id) == []
+    [main] = _runs("MAIN")
+    [child] = _steps(main.run_id)[1]["observation"]["child_results"]
+    assert (child["result"]["by"], child["result"]["status"]) == ("AGENT", "BLOCKED")
+    assert "bundle_plan" not in child["result"]
 
 
 def test_schedule_review_prompt_fingerprint():

@@ -4,6 +4,7 @@ store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데�
 Action: SUBMIT_BUNDLES, RETURN_RESULT.
 일정 Case의 충돌을 묶음으로 정리하고 검토 의견을 낸다. 서버가 계산한 최소 묶음(작업을 공유하는 충돌)을
 어떻게 합칠지만 정한다: 배치·점수 계산, 고정·값 고치기, 사람에게 묻는 도구는 없다 (AG-10·AG-36).
+묶음안을 내는 것이 끝내는 행동이다. RETURN_RESULT는 묶음안을 낼 수 없을 때(BLOCKED)만 쓴다.
 """
 
 from typing import Any, ClassVar
@@ -58,11 +59,11 @@ class Bundle(BaseModel):
 
 
 class SubmitBundles(Action):
-    """최소 묶음을 합쳐 실제 묶음을 정하고 일정 전체의 검토 의견을 낸다. 서버는 모든 최소 묶음이 정확히 한 번 들어갔는지만 검사하고, 통과하면 묶음안으로 기록한다."""
+    """최소 묶음을 합쳐 정한 묶음과 일정 전체의 검토 의견을 내고 검토를 끝낸다. 서버는 모든 최소 묶음이 정확히 한 번 들어갔는지만 검사하고, 통과하면 묶음안으로 기록하고 Run이 끝난다(메인에게는 그 묶음안이 결과로 간다). 내기 전에 묶음을 정한다."""
 
     OPENS = (
         "충돌이 있을 때. 최소 묶음을 빠뜨리거나, 같은 최소 묶음을 두 묶음에 넣거나, 없는 ID를 쓰면 "
-        "받아들여지지 않는다"
+        "받아들여지지 않고 Run은 계속된다"
     )
 
     bundles: list[Bundle] = Field(min_length=1, description="묶음 목록")
@@ -74,16 +75,16 @@ class SubmitBundles(Action):
 
 
 class ReturnResult(Action, ResultFields):
-    """결과를 돌려주고 Run을 끝낸다. 묶음안을 냈으면 DONE으로 돌려준다. 묶음안을 낼 수 없을 때만 BLOCKED로 돌려주고 이유를 요약에 적는다."""
+    """묶음안을 낼 수 없을 때 막힌 결과(BLOCKED)를 돌려주고 Run을 끝낸다. 이유를 요약에 적는다. 묶음안을 낼 수 있으면 쓰지 않는다."""
 
-    OPENS = "언제나 열려 있다. DONE은 지금 사실에서 낸 묶음안이 있을 때만 쓴다"
+    OPENS = "언제나 열려 있다. 상태는 BLOCKED뿐이다"
 
 
 ACTIONS: dict[str, type[Action]] = {
     "SUBMIT_BUNDLES": SubmitBundles,
     "RETURN_RESULT": ReturnResult,
 }
-FLOW = {"SUBMIT_BUNDLES": "CONTINUE", "RETURN_RESULT": "DONE"}
+FLOW = {"SUBMIT_BUNDLES": "DONE", "RETURN_RESULT": "DONE"}
 
 SKILLS = ("REVIEW_SCHEDULE", "WRAP_UP")
 
@@ -102,9 +103,8 @@ def valid_actions(obs: dict[str, Any]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     if obs["groups"]:
         out["SUBMIT_BUNDLES"] = {}
-    # DONE은 지금 사실에서 낸 묶음안이 있을 때만 유효하다(사실 조건)
-    ready = any(p["current"] for p in obs["bundle_plans"])
-    out["RETURN_RESULT"] = {"status": ["DONE", "BLOCKED"] if ready else ["BLOCKED"]}
+    # 마치는 것은 SUBMIT_BUNDLES로 한다. 스스로 끝내는 결과는 막힘뿐이다
+    out["RETURN_RESULT"] = {"status": ["BLOCKED"]}
     return out
 
 

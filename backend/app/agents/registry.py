@@ -65,7 +65,7 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=schedule_review_prompt,
         observer=schedule_review_observer,
         executor=ScheduleReviewExecutor,
-        exec_contract_version="schedule-review-c1",  # 기록만. 묶음안까지 (AG-36)
+        exec_contract_version="schedule-review-c2",  # 기록만. 묶음안 내기가 끝내는 행동 (AG-36)
     ),
     intake_spec.AGENT_TYPE: AgentBinding(
         spec=intake_spec.SPEC,
