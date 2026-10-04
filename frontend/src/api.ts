@@ -7,6 +7,7 @@ import type {
   Meta,
   MoveCheck,
   MoveOptions,
+  RemoveCheck,
   Scenario,
   SiteEntry,
   SiteState,
@@ -71,6 +72,11 @@ export function fetchMoveRange(actor: string, taskId: string): Promise<MoveOptio
 /** 직접 이동: 놓은 자리의 서버 판정. 확정과 같은 판정이다. */
 export function fetchMoveCheck(actor: string, taskId: string, start: number): Promise<MoveCheck> {
   return getJson<MoveCheck>(`/tasks/${encodeURIComponent(taskId)}/move-check?start=${start}`, actor)
+}
+
+/** 작업 없애기: 없앨 수 있는지와 무효가 될 검토 중인 안(서버 판정). 계획 밖 요청이면 철회 경로다. */
+export function fetchRemoveCheck(actor: string, taskId: string): Promise<RemoveCheck> {
+  return getJson<RemoveCheck>(`/tasks/${encodeURIComponent(taskId)}/remove-check`, actor)
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

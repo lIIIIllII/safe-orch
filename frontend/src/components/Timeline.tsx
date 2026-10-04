@@ -4,13 +4,13 @@
 // 고정은 자물쇠와 굵은 테두리, 희망 영역은 막대 뒤 Unit 색의 옅은 띠, 시간창은 선택했을 때만 가는 괄호다.
 // 담당자는 자기 작업의 Plan 막대를 끌어 시각을 옮긴다(AG-31): 놓을 수 있는 구간은 서버가 계산해 주고 화면은 칠하기만
 // 한다. 놓으면 미리보기와 [확정]/[취소]가 뜬다. 조금만 움직이면 선택이다. 희망 영역은 [희망 영역 그리기]를 누른 뒤
-// 그 작업의 행에서 끈다.
+// 그 작업의 행에서 끈다. 작업 카드의 [작업 없애기]는 서버 확인을 거쳐 [확정]해야 없어진다(계획 밖 요청은 요청 철회).
 // [하루 | 전체] 보기와 날짜 탭. 분당 픽셀로 그려 넘치면 가로 스크롤(시간 머리줄·행 이름 고정). 비근무는 회색 사선,
 // 전체 보기의 밤은 접힌 띠다. 자동으로 날짜를 옮기지 않고, 가로 자동 스크롤은 사용자가 직접 스크롤하기 전까지만 한다.
 
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { fetchMoveCheck, fetchMoveRange } from '../api'
-import type { CandidateView, Conflict, MoveCheck, MoveOptions, SiteState, Task } from '../types'
+import { fetchMoveCheck, fetchMoveRange, fetchRemoveCheck } from '../api'
+import type { CandidateView, Conflict, MoveCheck, MoveOptions, RemoveCheck, SiteState, Task } from '../types'
 import { CANDIDATE_KIND, CANDIDATE_STATUS, GATE, REASON, gateReason } from '../labels'
 import { poolExcessText, ruleName, useEnv, workTypeName } from '../context'
 import {
@@ -157,6 +157,14 @@ export function Timeline(props: Props) {
   // 직접 이동: 끄는 중이거나 놓은 뒤 [확정]을 기다리는 미리보기
   const [move, setMove] = useState<Move | null>(null)
   const dragged = useRef(false)
+  // 작업 없애기: [작업 없애기]를 누른 뒤 [확정]을 기다리는 확인 카드. 판정(check)은 서버가 준다
+  const [removal, setRemoval] = useState<{
+    taskId: string
+    x: number
+    y: number
+    check: RemoveCheck | null
+    error: string | null
+  } | null>(null)
   const [avail, setAvail] = useState(0)
   // 가로 스크롤 위치: 행 이름 열 뒤로 들어간 막대의 라벨을 보이는 쪽으로 민다
   const [scrollX, setScrollX] = useState(0)
@@ -516,6 +524,29 @@ export function Timeline(props: Props) {
     void run('직접 이동', `/tasks/${taskId}/move`, { start })
   }
 
+  // 작업 없애기: 서버에 없앨 수 있는지 묻고 확인 카드를 띄운다. [확정]하면 계획에 있는 작업은 없애기 명령,
+  // 계획 밖 요청은 요청 철회로 보낸다(어느 쪽인지는 서버가 알려 준다).
+  const askRemove = (taskId: string) => {
+    if (!selected) return
+    setRemoval({ taskId, x: selected.x, y: selected.y, check: null, error: null })
+    setSelected(null)
+    setDrawing(null)
+    fetchRemoveCheck(actorId, taskId)
+      .then((check) => setRemoval((cur) => (cur?.taskId === taskId ? { ...cur, check } : cur)))
+      .catch((err: unknown) =>
+        setRemoval((cur) =>
+          cur?.taskId === taskId ? { ...cur, error: err instanceof Error ? err.message : String(err) } : cur,
+        ),
+      )
+  }
+  const confirmRemove = () => {
+    if (!removal?.check) return
+    const { taskId, check } = removal
+    setRemoval(null)
+    if (check.path === 'WITHDRAW') void run(`요청 ${taskId} 철회`, `/tasks/${taskId}/withdraw`, { comment: '' })
+    else void run('작업 없애기', `/tasks/${taskId}/remove`, undefined)
+  }
+
   // 권한 안내(UI-04). 버튼은 역할·담당 관계만 보고 켜고, 판정은 서버가 한다(UI-01).
   const actions = (t: Task): ReactNode => {
     const owner = t.owner_actor_id === actorId
@@ -534,6 +565,11 @@ export function Timeline(props: Props) {
       : t.pin
         ? '고정된 작업은 끌어 옮길 수 없습니다'
         : '막대를 끌어 시각을 옮길 수 있습니다(놓은 뒤 [확정])'
+    const removeDenied = !owner
+      ? '담당자만 자기 작업을 없앨 수 있습니다'
+      : t.pin
+        ? '고정된 작업은 먼저 고정을 풀어야 없앨 수 있습니다'
+        : null
     const off = busy !== null
     return (
       <>
@@ -570,6 +606,14 @@ export function Timeline(props: Props) {
           >
             희망 영역 지우기
           </button>
+          <button
+            className="btn-small"
+            disabled={off || removeDenied !== null}
+            title={removeDenied ?? undefined}
+            onClick={() => askRemove(t.task_id)}
+          >
+            작업 없애기
+          </button>
         </div>
         {drawing === t.task_id && (
           <p className="small tl-card-note">이 작업의 행에서 끌어 바라는 시각 구간을 그리세요.</p>
@@ -577,6 +621,7 @@ export function Timeline(props: Props) {
         {pinDenied && <p className="small muted tl-card-note">고정: {pinDenied}</p>}
         {hopeDenied && <p className="small muted tl-card-note">{hopeDenied}</p>}
         <p className="small muted tl-card-note">{moveNote}</p>
+        {removeDenied && <p className="small muted tl-card-note">없애기: {removeDenied}</p>}
       </>
     )
   }
@@ -905,6 +950,51 @@ export function Timeline(props: Props) {
         >
           {actions(selectedTask)}
         </BarCard>
+      )}
+      {removal && (
+        <div
+          className="tl-card tl-card-fixed"
+          style={{
+            width: 340,
+            left: removal.x + 14 + 340 > window.innerWidth ? removal.x - 14 - 340 : removal.x + 14,
+            top: Math.max(8, Math.min(removal.y + 14, window.innerHeight - 220)),
+          }}
+        >
+          <div className="tl-card-head">
+            <span className="strong">{removal.taskId} 작업 없애기</span>
+          </div>
+          {!removal.check && !removal.error && <p className="small muted tl-card-note">서버가 확인하는 중…</p>}
+          {removal.error && <p className="small tl-card-note">확인하지 못했습니다: {removal.error}</p>}
+          {removal.check && !removal.check.ok && (
+            <p className="small tl-card-note">
+              없앨 수 없습니다: {removal.check.reason_codes.map((c) => ruleLabel(c)).join(', ')}
+            </p>
+          )}
+          {removal.check?.ok && (
+            <>
+              <p className="small tl-card-note">
+                {removal.check.path === 'WITHDRAW'
+                  ? '계획에 없는 요청입니다. 요청을 철회해 계산 대상에서 뺍니다.'
+                  : '이 작업을 계획에서 뺍니다. 자기 작업만 바뀌므로 Supervisor 승인 없이 확정됩니다.'}
+              </p>
+              {removal.check.invalidates.length > 0 && (
+                <p className="small tl-card-note">
+                  확정하면 검토 중인 안 {removal.check.invalidates.length}개가 무효가 됩니다:{' '}
+                  {removal.check.invalidates.map((id) => id.slice(0, 13)).join(', ')}
+                </p>
+              )}
+              <p className="small muted tl-card-note">되돌릴 수 없습니다.</p>
+            </>
+          )}
+          <div className="tl-card-actions">
+            <button className="btn-small" disabled={!removal.check?.ok || busy !== null} onClick={confirmRemove}>
+              확정
+            </button>
+            <button className="btn-small" onClick={() => setRemoval(null)}>
+              취소
+            </button>
+          </div>
+        </div>
       )}
       {move?.dropped && (
         <div

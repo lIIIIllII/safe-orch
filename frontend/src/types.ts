@@ -197,7 +197,7 @@ export interface RejectionView {
 
 export interface CandidateView {
   candidate_id: string
-  kind: 'REPLAN' | 'RECONFIRM' | 'MOVE'
+  kind: 'REPLAN' | 'RECONFIRM' | 'MOVE' | 'REMOVE'
   rejection: RejectionView | null
   run_id: string | null
   /** 이 후보를 만든 Case. 같은 Case의 안끼리 나란히 본다 */
@@ -487,6 +487,15 @@ export interface MoveOptions {
 export interface MoveCheck {
   task_id: string
   start: number
+  ok: boolean
+  reason_codes: string[]
+  invalidates: string[]
+}
+
+/** 작업 없애기의 서버 확인. path: 계획에 있는 작업은 REMOVE, 계획 밖 요청은 WITHDRAW(요청 철회) */
+export interface RemoveCheck {
+  task_id: string
+  path: 'REMOVE' | 'WITHDRAW'
   ok: boolean
   reason_codes: string[]
   invalidates: string[]
