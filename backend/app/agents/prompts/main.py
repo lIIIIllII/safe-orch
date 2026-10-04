@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p16"
+PROMPT_VERSION = "main-p17"
 
 
 def tool_catalog() -> str:
@@ -62,9 +62,11 @@ Hold가 걸린 작업(held_task_ids), 이 묶음의 작업을 바꾸는 검토 �
 뿐이고 재계획을 부르는 단위가 아니다: 재계획은 지금 충돌 전체를 한 번에 푼다.
 - 재계획 사실(replanning): 충돌에 걸린 작업 가운데 사람이 고정하지 않아 움직일 수 있는 \
 작업(movable_task_ids), 아직 계획에 없는 요청 작업(request_task_ids), 이 Case에서 아직 시도하지 않은 \
-탐색 범위(untried_levels), 이 Case에서 열리는 접근(approaches: 일정 넣기 사건이 있으면 세 방향 \
+탐색 범위(untried_levels), 이 Case에서 고를 수 있는 접근(approaches: 일정 넣기 사건이 있으면 세 방향 \
 KEEP_EXISTING 기존 위주·KEEP_ADDED 추가 위주·BALANCED 적절하게, 없으면 MIN_CHANGE 변경 최소·MIN_DELAY \
-덜 옮기기. 접근이 무엇을 먼저 줄일지를 정하고, 세 방향은 모두 작업 전체 범위에서 푼다), \
+덜 옮기기. 접근이 무엇을 먼저 줄일지를 정한다. 해야 할 목록이 아니라 고를 수 있는 값이다: 일정 넣기 \
+사건이 없는 Case에서는 그 가운데 하나를 고르면 되고 모두 부를 필요가 없다. 일정 Case의 세 방향은 모두 \
+부르고, 모두 작업 전체 범위에서 푼다), \
 마지막에 부른 재계획의 결과(last_result: 그때의 접근 approach, 결과 상태, 재계획 Agent가 엮은 길 paths, \
 서버가 계산해 붙인 열 수 있는 것 openers, 그 뒤 관련 사실이 바뀌었는지 facts_changed)가 있다. 길과 열 수 \
 있는 것의 필요한 것마다 need_id가 있다. 재계획은 고정되지 않은 작업을 Unit을 가리지 않고 옮긴다.
@@ -88,7 +90,8 @@ status는 DONE(마쳤다)·BLOCKED(막혔다)이고, 막혔으면 풀 수 있는
 판단이 필요함. 열 수 있는 것(openers)은 서버가 계산해 붙인 필요한 것이고 길로 엮여 있지 않다. by가 SERVER면 서버가 끝낸 Run이다(끝난 재계획이 만든 후보 가운데 살아 있는 것은 candidate_ids에 있다). result가 없으면 시작 조건이 맞지 않아 시작되지 못했다. \
 quoted_summary는 인용이다.
 - 지금 받아들여지는 호출(calls): 서버가 지금 받아들이는 호출의 참조 조합이다. 여기 없는 조합은 거절된다. \
-재계획은 접근(approach)만 넘기고 접근마다 따로이며, 협의(단계 CONSULT)는 Supervisor가 고른 후보만 있다. \
+부를 수 있는 호출이지 불러야 할 호출이 아니다: 여기 있다는 것만으로 부르지 않는다. \
+재계획은 접근(approach)만 넘기고 접근마다 항목이 따로 있으며, 협의(단계 CONSULT)는 Supervisor가 고른 후보만 있다. \
 일정 검토(SCHEDULE_REVIEW)는 참조가 없고, 일정 넣기 사건이 있는 Case에 충돌이 있을 때만 있다. \
 이관의 필요한 것에는 종류와 참조만 쓴다.
 - 이 Case의 열린 일(open_work): 검토 대기 후보, 통지하지 않은 확정, 계획에 들어가지 못한 작업(placed_by는 \
@@ -175,4 +178,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p14": "63d7b630b0dbad00f57a0cb8b2b9f3ddae089c67be1be10a0ab58470c25fbab4",  # 접근 목록은 Case 종류로: 일정 Case의 세 방향, 목적 순서는 접근이 정한다 (AG-28·CV-27)
     "main-p15": "30c8416a34dde4f2d3e0e9afa0f29199a0894874a991a8295b5713bf2b83661e",  # 열린 일에 아직 부르지 않은 방향(DIRECTION_UNTRIED): 세 방향의 안이 모인 뒤에 기다린다 (AG-28)
     "main-p16": "435b524bd53cd93d10c980c83c7f07d5d3d0b9029c9942d40066e9ee8de33d36",  # 일정이 아닌 Case는 재계획을 한 번 부르고 안이 있으면 기다린다 (AG-28)
+    "main-p17": "a19d790cf2ed43d912d8fe7ab703fbab6145ca711a66dc3ad125ea8d7c09e5ab",  # 접근(approaches)은 고를 수 있는 값, 호출(calls)은 부를 수 있는 것이지 불러야 할 것이 아니다 (AG-28)
 }
