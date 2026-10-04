@@ -27,7 +27,7 @@
 | Replanning | 검증 가능한 후보 묶음과 서버 지표 기반 설명 | `RETURN_RESULT` | step 15, Solver 6, 알아보기 계산 (값 미정) |
 | Coordination | 협의 항목 해소, 확정 뒤 통지 | `RETURN_RESULT` | step 12 |
 | Event Response | 신고의 대상·영향·사실 수정안(신고자에게 묻지 않는다) | `RETURN_RESULT` | step 10 |
-| Schedule Review | 일정 Case의 충돌을 정리한 묶음안과 검토 의견 | `RETURN_RESULT` | step 6 |
+| Schedule Review | 일정 Case의 충돌을 정리한 묶음안과 검토 의견 | `SUBMIT_BUNDLES`로 끝난다. 묶음안을 낼 수 없으면 `RETURN_RESULT(BLOCKED)` | step 6 |
 | Site Assistant | 근거 있는 답 | `ANSWER` | 질문당 step 6 |
 
 - LLM 시도 Budget은 모든 Agent가 step × 2다.
@@ -47,7 +47,8 @@
   - 관찰(모두 서버 계산): 충돌 목록, 최소 묶음(작업을 공유하는 충돌), 최소 묶음 사이의 관계(같은 자원: 기준 자원과 적격 대안, 같은 구역·관계 구역, 충돌 시간 사이의 간격), 사람만 풀 수 있는 최소 묶음(걸린 작업이 모두 고정, 작업을 옮겨도 풀리지 않는 충돌), 일정에서 온 작업과 기존 작업의 구분, 이 Case의 거절·이견 사유(인용).
   - 하는 일: 최소 묶음을 합쳐 실제 묶음을 정하고(합치지 않아도 된다) 묶음마다 메모를, 일정 전체에 검토 의견을 쓴다. 배치·점수 계산, 고정·값 고치기, 사람에게 묻기는 하지 않는다(도구가 없다).
   - 서버 검사: 모든 최소 묶음이 정확히 한 번 들어갔는가(빠짐·두 번·없는 ID는 거절). 서버는 묶음을 대신 정하지 않는다.
-  - 결과: 묶음안(불변 기록, 그때의 Snapshot에 묶임, ST-25)과 검토 의견. 메인 관찰에는 묶음안 요약(묶음과 사람만 풀 수 있는 묶음)만 보이고 메모·의견은 넣지 않는다. 묶음별 풀이는 5단계이고, 지금 재계획은 묶음과 관계없이 현장 충돌 전체를 한 번에 푼다. 사람만 풀 수 있는 묶음은 메인이 이관할 때 쓴다(지침).
+  - 끝내기: 묶음안 내기가 끝내는 행동이다. 검사를 통과하면 묶음안을 기록하고 Run이 끝난다(종료 사유 `BUNDLES_SUBMITTED:<묶음안 ID>`). 검사에 걸리면 거절되고 Run은 계속되어 고쳐 낼 수 있다. `RETURN_RESULT`는 묶음안을 낼 수 없을 때(BLOCKED)만 쓴다. 같은 묶음 재제출을 막는 서버 규칙은 없다(낸 뒤에는 Run이 없다).
+  - 결과: 묶음안(불변 기록, 그때의 Snapshot에 묶임, ST-25)과 검토 의견. 메인에게 돌아가는 하위 Run 결과는 그 묶음안의 ID와 묶음 구조다(서버 값). 메인 관찰에는 묶음안 요약(묶음과 사람만 풀 수 있는 묶음)만 보이고 메모·의견은 넣지 않는다. 묶음별 풀이는 5단계이고, 지금 재계획은 묶음과 관계없이 현장 충돌 전체를 한 번에 푼다. 사람만 풀 수 있는 묶음은 메인이 이관할 때 쓴다(지침).
 - 이 Case가 맡은 작업: 작업 준비됨 사건의 작업, 카드에서 값을 고친 작업, 일정 넣기 사건의 작업(새로 들어온 것과 바뀐 것). `CLOSE`의 열린 일(계획에 못 들어간 작업, 이 Case 작업의 충돌)은 이 작업들로 센다.
 
 ## 3. 도구
@@ -93,7 +94,7 @@
 **묶음** (Schedule Review)
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `SUBMIT_BUNDLES(bundles, opinion)` | 최소 묶음을 합친 묶음(묶음마다 최소 묶음 ID 목록과 메모)과 일정 전체의 검토 의견을 낸다. 서버는 모든 최소 묶음이 정확히 한 번 들어갔는지만 검사하고, 통과하면 묶음안으로 기록한다 | C |
+| `SUBMIT_BUNDLES(bundles, opinion)` | 최소 묶음을 합친 묶음(묶음마다 최소 묶음 ID 목록과 메모)과 일정 전체의 검토 의견을 낸다. 서버는 모든 최소 묶음이 정확히 한 번 들어갔는지만 검사하고, 통과하면 묶음안으로 기록하고 Run이 끝난다(메인에게는 그 묶음안이 결과로 간다). 걸리면 거절되고 Run은 계속된다 | D |
 
 **사람** (수신자는 Agent별로 서버가 고정)
 | 도구 | 하는 일 | 흐름 |
@@ -157,7 +158,7 @@
 | Replanning | 조회, 알아보기 전부, `SOLVE`, `SUBMIT_CANDIDATES`, `RETURN_RESULT`. 사람 도구 없음 |
 | Coordination | 조회, `ANALYZE_IMPACT`, `ASK_OWNER`, `WAIT_FOR_REPLIES`, `SEND_NOTICE`, `RETURN_RESULT` |
 | Event Response | 조회, `ANALYZE_IMPACT`, `PREVIEW`, `PROPOSE_FACT_UPDATE`, `RETURN_RESULT`. 사람에게 묻는 도구 없음 |
-| Schedule Review | `SUBMIT_BUNDLES`, `RETURN_RESULT`. 조회·계산·사람 도구 없음(필요한 사실은 관찰로 준다) |
+| Schedule Review | `SUBMIT_BUNDLES`(끝내는 행동), `RETURN_RESULT`(BLOCKED만). 조회·계산·사람 도구 없음(필요한 사실은 관찰로 준다) |
 | Site Assistant | 조회, `COMPARE_CANDIDATES`, `ANSWER` |
 
 ## 6. 현재 코드와의 대응 (옮긴 뒤 이 절은 지운다)
