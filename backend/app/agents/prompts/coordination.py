@@ -18,7 +18,7 @@ from app.agents.specs import coordination as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "coordination-p13"
+PROMPT_VERSION = "coordination-p14"
 
 
 def tool_catalog() -> str:
@@ -139,4 +139,5 @@ PROMPT_FINGERPRINTS = {
     "coordination-p11": "59d37970afee4f2a33f931de06b1b19cd49917d141c4eba83a90591837fee557",  # 결과의 OTHER_UNIT 삭제 (AG-24)
     "coordination-p12": "b723d6a2e1ee1bf60d54742392b96d9e125aefe3af38025d6d2e41396cae039d",  # 협의 항목 상태에서 COVERED 삭제: 항목은 기준에서 바뀐 작업뿐이다 (AG-33)
     "coordination-p13": "5228b4cde6e9d4f1e52ded9fc0a7486845fc5e23acd7e2f4c4d126b0590cee6e",  # 변경 요청은 담당자 한 명에게 한 통: SEND_CHANGE_REQUEST(actor_id), owners (ST-26)
+    "coordination-p14": "87f305091cef0f4d6f1a3589d09aeb8f3c7fcee7e82b58281fd9c02fd8382451",  # 목표 문장에서 사전 확인을 뺐다 (AG-34)
 }
