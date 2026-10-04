@@ -5,7 +5,7 @@
 Pack 그대로의 R0에 화기 작업 둘(S1·S2)을 일정으로 넣은 장면에서 본다: 도장 P·W와 하나씩 부딪힌다.
 """
 
-from conftest import add_run, take_snapshot
+from conftest import add_run, choose, reply_request, take_snapshot
 from scripted import (
     Router,
     ScriptedChatModel,
@@ -19,15 +19,19 @@ from scripted import (
 )
 from test_schedule_review import _groups, _import_two_conflicts, _runs, _steps, _submit
 
-from app.agents import runtime
+from app.agents import casefacts, runtime
 from app.agents.types import APPROACHES, DIRECTIONS, approaches_for, objective_of, scope_of
 from app.api.state import build_state, candidate_view
+from app.commands.approval import RejectRequest, reject_candidate
 from app.coordinator.dispatcher import run_until_idle
+from app.domain.ids import new_id
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
 from app.solver.candidate import build_candidate
 from app.solver.search_spec import build_search_spec
 from app.store import db
+from app.store.repos.consultations import list_review_queue
+from app.store.repos.records import list_validations
 
 
 def _untried(observation):
@@ -220,6 +224,73 @@ def test_untried_directions_are_dropped_when_one_direction_is_blocked(seeded_rea
         "BALANCED",
     }
     assert (main.status, last["guard"]["verdict"]) == ("ESCALATED", "ACCEPTED")
+
+
+def _three_directions_called(pack):
+    """일정을 넣고 메인이 세 방향을 모두 부른 뒤 기다리는 데까지. 메인 Run."""
+    _import_two_conflicts(pack)
+    router = Router(
+        main=[main_call("REPLANNING", approach=a) for a in DIRECTIONS] + [main_wait()],
+        replanning=[solve("L2"), done()] * 3,
+        auto_done=False,
+    )
+    run_until_idle(pack, model_factory=router.factory())
+    [main] = _runs("MAIN")
+    return main
+
+
+def _open_untried(pack, main):
+    """지금 메인이 보게 될 열린 일의 미시도 방향 (서버 사실)."""
+    with db.read() as conn:
+        return _untried(casefacts.build(conn, pack, main))
+
+
+def _open_requests():
+    with db.read() as conn:
+        return conn.execute(
+            "SELECT DISTINCT request_group_id, to_actor_id FROM message"
+            " WHERE type = 'CHANGE_REQUEST' AND status = 'OPEN' ORDER BY rowid"
+        ).fetchall()
+
+
+def test_choosing_and_accepting_do_not_reopen_directions(seeded_real, main_on):
+    """고르기와 담당자 수락은 재계획의 입력이 아니다: 세 방향을 부른 뒤에는 다시 열린 일에 오르지 않는다."""
+    pack = seeded_real
+    main = _three_directions_called(pack)
+    assert _open_untried(pack, main) == []
+    choose(pack)
+    assert _open_untried(pack, main) == []
+    run_until_idle(pack, model_factory=Router().factory())  # 메인이 고른 안의 협의를 부른다
+    requests = _open_requests()
+    assert requests
+    for group, owner in requests:
+        assert reply_request(pack, owner, group).status == "APPLIED"
+    assert _open_untried(pack, main) == []
+
+
+def test_objection_reopens_every_direction(seeded_real, main_on):
+    """담당자 이견은 재계획의 입력이다(CV-26): 사유를 반영한 새 안을 내도록 세 방향이 다시 오른다."""
+    pack = seeded_real
+    main = _three_directions_called(pack)
+    choose(pack)
+    run_until_idle(pack, model_factory=Router().factory())
+    group, owner = _open_requests()[0]
+    assert reply_request(pack, owner, group, "DECLINE", "그 시각은 안 됩니다").status == "APPLIED"
+    assert _open_untried(pack, main) == list(DIRECTIONS)
+
+
+def test_rejection_reopens_every_direction(seeded_real, main_on):
+    """Supervisor 거절은 재계획의 입력이다(CV-26): 세 방향이 다시 오른다."""
+    pack = seeded_real
+    main = _three_directions_called(pack)
+    with db.read() as conn:
+        cid = list_review_queue(conn, pack.site_id)[0]
+        v = list_validations(conn, pack.site_id, cid)[-1]
+    body = RejectRequest(
+        candidate_id=cid, validation_id=v.validation_id, reason_code="OTHER", comment="다시"
+    )
+    assert reject_candidate(pack, "supervisor", new_id("key"), body).status == "APPLIED"
+    assert _open_untried(pack, main) == list(DIRECTIONS)
 
 
 def test_first_stage_not_optimal_is_shown_as_unconfirmed(seeded_real, monkeypatch):

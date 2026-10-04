@@ -416,20 +416,48 @@ def untried_levels(
     return out
 
 
-def untried_directions(conn: sqlite3.Connection, site_id: str, approaches: Any) -> list[str]:
-    """지금 사실에서 아직 부르지 않은 방향 (일정 Case). 부른 뒤 관련 사실이 바뀌었으면 다시 미시도다.
+def untried_directions(
+    conn: sqlite3.Connection, site_id: str, case_id: str, approaches: Any
+) -> list[str]:
+    """아직 부르지 않은 방향 (일정 Case): 재계획의 입력이 되는 사실 위에서 그 방향의 계산이 아직 없다.
 
-    방향은 해의 유무를 바꾸지 않는다: 지금 사실에서 부른 방향이 하나라도 막혔으면(해 없음) 나머지 방향을
+    재계획의 입력은 현장·계획 버전과 이 Case에 쌓인 거절·이견 사유다(CV-26). 그 방향의 마지막 재계획
+    Run이 본 입력이 지금과 같으면 이미 부른 것이고, 거절·이견·버전 변경 뒤에는 다시 미시도다. 고르기·
+    수락·수용·통지는 재계획의 입력이 아니므로 방향을 다시 올리지 않는다. 호출 재사용 판정(같은 사실의
+    재호출 거절, AG-24)과는 따로 둔 판정이다.
+    방향은 해의 유무를 바꾸지 않는다: 지금 입력에서 부른 방향이 하나라도 막혔으면(해 없음) 나머지 방향을
     올리지 않는다(메인은 부르지 않고 이관한다, AG-28)."""
+    site = get_site(conn, site_id)
+    assert site is not None
+    now = (
+        site.context_version,
+        site.plan_revision,
+        len(case_rejection_reasons(conn, case_id)),
+        len(case_objections(conn, site_id, case_id)),
+    )
     untried = []
     for approach in approaches:
-        key = call_key("REPLANNING", {"approach": approach})
-        if not same_facts(conn, site_id, key):
+        row = conn.execute(
+            "SELECT run_id FROM agent_run WHERE site_id = ? AND case_id = ?"
+            " AND json_extract(input_ref, '$.call_key') = ?"
+            " AND status NOT IN ('RUNNING', 'WAITING_HUMAN', 'ERROR', 'CANCELLED')"
+            " ORDER BY rowid DESC LIMIT 1",
+            (site_id, case_id, call_key("REPLANNING", {"approach": approach})),
+        ).fetchone()
+        run = None if row is None else get_run(conn, row[0])
+        steps = [] if run is None else [s for s in list_steps(conn, run.run_id) if s["observation"]]
+        seen = None
+        if steps:
+            obs = steps[-1]["observation"]
+            seen = (
+                obs["versions"]["context_version"],
+                obs["versions"]["plan_revision"],
+                len(obs["rejections"]),
+                len(obs["objections"]),
+            )
+        if seen != now:
             untried.append(approach)
-            continue
-        last = last_result(conn, site_id, key)
-        run = None if last is None else get_run(conn, last["run_id"])
-        if run is not None and run_result(conn, run)["status"] != "DONE":
+        elif run is not None and run_result(conn, run)["status"] != "DONE":
             return []
     return untried
 
@@ -621,7 +649,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
     if schedule_case and groups and movable:
         open_work += [
             {"kind": "DIRECTION_UNTRIED", "approach": a}
-            for a in untried_directions(conn, site_id, approaches)
+            for a in untried_directions(conn, site_id, case_id, approaches)
         ]
 
     return {
