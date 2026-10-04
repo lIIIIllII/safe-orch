@@ -7,7 +7,6 @@ import type { AgentStep, RunSummary, SiteState } from '../types'
 import {
   ACTION_NAME,
   AGENT_TYPE,
-  AXIS,
   EXCLUDE_REASON,
   RESULT_KIND,
   RUN_STATUS,
@@ -192,10 +191,6 @@ function splitSummary(text: string): { why: string; next: string | null } {
   return m ? { why: m[1], next: m[2] } : { why: text, next: null }
 }
 
-function isRecord(x: unknown): x is Record<string, unknown> {
-  return typeof x === 'object' && x !== null && !Array.isArray(x)
-}
-
 type Why = { reason: string; attribute?: string }
 type Rid = { resource_id: string; reasons?: Why[] }
 
@@ -255,33 +250,6 @@ function ListResult({ tr }: { tr: Record<string, unknown> }) {
         </tr>
       </tbody>
     </table>
-  )
-}
-
-/** 담당자 확인 요청: 메시지와 서버 문구. 모델의 question은 모델 블록으로 따로 둔다. */
-function AskResult({ tr, args }: { tr: Record<string, unknown>; args: Record<string, unknown> }) {
-  // 사전 확인(ASK_OWNER)은 need 하나를 묻는다. 옛 기록(ASK_TASK_OWNER)은 작업·축·허용 값을 인자로 가졌다
-  const values = Array.isArray(args.allowed_values) ? (args.allowed_values as string[]) : []
-  const text = typeof args.message === 'string' ? args.message : args.question
-  return (
-    <>
-      <p>
-        메시지 <code>{String(tr.message_id)}</code> → {String(tr.to_actor_id)}
-        {typeof args.task_id === 'string' && (
-          <>
-            {' '}
-            · 작업 {args.task_id} · {AXIS[String(args.axis)] ?? String(args.axis)} 축 · 허용 값 {values.join(', ')}
-          </>
-        )}
-      </p>
-      <p className="ask-body">서버 문구: {String(tr.body)}</p>
-      {typeof text === 'string' && (
-        <div className="model-block">
-          <div className="block-label">Agent 설명(모델 작성)</div>
-          <p>{text}</p>
-        </div>
-      )}
-    </>
   )
 }
 
@@ -375,18 +343,6 @@ function StepCard({ s }: { s: AgentStep }) {
           )}
           {(name === 'LIST_ASSIGNABLE_RESOURCES' || name === 'LOOKUP_RESOURCE') && 'assignable' in tr && (
             <ListResult tr={tr} />
-          )}
-          {(name === 'ASK_OWNER' || name === 'ASK_TASK_OWNER') && 'message_id' in tr && (
-            <AskResult tr={tr} args={args} />
-          )}
-          {name === 'TRY_ALTERNATIVE_RESOURCE' && isRecord(tr.try_resources) && (
-            <p>
-              대체 자원 시도{' '}
-              {Object.entries(tr.try_resources)
-                .map(([t, rs]) => `${t} → ${(rs as string[]).join(', ')}`)
-                .join(' · ')}{' '}
-              <span className="muted small">(범위 L0 + 대체 자원)</span>
-            </p>
           )}
           {'candidate_id' in tr && (
             <p>

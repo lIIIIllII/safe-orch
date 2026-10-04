@@ -8,6 +8,7 @@ import type {
   MoveCheck,
   MoveOptions,
   RemoveCheck,
+  ResourceCheck,
   Scenario,
   SiteEntry,
   SiteState,
@@ -77,6 +78,12 @@ export function fetchMoveCheck(actor: string, taskId: string, start: number): Pr
 /** 작업 없애기: 없앨 수 있는지와 무효가 될 검토 중인 안(서버 판정). 계획 밖 요청이면 철회 경로다. */
 export function fetchRemoveCheck(actor: string, taskId: string): Promise<RemoveCheck> {
   return getJson<RemoveCheck>(`/tasks/${encodeURIComponent(taskId)}/remove-check`, actor)
+}
+
+/** 작업 카드의 자원 바꾸기: 그 자원으로 바꿀 수 있는지와 무효가 될 검토 중인 안(서버 판정). */
+export function fetchResourceCheck(actor: string, taskId: string, resourceId: string): Promise<ResourceCheck> {
+  const id = encodeURIComponent(taskId)
+  return getJson<ResourceCheck>(`/tasks/${id}/resource-check?resource_id=${encodeURIComponent(resourceId)}`, actor)
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

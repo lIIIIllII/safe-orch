@@ -31,7 +31,9 @@ export const REASON: Record<string, string> = {
   TASK_NOT_FOUND: '대상 작업 없음',
   // 고정·희망 영역
   ALREADY_PINNED: '이미 고정된 작업',
-  MOVE_NOT_VALID: '그 자리로 옮길 수 없음',
+  MOVE_NOT_VALID: '그 자리(또는 그 자원)로 바꿀 수 없음',
+  MOVE_TIME_AND_RESOURCE: '직접 이동은 시각만 또는 자원만 바꿈',
+  RESOURCE_NOT_FOUND: '없는 자원',
   REMOVE_NOT_VALID: '이 작업을 없앨 수 없음',
   REMOVE_NOT_OWNER: '없앤 사람이 담당자가 아님',
   REMOVE_NOT_SINGLE_TASK: '없애기는 작업 하나만 뺌',
@@ -113,20 +115,12 @@ export const REASON: Record<string, string> = {
   NEW_CHANGE_BEFORE_WAIT: '대기 직전 새 변화, 다시 관찰',
   RUN_INACTIVE: 'Run 종료됨',
   NO_ACTING_TASKS: '움직일 수 있는 작업 없음',
-  RESOURCE_AXIS_NOT_ALLOWED: '자원 축 이동 불가',
   TIME_AXIS_NOT_ALLOWED: '시간 축 이동 불가',
   // 메인 도구의 거절 사유
   CHILD_RUN_OPEN: '부른 하위 Run이 아직 열려 있음',
   UNIT_NOT_IN_GROUP: '그 충돌 그룹에 작업이 없는 Unit',
   UNIT_HAS_NO_MOVABLE_TASK: '그 Unit에 움직일 수 있는 작업이 없음',
   // 사전 확인(담당자에게 대체 자원 허용을 묻기)의 거절 사유
-  NEED_NOT_FOUND: '지금 결과에 없는 필요한 것',
-  NOT_OWNER_CONSENT: '담당자 확인이 아닌 필요한 것',
-  TIME_AXIS_NOT_ASKABLE: '시간 축은 사전 확인 대상이 아님',
-  NO_VALUES: '물을 자원 값이 없음',
-  VALUE_DECLINED: '담당자가 이미 거절한 값',
-  ALREADY_CONSENTED: '이미 동의 범위에 있음',
-  ALREADY_ASKED: '같은 작업에 답을 기다리는 질문이 있음',
   GROUP_NOT_FOUND: '지금 없는 충돌 그룹',
   SAME_FACTS: '마지막 결과 뒤로 관련 사실이 바뀌지 않음',
   NEW_EVENT: '아직 보지 않은 사건이 있음',
@@ -355,9 +349,6 @@ export const ACTION_NAME: Record<string, string> = {
   SOLVE_WITH_SCOPE: '탐색 범위 지정 Solver 실행',
   RETURN_RESULT: '결과 돌려주기',
   LIST_ASSIGNABLE_RESOURCES: '사용 가능 자원 조회',
-  TRY_ALTERNATIVE_RESOURCE: '대체 자원 시도',
-  ASK_TASK_OWNER: '작업 담당자에게 확인 요청',
-  ASK_OWNER: '작업 담당자에게 사전 확인',
 }
 
 /** 메인이 재계획에 준 접근(무엇을 우선할지) */

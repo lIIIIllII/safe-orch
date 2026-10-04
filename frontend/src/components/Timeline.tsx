@@ -205,6 +205,7 @@ export function Timeline(props: Props) {
 
   const bars: Bar[] = []
   const inPlan = new Set(plan.assignments.map((a) => a.task_id))
+  const placedBy = new Map(plan.assignments.map((a) => [a.task_id, { resourceId: a.resource_id }]))
   for (const a of plan.assignments) {
     const t = taskMap.get(a.task_id)
     if (!t) continue
@@ -623,7 +624,16 @@ export function Timeline(props: Props) {
         {hopeDenied && <p className="small muted tl-card-note">{hopeDenied}</p>}
         <p className="small muted tl-card-note">{moveNote}</p>
         {removeDenied && <p className="small muted tl-card-note">없애기: {removeDenied}</p>}
-        <TaskEdit key={`${t.task_id}:${t.revision}`} task={t} state={state} owner={owner} busy={busy} run={run} />
+        <TaskEdit
+          key={`${t.task_id}:${t.revision}:${plan.plan_revision}`}
+          task={t}
+          state={state}
+          owner={owner}
+          actorId={actorId}
+          planned={placedBy.get(t.task_id)}
+          busy={busy}
+          run={run}
+        />
       </>
     )
   }

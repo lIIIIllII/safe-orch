@@ -104,8 +104,6 @@ export interface Task {
   default_demands: Demand[]
   /** 작업 값 수요. 기본 수요보다 큰 것만 반영된다 */
   pool_demands: Demand[]
-  /** 자원 축이 담당자 확인으로 열렸는가. 시각이 움직이는지는 고정 여부로 정한다 */
-  movable: { resource: boolean }
   /** 사람이 건 고정(누가·언제). 없으면 고정되지 않았다 */
   pin: { pin_id: string; pinned_by: string; by_role: 'OWNER' | 'SUPERVISOR'; pinned_at: string } | null
   /** 담당자가 그린 희망 영역 [start, end) (분). 서버는 강제하지 않는다 */
@@ -485,6 +483,16 @@ export interface MoveCheck {
 export interface RemoveCheck {
   task_id: string
   path: 'REMOVE' | 'WITHDRAW'
+  ok: boolean
+  reason_codes: string[]
+  invalidates: string[]
+}
+
+/** 작업 카드의 자원 바꾸기 확인. path: 계획에 있는 작업은 MOVE(바로 확정), 계획 밖 요청은 EDIT(요청 자원 고치기) */
+export interface ResourceCheck {
+  task_id: string
+  resource_id: string
+  path: 'MOVE' | 'EDIT'
   ok: boolean
   reason_codes: string[]
   invalidates: string[]

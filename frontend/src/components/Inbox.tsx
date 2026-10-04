@@ -4,7 +4,6 @@
 import { useState } from 'react'
 import type { InboxItem, SiteState } from '../types'
 import {
-  AXIS,
   DECISION,
   DECISION_BY_TYPE,
   FACT_FIELD,
@@ -78,20 +77,6 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
       )}
       <table className="tbl small">
         <tbody>
-          {kind === 'QUESTION' && (
-            <>
-              <tr>
-                <th>작업</th>
-                <td>
-                  {m.task_id ?? '—'} · {m.axis ? (AXIS[m.axis] ?? m.axis) : '—'} 축
-                </td>
-              </tr>
-              <tr>
-                <th>허용 값</th>
-                <td>{m.allowed_values.join(', ') || '—'}</td>
-              </tr>
-            </>
-          )}
           {m.type === 'CHANGE_REQUEST' && (
             <tr>
               <th>후보</th>
