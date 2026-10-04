@@ -103,9 +103,12 @@ def _c01(
 def _c02(facts: SnapshotContent, candidate: Candidate) -> list[Violation]:
     counts = Counter(a.task_id for a in candidate.assignments)
     ready = {t.task_id for t in facts.tasks}
-    if candidate.kind == "MOVE":
-        # 직접 이동은 현재 Plan의 작업만 담는다. Plan 밖 요청은 넣지 않는다 (AG-31)
+    if candidate.kind in ("MOVE", "REMOVE"):
+        # 직접 이동·없애기는 현재 Plan의 작업만 담는다. Plan 밖 요청은 넣지 않는다 (AG-31)
         ready &= {a.task_id for a in facts.plan.assignments}
+    if candidate.kind == "REMOVE" and len(ready - set(counts)) == 1:
+        # 없애기는 작업 하나가 빠진 배치다. 몇 개가 빠졌는지는 C06이 본다
+        ready &= set(counts)
     out: list[Violation] = []
     out += [("C02", (t,), "TASK_MISSING") for t in sorted(ready - set(counts))]
     out += [("C02", (t,), "TASK_UNKNOWN") for t in sorted(set(counts) - ready)]
@@ -133,8 +136,20 @@ def _c06(
         out += [
             ("C06", (tid,), "MOVE_NOT_OWNER")
             for tid in changed
-            if tasks[tid].owner_actor_id != candidate.moved_by
+            if tasks[tid].owner_actor_id != candidate.made_by
         ]
+    if candidate.kind == "REMOVE":
+        # 빠진 작업은 하나이고, 없앤 사람이 그 작업의 담당자이며, 고정된 작업이 아니다 (AG-31)
+        in_plan = {a.task_id for a in facts.plan.assignments if a.task_id in tasks}
+        removed = sorted(in_plan - set(usable))
+        if len(removed) != 1:
+            out.append(("C06", tuple(removed), "REMOVE_NOT_SINGLE_TASK"))
+        out += [
+            ("C06", (tid,), "REMOVE_NOT_OWNER")
+            for tid in removed
+            if tasks[tid].owner_actor_id != candidate.made_by
+        ]
+        out += [("C06", (tid,), "TASK_PINNED") for tid in removed if tid in facts.pinned_task_ids()]
     for tid, a in usable.items():
         ref = base[tid]
         ax = axes.get(tid, TIME_ONLY if moved else NOT_MOVABLE)

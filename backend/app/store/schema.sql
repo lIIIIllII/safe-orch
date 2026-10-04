@@ -107,7 +107,8 @@ CREATE TABLE task (
     predecessors           TEXT NOT NULL CHECK (json_valid(predecessors)),
     movable                TEXT NOT NULL CHECK (json_valid(movable)),
     fields                 TEXT NOT NULL CHECK (json_valid(fields)),
-    lifecycle              TEXT NOT NULL CHECK (lifecycle IN ('DRAFT', 'NEEDS_INFO', 'READY', 'QUEUED')),
+    lifecycle              TEXT NOT NULL CHECK (lifecycle IN ('DRAFT', 'NEEDS_INFO', 'READY', 'QUEUED',
+                                                               'CANCELLED')),
     PRIMARY KEY (site_id, task_id, revision),
     CHECK (earliest_start <= latest_start),
     CHECK (earliest_start + duration <= latest_end),
@@ -169,13 +170,13 @@ CREATE TABLE candidate (
     pack_hash          TEXT NOT NULL,
     assignments        TEXT NOT NULL CHECK (json_valid(assignments)),
     candidate_hash     TEXT NOT NULL,
-    kind               TEXT NOT NULL CHECK (kind IN ('REPLAN', 'RECONFIRM', 'MOVE')),
-    -- MOVE: 담당자가 직접 옮긴 것. 옮긴 사람을 적는다
-    moved_by           TEXT,
+    kind               TEXT NOT NULL CHECK (kind IN ('REPLAN', 'RECONFIRM', 'MOVE', 'REMOVE')),
+    -- MOVE·REMOVE: 담당자가 직접 옮기거나 없앤 것. 그 사람을 적는다
+    made_by           TEXT,
     CHECK (kind <> 'REPLAN'
            OR (search_spec_id IS NOT NULL AND search_spec_hash IS NOT NULL
                AND solver_result_id IS NOT NULL)),
-    CHECK ((kind = 'MOVE') = (moved_by IS NOT NULL))
+    CHECK ((kind IN ('MOVE', 'REMOVE')) = (made_by IS NOT NULL))
 );
 
 -- STALE은 저장하지 않는다(조회 시 계산).
@@ -338,7 +339,8 @@ CREATE TABLE case_event (
                                                           'CHILD_RUN_ENDED',
                                                           'TASK_REQUEST_WITHDRAWN',
                                                           'TASK_PINNED', 'TASK_UNPINNED',
-                                                          'CANDIDATE_CHOSEN', 'TASK_MOVED')),
+                                                          'CANDIDATE_CHOSEN', 'TASK_MOVED',
+                                                          'TASK_REMOVED')),
     ref                     TEXT NOT NULL CHECK (json_valid(ref)),
     case_id                 TEXT NOT NULL,
     dedupe_key              TEXT NOT NULL,

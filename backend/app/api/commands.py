@@ -34,7 +34,7 @@ from app.commands.messages import (
     discard_proposal,
     reply_message,
 )
-from app.commands.moves import MoveRequest, move_task
+from app.commands.moves import MoveRequest, RemoveRequest, move_task, remove_task
 from app.commands.pins import (
     PreferredWindow,
     TaskRef,
@@ -167,6 +167,12 @@ def post_move(
     """담당자의 직접 이동: 자기 작업의 시각을 옮기고 바로 확정한다 (AG-31)."""
     req = MoveRequest(task_id=task_id, **body.model_dump())
     return respond(move_task(pack, actor.actor_id, key, req))
+
+
+@router.post("/tasks/{task_id}/remove")
+def post_remove(task_id: str, pack: PackDep, actor: ActorDep, key: KeyDep) -> JSONResponse:
+    """담당자가 계획에 있는 자기 작업을 없애고 바로 확정한다 (AG-31). 계획 밖 요청은 withdraw."""
+    return respond(remove_task(pack, actor.actor_id, key, RemoveRequest(task_id=task_id)))
 
 
 @router.post("/candidates/{candidate_id}/approve")

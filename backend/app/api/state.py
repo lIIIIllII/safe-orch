@@ -11,7 +11,7 @@ from fastapi import APIRouter
 
 from app.agents import casefacts
 from app.api.deps import ActorDep, ApiError, PackDep, check_site
-from app.commands.moves import move_check, move_range
+from app.commands.moves import move_check, move_range, remove_check
 from app.domain.calendar import work_delay
 from app.domain.canonical import canonical_hash
 from app.domain.models import AgentRun, Assignment, Plan, Snapshot, SnapshotContent, Task
@@ -453,6 +453,13 @@ def get_move_check(task_id: str, start: int, pack: PackDep, actor: ActorDep) -> 
     """놓은 자리의 판정. 확정과 같은 판정이다 (CV-28)."""
     with db.read_tx() as conn:
         return move_check(conn, pack, actor.actor_id, task_id, start)
+
+
+@router.get("/tasks/{task_id}/remove-check")
+def get_remove_check(task_id: str, pack: PackDep, actor: ActorDep) -> dict[str, Any]:
+    """[작업 없애기]의 확인: 없앨 수 있는지와 무효가 될 검토 중인 안 (AG-31)."""
+    with db.read_tx() as conn:
+        return remove_check(conn, pack, actor.actor_id, task_id)
 
 
 @router.get("/runs/{run_id}")

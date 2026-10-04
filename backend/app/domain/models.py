@@ -11,10 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_valid
 Role = Literal["UNIT_PLANNER", "REPORTER", "SUPERVISOR"]
 Relation = Literal["SAME", "ADJACENT", "BELOW"]
 StoredRelation = Literal["ADJACENT", "BELOW"]
-Lifecycle = Literal["DRAFT", "NEEDS_INFO", "READY", "QUEUED"]  # QUEUED: 열린 Case 중 접수
+# QUEUED: 열린 Case 중 접수. CANCELLED: 담당자가 계획에 있던 작업을 없앰 (AG-31)
+Lifecycle = Literal["DRAFT", "NEEDS_INFO", "READY", "QUEUED", "CANCELLED"]
 FieldStatus = Literal["PROPOSED", "CONFIRMED"]
-# MOVE: 담당자가 타임라인에서 자기 작업을 직접 옮긴 것 (AG-31)
-CandidateKind = Literal["REPLAN", "RECONFIRM", "MOVE"]
+# MOVE·REMOVE: 담당자가 타임라인에서 자기 작업을 직접 옮기거나 없앤 것 (AG-31)
+CandidateKind = Literal["REPLAN", "RECONFIRM", "MOVE", "REMOVE"]
 ValidationStatus = Literal["PASS", "FAIL", "INCOMPLETE"]
 ScopeLevel = Literal["L0", "L1", "L2"]
 Axis = Literal["TIME", "RESOURCE"]
@@ -480,7 +481,7 @@ class Candidate(Frozen):
     assignments: tuple[Assignment, ...]
     candidate_hash: str
     kind: CandidateKind
-    moved_by: str | None = None  # MOVE 후보를 만든 사람
+    made_by: str | None = None  # MOVE·REMOVE 후보를 만든 사람
 
 
 class ValidationCheck(Frozen):

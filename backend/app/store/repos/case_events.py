@@ -23,6 +23,7 @@ KINDS = (
     "TASK_UNPINNED",
     "CANDIDATE_CHOSEN",
     "TASK_MOVED",
+    "TASK_REMOVED",
 )
 
 
