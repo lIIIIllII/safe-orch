@@ -92,8 +92,10 @@ demo_events:
 demo_rejections:
   - { label: C 이동 불가, reason_code: TIME_WINDOW_UNACCEPTABLE, target_task_ids: [C], comment: "작업발판 연계 공정 확정" }
 
-# 자연어 작업 요청 시연값 (Work Intake). 명확한 요청은 new_task A와 같은 값이다.
-# answer는 모호한 요청에서 확인 질문을 받으면 요청자가 답하는 문장이다(테스트의 사람 역할).
+# 자연어 작업 요청 시연값 (Work Intake). 명확한 요청은 시각을 빼면 new_task A와 같은 값이다: 문장의 시각은
+# 가능 범위(시간창)가 아니라 희망 영역이 되고, 그 작업의 시간창은 Horizon 전체다. Intake는 요청자에게 묻지
+# 않는다. 모호한 요청은 문장에 없는 값(구역·자원)을 Intake가 스스로 정한다.
+# answer는 Intake가 요청자에게 되묻던 때의 답 문장이다. 지금은 쓰이지 않는다.
 demo_intakes:
   - label: 자연어 요청(명확)
     requester: planner_a

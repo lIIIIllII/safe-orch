@@ -396,8 +396,6 @@ export interface InboxItem {
   proposal_type: string | null
   proposal_status: string | null
   task_id: string | null
-  axis: string | null
-  allowed_values: string[]
   /** 변경 요청이 묶인 후보 (CHANGE_REQUEST) */
   candidate_id: string | null
   /** 사실 수정안 (CONFIRMATION + FACT_UPDATE). 값은 Horizon 원점 기준 분 */

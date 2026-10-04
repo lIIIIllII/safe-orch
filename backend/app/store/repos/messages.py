@@ -180,8 +180,6 @@ def list_inbox(conn: sqlite3.Connection, site_id: str, actor_id: str) -> list[di
             {
                 **r,
                 "task_id": r.pop("target_task_id"),
-                "axis": payload.get("axis"),
-                "allowed_values": payload.get("allowed_values", []),
                 # 사실 수정(FACT_UPDATE)의 필드·옛 값·새 값
                 "fact": None
                 if "field" not in payload

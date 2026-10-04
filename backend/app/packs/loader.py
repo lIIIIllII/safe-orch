@@ -122,7 +122,7 @@ class DemoIntake(Frozen):
     requester: str
     task_id: str = Field(min_length=1)
     text: str = Field(min_length=1)
-    answer: str = ""  # 확인 질문을 받으면 요청자가 답하는 문장(사람 역할)
+    answer: str = ""  # Intake가 되묻던 때의 답 문장. 지금은 묻지 않아 쓰이지 않는다 (AG-32)
 
 
 class LoadedPack(Frozen):
