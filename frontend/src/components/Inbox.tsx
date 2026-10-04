@@ -25,10 +25,176 @@ export function Inbox({ state, busy, run }: Props) {
   if (state.inbox.length === 0) return <p className="muted">받은 요청이 없습니다.</p>
   return (
     <div className="inbox">
-      {state.inbox.map((m) => (
-        <InboxCard key={m.message_id} m={m} busy={busy} run={run} />
-      ))}
+      {state.inbox.map((m) =>
+        m.request_group_id !== null ? (
+          <RequestCard key={m.request_group_id} m={m} busy={busy} run={run} />
+        ) : (
+          <InboxCard key={m.message_id} m={m} busy={busy} run={run} />
+        ),
+      )}
     </div>
+  )
+}
+
+type Answer = { decision: 'ACCEPT' | 'DECLINE' | null; comment: string }
+
+/** 변경 요청 한 통: 담당자 한 명에게 온 항목 전부. 항목마다 수락·이견을 정해 한 번에 보낸다.
+ *  표의 값(작업, 전→후)은 서버가 협의 항목에서 채운 것이고, Agent 설명은 한 번만 보인다. */
+function RequestCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: Run }) {
+  const { clock } = useEnv()
+  const [answers, setAnswers] = useState<Record<string, Answer>>({})
+  const words = DECISION_BY_TYPE.CHANGE_REQUEST
+  const open = m.status === 'OPEN'
+  const done = m.status === 'LATE' || m.status === 'CANCELLED'
+  const of = (id: string): Answer => answers[id] ?? { decision: null, comment: '' }
+  const set = (id: string, a: Partial<Answer>) => setAnswers({ ...answers, [id]: { ...of(id), ...a } })
+  // 모든 항목을 정하고 이견마다 사유가 있어야 보낸다(서버도 REPLY_INCOMPLETE·COMMENT_REQUIRED로 막는다)
+  const ready = m.items.every((i) => {
+    const a = of(i.message_id)
+    return a.decision === 'ACCEPT' || (a.decision === 'DECLINE' && a.comment.trim() !== '')
+  })
+  const send = () =>
+    run(`변경 요청 답 (${m.items.length}건)`, `/requests/${m.request_group_id}/reply`, {
+      answers: m.items.map((i) => {
+        const a = of(i.message_id)
+        return { message_id: i.message_id, decision: a.decision, comment: a.decision === 'DECLINE' ? a.comment : '' }
+      }),
+    })
+  return (
+    <article className={`inbox-item ${done ? 'inbox-done' : ''} ${open ? 'inbox-open' : ''}`}>
+      <header className="row">
+        <span className={`badge inbox-${m.status.toLowerCase()}`}>{MESSAGE_STATUS[m.status] ?? m.status}</span>
+        <strong className="inbox-title">
+          {MESSAGE_TYPE.CHANGE_REQUEST} {m.items.length}건
+        </strong>
+        <span className="small muted">
+          {m.plan_label ?? '후보'} · <code>{m.candidate_id ?? '—'}</code>
+        </span>
+      </header>
+      {m.agent_text && (
+        <div className="model-block">
+          <div className="block-label">Agent 설명(모델 작성)</div>
+          <p>{m.agent_text}</p>
+        </div>
+      )}
+      <div className="server-block">
+        <div className="block-label">바뀌는 작업 (서버 값 · 답의 기준)</div>
+        <table className="tbl small request-items">
+          <thead>
+            <tr>
+              <th>작업</th>
+              <th>시각 (전 → 후)</th>
+              <th>자원 (전 → 후)</th>
+              <th>답</th>
+            </tr>
+          </thead>
+          <tbody>
+            {m.items.map((i) => {
+              const a = of(i.message_id)
+              const moved = i.before && i.after && i.before.start !== i.after.start
+              const swapped = i.before && i.after && i.before.resource_id !== i.after.resource_id
+              return (
+                <tr key={i.message_id}>
+                  <th>{i.task_id ?? '—'}</th>
+                  <td>
+                    {i.before && i.after ? (
+                      moved ? (
+                        <>
+                          {clock.format(i.before.start)} → <b>{clock.format(i.after.start)}</b>
+                        </>
+                      ) : (
+                        <span className="muted">{clock.format(i.after.start)} 그대로</span>
+                      )
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td>
+                    {i.before && i.after ? (
+                      swapped ? (
+                        <>
+                          {i.before.resource_id ?? '없음'} → <b>{i.after.resource_id ?? '없음'}</b>
+                        </>
+                      ) : (
+                        <span className="muted">{i.after.resource_id ?? '없음'} 그대로</span>
+                      )
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td>
+                    {open ? (
+                      <div className="request-answer">
+                        <label className="inline">
+                          <input
+                            type="radio"
+                            name={`ans:${i.message_id}`}
+                            checked={a.decision === 'ACCEPT'}
+                            onChange={() => set(i.message_id, { decision: 'ACCEPT' })}
+                          />
+                          {words.ACCEPT}
+                        </label>
+                        <label className="inline">
+                          <input
+                            type="radio"
+                            name={`ans:${i.message_id}`}
+                            checked={a.decision === 'DECLINE'}
+                            onChange={() => set(i.message_id, { decision: 'DECLINE' })}
+                          />
+                          {words.DECLINE}
+                        </label>
+                        {a.decision === 'DECLINE' && (
+                          <input
+                            className="grow"
+                            placeholder="이견 사유(필수)"
+                            value={a.comment}
+                            onChange={(e) => set(i.message_id, { comment: e.target.value })}
+                          />
+                        )}
+                      </div>
+                    ) : i.reply ? (
+                      <>
+                        {words[i.reply.decision] ?? i.reply.decision}
+                        {i.reply.comment ? ` “${i.reply.comment}”` : ''}
+                      </>
+                    ) : (
+                      <span className="muted">답 없음</span>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="small muted">
+        보낸 Run <code>{m.run_id}</code> · step {m.step_no} · Context v{m.created_context_version}
+        {done && ' · 이 요청은 효력이 없습니다(안이 바뀌었거나 협의가 끝났습니다)'}
+      </p>
+      {open && (
+        <div className="row">
+          <button
+            disabled={busy !== null}
+            onClick={() =>
+              setAnswers(
+                Object.fromEntries(m.items.map((i) => [i.message_id, { decision: 'ACCEPT', comment: '' }])),
+              )
+            }
+          >
+            모두 {words.ACCEPT}
+          </button>
+          <span className="grow" />
+          <button
+            className="btn-primary"
+            disabled={busy !== null || !ready}
+            title={ready ? undefined : '모든 항목에 수락·이견을 정하고, 이견에는 사유를 적어야 합니다'}
+            onClick={() => void send()}
+          >
+            보내기
+          </button>
+        </div>
+      )}
+    </article>
   )
 }
 

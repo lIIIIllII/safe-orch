@@ -1,5 +1,5 @@
 // 검토 패널. 서버 계산 결과를 보여 준다. 모델이 쓴 문장(접근의 이유, 일정 검토 의견·메모)은 따로 구분한다(UI-06).
-// 승인 버튼은 권한만 보고 켠다. STALE·Hold여도 막지 않고 서버의 거절 사유를 보여 준다.
+// 승인 버튼은 권한과 고른 안인지(서버 값)만 보고 켠다. STALE·Hold여도 막지 않고 서버의 거절 사유를 보여 준다.
 
 import { Fragment, useState } from 'react'
 import type { CandidateView, CommandOutcome, CommandResponse, FactChange, SiteState } from '../types'
@@ -362,7 +362,7 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
             <th>접근</th>
             <th>바뀌는 것</th>
             <th>지표</th>
-            <th title="기준에서 바뀐 작업의 담당자 확인. 고른 안만 협의합니다">필요한 확인</th>
+            <th title="기준에서 바뀐 작업의 담당자 확인. 고른 안만 협의하고, 승인도 고른 안에만 됩니다">필요한 확인</th>
             <th>조건·표시</th>
             <th>고르기</th>
           </tr>
@@ -429,6 +429,7 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                   {c.chosen && c.consultation && (
                     <div className="muted">
                       협의 {CONSULTATION_STATUS[c.consultation.status] ?? c.consultation.status}
+                      {c.consulting && ` · 답 ${c.consulting.answered}/${c.consulting.asked}명`}
                     </div>
                   )}
                 </td>
@@ -462,6 +463,15 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                   >
                     {c.chosen ? '고름' : '이 안 고르기'}
                   </button>
+                  {/* 다른 안이 협의 중이면: 고르면 그 협의가 취소된다(서버가 준 수) */}
+                  {!c.chosen &&
+                    plans
+                      .filter((o) => o.candidate_id !== c.candidate_id && o.consulting !== null)
+                      .map((o) => (
+                        <div key={o.candidate_id} className="small bad">
+                          고르면 {planLabel(o)}의 협의(답 {o.consulting?.answered}/{o.consulting?.asked}명)는 취소됩니다
+                        </div>
+                      ))}
                 </td>
               </tr>
               {reasons.length > 0 && (
@@ -491,7 +501,7 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
       </div>
       {!isSupervisor && <p className="muted small">{denied}</p>}
       <p className="muted small">
-        고른 안만 담당자 협의로 갑니다. 협의가 끝나면 아래에서 승인합니다. 고르지 않은 안은 그대로 남습니다.
+        고른 안만 담당자 협의로 갑니다. 승인과 협의 항목 수용도 고른 안에만 됩니다. 고르지 않은 안은 그대로 남습니다.
       </p>
     </div>
   )
@@ -509,10 +519,27 @@ function CandidateDetail({
   const actorName = new Map(state.actors.map((a) => [a.actor_id, a.name]))
   const v = c.validation
   const items = c.consultation?.items ?? []
-  const [waiveIds, setWaiveIds] = useState<string[]>(
-    items.filter((i) => i.item_status === 'PENDING').map((i) => i.task_id),
-  )
+  // 수용할 항목. 기본값은 없음이다: Supervisor가 담당자 줄이나 항목에서 직접 고른다
+  const [waiveIds, setWaiveIds] = useState<string[]>([])
   const [waiveComment, setWaiveComment] = useState('')
+  // 펼친 담당자 줄
+  const [openOwners, setOpenOwners] = useState<string[]>([])
+  // 협의 현황은 담당자별로 묶어 보인다(한 통 = 담당자 하나)
+  const owners = [...new Set(items.map((i) => i.owner_actor_id))].map((id) => ({
+    id,
+    items: items.filter((i) => i.owner_actor_id === id),
+  }))
+  const ownerSummary = (list: typeof items): string => {
+    const text = (i: (typeof items)[number]) =>
+      i.item_status === 'PENDING'
+        ? i.request?.status === 'OPEN'
+          ? '답 대기'
+          : '확인 필요'
+        : (ITEM_STATUS[i.item_status] ?? i.item_status)
+    const kinds = [...new Set(list.map(text))]
+    if (kinds.length === 1) return kinds[0]
+    return kinds.map((k) => `${k} ${list.filter((i) => text(i) === k).length}`).join(' · ')
+  }
   const [rejReason, setRejReason] = useState('')
   const [rejTargets, setRejTargets] = useState<string[]>([])
   const [rejComment, setRejComment] = useState('')
@@ -735,72 +762,120 @@ function CandidateDetail({
         <>
           <table className="tbl">
             <tbody>
-              {items.map((it) => (
-                <tr key={it.task_id} className={`item-${it.item_status.toLowerCase()}`}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={waiveIds.includes(it.task_id)}
-                      onChange={() => setWaiveIds(toggle(waiveIds, it.task_id))}
-                      aria-label={`${it.task_id} 수용 대상`}
-                    />
-                  </td>
-                  <th>{it.task_id}</th>
-                  <td>{actorName.get(it.owner_actor_id) ?? it.owner_actor_id}</td>
-                  <td className="small">
-                    {assign(it.before)} → {assign(it.after)}
-                  </td>
-                  <td>
-                    {ITEM_STATUS[it.item_status] ?? it.item_status}
-                    {it.answer_source?.prior && (
-                      <div className="small muted">
-                        이전 답 적용 ·{' '}
-                        {actorName.get(it.answer_source.actor_id ?? '') ?? it.answer_source.actor_id}
-                        {it.answer_source.at && ` · ${it.answer_source.at}`} · 후보{' '}
-                        <code>{it.answer_source.candidate_id}</code>
-                      </div>
-                    )}
-                    {it.request?.quoted_comment && (
-                      <div className="small muted">이견(인용): “{it.request.quoted_comment}”</div>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {owners.map((o) => {
+                const open = openOwners.includes(o.id)
+                // 수용할 수 있는 것은 확인 대기 항목이다(서버가 준 항목 상태)
+                const pending = o.items.filter((i) => i.item_status === 'PENDING').map((i) => i.task_id)
+                const all = pending.length > 0 && pending.every((t) => waiveIds.includes(t))
+                return (
+                  <Fragment key={o.id}>
+                    <tr
+                      className="owner-row"
+                      title={open ? '누르면 접습니다' : '누르면 항목을 펼칩니다'}
+                      onClick={() => setOpenOwners(toggle(openOwners, o.id))}
+                    >
+                      <td>
+                        {c.chosen && (
+                          <input
+                            type="checkbox"
+                            checked={all}
+                            disabled={pending.length === 0}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={() =>
+                              setWaiveIds(
+                                all
+                                  ? waiveIds.filter((t) => !pending.includes(t))
+                                  : [...new Set([...waiveIds, ...pending])],
+                              )
+                            }
+                            aria-label={`${o.id}의 확인 대기 항목 전부 수용 대상`}
+                          />
+                        )}
+                      </td>
+                      <th colSpan={2}>
+                        {open ? '▾' : '▸'} {actorName.get(o.id) ?? o.id} {o.items.length}건: {ownerSummary(o.items)}
+                      </th>
+                      <td className="small muted" colSpan={2}>
+                        {o.items.map((i) => i.task_id).join(', ')}
+                      </td>
+                    </tr>
+                    {open &&
+                      o.items.map((it) => (
+                        <tr key={it.task_id} className={`owner-item item-${it.item_status.toLowerCase()}`}>
+                          <td>
+                            {c.chosen && (
+                              <input
+                                type="checkbox"
+                                checked={waiveIds.includes(it.task_id)}
+                                onChange={() => setWaiveIds(toggle(waiveIds, it.task_id))}
+                                aria-label={`${it.task_id} 수용 대상`}
+                              />
+                            )}
+                          </td>
+                          <th>{it.task_id}</th>
+                          <td className="small" colSpan={2}>
+                            {assign(it.before)} → {assign(it.after)}
+                          </td>
+                          <td>
+                            {ITEM_STATUS[it.item_status] ?? it.item_status}
+                            {it.answer_source?.prior && (
+                              <div className="small muted">
+                                이전 답 적용 ·{' '}
+                                {actorName.get(it.answer_source.actor_id ?? '') ?? it.answer_source.actor_id}
+                                {it.answer_source.at && ` · ${it.answer_source.at}`} · 후보{' '}
+                                <code>{it.answer_source.candidate_id}</code>
+                              </div>
+                            )}
+                            {it.request?.quoted_comment && (
+                              <div className="small muted">이견(인용): “{it.request.quoted_comment}”</div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                  </Fragment>
+                )
+              })}
             </tbody>
           </table>
           {items.length === 0 && <p className="muted">협의 항목 없음</p>}
-          <div className="row">
-            <input
-              className="grow"
-              placeholder="수용 사유"
-              value={waiveComment}
-              onChange={(e) => setWaiveComment(e.target.value)}
-            />
-            <button
-              disabled={!isSupervisor || busy !== null}
-              title={needSup}
-              onClick={async () => {
-                const r = await run('협의 항목 수용(WAIVE)', `/consultations/${c.candidate_id}/waive`, {
-                  task_ids: waiveIds,
-                  comment: waiveComment,
-                })
-                // 수용된 항목을 다시 보내 ITEM_NOT_WAIVABLE이 나지 않게 선택을 비운다
-                if (r && (r.status === 'APPLIED' || r.status === 'REPLAYED')) setWaiveIds([])
-              }}
-            >
-              선택 항목 수용
-            </button>
-          </div>
+          {/* 수용은 고른 안에서만 한다(서버도 CANDIDATE_NOT_CHOSEN으로 막는다, AG-29) */}
+          {c.chosen ? (
+            <div className="row">
+              <input
+                className="grow"
+                placeholder="수용 사유"
+                value={waiveComment}
+                onChange={(e) => setWaiveComment(e.target.value)}
+              />
+              <button
+                disabled={!isSupervisor || busy !== null}
+                title={needSup}
+                onClick={async () => {
+                  const r = await run('협의 항목 수용(WAIVE)', `/consultations/${c.candidate_id}/waive`, {
+                    task_ids: waiveIds,
+                    comment: waiveComment,
+                  })
+                  // 수용된 항목을 다시 보내 ITEM_NOT_WAIVABLE이 나지 않게 선택을 비운다
+                  if (r && (r.status === 'APPLIED' || r.status === 'REPLAYED')) setWaiveIds([])
+                }}
+              >
+                선택 항목 수용 ({waiveIds.length})
+              </button>
+            </div>
+          ) : (
+            items.length > 0 && <p className="muted small">협의와 수용은 고른 안에서만 합니다.</p>
+          )}
         </>
       ) : (
         <p className="muted">협의 정보 없음</p>
       )}
 
       <div className="approve-row">
+        {/* 승인은 고른 안에만 된다(서버도 CANDIDATE_NOT_CHOSEN으로 막는다, AG-29) */}
         <button
           className="btn-primary"
-          disabled={!isSupervisor || busy !== null}
-          title={needSup}
+          disabled={!isSupervisor || busy !== null || !c.chosen}
+          title={needSup ?? (c.chosen ? undefined : '먼저 이 안을 고르세요')}
           onClick={() =>
             run('후보 승인', `/candidates/${c.candidate_id}/approve`, {
               validation_id: v?.validation_id ?? '',
@@ -811,6 +886,7 @@ function CandidateDetail({
           승인·확정
         </button>
         {!isSupervisor && <span className="muted small">Supervisor 권한 필요</span>}
+        {isSupervisor && !c.chosen && <span className="muted small">먼저 이 안을 고르세요 (위 안 비교의 [이 안 고르기])</span>}
       </div>
 
       <details className="reject">

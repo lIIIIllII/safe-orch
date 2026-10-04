@@ -1390,6 +1390,43 @@ input.time {
   margin: 6px 0;
 }
 
+/* 변경 요청 한 통: 항목 표와 항목별 답 */
+.request-items th,
+.request-items td {
+  vertical-align: top;
+}
+
+.request-answer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+}
+
+.request-answer label {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.request-answer input.grow {
+  flex: 1 1 140px;
+}
+
+/* 검토 패널 협의 현황: 담당자 한 줄, 펼치면 항목 */
+.owner-row {
+  cursor: pointer;
+}
+
+.owner-row th {
+  text-align: left;
+}
+
+.owner-item td:first-child,
+.owner-item th:first-child {
+  padding-left: 22px;
+}
+
 .badge.inbox-open {
   background: #dbe7fb;
   color: var(--primary);

@@ -187,6 +187,8 @@ export interface ConsultationItem {
   /** 마지막 변경 요청과 담당자 답 (Coordination). quoted_comment는 담당자가 쓴 인용이다. */
   request: {
     message_id: string
+    /** 이 항목이 든 변경 요청 한 통(담당자 하나) */
+    request_group_id: string
     to_actor_id: string
     status: string
     decision: string | null
@@ -293,6 +295,8 @@ export interface CandidateView {
     checks: ValidationCheck[]
   } | null
   consultation: { status: string; items: ConsultationItem[] } | null
+  /** 이 안의 협의가 지금 열려 있으면: 요청을 보낸 담당자 수(asked)와 답한 담당자 수(answered). 서버 계산 */
+  consulting: { run_id: string; asked: number; answered: number } | null
 }
 
 /** 사실 변경 하나. 값은 분·ID 그대로다(화면이 풀어 쓴다) */
@@ -430,7 +434,18 @@ export interface SiteState {
 }
 
 /** 받은 요청 항목. body = 서버 문구(답의 기준), agent_text = 모델 작성 설명. */
+/** 변경 요청 한 통의 항목 하나. 작업과 변경 전·후는 서버가 협의 항목에서 채운다 */
+export interface InboxRequestItem {
+  message_id: string
+  task_id: string | null
+  before: Assignment | null
+  after: Assignment | null
+  status: 'OPEN' | 'ANSWERED' | 'CANCELLED' | 'LATE'
+  reply: { decision: string; comment: string; actor_id: string; at: string } | null
+}
+
 export interface InboxItem {
+  /** 변경 요청 한 통이면 request_group_id와 같다 */
   message_id: string
   /** 보낸 Run과 step. 서버가 Run 없이 보낸 통지(직접 이동)는 null */
   run_id: string | null
@@ -449,6 +464,10 @@ export interface InboxItem {
   task_id: string | null
   /** 변경 요청이 묶인 후보 (CHANGE_REQUEST) */
   candidate_id: string | null
+  /** 변경 요청 한 통(담당자 하나)의 키와 그 안의 번호, 항목. 다른 메시지는 null·빈 목록이다 */
+  request_group_id: string | null
+  plan_label: string | null
+  items: InboxRequestItem[]
   /** 사실 수정안 (CONFIRMATION + FACT_UPDATE). 값은 Horizon 원점 기준 분 */
   fact: { field: string; old_value: number; new_value: number } | null
 }

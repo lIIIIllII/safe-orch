@@ -15,7 +15,7 @@ export const REASON: Record<string, string> = {
   NO_LIVE_CANDIDATE: '거절할 살아 있는 안이 없음',
   CANDIDATE_COMMITTED: '이미 확정된 후보',
   ALREADY_CHOSEN: '이미 고른 안',
-  CANDIDATE_NOT_CHOSEN: 'Supervisor가 고르지 않은 안(협의 불가)',
+  CANDIDATE_NOT_CHOSEN: 'Supervisor가 고르지 않은 안(먼저 이 안을 고르세요)',
   APPROACH_REQUIRED: '재계획 호출에 접근 필요',
   VALIDATION_NOT_PASS: '규칙 검사 통과 기록이 없는 후보',
   STALE_PLAN: '기준 계획이 이미 바뀜(다른 후보 확정)',
@@ -24,7 +24,10 @@ export const REASON: Record<string, string> = {
   CONSULTATION_INCOMPLETE: '담당자 협의 미완료',
   // WAIVE
   CONSULTATION_NOT_FOUND: '협의 정보가 아직 없음',
-  ITEM_NOT_FOUND: '협의 항목에 없는 작업',
+  ITEM_NOT_FOUND: '협의 항목·요청에 없는 항목',
+  REQUEST_NOT_FOUND: '변경 요청 없음',
+  REPLY_INCOMPLETE: '요청의 항목 전부에 답해야 함',
+  REPLY_BY_REQUEST: '변경 요청은 한 통 전부를 한 번에 답함',
   ITEM_NOT_WAIVABLE: '확인 대기 항목만 수용 가능',
   COMMENT_REQUIRED: '사유 필요(수용·이견)',
   // 거절
