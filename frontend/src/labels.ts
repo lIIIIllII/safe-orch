@@ -12,6 +12,10 @@ export const REASON: Record<string, string> = {
   NOT_AUTHORIZED: '현재 Actor에게 권한 없음',
   CANDIDATE_NOT_FOUND: '후보 없음',
   CANDIDATE_REJECTED: '이미 거절된 후보',
+  CANDIDATE_COMMITTED: '이미 확정된 후보',
+  ALREADY_CHOSEN: '이미 고른 안',
+  CANDIDATE_NOT_CHOSEN: 'Supervisor가 고르지 않은 안(협의 불가)',
+  APPROACH_REQUIRED: '재계획 호출에 접근 필요',
   VALIDATION_NOT_PASS: '규칙 검사 통과 기록이 없는 후보',
   STALE_PLAN: '기준 계획이 이미 바뀜(다른 후보 확정)',
   STALE_CONTEXT: '후보를 만든 뒤 현장 정보가 바뀜',
@@ -344,6 +348,18 @@ export const ACTION_NAME: Record<string, string> = {
   TRY_ALTERNATIVE_RESOURCE: '대체 자원 시도',
   ASK_TASK_OWNER: '작업 담당자에게 확인 요청',
   ASK_OWNER: '작업 담당자에게 사전 확인',
+}
+
+/** 메인이 재계획에 준 접근(무엇을 우선할지) */
+export const APPROACH: Record<string, string> = {
+  MIN_CHANGE: '변경 최소',
+  MIN_DELAY: '지연 최소',
+  PREFER_WINDOW: '희망 영역 우선',
+}
+
+export const OBJECTIVE: Record<string, string> = {
+  CHANGE_FIRST: '변경 먼저',
+  DELAY_FIRST: '지연 먼저',
 }
 
 /** 후보가 담은 거절·이견된 변경의 출처 (서버 계산) */

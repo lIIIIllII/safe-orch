@@ -4,6 +4,7 @@
 import { useState } from 'react'
 import type { CandidateView, CommandOutcome, CommandResponse, SiteState } from '../types'
 import {
+  APPROACH,
   CANDIDATE_KIND,
   CONTESTED_BY,
   CANDIDATE_STATUS,
@@ -12,6 +13,7 @@ import {
   CONSULTATION_STATUS,
   ITEM_STATUS,
   REJECT_REASON,
+  OBJECTIVE,
   SCOPE_LEVEL,
   SOLVER_STATUS,
   VALIDATION_BADGE,
@@ -71,6 +73,7 @@ export function ReviewPanel(props: Props) {
             <button onClick={() => onSelect(queueNotice)}>보기</button>
           </div>
         )}
+        <PlanCompare {...props} />
         {candidate ? (
           <CandidateDetail
             key={`${candidate.candidate_id}:${candidate.consultation ? 'c' : '-'}`} {...props} candidate={candidate} missing={missing} />
@@ -84,6 +87,125 @@ export function ReviewPanel(props: Props) {
         {outcome ? <OutcomeBox outcome={outcome} /> : <p className="muted">없음</p>}
       </div>
     </section>
+  )
+}
+
+/** 안 번호: 그 후보에 도달한 접근의 호출 순번. 여럿이면 다른 접근이 같은 배치를 낸 것이다. */
+function planLabel(c: CandidateView): string {
+  const nos = [...new Set(c.approaches.map((a) => a.no))].sort((a, b) => a - b)
+  if (nos.length === 0) return short(c.candidate_id)
+  return `${nos.map((n) => `${n}안`).join('·')}${nos.length > 1 ? ' 동일 의견' : ''}`
+}
+
+/** 이 Case의 안을 나란히: 접근, 서버 지표, 필요한 동의, 조건, 거절·이견된 변경, 고르기.
+ *  지표·동의·표시는 서버 계산이고, 접근의 이유 문장은 Agent가 쓴 것이다(UI-06). */
+function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, busy, run }: Props) {
+  const queue = state.candidates.filter((c) => state.review_queue.includes(c.candidate_id))
+  const caseId = candidate?.case_id ?? queue[0]?.case_id ?? null
+  const plans = queue.filter((c) => c.case_id === caseId)
+  const actorName = new Map(state.actors.map((a) => [a.actor_id, a.name]))
+  if (plans.length === 0) return null
+  const denied = isSupervisor ? undefined : 'Supervisor만 안을 고를 수 있습니다'
+  return (
+    <div className="plans">
+      <h3>
+        안 비교 <span className="muted small">지표·필요한 동의는 서버 계산 · 이유는 Agent 문장</span>
+      </h3>
+      <table className="tbl small">
+        <thead>
+          <tr>
+            <th>안</th>
+            <th>접근</th>
+            <th>지표</th>
+            <th>필요한 동의</th>
+            <th>조건·표시</th>
+            <th>고르기</th>
+          </tr>
+        </thead>
+        <tbody>
+          {plans.map((c) => {
+            const items = c.consultation?.items ?? []
+            const need = items.filter((i) => i.item_status === 'PENDING')
+            const objected = items.filter((i) => i.item_status === 'OBJECTED')
+            const delay = c.changes.reduce((n, x) => n + x.delay, 0)
+            const workDelay = c.changes.reduce((n, x) => n + x.work_delay, 0)
+            return (
+              <tr
+                key={c.candidate_id}
+                className={`plan-row ${c.candidate_id === selectedId ? 'plan-on' : ''} ${c.chosen ? 'plan-chosen' : ''}`}
+                onClick={() => onSelect(c.candidate_id)}
+              >
+                <td>
+                  <b>{planLabel(c)}</b>
+                  {c.chosen && <div className="tag">고른 안</div>}
+                </td>
+                <td>
+                  {c.approaches.length === 0 && <span className="muted">—</span>}
+                  {c.approaches.map((a) => (
+                    <div key={`${a.run_id}`}>
+                      {a.no}안 {APPROACH[a.approach] ?? a.approach}
+                      {a.same && <span className="muted"> (같은 배치)</span>}
+                      {a.quoted_reason && <div className="agent-quote">Agent: “{a.quoted_reason}”</div>}
+                    </div>
+                  ))}
+                </td>
+                <td>
+                  변경 {c.changes.length}건
+                  <br />
+                  지연 {delayText(delay, workDelay)}
+                </td>
+                <td>
+                  {need.length === 0 && objected.length === 0 && <span className="muted">없음</span>}
+                  {need.map((i) => (
+                    <div key={i.task_id}>
+                      {i.task_id} · {actorName.get(i.owner_actor_id) ?? i.owner_actor_id}
+                    </div>
+                  ))}
+                  {objected.map((i) => (
+                    <div key={i.task_id} className="bad">
+                      {i.task_id} 이견 · {actorName.get(i.owner_actor_id) ?? i.owner_actor_id}
+                    </div>
+                  ))}
+                  {c.chosen && c.consultation && (
+                    <div className="muted">
+                      협의 {CONSULTATION_STATUS[c.consultation.status] ?? c.consultation.status}
+                    </div>
+                  )}
+                </td>
+                <td>
+                  {c.conditions.length > 0 && <div>조건 {c.conditions.map((x) => x.task_id).join(', ')}</div>}
+                  {c.contested.map((x) => (
+                    <span key={`${x.task_id}:${x.by}`} className="tag tag-warn">
+                      {x.task_id} {CONTESTED_BY[x.by] ?? x.by}
+                    </span>
+                  ))}
+                  {c.conditions.length === 0 && c.contested.length === 0 && <span className="muted">—</span>}
+                </td>
+                <td>
+                  <button
+                    className="btn-small"
+                    disabled={!isSupervisor || busy !== null || c.chosen || !c.validation}
+                    title={denied ?? (c.chosen ? '이미 고른 안입니다' : undefined)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void run('안 고르기', `/candidates/${c.candidate_id}/choose`, {
+                        validation_id: c.validation?.validation_id ?? '',
+                      })
+                    }}
+                  >
+                    {c.chosen ? '고름' : '이 안 고르기'}
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      {!isSupervisor && <p className="muted small">{denied}</p>}
+      <p className="muted small">
+        고른 안만 담당자 협의로 갑니다. 협의가 끝나면 아래에서 승인합니다. 고르지 않은 안은 그대로 남습니다.
+      </p>
+    </div>
   )
 }
 
@@ -120,6 +242,8 @@ function CandidateDetail({
           후보: {CANDIDATE_STATUS[c.display_status] ?? c.display_status}
         </span>
         {v ? <ValidationBadge status={v.display_status} /> : <span className="badge">검증 대기</span>}
+        {c.approaches.length > 0 && <span className="badge">{planLabel(c)}</span>}
+        {c.chosen && <span className="badge">고른 안</span>}
         {missing && <span className="badge badge-stale">목록에서 제외됨(갱신 중단)</span>}
       </div>
       {v && v.display_status === 'STALE' && (
@@ -207,31 +331,68 @@ function CandidateDetail({
                 <td>{SCOPE_LEVEL[c.solver.scope_level] ?? c.solver.scope_level}</td>
               </tr>
               <tr>
-                <th>1단계 (변경 수)</th>
-                <td>
-                  {SOLVER_STATUS[c.solver.stage1.status] ?? c.solver.stage1.status} · 변경{' '}
-                  {c.solver.stage1.changed ?? '—'} <code>{c.solver.stage1.status}</code>
-                </td>
+                <th>목적 순서</th>
+                <td>{OBJECTIVE[c.solver.objective] ?? c.solver.objective}</td>
               </tr>
-              <tr>
-                <th>2단계 (지연)</th>
-                <td>
-                  {c.solver.stage2 ? (
-                    <>
-                      {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 총 지연{' '}
-                      {delayText(c.solver.stage2.delay, c.solver.stage2.work_delay)}{' '}
-                      <code>{c.solver.stage2.status}</code>
-                    </>
-                  ) : (
-                    '실행 안 함'
-                  )}
-                </td>
-              </tr>
+              {c.solver.objective === 'DELAY_FIRST' ? (
+                <>
+                  <tr>
+                    <th>1단계 (지연)</th>
+                    <td>
+                      {SOLVER_STATUS[c.solver.stage1.status] ?? c.solver.stage1.status} · 총 지연{' '}
+                      {c.solver.stage1.delay ?? '—'}분 <code>{c.solver.stage1.status}</code>
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>2단계 (변경 수)</th>
+                    <td>
+                      {c.solver.stage2 ? (
+                        <>
+                          {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 변경{' '}
+                          {c.solver.stage2.changed ?? '—'} · 근무시간 기준 지연{' '}
+                          {c.solver.stage2.work_delay ?? '—'}분 <code>{c.solver.stage2.status}</code>
+                        </>
+                      ) : (
+                        '실행 안 함'
+                      )}
+                    </td>
+                  </tr>
+                </>
+              ) : (
+                <>
+                  <tr>
+                    <th>1단계 (변경 수)</th>
+                    <td>
+                      {SOLVER_STATUS[c.solver.stage1.status] ?? c.solver.stage1.status} · 변경{' '}
+                      {c.solver.stage1.changed ?? '—'} <code>{c.solver.stage1.status}</code>
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>2단계 (지연)</th>
+                    <td>
+                      {c.solver.stage2 ? (
+                        <>
+                          {SOLVER_STATUS[c.solver.stage2.status] ?? c.solver.stage2.status} · 총 지연{' '}
+                          {delayText(c.solver.stage2.delay, c.solver.stage2.work_delay)}{' '}
+                          <code>{c.solver.stage2.status}</code>
+                        </>
+                      ) : (
+                        '실행 안 함'
+                      )}
+                    </td>
+                  </tr>
+                </>
+              )}
             </tbody>
           </table>
           <p className="small">
             {c.solver.minimal_change && <span className="tag">최소 변경(이 탐색 범위 안)</span>}
-            {c.solver.delay_optimality_unconfirmed && <span className="tag tag-warn">지연 최적성 미확정</span>}
+            {c.solver.minimal_delay && <span className="tag">최소 지연(이 탐색 범위 안)</span>}
+            {c.solver.delay_optimality_unconfirmed && (
+              <span className="tag tag-warn">
+                {c.solver.objective === 'DELAY_FIRST' ? '변경 수 최적성 미확정' : '지연 최적성 미확정'}
+              </span>
+            )}
           </p>
         </>
       )}

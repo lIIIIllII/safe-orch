@@ -141,10 +141,13 @@ export interface Conflict {
 
 export interface SolverView {
   scope_level: string
-  stage1: { status: string; changed: number | null }
-  stage2: { status: string; delay: number | null; work_delay: number | null } | null
+  /** 목적 순서. DELAY_FIRST면 1단계가 총 지연, 2단계가 변경 작업 수다 */
+  objective: 'CHANGE_FIRST' | 'DELAY_FIRST'
+  stage1: { status: string; changed: number | null; delay?: number | null }
+  stage2: { status: string; delay: number | null; changed?: number | null; work_delay: number | null } | null
   chosen_stage: number | null
   minimal_change: boolean
+  minimal_delay: boolean
   delay_optimality_unconfirmed: boolean
 }
 
@@ -197,6 +200,20 @@ export interface CandidateView {
   kind: 'REPLAN' | 'RECONFIRM'
   rejection: RejectionView | null
   run_id: string | null
+  /** 이 후보를 만든 Case. 같은 Case의 안끼리 나란히 본다 */
+  case_id: string | null
+  /** 이 후보에 도달한 접근. no는 그 Case의 재계획 호출 순번("n안"). 여럿이면 다른 접근이 같은 배치를 냈다.
+   *  quoted_note(메인)·quoted_reason(재계획)은 모델이 쓴 문장이다 */
+  approaches: {
+    no: number
+    approach: string
+    quoted_note: string | null
+    run_id: string
+    same: boolean
+    quoted_reason: string | null
+  }[]
+  /** Supervisor가 고른 안. 고른 안만 협의한다 */
+  chosen: boolean
   context_version: number
   base_plan_revision: number
   display_status: 'COMMITTED' | 'REJECTED' | 'STALE' | 'OPEN'

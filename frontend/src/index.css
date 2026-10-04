@@ -1375,6 +1375,33 @@ input.time {
   border: 1px dashed var(--border);
 }
 
+/* 안 비교 표: 줄을 누르면 그 안의 상세가 아래에 열린다. 고른 안은 테두리로 표시 */
+.plans {
+  margin: 8px 0;
+}
+
+.plan-row {
+  cursor: pointer;
+}
+
+.plan-row td {
+  vertical-align: top;
+}
+
+.plan-on {
+  background: var(--ua-bg);
+}
+
+.plan-chosen td:first-child {
+  border-left: 3px solid #111;
+}
+
+/* Agent가 쓴 문장(서버 계산과 구분) */
+.agent-quote {
+  color: #556;
+  font-style: italic;
+}
+
 /* 후보 카드: 거절·이견된 변경(서버 계산)과 Agent가 건 조건 */
 .contested,
 .conditions {
