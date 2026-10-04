@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p15"
+PROMPT_VERSION = "main-p16"
 
 
 def tool_catalog() -> str:
@@ -174,4 +174,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p13": "6eb90b73f621071cf16d64c1bbe2db1c2ce769cf720cbfc45ece3a95328403bf",  # 일정 검토 호출(SCHEDULE_REVIEW)과 묶음안 요약(schedule_review) (AG-36)
     "main-p14": "63d7b630b0dbad00f57a0cb8b2b9f3ddae089c67be1be10a0ab58470c25fbab4",  # 접근 목록은 Case 종류로: 일정 Case의 세 방향, 목적 순서는 접근이 정한다 (AG-28·CV-27)
     "main-p15": "30c8416a34dde4f2d3e0e9afa0f29199a0894874a991a8295b5713bf2b83661e",  # 열린 일에 아직 부르지 않은 방향(DIRECTION_UNTRIED): 세 방향의 안이 모인 뒤에 기다린다 (AG-28)
+    "main-p16": "435b524bd53cd93d10c980c83c7f07d5d3d0b9029c9942d40066e9ee8de33d36",  # 일정이 아닌 Case는 재계획을 한 번 부르고 안이 있으면 기다린다 (AG-28)
 }
