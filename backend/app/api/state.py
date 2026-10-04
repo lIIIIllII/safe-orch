@@ -105,6 +105,70 @@ def _work_delay_sum(
     )
 
 
+def plan_changes(facts: SnapshotContent | None, assignments: Any) -> list[dict[str, Any]]:
+    """이 안이 기준 계획에서 바꾸는 것 (서버 계산, 작업 ID순). 화면은 그리기만 한다.
+
+    - CHANGED: 계획에 있던 작업의 시각이나 자원이 바뀐다. before는 지금 배치다.
+    - NEW: 계획에 없던 작업을 새로 배치한다(기준 자리 그대로여도 낸다). before는 없다.
+    - time_changed·resource_changed: CHANGED는 지금 배치와 비교, NEW는 자원만 요청 자원과 비교한다.
+    - off_request: 배치된 자원이 그 작업의 요청 자원과 다르다(요청 자원이 있을 때만).
+    """
+    if facts is None:
+        return []
+    tasks, base = facts.task_map(), facts.base_assignments()
+    in_plan = {a.task_id for a in facts.plan.assignments}
+    out = []
+    for a in sorted(assignments, key=lambda a: a.task_id):
+        task = tasks.get(a.task_id)
+        if task is None:
+            continue
+        requested = task.requested_resource_id
+        off_request = requested is not None and a.resource_id != requested
+        new = a.task_id not in in_plan
+        before = None if new else base[a.task_id]
+        time_changed = before is not None and a.start != before.start
+        resource_changed = off_request if before is None else a.resource_id != before.resource_id
+        if not (new or time_changed or resource_changed):
+            continue
+        out.append(
+            {
+                "task_id": a.task_id,
+                "kind": "NEW" if new else "CHANGED",
+                "before": None if before is None else before.model_dump(),
+                "after": a.model_dump(),
+                "time_changed": time_changed,
+                "resource_changed": resource_changed,
+                "off_request": off_request,
+                "requested_resource_id": requested,
+                "resource_type": task.required_resource_type,
+            }
+        )
+    return out
+
+
+def plan_numbers(conn: sqlite3.Connection, site_id: str, case_id: str) -> dict[str, int]:
+    """이 Case의 살아 있는 재계획 후보에 만들어진 순서로 매긴 안 번호(1부터). 화면의 "n안"이다.
+    한 호출이 후보를 여럿 내도 후보마다 번호가 다르다. 무효·거절·확정된 후보에는 번호가 없다."""
+    ids = [
+        r["candidate_id"]
+        for r in rows(
+            conn,
+            "SELECT c.candidate_id FROM candidate c"
+            " JOIN solver_job j ON j.solver_result_id = c.solver_result_id"
+            " JOIN agent_run r ON r.run_id = j.run_id WHERE r.case_id = ? ORDER BY c.rowid",
+            (case_id,),
+        )
+    ]
+    out: dict[str, int] = {}
+    for cid in ids:
+        candidate = get_candidate(conn, site_id, cid)
+        assert candidate is not None
+        state = candidate_state(conn, site_id, candidate)
+        if not (state.stale or state.rejected or state.committed):
+            out[cid] = len(out) + 1
+    return out
+
+
 def off_hope(facts: SnapshotContent | None, assignments: Any) -> list[dict[str, Any]]:
     """그 배치에서 희망 영역 밖에 놓인 작업과 정도 (서버 계산). 바뀐 작업만이 아니라 희망 영역이 있는
     작업 전부를 본다. direction은 희망보다 이른지(EARLY) 늦은지(LATE)다."""
@@ -238,6 +302,10 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "run_id": run_id,
         # 이 후보를 만든 Case, 이 후보에 도달한 접근들(같은 배치면 여럿), Supervisor가 골랐는가 (AG-28·AG-29)
         "case_id": None if maker is None else maker.case_id,
+        # 안 번호: 이 Case의 살아 있는 후보에 만들어진 순서로 매긴다(후보마다 다르다). 없으면 None
+        "plan_no": None
+        if maker is None
+        else plan_numbers(conn, site_id, maker.case_id).get(cand.candidate_id),
         "approaches": [
             {k: a[k] for k in ("no", "approach", "quoted_note", "run_id", "same", "quoted_reason")}
             for a in approach_attempts(conn, candidate_id=cand.candidate_id)
@@ -248,6 +316,8 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "display_status": display,
         "assignments": [a.model_dump() for a in cand.assignments],
         "changes": changes,
+        # 이 안이 기준 계획에서 바꾸는 것: 시각·자원·새 배치·요청 자원과 다름 (서버 계산)
+        "plan_changes": plan_changes(facts, cand.assignments),
         # 희망 영역 밖에 놓인 작업과 정도 (ST-22)
         "off_hope": off_hope(facts, cand.assignments),
         # 기준 계획을 확정한 뒤 사람이 바꾼 사실: 무엇 때문에 다시 계획·확정하는가

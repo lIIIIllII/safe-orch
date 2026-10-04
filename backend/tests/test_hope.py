@@ -334,3 +334,81 @@ def test_off_hope_lists_only_tasks_outside_their_hope(with_a):
     assert off_hope(_hoped(snap, "C", 0, 60).facts(), late.assignments) == [
         {"task_id": "C", "delay": 60, "work_delay": 60, "direction": "LATE"}
     ]
+
+
+# ── 안이 바꾸는 것 (안 비교) ───────────────────────────────────
+
+
+def test_plan_changes_list_time_resource_new_placement_and_off_request(with_a):
+    """안 비교의 "바뀌는 것"은 서버가 계산한다: 시각 변경, 자원 변경, 계획 밖 작업의 새 배치, 요청 자원과
+    다름. 계획 밖 작업은 기준 자리 그대로 놓여도 새 배치로 나온다."""
+    from app.api.state import plan_changes
+
+    snap = take_snapshot(with_a)
+    facts = snap.facts()
+    base = facts.base_assignments()
+    c, a = base["C"], base["A"]
+    assert a.resource_id == "A-CR-01" and facts.task_map()["A"].requested_resource_id == "A-CR-01"
+
+    def placed(**moves):
+        return tuple(x.model_copy(update=moves.get(tid, {})) for tid, x in base.items())
+
+    # 기준 그대로: 계획 밖의 A만 새 배치로 나온다(요청 자원 그대로)
+    [only] = plan_changes(facts, placed())
+    assert (only["task_id"], only["kind"], only["before"]) == ("A", "NEW", None)
+    assert (only["time_changed"], only["resource_changed"], only["off_request"]) == (
+        False,
+        False,
+        False,
+    )
+
+    found = plan_changes(
+        facts,
+        placed(
+            A={"start": 60, "end": 90, "resource_id": "SITE-CR-01"},
+            C={"start": c.start + 30, "end": c.end + 30},
+        ),
+    )
+    by_task = {x["task_id"]: x for x in found}
+    assert sorted(by_task) == ["A", "C"]
+    # 계획 밖 작업: 새 배치이고 요청 자원과 다른 자원에 놓였다
+    assert (by_task["A"]["kind"], by_task["A"]["after"]["start"]) == ("NEW", 60)
+    assert (by_task["A"]["resource_changed"], by_task["A"]["off_request"]) == (True, True)
+    assert (by_task["A"]["requested_resource_id"], by_task["A"]["resource_type"]) == (
+        "A-CR-01",
+        "CRANE",
+    )
+    # 계획에 있던 작업: 시각만 바뀌었다(전·후가 있다)
+    assert (by_task["C"]["kind"], by_task["C"]["before"]["start"]) == ("CHANGED", c.start)
+    assert (by_task["C"]["time_changed"], by_task["C"]["resource_changed"]) == (True, False)
+
+    # 계획에 있던 작업의 자원만 바뀌면 자원 변경이고, 요청 자원과도 달라진다
+    [swap] = [
+        x
+        for x in plan_changes(facts, placed(C={"resource_id": "SITE-CR-01"}))
+        if x["task_id"] == "C"
+    ]
+    assert (swap["time_changed"], swap["resource_changed"], swap["off_request"]) == (
+        False,
+        True,
+        True,
+    )
+    assert (swap["before"]["resource_id"], swap["after"]["resource_id"]) == (
+        c.resource_id,
+        "SITE-CR-01",
+    )
+
+
+def test_change_request_text_has_resource_before_and_after(with_a):
+    """담당자에게 가는 변경 요청 문장에 자원 전→후가 들어간다."""
+    from app.agents.executors.coordination import change_request_text
+
+    facts = take_snapshot(with_a).facts()
+    c = facts.base_assignments()["C"]
+    task = facts.task_map()["C"]
+    swapped = c.model_copy(update={"resource_id": "SITE-CR-01"})
+    text = change_request_text(with_a, task, c, swapped)
+    assert f"자원 {c.resource_id} → SITE-CR-01" in text and "시작" not in text
+    moved = swapped.model_copy(update={"start": c.start + 30, "end": c.end + 30})
+    both = change_request_text(with_a, task, c, moved)
+    assert "시작 " in both and f"자원 {c.resource_id} → SITE-CR-01" in both

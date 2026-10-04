@@ -304,6 +304,10 @@ def test_choosing_another_plan_ends_the_open_consultation(seeded_real, main_on):
     chosen = {c["candidate_id"]: c["chosen"] for c in state["candidates"]}
     assert (chosen[first], chosen[second]) == (False, True)
     assert set(state["review_queue"]) == {first, second}  # 고르지 않은 안은 그대로 둔다
+    # 안 번호는 후보마다 만들어진 순서로 매긴다: 한 호출이 낸 두 후보도 번호가 다르다
+    views = {c["candidate_id"]: c for c in state["candidates"]}
+    assert (views[first]["plan_no"], views[second]["plan_no"]) == (1, 2)
+    assert [a["no"] for cid in (first, second) for a in views[cid]["approaches"]] == [1, 1]
 
     run_until_idle(pack, model_factory=Router().factory())
     again = _runs("COORDINATION")[-1]
