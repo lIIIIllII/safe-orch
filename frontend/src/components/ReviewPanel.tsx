@@ -545,6 +545,12 @@ function CandidateDetail({
               )}
             </tbody>
           </table>
+          {c.solver.stage2?.resource_changed !== null && c.solver.stage2?.resource_changed !== undefined && (
+            <p className="small">
+              마지막 단계: 자원을 바꾸는 작업 {c.solver.stage2.resource_changed}건{' '}
+              <span className="muted">(변경 수와 벗어난 정도가 같은 해 가운데 가장 적게)</span>
+            </p>
+          )}
           <p className="small">
             {c.solver.minimal_change && <span className="tag">최소 변경(이 탐색 범위 안)</span>}
             {c.solver.minimal_delay && <span className="tag">희망에서 가장 덜 벗어남(이 탐색 범위 안)</span>}

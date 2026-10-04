@@ -216,6 +216,8 @@ def _solver(
             "status": s2["status"],
             "delay": s2["delay"],
             "changed": s2.get("changed"),
+            # 마지막 단계: 자원을 바꾸는 작업 수 (CV-12)
+            "resource_changed": s2.get("resource_changed"),
             "work_delay": _work_delay_sum(s2.get("solution"), facts),
         },
         "chosen_stage": r["chosen_stage"],

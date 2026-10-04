@@ -22,7 +22,7 @@ from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "replanning-p22"
+PROMPT_VERSION = "replanning-p23"
 
 
 def tool_catalog() -> str:
@@ -75,7 +75,7 @@ Goal: {goal}
 - 조건 도구의 시각 인자는 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다. 분으로 바꾸지 않는다(서버가 바꾼다). clock의 값이 같은 형식이다.
 - 동의 범위(consents)는 작업 담당자가 동의한 시작 범위·자원이다. 희망 영역이 있는 작업의 시각은 말한 희망(STATED)의 시작 범위가 동의 범위이고, 정한 희망(DECIDED)은 담당자가 확인하기 전까지 동의가 아니다. 동의 범위 밖의 시각·자원으로 바뀐 안은 Supervisor가 고른 뒤 협의에서 담당자에게 간다.
 - 아직 시도하지 않은 탐색 범위(untried_levels): L0은 충돌 당사자만, L1은 같은 구역·같은 자원의 작업까지, L2는 acting_unit 작업 전부를 움직일 수 있게 한다. 범위가 넓을수록 바뀌는 작업이 늘 수 있다.
-- 이전 계산(attempts): 이 Case에서 acting_unit으로 한 계산 전부다(this_run이 false면 같은 Case의 앞 Run이 한 것). 1단계(stage1)는 변경 작업 수 최소화, 2단계(stage2)는 지연(희망에서 벗어난 정도의 합) 최소화 결과다. 조건(conditions)이 있으면 작업별로 건 시작 범위(start_min·start_max, 분)·자원을 넣은 계산이고, conditions_as_args는 같은 조건을 조건 도구의 인자 모양(현장 날짜·시각 문자열)으로 적은 것이다. 같은 범위·같은 조건·같은 목적 순서(objective)는 다시 계산되지 않는다: 다시 부르면 Solver를 돌리지 않고 ALREADY_TRIED와 함께 그때의 결과를 돌려준다(어느 Run의 몇 번째 step이었는지 first). 다른 결과를 얻으려면 범위·조건·목적 순서 가운데 하나를 실제로 바꿔야 한다. 지연 먼저(DELAY_FIRST)로 푼 계산은 1단계가 지연, 2단계가 변경 작업 수다. same_as_candidate_id가 있으면 해가 살아 있는 기존 후보와 같은 배치라 새 후보를 만들지 않았다.
+- 이전 계산(attempts): 이 Case에서 acting_unit으로 한 계산 전부다(this_run이 false면 같은 Case의 앞 Run이 한 것). 1단계(stage1)는 변경 작업 수 최소화, 2단계(stage2)는 지연(희망에서 벗어난 정도의 합) 최소화 결과다. 두 값이 같은 해 가운데서는 자원을 바꾸는 작업 수가 가장 적은 해가 나오고, 그 수가 resource_changed다. 조건(conditions)이 있으면 작업별로 건 시작 범위(start_min·start_max, 분)·자원을 넣은 계산이고, conditions_as_args는 같은 조건을 조건 도구의 인자 모양(현장 날짜·시각 문자열)으로 적은 것이다. 같은 범위·같은 조건·같은 목적 순서(objective)는 다시 계산되지 않는다: 다시 부르면 Solver를 돌리지 않고 ALREADY_TRIED와 함께 그때의 결과를 돌려준다(어느 Run의 몇 번째 step이었는지 first). 다른 결과를 얻으려면 범위·조건·목적 순서 가운데 하나를 실제로 바꿔야 한다. 지연 먼저(DELAY_FIRST)로 푼 계산은 1단계가 지연, 2단계가 변경 작업 수다. same_as_candidate_id가 있으면 해가 살아 있는 기존 후보와 같은 배치라 새 후보를 만들지 않았다.
 - 마지막 검증(latest_validation)은 마지막 후보의 독립 검증이고 live가 false면 그 후보는 무효가 되었거나 거절·확정되었다. 직전 거절 사유(last_guard)는 직전 행동이 받아들여지지 않은 이유다. ALREADY_TRIED면 previous에 이미 한 그 계산의 결과(Solver 상태, 변경 수·지연, 후보 candidate_id 또는 같은 배치였던 기존 후보 same_as_candidate_id, 건 조건 conditions_as_args)가 있다.
 - 후보 거절(rejections): 이 Case 후보에 대한 Supervisor 거절이다. 거절된 배정과 같은 배정은 다시 후보가 되지 않는다. quoted_comment는 인용이다. 거절 사실(rejection_facts)은 거절 수, 마지막 거절, 미시도 범위가 남았는지(untried_remaining)다.
 - 담당자 이견(objections): 이 Case의 협의에서 작업 담당자가 변경 요청에 낸 이견 전부다. 이견이 난 변경(작업, 변경 전·후 before·after)과 quoted_comment(인용)가 있다. 거절과 이견은 Case가 끝날 때까지 쌓인다.
@@ -186,4 +186,5 @@ PROMPT_FINGERPRINTS = {
     "replanning-p20": "6876d6dbc25a414bb8ecb185439e940af045c324556a601ddcc79eca0e2b99a6",  # 이미 한 탐색은 그때의 결과를 돌려준다(last_guard.previous), 이전 계산에 run_id (CV-13)
     "replanning-p21": "3e5a6fd103d48c1f39032178ee5bdb7be9131c43db82f7e06797e07e40523241",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
     "replanning-p22": "6c7850a500ebe1311a512b9ffb2b8e01217d019c9a387fdee517b6bd7d031f72",  # 희망 영역은 지연의 기준이고 동의 범위, 접근 둘(변경 최소·희망 우선), 정한 시간창 opener 삭제 (ST-22, AG-28)
+    "replanning-p23": "365cbb68ec376da1af67947e067bb76f8c133c7ffaf4ca86e50072d2100d7571",  # 마지막 단계: 자원을 바꾸는 작업 수 최소(resource_changed) (CV-12)
 }

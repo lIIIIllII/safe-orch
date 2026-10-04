@@ -1,4 +1,4 @@
-"""CP-SAT 2단계 최적화.
+"""CP-SAT 단계 최적화: 변경 작업 수 → 지연 → 자원을 바꾸는 작업 수.
 
 트랜잭션 밖에서 돈다. 모든 READY 작업을 넣고 SearchSpec이 허용하지 않은 작업·축은 기준값 상수다.
 1단계 min Σ changed_t, 1단계가 OPTIMAL이면 그 값을 고정하고 2단계 min Σ delay_t.
@@ -6,6 +6,10 @@ delay_t는 희망에서 벗어난 정도다: 희망 영역이 있는 작업은 �
 안이면 0), 없는 작업은 max(0, s_t − base_t). Plan에 없는 작업이 희망 영역을 가지면 희망 시작 범위
 안의 시작은 변경으로 세지 않는다 (ST-22).
 목적 순서가 지연 먼저(DELAY_FIRST)면 두 단계의 목적을 바꾼다: 1단계 지연, 2단계 변경 작업 수 (CV-27).
+마지막 단계: 두 값이 모두 OPTIMAL이면 둘을 고정하고 자원을 바꾸는 작업 수를 줄인다 (CV-12). 변경 수는
+작업당 하나라 시각을 바꾼 작업의 자원을 더 바꿔도 앞의 두 값이 같기 때문이다. 이 단계의 해는 2단계의
+해를 대신하고, 2단계 결과에 자원을 바꾸는 작업 수(resource_changed)와 이 단계의 상태(resource_status)를
+남긴다. 이 단계가 해를 못 내거나 자원을 덜 바꾸는 해가 없으면 2단계 해를 그대로 쓴다.
 Rule 데이터는 Pack에서 읽고 app.rules·app.validator를 import하지 않는다.
 """
 
@@ -33,6 +37,8 @@ class _Built:
     choices: dict[str, list[tuple[str, cp_model.IntVar]]] = field(default_factory=dict)
     changed: list[cp_model.IntVar] = field(default_factory=list)
     delays: list[cp_model.IntVar] = field(default_factory=list)
+    # 작업마다 "기준 자원이 아닌 자원을 쓴다" (자원 축이 열려 있고 고를 자원이 둘 이상인 작업만)
+    swaps: list[cp_model.IntVar] = field(default_factory=list)
 
 
 def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
@@ -103,6 +109,10 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
             elif t.required_resource_type is not None:
                 m.add(ch == 1)  # 기준 자원이 없으면 배정 자체가 변경
             b.changed.append(ch)
+            if ax.resource and base_lit is not None and len(lits) > 1:
+                swap = m.new_bool_var(f"swap_{tid}")
+                m.add(swap + base_lit == 1)
+                b.swaps.append(swap)
         if ax.time:
             dl = m.new_int_var(0, horizon, f"delay_{tid}")
             if hope is None:
@@ -204,6 +214,16 @@ def _solution(b: _Built, solver: cp_model.CpSolver) -> list[dict[str, Any]]:
     return out
 
 
+def _resource_changes(snapshot: Snapshot, solution: list[dict[str, Any]]) -> int:
+    """해가 기준 자원과 다른 자원에 놓은 작업 수."""
+    base = snapshot.facts().base_assignments()
+    return sum(
+        1
+        for a in solution
+        if a["task_id"] in base and a["resource_id"] != base[a["task_id"]].resource_id
+    )
+
+
 def solve(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> SolverResult:
     began = time.monotonic()
     delay_first = spec.objective == "DELAY_FIRST"
@@ -245,6 +265,25 @@ def solve(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> SolverResul
                 stage2["solution"] = _solution(b2, solver2)
 
     if stage2 is not None and stage2["solution"] is not None:
+        if stage2["status"] == "OPTIMAL":
+            # 마지막 단계: 변경 수와 지연을 고정하고 자원을 바꾸는 작업 수를 줄인다 (CV-12)
+            b3 = _build(snapshot, spec, pack)
+            if b3.swaps:
+                fixed = stage2["changed"] if delay_first else stage1["changed"]
+                b3.model.add(sum(b3.changed) == fixed)
+                b3.model.add(sum(b3.delays) == stage2["delay"])
+                b3.model.minimize(sum(b3.swaps))
+                remaining = max(spec.time_limit_s - (time.monotonic() - began), 0.1)
+                status3, solver3 = _solve_stage(b3.model, remaining)
+                stage2["resource_status"] = status3
+                # 자원을 덜 바꾸는 해가 있을 때만 바꾼다(같으면 2단계 해를 그대로 둔다)
+                if status3 in SOLVED:
+                    better = _solution(b3, solver3)
+                    if _resource_changes(snapshot, better) < _resource_changes(
+                        snapshot, stage2["solution"]
+                    ):
+                        stage2["solution"] = better
+        stage2["resource_changed"] = _resource_changes(snapshot, stage2["solution"])
         chosen = 2
     elif stage1["solution"] is not None:
         chosen = 1  # 2단계가 해를 못 내면 1단계 해

@@ -156,7 +156,14 @@ export interface SolverView {
   /** 목적 순서. DELAY_FIRST면 1단계가 희망에서 벗어난 정도, 2단계가 변경 작업 수다 */
   objective: 'CHANGE_FIRST' | 'DELAY_FIRST'
   stage1: { status: string; changed: number | null; delay?: number | null }
-  stage2: { status: string; delay: number | null; changed?: number | null; work_delay: number | null } | null
+  /** resource_changed: 마지막 단계의 자원을 바꾸는 작업 수(변경 수·벗어난 정도가 같은 해 가운데 최소) */
+  stage2: {
+    status: string
+    delay: number | null
+    changed?: number | null
+    resource_changed?: number | null
+    work_delay: number | null
+  } | null
   chosen_stage: number | null
   minimal_change: boolean
   minimal_delay: boolean

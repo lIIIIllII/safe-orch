@@ -7,6 +7,7 @@ from conftest import add_task, make_task, take_snapshot, with_facts
 
 from app.domain.hashes import candidate_hash
 from app.domain.models import (
+    Condition,
     Conflict,
     Movable,
     Pin,
@@ -202,6 +203,60 @@ def test_search_spec_hash_depends_on_snapshot_hash_not_id(with_a):
     add_task(with_a, make_task(with_a, revision=2))  # 같은 값이라도 Context가 바뀜
     s3 = take_snapshot(with_a)
     assert build_search_spec(s3, c, "UA", "L0").hash != build_search_spec(s1, c, "UA", "L0").hash
+
+
+# ── 마지막 단계: 자원을 바꾸는 작업 수 (CV-12) ─────────────────
+
+
+def test_equal_metrics_prefer_the_solution_that_changes_fewer_resources(seeded):
+    """변경 수와 지연이 같으면 자원을 덜 바꾸는 해가 나온다. 변경 수는 작업당 하나라, 시각을 바꿔야 하는
+    작업의 자원을 더 바꿔도 앞의 두 값은 같다."""
+    pack = seeded
+    snap = _site_crane_free(take_snapshot(pack))
+    conflict = Conflict(rule_id="TEST", task_ids=("B", "C"), zone_ids=(), interval=(0, 1))
+    later = {"C": Condition(start_min=90)}  # C는 시각을 바꿔야 한다
+    spec = build_search_spec(snap, conflict, "UA", "L0", later)
+    assert spec.resource_alternatives == {"C": ("SITE-CR-01",)}  # 자원도 바꿀 수 있다
+    result = cpsat.solve(snap, spec, pack)
+    assert _placed(result, "C") == [("C", 90, "A-CR-01")]  # 시각만 바꾼다
+    assert (result.stage1["changed"], result.stage2["delay"]) == (1, 30)
+    assert (result.stage2["resource_status"], result.stage2["resource_changed"]) == ("OPTIMAL", 0)
+
+    # 자원까지 바꾼 해도 변경 수와 지연은 같다: 마지막 단계가 없으면 둘은 구분되지 않는다
+    swapped = {"C": Condition(start_min=90, resource_id="SITE-CR-01")}
+    forced = cpsat.solve(snap, build_search_spec(snap, conflict, "UA", "L0", swapped), pack)
+    assert _placed(forced, "C") == [("C", 90, "SITE-CR-01")]
+    assert (forced.stage1["changed"], forced.stage2["delay"]) == (1, 30)
+    assert forced.stage2["resource_changed"] == 1
+
+    # 지연 먼저로 풀어도 마지막 단계는 같다
+    first = build_search_spec(snap, conflict, "UA", "L0", later, "DELAY_FIRST")
+    delay_first = cpsat.solve(snap, first, pack)
+    assert _placed(delay_first, "C") == [("C", 90, "A-CR-01")]
+    assert (delay_first.stage2["changed"], delay_first.stage2["resource_changed"]) == (1, 0)
+
+
+def test_last_stage_replaces_a_solution_that_changes_more_resources(seeded, monkeypatch):
+    """2단계 해가 자원을 불필요하게 바꿨으면 마지막 단계의 해가 그 자리를 대신한다."""
+    pack = seeded
+    snap = _site_crane_free(take_snapshot(pack))
+    conflict = Conflict(rule_id="TEST", task_ids=("B", "C"), zone_ids=(), interval=(0, 1))
+    spec = build_search_spec(snap, conflict, "UA", "L0", {"C": Condition(start_min=90)})
+    real, calls = cpsat._solution, []
+
+    def swapped_at_stage2(b, solver):
+        """두 번째로 읽는 해(2단계)만 C의 자원을 바꾼 것으로 돌려준다."""
+        calls.append(1)
+        out = real(b, solver)
+        if len(calls) == 2:
+            out = [{**a, "resource_id": "SITE-CR-01"} if a["task_id"] == "C" else a for a in out]
+        return out
+
+    monkeypatch.setattr(cpsat, "_solution", swapped_at_stage2)
+    result = cpsat.solve(snap, spec, pack)
+    assert len(calls) == 3  # 1단계, 2단계, 마지막 단계
+    assert _placed(result, "C") == [("C", 90, "A-CR-01")]
+    assert result.stage2["resource_changed"] == 0
 
 
 # ── T31 축별 독립 ──────────────────────────────────────────────

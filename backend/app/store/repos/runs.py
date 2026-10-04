@@ -310,10 +310,12 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
 
 
 def _stage(stage: dict[str, Any], key: str, objective: str) -> dict[str, Any]:
-    """단계 요약. 변경 먼저면 1단계는 변경 수·2단계는 지연, 지연 먼저면 두 값을 다 보인다."""
+    """단계 요약. 변경 먼저면 1단계는 변경 수·2단계는 지연, 지연 먼저면 두 값을 다 보인다.
+    마지막 단계까지 간 2단계 결과에는 자원을 바꾸는 작업 수(resource_changed)가 붙는다 (CV-12)."""
+    extra = {"resource_changed": stage["resource_changed"]} if "resource_changed" in stage else {}
     if objective == "DELAY_FIRST":
-        return {k: stage.get(k) for k in ("status", "changed", "delay")}
-    return {"status": stage["status"], key: stage[key]}
+        return {**{k: stage.get(k) for k in ("status", "changed", "delay")}, **extra}
+    return {"status": stage["status"], key: stage[key], **extra}
 
 
 def approach_attempts(

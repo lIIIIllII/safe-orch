@@ -449,7 +449,9 @@ def _solver_summary(
         "stage2": None
         if result.stage2 is None
         else {
-            k: result.stage2.get(k) for k in ("status", "delay", "changed") if k in result.stage2
+            k: result.stage2.get(k)
+            for k in ("status", "delay", "changed", "resource_changed")
+            if k in result.stage2
         },
         "chosen_stage": result.chosen_stage,
         "minimal_change": result.minimal_change,

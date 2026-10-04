@@ -652,7 +652,12 @@ def test_steps_api_reports_work_delay_without_storing(client, seeded):
     res = client.get(f"/api/runs/{run.run_id}/steps", headers={"X-Actor": "supervisor"})
     assert res.status_code == 200, res.text
     step = res.json()[0]
-    assert step["tool_result"]["stage2"] == {"status": "OPTIMAL", "delay": 1140, "work_delay": 180}
+    assert step["tool_result"]["stage2"] == {
+        "status": "OPTIMAL",
+        "delay": 1140,
+        "resource_changed": 0,  # 마지막 단계: 자원을 바꾸는 작업 수 (CV-12)
+        "work_delay": 180,
+    }
     with db.read() as conn:
         stored = conn.execute(
             "SELECT tool_result FROM agent_step WHERE run_id = ? AND step_no = 1", (run.run_id,)
