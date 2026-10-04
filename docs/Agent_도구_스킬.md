@@ -25,14 +25,14 @@
 | Main | 맡은 사건을 끝까지 처리한다 | 이 Case의 열린 일이 없으면 `CLOSE`. 풀 수 없으면 Supervisor에게 `ESCALATE` | 기본 step 14, 전문 Agent 호출 10 (설정값). 그 Case에서 사람이 새 일을 만들 때마다 step 8·호출 5씩, 네 번까지 늘어난다(AG-30). 사건을 합칠 때의 가산은 3단계 |
 | Intake | 묻지 않고 만든 작업 묶음(값마다 출처: 말함·정함) | `COMPLETE_TASK_BATCH`로 완료. 막히면 `RETURN_RESULT(BLOCKED)`: 접수 미완으로 끝나고 요청자에게 사유를 통지한다 | step 12 |
 | Replanning | 검증 가능한 후보 묶음과 서버 지표 기반 설명 | `RETURN_RESULT` | step 15, Solver 6, 알아보기 계산 (값 미정) |
-| Coordination | 협의 항목 해소, 후보 없는 사전 확인, 확정 뒤 통지 | `RETURN_RESULT` | step 12 |
+| Coordination | 협의 항목 해소, 확정 뒤 통지 | `RETURN_RESULT` | step 12 |
 | Event Response | 신고의 대상·영향·사실 수정안 | `RETURN_RESULT` | step 10, 사람 라운드 2 |
 | Site Assistant | 근거 있는 답 | `ANSWER` | 질문당 step 6 |
 
 - LLM 시도 Budget은 모든 Agent가 step × 2다.
 - 전문 Agent는 다른 Agent를 부르지 않고 사람에게 이관하지도 않는다. 막히면 `RETURN_RESULT(BLOCKED)`에 요약과 풀 수 있는 길을 담아 메인에게 돌려준다. Supervisor 이관은 메인만 한다.
-- 작업 담당자 확인은 Coordination 한 창구다. 후보가 있으면 협의로, 후보가 없으면 사전 확인으로 묻는다. Replanning은 사람에게 묻지 않고, 담당자 확인이 있어야 열리는 해는 막힌 결과의 길로 돌려준다.
-- 작업 고정·고정 해제와 희망 영역, 직접 이동·작업 없애기(담당자가 자기 작업의 시각을 옮기거나 자기 작업을 없애고 바로 확정, AG-31)는 사람만 타임라인에서 한다. 없앤 작업(취소됨)은 관찰에 들어가지 않는다. Agent 도구에 없다(AG-27). 작업을 관찰에 넣는 Agent(Replanning, Event Response)의 관찰에는 고정 여부(누가)와 희망 영역이 들어가고, 메인의 "움직일 수 있는 작업"은 고정되지 않은 작업이다. 희망 영역을 Solver 시도에 쓰는 것은 여러 안 제안 때 한다.
+- 작업 담당자 확인은 Coordination 한 창구이고, Supervisor가 고른 안의 협의에서만 묻는다(사전 확인은 없다). Replanning은 사람에게 묻지 않는다. 고정되지 않은 작업은 시각도 자원도 움직이고(AG-34), 범위 안 작업마다 서버가 채운 적격 자원 가운데서 Solver가 고른다. 요청 자원은 동의다: 그 자원이면 묻지 않고, 다른 자원으로 바뀐 안은 협의 항목이 된다.
+- 작업 고정·고정 해제와 희망 영역, 직접 이동·자원 바꾸기·작업 없애기(담당자가 자기 작업의 시각을 옮기거나 작업 카드에서 자원을 바꾸거나 자기 작업을 없애고 바로 확정, AG-31)는 사람만 타임라인에서 한다. 없앤 작업(취소됨)은 관찰에 들어가지 않는다. Agent 도구에 없다(AG-27). 작업을 관찰에 넣는 Agent(Replanning, Event Response)의 관찰에는 고정 여부(누가)와 희망 영역이 들어가고, 메인의 "움직일 수 있는 작업"은 고정되지 않은 작업이다. 희망 영역을 Solver 시도에 쓰는 것은 여러 안 제안 때 한다.
 - 사람이 남긴 사유(Supervisor 거절 문장, 담당자 이견)는 Case가 닫힐 때까지 Replanning 관찰에 인용으로 전부 쌓인다. Replanning은 사유가 시각·자원 조건으로 읽히면 조건을 걸어 다시 풀고, 서버는 사유를 해석하지 않는다(CV-26).
 - 서버는 살아 있는 후보가 거절·이견된 변경과 같은 변경을 담았는지 표시만 한다(Replanning·메인 관찰과 검토 패널). 메인은 그 표시가 있는 후보를 협의로 보내지 않고 재계획을 다시 부른다(지침).
 - 여러 안: 메인은 재계획을 접근을 달리해 두세 번 순서대로 부른다(같은 배치는 한 후보로 묶이고 그 후보에 접근이 더해진다). 안이 모이면 Supervisor가 고를 때까지 기다리고, 고른 안만 협의를 부른 뒤 승인을 기다린다(AG-28·AG-29). 거절·이견이 나오면 재계획을 다시 부를 수 있다.
@@ -48,7 +48,7 @@
 **메인 전용**
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `CALL_AGENT(agent, 참조)` | 전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다: 재계획은 충돌 그룹과 주체 Unit과 접근(목록 값 하나: 변경 최소·지연 최소·희망 영역 우선. 짧은 문장을 덧붙일 수 있고 인용으로만 전해진다), 협의는 Supervisor가 고른 후보, 통지는 확정된 후보, 사전 확인은 need ID 목록, 신고 대응은 신고. 하위 Run은 한 번에 하나다. 주체 Unit이 그 그룹에 움직일 수 있는 작업을 가졌는지 서버가 검사하고, ACTIVE Hold 중의 재계획·협의·사전 확인, 관련 사실이 바뀌지 않은 재호출(재계획은 같은 접근일 때), 고르지 않은 후보의 협의는 거절한다 | W |
+| `CALL_AGENT(agent, 참조)` | 전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다: 재계획은 충돌 그룹과 주체 Unit과 접근(목록 값 하나: 변경 최소·지연 최소·희망 영역 우선. 짧은 문장을 덧붙일 수 있고 인용으로만 전해진다), 협의는 Supervisor가 고른 후보, 통지는 확정된 후보, 신고 대응은 신고. 하위 Run은 한 번에 하나다. 주체 Unit이 그 그룹에 움직일 수 있는 작업을 가졌는지 서버가 검사하고, ACTIVE Hold 중의 재계획·협의, 관련 사실이 바뀌지 않은 재호출(재계획은 같은 접근일 때), 고르지 않은 후보의 협의는 거절한다 | W |
 | `WAIT()` | 사람의 결정(후보 승인·거절, Hold 해제)을 기다린다. 검토 대기 후보나 ACTIVE Hold가 있을 때만 유효하다 | W |
 | `MERGE_EVENT(event)` / `DEFER_EVENT(event)` | 새 사건을 지금 일에 합치거나 뒤로 미룬다 (3단계) | C |
 | `SEND_TO_REVIEW(group, candidate_set)` | 후보 묶음을 사람 검토 대기로 보낸다. 승인은 사람만 한다 (4단계. 지금은 검증을 통과한 후보를 서버가 검토 대기로 계산하고, Supervisor가 그 가운데 안을 고른다. 이 도구가 생기면 "어느 안을 보일지"만 메인으로 옮기고 고르기는 그대로 사람이 한다) | W |
@@ -68,7 +68,7 @@
 | 도구 | 하는 일 |
 |---|---|
 | `DIAGNOSE(conflict)` | 왜 안 풀리나: 막고 있는 조건·작업 |
-| `TEST_RELAXATION(conflict, conditions)` | 무엇을 풀면 풀리나: 물어볼 수 있는 조건(Soft 조건, 자원 축, 다른 작업 이동)을 하나씩 풀어 해가 생기는지 |
+| `TEST_RELAXATION(conflict, conditions)` | 무엇을 풀면 풀리나: 물어볼 수 있는 조건(Soft 조건, 다른 작업 이동)을 하나씩 풀어 해가 생기는지 |
 | `PREVIEW(change)` | 가정한 변경을 등록 없이 검사 |
 | `ANALYZE_IMPACT(change)` | 변경이 닿는 작업·담당자·규칙 |
 | `COMPARE_CANDIDATES(ids)` | 후보 사이 지표 차이(변경 수·지연·비용·넘은 Soft 조건) |
@@ -98,7 +98,7 @@
 **마무리·답변**
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `RETURN_RESULT(status, summary, paths)` | 전문 Agent가 결과를 돌려준다. status DONE / BLOCKED. 모델은 요약과 길만 쓰고, 결과물(후보·협의 상태·사전 확인의 답·수정안 등)은 서버가 채운다 | D |
+| `RETURN_RESULT(status, summary, paths)` | 전문 Agent가 결과를 돌려준다. status DONE / BLOCKED. 모델은 요약과 길만 쓰고, 결과물(후보·협의 상태·수정안 등)은 서버가 채운다 | D |
 | `ANSWER(text, evidence_refs)` | 근거 ID를 붙여 답한다. 근거가 없으면 모른다고 답한다 | D |
 
 ### 결과의 길과 needs
@@ -107,25 +107,16 @@
 - need는 종류와 그 종류의 참조만 쓴다. 자유 문장은 없다. 서버는 참조가 가리키는 대상이 지금 사실에 있는지 검사하고, 아니면 거절한다(`NEED_INVALID`).
 - Budget 소진은 need가 아니다. Run의 종료 사유로만 남는다.
 - 열 수 있는 것(openers): 서버가 지금 사실에서 계산해 need 모양으로 준다. Replanning 관찰에 넣고, 막힌 결과에도 붙인다(모델이 길을 비워도 메인이 볼 것이 남는다). 서버는 엮지 않는다. 길은 모델이 엮는다.
-  - 담당자 확인(`OWNER_CONSENT`): 자원 축이 확인되지 않은 작업과 물을 수 있는 적격 대체 자원. 거절한 값, 고정된 작업, 답을 기다리는 질문이 있는 작업은 뺀다.
   - 다른 Unit(`OTHER_UNIT`): 그 그룹에 움직일 수 있는 작업을 가진 다른 Unit.
   - 사실(`FACT_CHANGE`): 풀 초과 충돌의 풀(수량), 자원 조회에서 제외된 자원(사용 권한 없음 → 사용 권한, 가용 없음 → 가용 구간), 모든 범위에서 해가 없는 요청 작업의 시간창.
 - need ID: 결과의 need마다 서버가 ID를 붙인다(Run·길·순번). 모델이 엮은 길의 need와 서버가 붙인 openers의 need는 결과와 기록에서 따로 남고, 메인은 어느 쪽 ID든 같은 방식으로 넘긴다.
 
 | 종류 | 참조 | 서버 검증 |
 |---|---|---|
-| `OWNER_CONSENT` | 작업, 축, (자원 축이면 자원 값) | 현재 계산 대상 작업, 그 작업이 고정되지 않음(동의로 고정을 우회하지 않는다), 자원 값이 적격이고 담당자가 거절한 값이 아님(같은 작업 revision이면 현장 전체) |
 | `OTHER_UNIT` | 충돌 그룹, Unit | 그 그룹에 움직일 수 있는 작업을 가진 Unit이고 그 Run의 acting unit이 아님 |
 | `FACT_CHANGE` | 필드와 대상 하나(작업: 시간창·작업 시간·요청 철회, 자원: 가용 구간·사용 권한, 풀: 수량) | 대상이 있음 |
 | `HUMAN_INFO` | 사람, 신고 또는 작업 | 사람과 대상이 있음. Intake는 요청자와 접수 중인 작업, Event Response는 신고자와 그 신고 |
 | `HUMAN_DECISION` | 후보·신고·메시지 중 하나 | 대상이 있음 |
-
-### 사전 확인 (후보 없는 담당자 확인)
-
-- 메인이 `CALL_AGENT(COORDINATION, 단계 ASK, need_ids)`로 부른다. 받는 값은 지금 물을 수 있는 `OWNER_CONSENT` need ID뿐이다: 자원 축이고, 값이 적격이고 거절되지 않았고, 아직 동의 범위에 없다. 시간 축 `OWNER_CONSENT`는 유효한 need지만 사전 확인 대상이 아니다(시간은 Solver가 움직이고 시간 동의는 후보 협의에서 받는다).
-- 여러 길·여러 그룹의 ID를 한 호출에 담을 수 있다. 같은 확인이 겹치면 한 번만 묻고, 서버가 담당자별로 정렬해 Coordination 관찰에 준다.
-- 수락하면 작업 새 revision(자원 축 열림)과 자원 Consent가 생기고 현장 버전이 오른다. 메인이 다시 부른 Replanning은 동의 범위와 열린 자원 축을 보고 대체 자원으로 탐색한다.
-- 결과는 서버가 채운다: need별 수락한 값 / 거절 / 미응답. 전부 답을 받았으면 DONE, 응답을 받을 수 없으면 BLOCKED(`HUMAN_INFO`)다.
 
 ## 4. 스킬
 
@@ -158,10 +149,10 @@
 
 ## 6. 현재 코드와의 대응 (옮긴 뒤 이 절은 지운다)
 
-- Replanning `SOLVE_WITH_SCOPE`·`SOLVE_WITH_CONDITIONS`(조건)·`TRY_ALTERNATIVE_RESOURCE` → `SOLVE`
+- Replanning `SOLVE_WITH_SCOPE`·`SOLVE_WITH_CONDITIONS`(조건) → `SOLVE`
 - Replanning `LIST_ASSIGNABLE_RESOURCES`, Intake `LOOKUP_RESOURCE` → `LOOKUP_RESOURCES`
-- Coordination `SEND_CHANGE_REQUEST`(후보의 변경 확인), `ASK_OWNER(need_id, message)`(사전 확인, 스킬 `PRE_CONFIRM`) → Coordination `ASK_OWNER`
-- 사전 확인의 `ASK_OWNER`는 지금 need 하나에 질문 하나다. 담당자별 묶음 메시지(`ASK_OWNER(owner, items)`)는 3단계 묶음 등록 때 한다.
+- Coordination `SEND_CHANGE_REQUEST`(후보의 변경 확인) → Coordination `ASK_OWNER`
+- 담당자별 묶음 메시지(`ASK_OWNER(owner, items)`)는 3단계 묶음 등록 때 한다.
 - Intake `COMPLETE_TASKSPEC(values, origins)` → `COMPLETE_TASK_BATCH`
 
 ## 7. 열린 값
