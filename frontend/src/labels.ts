@@ -15,6 +15,7 @@ export const REASON: Record<string, string> = {
   NO_LIVE_CANDIDATE: '거절할 살아 있는 안이 없음',
   CANDIDATE_COMMITTED: '이미 확정된 후보',
   ALREADY_CHOSEN: '이미 고른 안',
+  APPROACH_NOT_OPEN: '이 Case에서 열리지 않는 접근',
   CANDIDATE_NOT_CHOSEN: 'Supervisor가 고르지 않은 안(먼저 이 안을 고르세요)',
   APPROACH_REQUIRED: '재계획 호출에 접근 필요',
   VALIDATION_NOT_PASS: '규칙 검사 통과 기록이 없는 후보',
@@ -380,11 +381,17 @@ export const HUMAN_ONLY: Record<string, string> = {
 export const APPROACH: Record<string, string> = {
   MIN_CHANGE: '변경 최소',
   MIN_DELAY: '덜 옮기기',
+  // 일정 Case의 세 방향
+  KEEP_EXISTING: '기존 위주',
+  KEEP_ADDED: '추가 위주',
+  BALANCED: '적절하게',
 }
 
 export const OBJECTIVE: Record<string, string> = {
   CHANGE_FIRST: '변경 먼저',
   DELAY_FIRST: '기준에서 덜 옮기기 먼저',
+  EXISTING_FIRST: '기존 작업 변경 먼저',
+  ADDED_FIRST: '추가 작업 변경 먼저',
 }
 
 /** 후보가 담은 거절·이견된 변경의 출처 (서버 계산) */

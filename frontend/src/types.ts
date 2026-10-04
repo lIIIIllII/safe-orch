@@ -151,8 +151,9 @@ export interface Conflict {
 
 export interface SolverView {
   scope_level: string
-  /** 목적 순서. DELAY_FIRST면 1단계가 기준에서 옮긴 거리, 2단계가 변경 작업 수다 */
-  objective: 'CHANGE_FIRST' | 'DELAY_FIRST'
+  /** 목적 순서(접근이 정한다). DELAY_FIRST면 1단계가 기준에서 옮긴 거리, 2단계가 변경 작업 수다.
+   *  EXISTING_FIRST·ADDED_FIRST는 1단계에서 기존 작업·추가 작업의 변경 수를 그 순서로 줄인다 */
+  objective: 'CHANGE_FIRST' | 'DELAY_FIRST' | 'EXISTING_FIRST' | 'ADDED_FIRST'
   stage1: { status: string; changed: number | null; delay?: number | null }
   /** resource_changed: 마지막 단계의 자원을 바꾸는 작업 수(변경 수·벗어난 정도가 같은 해 가운데 최소) */
   stage2: {
@@ -163,6 +164,8 @@ export interface SolverView {
     work_delay: number | null
   } | null
   chosen_stage: number | null
+  /** 1단계(접근이 먼저 줄이는 것)의 최적이 확인되지 않았다. 안 이름 옆에 "최적 미확인"으로 보인다 */
+  first_unconfirmed: boolean
   minimal_change: boolean
   minimal_delay: boolean
   delay_optimality_unconfirmed: boolean
@@ -278,6 +281,8 @@ export interface CandidateView {
   }[]
   /** 기준 계획을 확정한 뒤 사람이 바꾼 사실 (서버 계산): 무엇 때문에 다시 계획·확정하는가 */
   fact_changes: FactChange[]
+  /** 기존 작업(계획에 있던 작업) 변경 수, 추가 작업(계획에 없던 작업) 변경 수, 옮긴 거리(분). 서버 계산 */
+  change_counts: { existing: number; added: number; delay: number } | null
   solver: SolverView | null
   /** Agent가 그 탐색에 건 조건(서버가 받은 값, 시각은 분). 없으면 빈 목록 */
   conditions: {

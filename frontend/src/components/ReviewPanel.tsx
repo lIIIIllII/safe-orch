@@ -384,7 +384,14 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                 onClick={() => onSelect(c.candidate_id)}
               >
                 <td>
+                  {/* 이름은 그 안을 낸 호출의 접근(방향)이다. 같은 배치가 여러 접근에서 나오면 함께 보인다 */}
                   <b>{planLabel(c)}</b>
+                  {approachNames(c).length > 0 && <> · {approachNames(c).join('·')}</>}
+                  {c.solver?.first_unconfirmed && (
+                    <div className="tag tag-warn" title="시간 한도 안에 최적이 확인되지 않았습니다">
+                      최적 미확인
+                    </div>
+                  )}
                   {c.chosen && <div className="tag">고른 안</div>}
                 </td>
                 <td>
@@ -399,13 +406,25 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                 </td>
                 <td className="wrap">
                   {c.plan_changes.length === 0 && <span className="muted">없음</span>}
-                  {c.plan_changes.map((x) => (
-                    <PlanChange key={x.task_id} x={x} />
-                  ))}
+                  {/* 기존 작업(계획에 있던 작업)과 추가 작업(계획에 없던 작업)을 나눠 보인다 */}
+                  {(['CHANGED', 'NEW'] as const).map((kind) => {
+                    const list = c.plan_changes.filter((x) => x.kind === kind)
+                    if (list.length === 0) return null
+                    return (
+                      <div key={kind} className="chg-group">
+                        <div className="chg-group-name">{kind === 'CHANGED' ? '기존 작업' : '추가 작업'}</div>
+                        {list.map((x) => (
+                          <PlanChange key={x.task_id} x={x} />
+                        ))}
+                      </div>
+                    )
+                  })}
                 </td>
-                <td title={`기준에서 바뀐 작업 수 · 자원이 바뀌는 작업 수 · 기준에서 옮긴 거리 ${delayText(delay, workDelay)}`}>
-                  변경 {c.changes.length} · 자원 {c.plan_changes.filter((x) => x.resource_changed).length} · 기준에서 옮긴 거리{' '}
-                  {delay}분
+                <td title={`기존 작업 변경 수 · 추가 작업 변경 수 · 기준에서 옮긴 거리 ${delayText(delay, workDelay)} · 자원이 바뀌는 작업 수 (서버 계산)`}>
+                  {c.change_counts
+                    ? `기존 ${c.change_counts.existing} · 추가 ${c.change_counts.added} · 옮긴 거리 ${c.change_counts.delay}분`
+                    : `변경 ${c.changes.length} · 옮긴 거리 ${delay}분`}
+                  <div className="muted">자원 {c.plan_changes.filter((x) => x.resource_changed).length}</div>
                   {c.plan_changes
                     .filter((x) => x.direction !== null)
                     .map((x) => (

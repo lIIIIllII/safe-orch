@@ -1564,6 +1564,16 @@ input.time {
   overflow-wrap: anywhere;
 }
 
+/* 안 비교의 바뀌는 것: 기존 작업 / 추가 작업으로 나눠 보인다 */
+.chg-group + .chg-group {
+  margin-top: 4px;
+}
+
+.chg-group-name {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .chg-resource {
   color: #7a3e00;
 }
