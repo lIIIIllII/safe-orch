@@ -321,7 +321,7 @@ def approach_attempts(
 ) -> list[dict[str, Any]]:
     """접근을 받은 재계획 Run이 후보를 만들었거나 기존 후보와 같은 배치에 도달한 시도 (AG-28).
 
-    Case 또는 후보로 거른다. no는 그 Case에서 접근을 받은 재계획 Run의 순번(1부터)이다: 화면의 "n안".
+    Case 또는 후보로 거른다. no는 그 Case에서 부른 재계획 Run의 순번(1부터)이다: 안 번호의 숫자다.
     같은 Run이 같은 후보에 여러 번 닿아도 한 번만 낸다. quoted_reason은 그 step에 모델이 쓴 이유다.
     """
     found = rows(
@@ -350,7 +350,7 @@ def approach_attempts(
                 x[0]
                 for x in conn.execute(
                     "SELECT run_id FROM agent_run WHERE case_id = ? AND agent_type = 'REPLANNING'"
-                    " AND json_extract(input_ref, '$.approach') IS NOT NULL ORDER BY rowid",
+                    " ORDER BY rowid",
                     (r["case_id"],),
                 )
             ]
@@ -368,6 +368,42 @@ def approach_attempts(
             }
         )
     return out
+
+
+PLAN_LETTERS = "가나다라마바사아자차카타파하"
+
+
+def plan_labels(conn: sqlite3.Connection, case_id: str) -> dict[str, str]:
+    """이 Case 후보의 안 번호 (AG-29). 재계획을 부른 순서대로 1, 2, 3이고, 한 호출이 안을 여럿 내면 그
+    번호에 가·나를 붙인다. 다른 호출이 이미 있는 안과 같은 배치에 도달했으면(CV-25) 그 번호를 합친다:
+    "1가·2". 무효·거절된 안도 세므로 번호는 Case 안에서 바뀌지 않는다. "안"은 화면이 붙인다."""
+    runs = [
+        r[0]
+        for r in conn.execute(
+            "SELECT run_id FROM agent_run WHERE case_id = ? AND agent_type = 'REPLANNING'"
+            " ORDER BY rowid",
+            (case_id,),
+        )
+    ]
+    reached: dict[str, list[str]] = {run_id: [] for run_id in runs}
+    for r in rows(
+        conn,
+        "SELECT j.run_id, COALESCE(c.candidate_id, j.same_candidate_id) AS candidate_id"
+        " FROM solver_job j JOIN agent_run a ON a.run_id = j.run_id"
+        " LEFT JOIN candidate c ON c.solver_result_id = j.solver_result_id"
+        " WHERE a.case_id = ? AND a.agent_type = 'REPLANNING' AND j.status = 'REGISTERED'"
+        " AND COALESCE(c.candidate_id, j.same_candidate_id) IS NOT NULL ORDER BY j.rowid",
+        (case_id,),
+    ):
+        if r["candidate_id"] not in reached[r["run_id"]]:
+            reached[r["run_id"]].append(r["candidate_id"])
+    parts: dict[str, list[str]] = {}
+    for no, run_id in enumerate(runs, start=1):
+        found = reached[run_id]
+        for i, candidate_id in enumerate(found):
+            letter = PLAN_LETTERS[i % len(PLAN_LETTERS)] if len(found) > 1 else ""
+            parts.setdefault(candidate_id, []).append(f"{no}{letter}")
+    return {candidate_id: "·".join(tags) for candidate_id, tags in parts.items()}
 
 
 def run_for_solver_result(conn: sqlite3.Connection, solver_result_id: str) -> str | None:

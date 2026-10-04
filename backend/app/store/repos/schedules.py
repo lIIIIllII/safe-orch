@@ -56,7 +56,8 @@ def get_schedule(conn: sqlite3.Connection, site_id: str, schedule_id: str) -> di
 def insert_task_base(
     tx: sqlite3.Connection, site_id: str, base: TaskBase, schedule_id: str | None = None
 ) -> None:
-    """새 작업의 기준 위치 (CV-29). 일정으로 들어온 작업이면 어느 넣기에서 왔는지도 적는다 (ST-24)."""
+    """새 작업의 기준 위치 (CV-29). 일정으로 들어온 작업이면 어느 넣기에서 왔는지도 적는다 (ST-24).
+    같은 작업에 다시 넣으면 그 행이 지금 값이 된다(카드에서 요청 시작 범위 고치기, AG-33)."""
     tx.execute(
         "INSERT INTO task_base (site_id, task_id, start_min, start_max, resource_id, origin,"
         " schedule_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -73,7 +74,7 @@ def insert_task_base(
 
 
 def list_task_bases(conn: sqlite3.Connection, site_id: str) -> list[TaskBase]:
-    """기준 위치 전부 (작업 ID순)."""
+    """작업마다 지금의 기준 위치 (작업 ID순). 고친 기록이 있으면 마지막 것이다."""
     return [
         TaskBase(
             task_id=r["task_id"],
@@ -85,10 +86,22 @@ def list_task_bases(conn: sqlite3.Connection, site_id: str) -> list[TaskBase]:
         for r in rows(
             conn,
             "SELECT task_id, start_min, start_max, resource_id, origin FROM task_base"
-            " WHERE site_id = ? ORDER BY task_id",
-            (site_id,),
+            " WHERE site_id = ? AND base_id IN (SELECT MAX(base_id) FROM task_base"
+            "  WHERE site_id = ? GROUP BY task_id) ORDER BY task_id",
+            (site_id, site_id),
         )
     ]
+
+
+def get_task_base(conn: sqlite3.Connection, site_id: str, task_id: str) -> dict[str, Any] | None:
+    """그 작업의 지금 기준 위치 기록 {start, start_max, resource_id, origin, schedule_id}. 없으면 None."""
+    found = rows(
+        conn,
+        "SELECT start_min AS start, start_max, resource_id, origin, schedule_id FROM task_base"
+        " WHERE site_id = ? AND task_id = ? ORDER BY base_id DESC LIMIT 1",
+        (site_id, task_id),
+    )
+    return found[0] if found else None
 
 
 def schedule_of_tasks(conn: sqlite3.Connection, site_id: str) -> dict[str, str]:

@@ -90,11 +90,11 @@ def _task(pack, task_id):
 
 
 def _base(task_id):
-    """그 작업의 기준 위치 기록. 없으면 None."""
+    """그 작업의 지금 기준 위치 기록(고쳤으면 마지막 것). 없으면 None."""
     with db.read() as conn:
         cur = conn.execute(
             "SELECT start_min, start_max, resource_id, origin, schedule_id FROM task_base"
-            " WHERE task_id = ?",
+            " WHERE task_id = ? ORDER BY base_id DESC",
             (task_id,),
         )
         cols = [d[0] for d in cur.description]

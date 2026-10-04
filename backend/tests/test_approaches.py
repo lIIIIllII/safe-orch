@@ -22,8 +22,10 @@ from app.agents import casefacts, runtime
 from app.api.state import build_state
 from app.commands.approval import (
     ChooseRequest,
+    RejectAllRequest,
     RejectRequest,
     choose_candidate,
+    reject_all,
     reject_candidate,
 )
 from app.commands.messages import ReplyRequest, reply_message
@@ -36,6 +38,7 @@ from app.solver.candidate import build_candidate
 from app.solver.search_spec import build_search_spec
 from app.store import db
 from app.store.repos.calls import call_key
+from app.store.repos.decisions import case_rejection_reasons
 from app.store.repos.records import list_validations
 from app.store.repos.runs import get_run, list_steps
 from app.validator.validator import validate
@@ -254,6 +257,8 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
         (2, "MIN_DELAY", True),
     ]
     assert view["approaches"][1]["quoted_reason"] == "이유: 지연을 먼저 줄인다/다음: 검증"
+    # 안 번호: 호출마다 번호 하나이고, 두 호출이 같은 배치를 냈으면 번호를 합친다
+    assert view["plan_label"] == "1·2"
     assert (view["chosen"], view["case_id"], view["solver"]["objective"]) == (
         False,
         main.case_id,
@@ -306,9 +311,9 @@ def test_choosing_another_plan_ends_the_open_consultation(seeded_real, main_on):
     chosen = {c["candidate_id"]: c["chosen"] for c in state["candidates"]}
     assert (chosen[first], chosen[second]) == (False, True)
     assert set(state["review_queue"]) == {first, second}  # 고르지 않은 안은 그대로 둔다
-    # 안 번호는 후보마다 만들어진 순서로 매긴다: 한 호출이 낸 두 후보도 번호가 다르다
+    # 안 번호는 재계획 호출마다 하나다: 한 호출이 낸 두 안은 그 번호에 가·나를 붙인다
     views = {c["candidate_id"]: c for c in state["candidates"]}
-    assert (views[first]["plan_no"], views[second]["plan_no"]) == (1, 2)
+    assert (views[first]["plan_label"], views[second]["plan_label"]) == ("1가", "1나")
     assert [a["no"] for cid in (first, second) for a in views[cid]["approaches"]] == [1, 1]
 
     run_until_idle(pack, model_factory=Router().factory())
@@ -326,8 +331,8 @@ def test_choosing_another_plan_ends_the_open_consultation(seeded_real, main_on):
     with db.read() as conn:
         state = build_state(conn, pack, "supervisor")
     views = {c["candidate_id"]: c for c in state["candidates"]}
-    assert (views[first]["display_status"], views[first]["plan_no"]) == ("REJECTED", 1)
-    assert views[second]["plan_no"] == 2
+    assert (views[first]["display_status"], views[first]["plan_label"]) == ("REJECTED", "1가")
+    assert views[second]["plan_label"] == "1나"
 
 
 def test_choice_change_and_objection_count_as_human_work(seeded_real, main_on):
@@ -362,3 +367,103 @@ def test_choice_change_and_objection_count_as_human_work(seeded_real, main_on):
     assert count() == 2
     choose(pack, first)
     assert count() == 2
+
+
+# ── 모두 거절 (AG-29) ──────────────────────────────────────────
+
+REASON = "두 안 모두 오전 인양이 겹친다"
+
+
+def _reject_all(pack, actor, comment=REASON, key=None, case_id=None):
+    body = RejectAllRequest(case_id=case_id or _runs("MAIN")[0].case_id, comment=comment)
+    return reject_all(pack, actor, key or _key(), body)
+
+
+def test_reject_all_turns_down_every_live_plan_with_one_reason(seeded_real, main_on):
+    """[모두 거절]: 이 Case의 살아 있는 안이 한 번에 거절된다. 안마다 하나씩 거절과 같은 처리(결정 기록,
+    보낸 협의 요청 정리)이고, 사유는 한 번만 쌓이며 메인에게는 사건 하나, 사람이 만든 일도 하나다."""
+    pack = seeded_real
+    _submit_a(pack)
+    replies = [solve("L1"), solve_with("L2", cond("M", start_at=2940)), done()]
+    run_until_idle(pack, model_factory=Router(replanning=replies, auto_done=False).factory())
+    first, second = _candidate_ids()
+    [main] = _runs("MAIN")
+    choose(pack, first)
+    run_until_idle(pack, model_factory=Router().factory())
+    [consult] = _runs("COORDINATION")
+    assert (consult.input_ref["candidate_id"], consult.status) == (first, "WAITING_HUMAN")
+    before = len(_events("CANDIDATE_DECIDED"))
+    with db.read() as conn:
+        assert casefacts.human_work(conn, pack.site_id, main.case_id) == 0
+
+    # Supervisor만 한다. 사유는 꼭 적는다. 거절은 아무것도 바꾸지 않는다
+    assert _reject_all(pack, "planner_a").reason_codes == ("NOT_AUTHORIZED",)
+    assert _reject_all(pack, "supervisor", "  ").reason_codes == ("COMMENT_REQUIRED",)
+    assert _reject_all(pack, "supervisor", case_id="case_none").reason_codes == (
+        "NO_LIVE_CANDIDATE",
+    )
+    with db.read() as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM decision WHERE type = 'REJECT'").fetchone()[0] == 0
+        )
+
+    out = _reject_all(pack, "supervisor", key="k-reject-all")
+    assert out.status == "APPLIED" and out.result_refs["candidate_ids"] == [first, second]
+    # 같은 키로 다시 보내도 효과는 한 번이다
+    again = _reject_all(pack, "supervisor", key="k-reject-all")
+    assert again.status == "REPLAYED" and again.result_refs == out.result_refs
+    with db.read() as conn:
+        decided = conn.execute(
+            "SELECT candidate_id, reason_code, comment, batch_id FROM decision"
+            " WHERE type = 'REJECT' ORDER BY rowid"
+        ).fetchall()
+        requests = conn.execute(
+            "SELECT candidate_id, status FROM message WHERE type = 'CHANGE_REQUEST'"
+        ).fetchall()
+        state = build_state(conn, pack, "supervisor")
+        reasons = case_rejection_reasons(conn, main.case_id)
+        facts = casefacts.rejection_facts(conn, main.case_id)
+        work = casefacts.human_work(conn, pack.site_id, main.case_id)
+    # 안마다 결정 기록이 남고 같은 묶음이다. 고른 안의 협의는 끝나고 보낸 요청은 정리된다
+    assert [(d[0], d[1], d[2]) for d in decided] == [
+        (first, "OTHER", REASON),
+        (second, "OTHER", REASON),
+    ]
+    assert {d[3] for d in decided} == {out.result_refs["batch_id"]}
+    assert [tuple(r) for r in requests] == [(first, "CANCELLED")]
+    assert _runs("COORDINATION")[0].status == "STALE"
+    views = {c["candidate_id"]: c["display_status"] for c in state["candidates"]}
+    assert (views[first], views[second], state["review_queue"]) == ("REJECTED", "REJECTED", [])
+    # 사유는 한 번만 쌓인다 (CV-26). 메인에게는 사건 하나, 사람이 만든 일도 하나다 (AG-30)
+    assert [(r["quoted_comment"], r["candidate_ids"]) for r in reasons] == [
+        (REASON, [first, second])
+    ]
+    assert (facts["count"], work) == (1, 1)
+    events = _events("CANDIDATE_DECIDED")
+    assert len(events) == before + 1
+    ref, case_id = events[-1]
+    assert case_id == main.case_id and first in ref and second in ref
+    # 더 거절할 살아 있는 안이 없다
+    assert _reject_all(pack, "supervisor").reason_codes == ("NO_LIVE_CANDIDATE",)
+
+
+def test_reject_all_api(seeded_real, main_on):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    pack = seeded_real
+    _submit_a(pack)
+    run_until_idle(pack, model_factory=Router(replanning=[solve("L1"), done()]).factory())
+    [main] = _runs("MAIN")
+    [cid] = _candidate_ids()
+    with TestClient(app) as client:
+
+        def post(actor, body):
+            headers = {"X-Actor": actor, "Idempotency-Key": _key()}
+            return client.post(f"/api/cases/{main.case_id}/reject-all", json=body, headers=headers)
+
+        assert post("planner_a", {"comment": "다시"}).status_code == 403
+        assert post("supervisor", {}).status_code == 422
+        res = post("supervisor", {"comment": "다시"})
+    assert res.status_code == 200 and res.json()["result_refs"]["candidate_ids"] == [cid]

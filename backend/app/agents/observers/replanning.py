@@ -22,7 +22,7 @@ from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.solver.search_spec import SearchSpecError, build_search_spec
 from app.store.repos.consultations import candidate_state, case_objections, contested_changes
-from app.store.repos.decisions import list_case_rejections
+from app.store.repos.decisions import case_rejection_reasons
 from app.store.repos.records import get_candidate, list_validations
 from app.store.repos.runs import (
     approach_attempts,
@@ -375,8 +375,9 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             for a in attempts
         ],
         "latest_validation": latest_validation,
-        # 이 Case 후보에 대한 Supervisor 거절. comment는 인용 데이터다
-        "rejections": list_case_rejections(conn, run.case_id),
+        # 이 Case 후보에 대한 Supervisor 거절. 사유 하나가 한 줄이다([모두 거절]은 한 줄에 안 여럿).
+        # comment는 인용 데이터다 (CV-26)
+        "rejections": case_rejection_reasons(conn, run.case_id),
         # 이 Case의 협의에서 담당자가 낸 이견 전부. quoted_comment는 인용 데이터다 (CV-26)
         "objections": case_objections(conn, pack.site_id, run.case_id),
         # 이 Case의 살아 있는 후보와 그 후보가 담은 거절·이견된 변경 (서버 계산)

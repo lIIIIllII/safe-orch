@@ -39,8 +39,14 @@ from app.store.repos.records import (
     list_validations,
 )
 from app.store.repos.resources import list_resources
-from app.store.repos.runs import approach_attempts, get_run, list_steps, run_for_solver_result
-from app.store.repos.schedules import get_schedule
+from app.store.repos.runs import (
+    approach_attempts,
+    get_run,
+    list_steps,
+    plan_labels,
+    run_for_solver_result,
+)
+from app.store.repos.schedules import get_schedule, list_task_bases
 from app.store.repos.site import get_site, list_actors, list_zone_relations
 from app.store.repos.snapshots import build_snapshot_content, plan_facts
 from app.store.repos.tasks import list_current_tasks
@@ -171,23 +177,6 @@ def plan_changes(facts: SnapshotContent | None, assignments: Any) -> list[dict[s
     return out
 
 
-def plan_numbers(conn: sqlite3.Connection, case_id: str) -> dict[str, int]:
-    """이 Case의 재계획 후보 전체에 만들어진 순서로 매긴 안 번호(1부터). 화면의 "n안"이다.
-    한 호출이 후보를 여럿 내도 후보마다 번호가 다르다. 무효·거절된 후보도 세므로 번호는 바뀌지 않고,
-    살아 있는 안만 보면 번호가 건너뛸 수 있다."""
-    ids = [
-        r["candidate_id"]
-        for r in rows(
-            conn,
-            "SELECT c.candidate_id FROM candidate c"
-            " JOIN solver_job j ON j.solver_result_id = c.solver_result_id"
-            " JOIN agent_run r ON r.run_id = j.run_id WHERE r.case_id = ? ORDER BY c.rowid",
-            (case_id,),
-        )
-    ]
-    return {cid: no for no, cid in enumerate(ids, start=1)}
-
-
 def _solver(
     conn: sqlite3.Connection, solver_result_id: str | None, facts: SnapshotContent | None
 ) -> dict[str, Any] | None:
@@ -299,10 +288,11 @@ def candidate_view(conn: sqlite3.Connection, site_id: str, candidate_id: str) ->
         "run_id": run_id,
         # 이 후보를 만든 Case, 이 후보에 도달한 접근들(같은 배치면 여럿), Supervisor가 골랐는가 (AG-28·AG-29)
         "case_id": None if maker is None else maker.case_id,
-        # 안 번호: 이 Case의 재계획 후보 전체에 만들어진 순서로 매긴다(바뀌지 않는다). 없으면 None
-        "plan_no": None
+        # 안 번호: 재계획 호출 순서의 숫자, 한 호출의 여러 안은 가·나, 같은 배치는 번호를 합친다("1가·2").
+        # Case 안에서 바뀌지 않는다. 없으면 None
+        "plan_label": None
         if maker is None
-        else plan_numbers(conn, maker.case_id).get(cand.candidate_id),
+        else plan_labels(conn, maker.case_id).get(cand.candidate_id),
         "approaches": [
             {k: a[k] for k in ("no", "approach", "quoted_note", "run_id", "same", "quoted_reason")}
             for a in approach_attempts(conn, candidate_id=cand.candidate_id)
@@ -452,6 +442,8 @@ def build_state(
     conflicts = detect_conflicts(snapshot, snapshot.facts().check_assignments(), pack)
     facts = snapshot.facts()
     base = facts.base_assignments()
+    # 대기 중인(QUEUED) 작업은 아직 사실이 아니지만 요청 시작 범위는 카드에서 보고 고칠 수 있다
+    requested = {b.task_id: b for b in list_task_bases(conn, site_id)}
 
     live = rows(
         conn,
@@ -506,7 +498,16 @@ def build_state(
                 # 기준 시작: 계획에 있으면 지금 배치, 없으면 요청한 시작(없으면 가장 이른 시작). READY만
                 "base_start": base[t.task_id].start if t.task_id in base else None,
                 # 기준 위치: 출처(계획·요청한 자리·없음)와 시작 범위, 말함·정함 (CV-29). READY만
-                "base": facts.base_info(t.task_id) if t.task_id in base else None,
+                "base": facts.base_info(t.task_id)
+                if t.task_id in base
+                else {
+                    "source": "REQUEST",
+                    "start": requested[t.task_id].start,
+                    "start_max": requested[t.task_id].upper,
+                    "origin": requested[t.task_id].origin,
+                }
+                if t.lifecycle == "QUEUED" and t.task_id in requested
+                else None,
             }
             for t in tasks
         ],

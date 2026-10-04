@@ -246,6 +246,7 @@ def test_plan_b_reject_and_pin_recalls_replanning(seeded):
             "reason_code": "TIME_WINDOW_UNACCEPTABLE",
             "target_task_ids": ["C"],
             "quoted_comment": "작업발판 연계 공정 확정",
+            "candidate_ids": [run.wait_ref],
         }
     ]
     assert obs["rejection_facts"]["count"] == 1

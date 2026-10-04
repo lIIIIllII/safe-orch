@@ -11,10 +11,12 @@ from app.api.deps import ActorDep, KeyDep, PackDep, check_site, respond
 from app.commands.approval import (
     ApproveRequest,
     ChooseRequest,
+    RejectAllRequest,
     RejectRequest,
     WaiveRequest,
     approve_and_commit,
     choose_candidate,
+    reject_all,
     reject_candidate,
     waive,
 )
@@ -66,6 +68,10 @@ class ChooseBody(Body):
     validation_id: str
 
 
+class RejectAllBody(Body):
+    comment: str
+
+
 class RejectBody(Body):
     validation_id: str
     reason_code: str
@@ -110,6 +116,9 @@ class EditBody(Body):
     latest_end: int | None = None
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
+    # 요청 시작 범위(기준 위치). 계획에 아직 없고 기준 위치가 있는 작업만 고친다
+    base_start: int | None = None
+    base_start_max: int | None = None
 
 
 class ReleaseBody(Body):
@@ -227,6 +236,15 @@ def post_reject(
 ) -> JSONResponse:
     req = RejectRequest(candidate_id=candidate_id, **body.model_dump())
     return respond(reject_candidate(pack, actor.actor_id, key, req))
+
+
+@router.post("/cases/{case_id}/reject-all")
+def post_reject_all(
+    case_id: str, body: RejectAllBody, pack: PackDep, actor: ActorDep, key: KeyDep
+) -> JSONResponse:
+    """이 Case의 살아 있는 안을 한 번에 거절한다. 사유는 한 번만 적는다 (AG-29)."""
+    req = RejectAllRequest(case_id=case_id, **body.model_dump())
+    return respond(reject_all(pack, actor.actor_id, key, req))
 
 
 @router.post("/consultations/{candidate_id}/waive")

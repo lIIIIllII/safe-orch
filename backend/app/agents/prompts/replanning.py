@@ -22,7 +22,7 @@ from app.agents.specs import replanning as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "replanning-p26"
+PROMPT_VERSION = "replanning-p27"
 
 
 def tool_catalog() -> str:
@@ -76,7 +76,7 @@ Goal: {goal}
 - 아직 시도하지 않은 탐색 범위(untried_levels): L0은 충돌에 걸린 작업, L1은 그 작업과 같은 구역·같은 자원의 작업까지, L2는 작업 전부를 움직일 수 있게 한다(고정된 작업은 어느 범위에서도 움직이지 않는다). 범위가 넓을수록 바뀌는 작업이 늘 수 있다.
 - 이전 계산(attempts): 이 Case에서 한 계산 전부다(this_run이 false면 같은 Case의 앞 Run이 한 것). 1단계(stage1)는 변경 작업 수 최소화, 2단계(stage2)는 지연(기준에서 옮긴 거리의 합) 최소화 결과다. 두 값이 같은 해 가운데서는 자원을 바꾸는 작업 수가 가장 적은 해가 나오고, 그 수가 resource_changed다. 조건(conditions)이 있으면 작업별로 건 시작 범위(start_min·start_max, 분)·자원을 넣은 계산이고, conditions_as_args는 같은 조건을 조건 도구의 인자 모양(현장 날짜·시각 문자열)으로 적은 것이다. 같은 범위·같은 조건·같은 목적 순서(objective)는 다시 계산되지 않는다: 다시 부르면 Solver를 돌리지 않고 ALREADY_TRIED와 함께 그때의 결과를 돌려준다(어느 Run의 몇 번째 step이었는지 first). 다른 결과를 얻으려면 범위·조건·목적 순서 가운데 하나를 실제로 바꿔야 한다. 지연 먼저(DELAY_FIRST)로 푼 계산은 1단계가 지연, 2단계가 변경 작업 수다. same_as_candidate_id가 있으면 해가 살아 있는 기존 후보와 같은 배치라 새 후보를 만들지 않았다.
 - 마지막 검증(latest_validation)은 마지막 후보의 독립 검증이고 live가 false면 그 후보는 무효가 되었거나 거절·확정되었다. 직전 거절 사유(last_guard)는 직전 행동이 받아들여지지 않은 이유다. ALREADY_TRIED면 previous에 이미 한 그 계산의 결과(Solver 상태, 변경 수·지연, 후보 candidate_id 또는 같은 배치였던 기존 후보 same_as_candidate_id, 건 조건 conditions_as_args)가 있다.
-- 후보 거절(rejections): 이 Case 후보에 대한 Supervisor 거절이다. 거절된 배정과 같은 배정은 다시 후보가 되지 않는다. quoted_comment는 인용이다. 거절 사실(rejection_facts)은 거절 수, 마지막 거절, 미시도 범위가 남았는지(untried_remaining)다.
+- 후보 거절(rejections): 이 Case 후보에 대한 Supervisor 거절이고 사유 하나가 한 줄이다. 그 사유로 거절된 후보가 candidate_ids에 있다: 여럿이면 Supervisor가 그때의 안을 한 번에 모두 거절한 것이다. 거절된 배정과 같은 배정은 다시 후보가 되지 않는다. quoted_comment는 인용이다. 거절 사실(rejection_facts)은 거절 수, 마지막 거절, 미시도 범위가 남았는지(untried_remaining)다.
 - 담당자 이견(objections): 이 Case의 협의에서 작업 담당자가 변경 요청에 낸 이견 전부다. 이견이 난 변경(작업, 변경 전·후 before·after)과 quoted_comment(인용)가 있다. 거절과 이견은 Case가 끝날 때까지 쌓인다.
 - 살아 있는 후보(live_candidates): 이 Case의 살아 있는 후보와, 그 후보가 담은 거절·이견된 변경(contested: 작업과 REJECTION 거절된 후보의 대상 작업 변경과 같음, OBJECTION 이견이 난 변경과 같음)이다. 서버가 같은 변경인지만 계산한 것이고 사유를 해석한 것이 아니다.
 - 자원 조회 결과(assignable_resources): 작업별로 쓸 수 있는 자원(assignable), 쓸 수 없는 자원과 이유(excluded의 reasons: NOT_ALLOWED 그 작업의 Unit에 사용 권한 없음, NO_AVAILABILITY 가용 구간 없음, ZONE_NOT_ALLOWED 작업 구역에서 쓸 수 없음, REQUIREMENT_NOT_MET 작업의 자원 요구 조건을 맞추지 못함이고 attribute가 어느 속성인지다), 현재 자원(current)이다. 조건의 자원 지정에는 쓸 수 있는 자원만 받는다.
@@ -185,4 +185,5 @@ PROMPT_FINGERPRINTS = {
     "replanning-p24": "2f0ec5dc675365a2855955f013e7440e9fa523d48646ad97bddcec416773d912",  # 주체 Unit 없이 충돌 전체를 푼다: 작업 전체(tasks), 맡은 충돌·그룹·OTHER_UNIT 삭제 (AG-24)
     "replanning-p25": "df2936f19d7109027bee311eae4001148f7ab4922f7e5e86826a93038047bcea",  # 지연은 세 경우: 희망 영역, 계획의 시작에서 옮긴 거리(앞뒤), 계획 밖은 0 (CV-29)
     "replanning-p26": "d3353fa5758034703e2c4072b1fba199c2c67f164b307983729c9c01cd694db1",  # 기준 배정의 출처·범위·정함, 희망 영역·동의 범위·조건의 희망 영역 삭제, 접근 MIN_DELAY (CV-29·AG-33)
+    "replanning-p27": "32c226a1f8cd17856c4b04164bd3c545cad23ac3c5ac34375cffd8e617c3d805",  # 거절 사유 하나가 한 줄(candidate_ids): 모두 거절은 사유를 한 번만 쌓는다 (CV-26)
 }

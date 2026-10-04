@@ -1,4 +1,4 @@
-"""ApproveAndCommit·WAIVE·구조화 거절·안 고르기.
+"""ApproveAndCommit·WAIVE·구조화 거절·모두 거절·안 고르기.
 
 NOT_AUTHORIZED와 CANDIDATE_NOT_FOUND는 단독으로 반환하고, 나머지 사유는 해당하는 것을 모두 반환한다.
 STALE은 STALE_PLAN·STALE_CONTEXT로만 보고한다(승인 8단계는 item만 본 상태로 판정).
@@ -12,6 +12,7 @@ from app.commands.service import Body, CommandContext, CommandOutcome, Result, r
 from app.domain.ids import new_id
 from app.domain.models import Candidate, Plan, Validation
 from app.packs.loader import LoadedPack
+from app.store.repos._rows import rows
 from app.store.repos.cases import deliver_event, end_candidate_runs, register_recheck, wake_run
 from app.store.repos.consultations import CandidateState, candidate_state, consultation_view
 from app.store.repos.decisions import chosen_by_case, insert_decision
@@ -53,6 +54,14 @@ class RejectRequest(Body):
     reason_code: str
     target_task_ids: tuple[str, ...] = ()
     comment: str = ""
+
+
+class RejectAllRequest(Body):
+    """이 Case의 살아 있는 안을 한 번에 거절한다. 사유(comment)는 한 번만 적는다."""
+
+    case_id: str
+    comment: str
+    reason_code: str = "OTHER"
 
 
 def _pass_validation(
@@ -238,29 +247,119 @@ def _reject(tx: sqlite3.Connection, ctx: CommandContext, body: RejectRequest) ->
         return r
 
     targets = tuple(sorted(set(body.target_task_ids)))
+    decision_id = _record_rejection(
+        tx, ctx, candidate, validation, body.reason_code, targets, body.comment
+    )
+    r.refs = {"decision_id": decision_id}
+    r.audit_reason = body.reason_code
+    # 거절 결과는 사건으로 메인에게 간다. 다시 재계획할지 이관할지는 메인이 판단한다 (AG-25)
+    _deliver_decided(tx, ctx, candidate, decision_id, "REJECT")
+    return r
+
+
+def _record_rejection(
+    tx: sqlite3.Connection,
+    ctx: CommandContext,
+    candidate: Candidate,
+    validation: Validation,
+    reason_code: str,
+    targets: tuple[str, ...],
+    comment: str,
+    batch_id: str | None = None,
+) -> str:
+    """후보 하나의 거절: 결정 기록을 남기고 그 후보의 협의 Run을 끝낸다(보낸 요청 정리).
+    하나씩 거절과 모두 거절이 같이 쓴다. 사건은 부르는 쪽이 전한다."""
     decision_id = new_id("dec")
     insert_decision(
         tx,
-        site_id,
+        ctx.site_id,
         decision_id,
         "REJECT",
         candidate.candidate_id,
         validation.validation_id,
         ctx.actor_id,
         ctx.site.context_version,
-        reason_code=body.reason_code,
+        reason_code=reason_code,
         target_task_ids=targets,
-        comment=body.comment,
+        comment=comment,
+        batch_id=batch_id,
     )
-    r.refs = {"decision_id": decision_id}
-    r.audit_reason = body.reason_code
-    # 후보가 거절되었으므로 그 후보의 협의 Run을 끝낸다(보낸 요청 정리)
     end_candidate_runs(
         tx, ctx.pack, candidate.candidate_id, "STALE", f"REJECTED:{candidate.candidate_id}"
     )
-    # 거절 결과는 사건으로 메인에게 간다. 다시 재계획할지 이관할지는 메인이 판단한다 (AG-25)
-    _deliver_decided(tx, ctx, candidate, decision_id, "REJECT")
+    return decision_id
+
+
+# ── 모두 거절 ───────────────────────────────────────────
+
+
+def _reject_all(tx: sqlite3.Connection, ctx: CommandContext, body: RejectAllRequest) -> Result:
+    """이 Case의 살아 있는 안(검증을 통과했고 무효·거절·확정이 아닌 후보)을 한 번에 거절한다 (AG-29).
+
+    안마다 하나씩 거절과 같은 처리(결정 기록, 보낸 협의 요청 정리)를 하고 같은 묶음(batch_id)으로 남긴다.
+    사유는 묶음마다 한 번만 쌓이고(CV-26), 메인에게는 사건 하나로 간다.
+    """
+    r = Result()
+    if not ctx.has_role("SUPERVISOR"):
+        r.reject("NOT_AUTHORIZED")
+        return r
+    if not body.comment.strip():
+        r.reject("COMMENT_REQUIRED")
+    if body.reason_code not in REJECT_REASONS:
+        r.reject("INVALID_REASON_CODE")
+    site_id = ctx.site_id
+    live: list[tuple[Candidate, Validation]] = []
+    for row in rows(
+        tx,
+        "SELECT c.candidate_id FROM candidate c"
+        " JOIN solver_job j ON j.solver_result_id = c.solver_result_id"
+        " JOIN agent_run a ON a.run_id = j.run_id"
+        " WHERE c.site_id = ? AND a.case_id = ? ORDER BY c.rowid",
+        (site_id, body.case_id),
+    ):
+        candidate = get_candidate(tx, site_id, row["candidate_id"])
+        assert candidate is not None
+        state = candidate_state(tx, site_id, candidate)
+        validation = _pass_validation(tx, site_id, candidate.candidate_id)
+        if validation is not None and not (state.stale or state.rejected or state.committed):
+            live.append((candidate, validation))
+    if not live:
+        r.reject("NO_LIVE_CANDIDATE")
+    if r.reason_codes:
+        return r
+
+    batch_id = new_id("rej")
+    decision_ids = [
+        _record_rejection(
+            tx, ctx, candidate, validation, body.reason_code, (), body.comment, batch_id
+        )
+        for candidate, validation in live
+    ]
+    candidate_ids = [candidate.candidate_id for candidate, _ in live]
+    r.refs = {"batch_id": batch_id, "candidate_ids": candidate_ids, "decision_ids": decision_ids}
+    r.audit_reason = body.reason_code
+    # 메인에게는 사건 하나다. candidate_id는 묶음의 첫 안이고 candidate_ids에 전부 있다
+    deliver_event(
+        tx,
+        ctx.pack,
+        "CANDIDATE_DECIDED",
+        f"CANDIDATE_DECIDED:{batch_id}",
+        {
+            "candidate_id": candidate_ids[0],
+            "candidate_ids": candidate_ids,
+            "decision_ids": decision_ids,
+            "batch_id": batch_id,
+            "type": "REJECT",
+        },
+        body.case_id,
+    )
     return r
+
+
+def reject_all(
+    pack: LoadedPack, actor_id: str, idempotency_key: str, body: RejectAllRequest
+) -> CommandOutcome:
+    return run_command(pack, "REJECT_ALL", actor_id, idempotency_key, body, _reject_all)
 
 
 # ── 안 고르기 ───────────────────────────────────────────

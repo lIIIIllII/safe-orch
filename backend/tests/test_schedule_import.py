@@ -345,6 +345,18 @@ def test_existing_task_with_another_assignment_changes_nothing(seeded_real):
         plan = {a.task_id: a.start for a in get_current_plan(conn, pack.site_id).assignments}
     assert plan["K"] == 1440 and _task(pack, "K").revision == 1
     assert _site(pack).context_version == before.context_version and _events(pack) == []
+    # 값이 바뀌는 작업에도 표시는 그대로 붙는다: 값만 쓰이고 배정은 쓰이지 않는다
+    next(t for t in doc["tasks"] if t["task_id"] == "K")["zone_id"] = "H"
+    _, tasks = _preview(pack, doc)
+    assert (tasks["K"]["verdict"], tasks["K"]["changed"], tasks["K"]["assignment_differs"]) == (
+        "VALUE_CHANGED",
+        ["zone_id"],
+        True,
+    )
+    assert _import(pack, doc).result_refs["changed_task_ids"] == ["K"]
+    with db.read() as conn:
+        plan = {a.task_id: a.start for a in get_current_plan(conn, pack.site_id).assignments}
+    assert plan["K"] == 1440
 
 
 def test_existing_task_with_other_values_is_edited_like_the_card(seeded_real):

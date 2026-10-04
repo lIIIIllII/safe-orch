@@ -1,4 +1,4 @@
--- SAFE-ORCH schema. schema_version 21.
+-- SAFE-ORCH schema. schema_version 22.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -140,12 +140,14 @@ CREATE TABLE schedule (
     FOREIGN KEY (site_id, actor_id) REFERENCES actor (site_id, actor_id)
 );
 
--- 새 작업의 기준 위치: 요청한 시작 범위 [start_min, start_max]와 기준 자원. 작업당 하나이고 불변이다.
+-- 새 작업의 기준 위치: 요청한 시작 범위 [start_min, start_max]와 기준 자원. 불변이다. 담당자가 작업
+-- 카드에서 요청 시작 범위를 고치면 새 행을 더하고, 작업마다 마지막 행(base_id가 가장 큰 것)이 지금 값이다.
 -- 계획에 들어가기 전까지 그 작업의 기준이다 (CV-29). 일정으로 들어온 작업은 문서의 배정(한 점, 자원은
 -- 문서 배정의 자원)이고 schedule_id가 어느 넣기인지다. 자연어 요청은 문장에서 말한 시작 범위이고
 -- schedule_id와 resource_id를 비운다(기준 자원은 요청 자원이다). 폼 요청은 기록이 없다(기준 없음).
 -- origin: 사람이 말한 범위 STATED, 접수 Agent가 정한 범위 DECIDED. 계산에서는 똑같이 쓴다.
 CREATE TABLE task_base (
+    base_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     site_id     TEXT NOT NULL REFERENCES site (site_id),
     task_id     TEXT NOT NULL,
     start_min   INTEGER NOT NULL CHECK (start_min >= 0),
@@ -153,7 +155,6 @@ CREATE TABLE task_base (
     resource_id TEXT,
     origin      TEXT NOT NULL CHECK (origin IN ('STATED', 'DECIDED')),
     schedule_id TEXT REFERENCES schedule (schedule_id),
-    PRIMARY KEY (site_id, task_id),
     CHECK (start_min <= start_max),
     FOREIGN KEY (site_id, resource_id) REFERENCES resource (site_id, resource_id)
 );
@@ -265,6 +266,7 @@ CREATE TABLE command_result (
 
 -- reason_code는 REJECT만. WAIVE의 comment 필수는 명령에서 검사한다.
 -- CHOOSE: Supervisor가 그 안을 골랐다. 고른 안만 협의한다 (AG-29).
+-- batch_id: [모두 거절] 한 번으로 함께 거절된 안들의 묶음. 사유는 묶음마다 한 번만 센다 (CV-26).
 CREATE TABLE decision (
     decision_id     TEXT PRIMARY KEY,
     site_id         TEXT NOT NULL REFERENCES site (site_id),
@@ -278,7 +280,9 @@ CREATE TABLE decision (
     target_task_ids TEXT NOT NULL CHECK (json_valid(target_task_ids)),
     comment         TEXT NOT NULL,
     context_version INTEGER NOT NULL CHECK (context_version >= 0),
+    batch_id        TEXT,
     CHECK ((type = 'REJECT') = (reason_code IS NOT NULL)),
+    CHECK (batch_id IS NULL OR type = 'REJECT'),
     FOREIGN KEY (site_id, actor_id) REFERENCES actor (site_id, actor_id)
 );
 

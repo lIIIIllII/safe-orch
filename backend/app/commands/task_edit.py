@@ -3,7 +3,10 @@
 담당자(요청자)가 자기 작업의 critical field 값을 고친다.
 - 고치면 새 revision이고 고친 값은 사람이 말한 값이 된다. 검증은 폼과 같다(validate_task_request).
   고치지 않은 정한 값은 정한 값으로 남는다(그대로 확인하는 길은 없다).
-- 카드에서 고치는 시간창은 가능 범위(Hard)다. 기준 위치(요청한 시작 범위)는 고치지 않는다.
+- 카드에서 고치는 시간창은 가능 범위(Hard)다.
+- 요청 시작 범위(기준 위치)도 고친다: 계획에 아직 없고 기준 위치가 있는 작업만이다. 고친 범위는 사람이
+  말한 범위가 되고, 작업 값은 그대로라 새 revision을 만들지 않는다. 기준 위치가 없는 폼 작업은 고칠 것이
+  없고(NO_BASE), 계획에 있는 작업의 기준은 승인된 자리라 고치지 않는다(BASE_IN_PLAN: 옮기려면 직접 이동).
 - 계획에 있는 작업도 지금 배치가 깨지는 값으로 고칠 수 있다. 막지 않고 Agent가 다시 풀게 한다.
 - context +1, 열린 재계획·협의 Run 깨우기, 재확인 등록. 사건(TASK_EDITED)은 고친 뒤 충돌이 있거나 계획 밖
   READY 작업이 남으면 작업 준비됨과 같은 방식으로 전하고(열린 메인이 없으면 메인이 뜬다), 그렇지 않으면
@@ -20,11 +23,13 @@ from app.commands.service import Body, CommandContext, CommandOutcome, Result, r
 from app.commands.task_request import TaskRequestForm, validate_task_request
 from app.domain.canonical import canonical_hash
 from app.domain.ids import new_id
-from app.domain.models import FieldRecord, Snapshot, Task
+from app.domain.models import FieldRecord, Snapshot, Task, TaskBase
 from app.packs.loader import FIELD_VALUES, LoadedPack, confirmed_fields
 from app.rules.engine import detect_conflicts
 from app.store.repos.cases import deliver_event, deliver_to_open_main, register_recheck, wake_run
+from app.store.repos.plans import get_current_plan
 from app.store.repos.runs import list_active_runs
+from app.store.repos.schedules import get_task_base, insert_task_base
 from app.store.repos.site import bump_context_version
 from app.store.repos.snapshots import build_snapshot_content
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
@@ -51,6 +56,9 @@ class EditRequest(Body):
     latest_end: int | None = None
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
+    # 요청 시작 범위(기준 위치의 시작 범위, 분). 준 쪽만 바뀐다
+    base_start: int | None = None
+    base_start_max: int | None = None
 
 
 def _needs_agent(tx: sqlite3.Connection, ctx: CommandContext) -> bool:
@@ -122,11 +130,37 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         return r
     given = {k: getattr(body, k) for k in EDITABLE if getattr(body, k) is not None}
     changes = {k: v for k, v in given.items() if v != getattr(task, k)}
-    if not changes:
+    data = {**task.model_dump(), **changes}
+    # 요청 시작 범위: 계획에 아직 없고 기준 위치가 있는 작업만 고친다
+    base: TaskBase | None = None
+    schedule_id = None
+    if body.base_start is not None or body.base_start_max is not None:
+        current = get_task_base(tx, site_id, task.task_id)
+        plan = get_current_plan(tx, site_id)
+        if plan is not None and any(a.task_id == task.task_id for a in plan.assignments):
+            r.reject("BASE_IN_PLAN")
+            return r
+        if current is None:
+            r.reject("NO_BASE")
+            return r
+        lo = current["start"] if body.base_start is None else body.base_start
+        hi = current["start_max"] if body.base_start_max is None else body.base_start_max
+        if not 0 <= lo <= hi or hi + data["duration"] > ctx.site.horizon_minutes:
+            r.reject("INVALID_BASE_RANGE")
+            return r
+        if (lo, hi) != (current["start"], current["start_max"]):
+            schedule_id = current["schedule_id"]
+            base = TaskBase(
+                task_id=task.task_id,
+                start=lo,
+                start_max=hi,
+                resource_id=current["resource_id"],
+                origin="STATED",
+            )
+    if not changes and base is None:
         r.reject("NO_CHANGE")
         return r
 
-    data = {**task.model_dump(), **changes}
     form = TaskRequestForm(**{k: data[k] for k in TaskRequestForm.model_fields if k in data})
     for code in validate_task_request(tx, ctx.pack, ctx.site, ctx.actor, form, existing=True):
         r.reject(code)
@@ -134,12 +168,14 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         return r
 
     ready = task.lifecycle == "READY"
-    revision = task.revision + 1
+    revision = task.revision + 1 if changes else task.revision
     edit_id = new_id("edit")
-    changed = set(changes)
-    if ready:
-        bump_context_version(tx, site_id)
-    revise_task(tx, site_id, task, changes, f"card:{edit_id}")
+    changed = set(changes) | ({"base_range"} if base is not None else set())
+    context_version = bump_context_version(tx, site_id) if ready else ctx.site.context_version
+    if changes:
+        revise_task(tx, site_id, task, changes, f"card:{edit_id}")
+    if base is not None:
+        insert_task_base(tx, site_id, base, schedule_id)
 
     r.refs = {
         "task_id": task.task_id,
@@ -160,7 +196,8 @@ def _edit(tx: sqlite3.Connection, ctx: CommandContext, body: EditRequest) -> Res
         "revision": revision,
         "changed": sorted(changed),
     }
-    key = f"TASK_EDITED:{task.task_id}:{revision}"
+    # 요청 시작 범위만 고치면 revision이 그대로라 현장 버전으로 구분한다
+    key = f"TASK_EDITED:{task.task_id}:{revision}" + ("" if changes else f":{context_version}")
     if _needs_agent(tx, ctx):
         # 풀 일이 남았다: 작업 준비됨과 같은 방식으로 전한다(열린 메인이 없으면 메인이 뜬다)
         deliver_event(tx, ctx.pack, "TASK_EDITED", key, ref)

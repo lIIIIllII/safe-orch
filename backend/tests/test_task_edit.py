@@ -5,6 +5,7 @@ Work Intake가 정한 값은 작업 기록에 남는다. 요청자(담당자)가
 값을 바꾸지 못하고, 막히면 결과의 열 수 있는 것에 올린다.
 """
 
+from conftest import add_run, take_snapshot
 from fastapi.testclient import TestClient
 from scripted import Router, blocked, solve
 from test_intake import (
@@ -22,6 +23,7 @@ from test_intake import (
 from app.agents import casefacts
 from app.api.state import build_state
 from app.commands.task_edit import EditRequest, edit_task
+from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.main import app
 from app.store import db
@@ -229,3 +231,97 @@ def test_edit_api(seeded):
         state = client.get(f"/api/sites/{pack.site_id}/state", headers={"X-Actor": "planner_a"})
     task = next(t for t in state.json()["tasks"] if t["task_id"] == "A")
     assert task["duration"] == 45 and task["fields"]["duration"]["origins"] == {}
+
+
+# ── 요청 시작 범위 고치기 (AG-33) ──────────────────────────────
+
+
+def _facts(pack):
+    return take_snapshot(pack).facts()
+
+
+def _range(task_id):
+    found = _base(task_id)
+    return found["start_min"], found["start_max"], found["origin"]
+
+
+def test_owner_edits_the_requested_start_range_on_the_card(seeded):
+    """계획에 아직 없는 자기 작업의 요청 시작 범위를 담당자가 고친다. 고친 범위는 말한 범위가 되고, 지연·
+    변경의 기준이 바뀐다. 작업 값은 그대로라 revision은 그대로이고 현장 버전은 오른다."""
+    pack = seeded
+    _run_intake(pack, [_complete(decided=("latest_start",))])
+    assert _range("A") == (0, 60, "DECIDED")
+    before = _facts(pack)
+    assert (before.base_range("A"), before.deviation("A", 90)) == ((0, 60), 30)
+    ctx = _site(pack).context_version
+
+    # 담당자만 고친다. 바뀐 것이 없거나 범위 모양이 틀리면 거절한다
+    assert _edit(pack, "planner_b", base_start_max=120).reason_codes == ("NOT_AUTHORIZED",)
+    assert _edit(pack, "supervisor", base_start_max=120).reason_codes == ("NOT_AUTHORIZED",)
+    assert _edit(pack, "planner_a", base_start=0, base_start_max=60).reason_codes == ("NO_CHANGE",)
+    bad = _edit(pack, "planner_a", base_start=90, base_start_max=30)
+    assert bad.reason_codes == ("INVALID_BASE_RANGE",)
+    over = _edit(pack, "planner_a", base_start_max=pack.horizon_minutes)
+    assert over.reason_codes == ("INVALID_BASE_RANGE",)
+    assert (_range("A"), _site(pack).context_version) == ((0, 60, "DECIDED"), ctx)
+
+    out = _edit(pack, "planner_a", base_start_max=120)
+    assert out.status == "APPLIED" and out.result_refs["changed"] == ["base_range"]
+    assert (_task(pack, "A").revision, out.result_refs["revision"]) == (1, 1)
+    assert _site(pack).context_version == ctx + 1
+    assert _range("A") == (0, 120, "STATED")
+    after = _facts(pack)
+    assert (after.base_range("A"), after.deviation("A", 90)) == ((0, 120), 0)
+    assert after.base_info("A")["origin"] == "STATED"
+    # 계획 밖 요청이 남아 있으므로 사건이 남는다(값 고치기와 같은 규칙)
+    with db.read() as conn:
+        [event] = [e for e in list_case_events(conn, pack.site_id) if e["kind"] == "TASK_EDITED"]
+        state = build_state(conn, pack, "planner_a")
+    assert event["ref"]["changed"] == ["base_range"]
+    shown = next(t for t in state["tasks"] if t["task_id"] == "A")["base"]
+    assert shown == {"source": "REQUEST", "start": 0, "start_max": 120, "origin": "STATED"}
+
+    # 값과 범위를 같이 고치면 revision이 오르고, 범위는 한 점으로도 좁힐 수 있다
+    out = _edit(pack, "planner_a", duration=45, base_start=30, base_start_max=30)
+    assert out.status == "APPLIED" and out.result_refs["changed"] == ["base_range", "duration"]
+    assert (_task(pack, "A").revision, _facts(pack).base_range("A")) == (2, (30, 30))
+
+
+def test_requested_start_range_is_not_for_form_or_planned_tasks(seeded):
+    """기준 위치가 없는 폼 작업은 고칠 범위가 없고, 계획에 있는 작업의 기준은 승인된 자리라 고치지 않는다."""
+    pack = seeded
+    form = TaskRequestForm(
+        task_id="A2",
+        work_type="LIFTING",
+        zone_id="B",
+        duration=30,
+        earliest_start=0,
+        latest_start=60,
+        latest_end=90,
+        required_resource_type="CRANE",
+        requested_resource_id="A-CR-01",
+    )
+    assert submit_task_request(pack, "planner_a", _key(), form).status == "APPLIED"
+    ctx = _site(pack).context_version
+    out = _edit(pack, "planner_a", "A2", base_start=0, base_start_max=30)
+    assert out.reason_codes == ("NO_BASE",)
+    out = _edit(pack, "foreman_a2", "C", base_start=60, base_start_max=90)
+    assert out.reason_codes == ("BASE_IN_PLAN",)
+    assert (_base("A2"), _base("C"), _site(pack).context_version) == (None, None, ctx)
+
+
+def test_queued_task_range_can_be_edited_without_touching_the_site(seeded, main_on):
+    """대기 중인(QUEUED) 작업도 요청 시작 범위를 고친다. 아직 사실이 아니라 현장 버전은 그대로다."""
+    pack = seeded
+    add_run(pack, "main", agent_type="MAIN", acting_unit_id="SITE", acting_actor_id=None)
+    assert _intake(pack).status == "APPLIED"
+    run_until_idle(pack, model_factory=Router(intake=[_complete()]).factory())
+    assert _task(pack, "A").lifecycle == "QUEUED"
+    ctx = _site(pack).context_version
+    out = _edit(pack, "planner_a", base_start=30)
+    assert out.status == "APPLIED" and out.result_refs["queued"] is True
+    assert _range("A") == (30, 60, "STATED") and _site(pack).context_version == ctx
+    with db.read() as conn:
+        tasks = build_state(conn, pack, "planner_a")["tasks"]
+    shown = next(t for t in tasks if t["task_id"] == "A")["base"]
+    assert shown == {"source": "REQUEST", "start": 30, "start_max": 60, "origin": "STATED"}
