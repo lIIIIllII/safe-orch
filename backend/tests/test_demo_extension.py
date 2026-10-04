@@ -13,6 +13,7 @@ from scripted import Router, escalate, solve
 
 from app.agents import casefacts
 from app.commands.approval import ApproveRequest, WaiveRequest, approve_and_commit, waive
+from app.commands.pins import TaskRef, pin_task, unpin_task
 from app.commands.task_request import (
     TaskRequestForm,
     TaskWithdraw,
@@ -396,6 +397,25 @@ def test_withdraw_permissions_and_targets(seeded):
     assert withdraw("supervisor", "N5") == ("APPLIED", ())
     assert _site(pack).context_version == ctx + 1
     assert withdraw("supervisor", "N5") == ("REJECTED", ("TASK_NOT_FOUND",))  # 이미 철회
+
+
+def test_withdraw_rejects_pinned_task(seeded):
+    """고정된 작업은 철회할 수 없다. 철회로 Supervisor가 건 고정을 우회하지 않는다 (AG-27)."""
+    pack = seeded
+    _submit(pack, "N5")  # 담당 planner_b
+
+    def withdraw(actor):
+        out = withdraw_task_request(pack, actor, _key(), TaskWithdraw(task_id="N5"))
+        return out.status, out.reason_codes
+
+    ref = TaskRef(task_id="N5")
+    assert pin_task(pack, "supervisor", _key(), ref).status == "APPLIED"
+    assert withdraw("planner_b") == ("REJECTED", ("TASK_PINNED",))
+    assert withdraw("supervisor") == ("REJECTED", ("TASK_PINNED",))
+    # 담당자는 Supervisor가 건 고정을 풀 수 없으므로 철회하지 못한다. Supervisor가 풀면 철회된다
+    assert unpin_task(pack, "planner_b", _key(), ref).reason_codes == ("NOT_AUTHORIZED",)
+    assert unpin_task(pack, "supervisor", _key(), ref).status == "APPLIED"
+    assert withdraw("planner_b") == ("APPLIED", ())
 
 
 # ── 선행 작업 참조 ─────────────────────────────────

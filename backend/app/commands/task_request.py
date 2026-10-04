@@ -32,6 +32,7 @@ from app.store.repos.cases import (
     wake_run,
 )
 from app.store.repos.consents import insert_consent
+from app.store.repos.pins import list_active_pins
 from app.store.repos.plans import get_current_plan
 from app.store.repos.resources import list_pools, list_resources
 from app.store.repos.runs import has_open_case, list_active_runs
@@ -296,6 +297,7 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
     """해결하지 못한 요청(Plan에 없는 READY 작업) 또는 대기열(QUEUED) 작업을 계산 대상에서 뺀다.
 
     READY를 남겨 두면 기준 위치에 고정 상수로 남아 이후 모든 Solver 호출이 INFEASIBLE이 된다.
+    고정된 작업은 철회할 수 없다(TASK_PINNED): 먼저 고정을 푼다.
     - READY: 새 revision(NEEDS_INFO) + context +1 + RECHECK. 이 작업을 다루는 열린 Run은 STALE(그 Case가
       끝나 대기열이 올라감), 다른 열린 Run은 wake(고정 충돌이 사라져 다시 풀 수 있다).
     - QUEUED: 사실에 들어간 적이 없으므로 새 revision(NEEDS_INFO)만. context·RECHECK·Run 영향 없음.
@@ -315,6 +317,10 @@ def _withdraw(tx: sqlite3.Connection, ctx: CommandContext, body: TaskWithdraw) -
     plan = get_current_plan(tx, site_id)
     if plan is not None and any(a.task_id == task.task_id for a in plan.assignments):
         r.reject("TASK_IN_PLAN")
+        return r
+    # 고정된 작업은 먼저 고정을 풀어야 한다: 철회로 고정(특히 Supervisor가 건 것)을 우회하지 않는다 (AG-27)
+    if any(p.task_id == task.task_id for p in list_active_pins(tx, site_id)):
+        r.reject("TASK_PINNED")
         return r
     # 이 작업을 선행으로 가진 READY·QUEUED 작업이 있으면 후속 요청을 먼저 철회해야 한다.
     if any(p.task_id == task.task_id for t in active for p in t.predecessors):
