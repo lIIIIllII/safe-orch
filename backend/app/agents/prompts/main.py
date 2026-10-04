@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p6"
+PROMPT_VERSION = "main-p7"
 
 
 def tool_catalog() -> str:
@@ -61,7 +61,8 @@ Goal: {goal}
 Hold가 걸린 작업(held_task_ids), 이 그룹의 작업을 바꾸는 검토 대기 후보(review_candidates), 그룹에 작업을 \
 가진 Unit(units)이 있다. Unit마다 그 Unit의 작업, 사람이 고정하지 않아 움직일 수 있는 \
 작업(movable_task_ids), 그중 아직 \
-계획에 없는 요청 작업(request_task_ids), 그 Unit으로 재계획할 때 아직 시도하지 않은 탐색 범위(untried_levels), \
+계획에 없는 요청 작업(request_task_ids), 담당자가 희망 영역을 그려 둔 작업(preferred_task_ids: 비어 있으면 \
+그 Unit에는 희망 영역이 없다), 그 Unit으로 재계획할 때 아직 시도하지 않은 탐색 범위(untried_levels), \
 그 그룹·Unit으로 마지막에 부른 재계획의 결과(last_result: 그때의 접근 approach, 결과 상태, 재계획 Agent가 엮은 길 paths, \
 서버가 계산해 붙인 열 수 있는 것 openers, 그 뒤 관련 사실이 바뀌었는지 facts_changed)가 있다. 길과 열 수 \
 있는 것의 필요한 것마다 need_id가 있다. 재계획은 주체 Unit의 움직일 수 있는 작업만 옮긴다.
@@ -80,7 +81,7 @@ status는 DONE(마쳤다)·BLOCKED(막혔다)이고, 막혔으면 풀 수 있는
 재계획해야 함, FACT_CHANGE 사실이 바뀌어야 함, HUMAN_INFO 사람의 답을 받지 못함, HUMAN_DECISION 사람의 \
 판단이 필요함. 열 수 있는 것(openers)은 서버가 계산해 붙인 필요한 것이고 길로 엮여 있지 않다. 사전 확인 \
 결과에는 확인마다 담당자의 답(asks: 수락한 값 ACCEPTED, 거절 DECLINED, 미응답 NO_REPLY, 묻지 못함 NOT_ASKED)이 \
-있다. by가 SERVER면 서버가 끝낸 Run이다. result가 없으면 시작 조건이 맞지 않아 시작되지 못했다. \
+있다. by가 SERVER면 서버가 끝낸 Run이다(끝난 재계획이 만든 후보 가운데 살아 있는 것은 candidate_ids에 있다). result가 없으면 시작 조건이 맞지 않아 시작되지 못했다. \
 quoted_summary는 인용이다.
 - 지금 받아들여지는 호출(calls): 서버가 지금 받아들이는 호출의 참조 조합이다. 여기 없는 조합은 거절된다. \
 재계획은 접근(approach)마다 따로이고, 협의(단계 CONSULT)는 Supervisor가 고른 후보만 있다. \
@@ -157,4 +158,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p4": "9a270fdcd800ecd3cfad0173c714b619d82c4fc3e8706255261478f850f58598",  # 고정·해제 사건, 고정되지 않은 작업이 움직인다, 제약 삭제 (AG-27)
     "main-p5": "fd9fdc255292ca861058682bf294f058371ccafa8d7614defc8dd4f49c0d60a5",  # 후보의 거절·이견된 변경(contested): 협의로 보내지 않고 재계획 (CV-26)
     "main-p6": "43ae8e62d50aa22f99f346429c61102a2ac2902cf78655561fcb6b07a1da5f46",  # 접근을 달리한 재계획, Supervisor가 고른 안만 협의 (AG-28·AG-29)
+    "main-p7": "3320a12a2ed131d74472c133a2bd7e2e53f925054e3e712ad36463a693132c1e",  # Unit의 희망 영역이 그려진 작업(preferred_task_ids), 서버가 끝낸 재계획의 살아 있는 후보
 }

@@ -290,6 +290,7 @@ def list_attempts(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]
         s1, s2 = loads(r["stage1"]), loads(r["stage2"])
         out.append(
             {
+                "run_id": r["run_id"],
                 "step_no": r["step_no"],
                 # 이 Run의 시도인가(아니면 같은 Case의 앞 Run)
                 "this_run": r["run_id"] == run_id,

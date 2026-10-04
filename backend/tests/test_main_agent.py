@@ -18,11 +18,18 @@ from scripted import (
 from app.agents import casefacts, runtime
 from app.agents.observers import main as main_observer
 from app.agents.specs import main as main_spec
+from app.agents.specs import replanning as replanning_spec
 from app.api.state import run_summary
 from app.commands.approval import RejectRequest, reject_candidate
 from app.commands.events import EventReport, receive_event
 from app.commands.messages import ReplyRequest, reply_message
-from app.commands.pins import TaskRef, pin_task, unpin_task
+from app.commands.pins import (
+    PreferredWindow,
+    TaskRef,
+    pin_task,
+    set_preferred_window,
+    unpin_task,
+)
 from app.commands.runs import CancelRun, cancel_run
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
@@ -541,6 +548,49 @@ def test_human_work_extends_main_budget_and_agent_actions_do_not(seeded, main_on
         )
 
 
+def test_exhausted_replanning_result_has_its_live_candidates(seeded, main_on, monkeypatch):
+    """결과를 돌려주지 못하고 Budget 소진으로 끝난 재계획: 서버가 만든 결과에 그 Run이 만든 살아 있는
+    후보가 들어간다 (ST-20)."""
+    pack = seeded
+    monkeypatch.setitem(replanning_spec.SPEC.budget, "steps", 2)
+    assert _submit(pack).status == "APPLIED"
+    router = Router(replanning=[solve("L0"), solve("L1")], auto_done=False)
+    run_until_idle(pack, model_factory=router.factory())
+    [child] = _runs("REPLANNING")
+    assert (child.status, child.end_reason) == ("BUDGET_EXHAUSTED", "BUDGET_EXHAUSTED")
+    candidate_id = _review_candidate(pack)
+    [main] = _runs("MAIN")
+    [result] = _steps(main.run_id)[-1]["observation"]["child_results"]
+    assert result["result"] == {
+        "by": "SERVER",
+        "status": "BLOCKED",
+        "paths": [],
+        "candidate_ids": [candidate_id],
+    }
+    # 후보가 무효가 되면 빠진다
+    assert _reject(pack, candidate_id).status == "APPLIED"
+    with db.read() as conn:
+        assert casefacts.run_result(conn, child)["candidate_ids"] == []
+
+
+def test_main_sees_tasks_with_a_preferred_window(with_a):
+    """메인 관찰: 그룹의 Unit마다 담당자가 희망 영역을 그려 둔 작업이 보인다(서버 규칙은 없다)."""
+    pack = with_a
+    _main(pack, [main_escalate()])
+    units = _steps("main")[0]["observation"]["groups"][0]["units"]
+    assert {u["unit_id"]: u["preferred_task_ids"] for u in units}["UA"] == []
+
+    window = PreferredWindow(task_id="A", start=60, end=120)
+    assert set_preferred_window(pack, "planner_a", _key(), window).status == "APPLIED"
+    _main(pack, [main_escalate()], run_id="main2")
+    step = _steps("main2")[0]
+    by_unit = {u["unit_id"]: u for u in step["observation"]["groups"][0]["units"]}
+    assert by_unit["UA"]["preferred_task_ids"] == ["A"]
+    # 희망 영역이 없어도 희망 영역 우선 접근은 그대로 고를 수 있다
+    calls = [c for c in step["observation"]["calls"] if c["agent"] == "REPLANNING"]
+    assert "PREFER_WINDOW" in {c["approach"] for c in calls}
+
+
 def test_decision_for_closed_case_goes_to_a_new_main(seeded, main_on):
     """메인이 끝난 뒤 온 후보 결과는 새 메인이 받는다. 사건은 새 메인의 Case에 들어가 안 본 사건이 된다."""
     pack = seeded
@@ -578,7 +628,12 @@ def test_malformed_twice_ends_main_escalated_and_specialist_blocked(seeded, main
     [child] = _runs("REPLANNING")
     assert (child.status, child.end_reason) == ("BLOCKED", "MALFORMED_TWICE")
     [result] = _steps(_runs("MAIN")[0].run_id)[-1]["observation"]["child_results"]
-    assert result["result"] == {"by": "SERVER", "status": "BLOCKED", "paths": []}
+    assert result["result"] == {
+        "by": "SERVER",
+        "status": "BLOCKED",
+        "paths": [],
+        "candidate_ids": [],
+    }
 
     assert _submit(pack, "N1").result_refs["queued"] is False  # 앞 메인은 이관으로 끝났다
     run_until_idle(pack, model_factory=Router(main=[bad, bad]).factory())

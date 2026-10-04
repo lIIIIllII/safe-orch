@@ -29,6 +29,7 @@ from app.store.repos.consultations import (
 from app.store.repos.decisions import is_chosen, list_case_rejections, list_decisions
 from app.store.repos.events import get_event
 from app.store.repos.messages import list_fact_updates
+from app.store.repos.pins import preferred_windows
 from app.store.repos.plans import get_plan, get_plan_by_candidate
 from app.store.repos.records import find_reconfirm_candidate, get_candidate, list_validations
 from app.store.repos.runs import approach_attempts, get_run, list_steps, tried_search_keys
@@ -303,11 +304,35 @@ def run_result(conn: sqlite3.Connection, run: AgentRun) -> dict[str, Any]:
         # 요약은 전문 Agent가 쓴 문장이다(인용 데이터)
         result["quoted_summary"] = result.pop("summary", None)
         return {"by": "AGENT", **result}
-    return {
+    result: dict[str, Any] = {
         "by": "SERVER",
         "status": "DONE" if run.status == "SUCCEEDED" else "BLOCKED",
         "paths": [],
     }
+    if run.agent_type == "REPLANNING":
+        # 결과를 돌려주지 못하고 끝난 재계획(Budget 소진 등)이 만든 후보 가운데 살아 있는 것
+        result["candidate_ids"] = _live_candidates_of(conn, run.run_id)
+    return result
+
+
+def _live_candidates_of(conn: sqlite3.Connection, run_id: str) -> list[str]:
+    """그 Run이 만들었거나 같은 배치로 도달한 후보 가운데 살아 있는 것(무효·거절·확정이 아닌 것)."""
+    out: list[str] = []
+    for r in rows(
+        conn,
+        "SELECT j.site_id, COALESCE(c.candidate_id, j.same_candidate_id) AS candidate_id"
+        " FROM solver_job j LEFT JOIN candidate c ON c.solver_result_id = j.solver_result_id"
+        " WHERE j.run_id = ? ORDER BY j.rowid",
+        (run_id,),
+    ):
+        cid = r["candidate_id"]
+        candidate = None if cid is None else get_candidate(conn, r["site_id"], cid)
+        if candidate is None or cid in out:
+            continue
+        state = candidate_state(conn, r["site_id"], candidate)
+        if not (state.stale or state.rejected or state.committed):
+            out.append(cid)
+    return out
 
 
 def child_results(
@@ -434,6 +459,7 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
     hold_active = bool(holds)
     held_tasks = {h["task_id"] for h in holds if h["task_id"]}
 
+    wanted = preferred_windows(conn, site_id)
     calls: list[dict[str, Any]] = []
     group_views = []
     found_needs: dict[str, dict[str, Any]] = {}  # 그룹 Unit의 마지막 결과에 있는 need (ID → need)
@@ -478,6 +504,8 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
                     # 고정되지 않아 움직일 수 있는 작업 (재계획은 이것만 옮긴다)
                     "movable_task_ids": movable,
                     "request_task_ids": [t for t in task_ids if t not in in_plan],
+                    # 담당자가 희망 영역을 그려 둔 작업 (희망 영역 우선 접근이 쓸 수 있는 것)
+                    "preferred_task_ids": [t for t in task_ids if t in wanted],
                     "untried_levels": untried_levels(
                         snapshot, primary_for(g, facts, unit), unit, tried
                     ),

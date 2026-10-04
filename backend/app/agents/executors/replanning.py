@@ -4,7 +4,8 @@ ToolGateway.execute 안에서만 불린다(도구 실행 경로는 하나). 공�
 STALE_OBSERVATION·연속 2회·step 완료 기록)은 ToolGateway에 있고, 이 클래스는 그 도우미를 받아 쓴다.
 SOLVE_WITH_SCOPE·SOLVE_WITH_CONDITIONS·TRY_ALTERNATIVE_RESOURCE는 예약 tx → tx 밖 Solver → 등록 tx,
 나머지는 tx 하나다. 조건은 좁히기만 하고 서버는 유효성만 본다(CV-24). 해가 살아 있는 기존 후보와 같은
-배치면 새 후보를 만들지 않는다(CV-25).
+배치면 새 후보를 만들지 않는다(CV-25). 같은 사실에서 이미 한 탐색(같은 범위·조건·목적 순서)이면 Solver를
+부르지 않고 그때의 결과를 돌려준다(CV-13).
 사람에게 묻지 않는다. 막힌 결과에는 서버가 계산한 열 수 있는 것(openers)을 붙인다 (AG-23).
 관찰 계산은 binding.observer로 쓴다(observers를 import하지 않는다).
 승인·확정·Hold 해제·Proposal 확인·Validation 등록 함수는 없다.
@@ -38,6 +39,7 @@ from app.store.repos.runs import (
     charge,
     finish_solver_job,
     insert_solver_job,
+    list_attempts,
     tried_search_keys,
 )
 from app.store.repos.snapshots import create_snapshot
@@ -88,6 +90,10 @@ class ReplanningExecutor:
         if isinstance(action, spec.ReturnResult):
             return action.status in available.get("RETURN_RESULT", {}).get("status", [])
         return False
+
+    @staticmethod
+    def _refusal(verdict: bool | str) -> str:
+        return verdict if isinstance(verdict, str) else "ACTION_NOT_AVAILABLE"
 
     def _single_tx(
         self, run_id: str, step_no: int, meta: StepMeta, parsed: _Parsed
@@ -161,21 +167,24 @@ class ReplanningExecutor:
             assert isinstance(action, spec.SolveWithScope)
             level = action.level
         site_id = self.pack.site_id
+        # 범위·조건 계산은 허용 판정을 미룬다: 이미 한 탐색이면 허용 여부와 관계없이 그때의 결과를 돌려준다
+        repeatable = not isinstance(action, spec.TryAlternativeResource)
+        verdicts: list[bool | str] = []
+
+        def permitted(o: Observation) -> bool | str:
+            verdict = self._permitted(o, action)
+            if verdict is True:
+                verdict = o.primary is not None
+            verdicts.append(verdict)
+            return o.primary is not None if repeatable else verdict
+
         # 1. 예약 tx: 관찰 버전 확인 → Available 재계산 → Snapshot·SearchSpec·SolverJob, Solver Budget
         with db.write() as tx:
-            rejected, obs = self.begin_step(
-                tx,
-                run_id,
-                step_no,
-                meta,
-                parsed,
-                lambda o: (
-                    v if (v := self._permitted(o, action)) is not True else o.primary is not None
-                ),
-            )
+            rejected, obs = self.begin_step(tx, run_id, step_no, meta, parsed, permitted)
             if rejected is not None:
                 return rejected
             assert obs is not None
+            verdict = verdicts[-1]
             conditions = _resolve_conditions(self.pack, obs, asked)
             if isinstance(conditions, str):
                 return self._reject(tx, run_id, step_no, meta, parsed, conditions)
@@ -183,24 +192,40 @@ class ReplanningExecutor:
             if isinstance(action, spec.SolveWithConditions) and not narrowed:
                 # 조건도 없고 목적 순서도 기본이면 범위 계산(SOLVE_WITH_SCOPE)과 같다
                 return self._reject(tx, run_id, step_no, meta, parsed, "CONDITION_INVALID")
-            snapshot = create_snapshot(tx, site_id, self.pack)
+            args = (
+                obs.primary,
+                obs.run.acting_unit_id,
+                level,
+                try_resources,
+                conditions,
+                objective,
+            )
             try:
-                search_spec = build_search_spec(
-                    snapshot,
-                    obs.primary,
-                    obs.run.acting_unit_id,
-                    level,
-                    try_resources,
-                    conditions,
-                    objective,
-                )
+                # 저장하지 않는 Snapshot으로 탐색 키부터 본다(이미 한 탐색이면 아무것도 남기지 않는다)
+                probe = build_search_spec(self.observer.current_snapshot(tx, self.pack), *args)
             except SearchSpecError as e:
-                return self._reject(tx, run_id, step_no, meta, parsed, e.reason_code)
-            # 같은 사실에서 같은 범위·같은 조건·같은 목적 순서는 다시 풀지 않는다(Solver Budget을 쓰지 않는다)
-            if narrowed and search_spec.search_key in tried_search_keys(
-                tx, site_id, obs.run.case_id
-            ):
-                return self._reject(tx, run_id, step_no, meta, parsed, "ALREADY_TRIED")
+                reason = e.reason_code if verdict is True else self._refusal(verdict)
+                return self._reject(tx, run_id, step_no, meta, parsed, reason)
+            # 같은 사실에서 같은 범위·같은 조건·같은 목적 순서는 다시 풀지 않는다: Solver를 부르지 않고
+            # Solver Budget도 쓰지 않으며, 그때의 결과를 돌려준다 (CV-13)
+            if repeatable and probe.search_key in tried_search_keys(tx, site_id, obs.run.case_id):
+                previous = _previous_result(tx, run_id, probe.search_key)
+                self._complete(
+                    tx,
+                    run_id,
+                    step_no,
+                    meta,
+                    parsed,
+                    verdict=REJECTED,
+                    reason="ALREADY_TRIED",
+                    result_kind="REJECTED",
+                    tool_result=previous,
+                )
+                return GatewayResult("REJECTED", "ALREADY_TRIED")
+            if verdict is not True:
+                return self._reject(tx, run_id, step_no, meta, parsed, self._refusal(verdict))
+            snapshot = create_snapshot(tx, site_id, self.pack)
+            search_spec = build_search_spec(snapshot, *args)
             insert_search_spec(tx, site_id, search_spec)
             insert_solver_job(tx, site_id, run_id, step_no, search_spec.search_spec_id)
             charge(tx, run_id, solver_calls=1, solver_seconds=search_spec.time_limit_s)
@@ -303,6 +328,32 @@ class ReplanningExecutor:
                 end=outcome,
             )
             return outcome
+
+
+def _previous_result(tx: sqlite3.Connection, run_id: str, key: str) -> dict[str, Any]:
+    """이미 한 탐색의 결과: 그때의 Solver 상태, 변경 수·지연, 후보(또는 같은 배치였던 기존 후보),
+    몇 번째 step·어느 Run이었는지. 같은 Case의 앞 Run이 한 계산도 찾는다."""
+    found = [a for a in list_attempts(tx, run_id) if a["search_key"] == key]
+    if not found:
+        return {"already_tried": True}
+    a = found[-1]
+    return {
+        "already_tried": True,
+        "first": {k: a[k] for k in ("run_id", "step_no", "this_run")},
+        **{
+            k: a[k]
+            for k in (
+                "scope_level",
+                "conditions",
+                "objective",
+                "job_status",
+                "stage1",
+                "stage2",
+                "candidate_id",
+                "same_as_candidate_id",
+            )
+        },
+    }
 
 
 def _resolve_conditions(

@@ -370,6 +370,12 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
     last_guard = (
         steps[-1]["guard"] if steps and steps[-1]["guard"]["verdict"] == "REJECTED" else None
     )
+    if last_guard is not None and last_guard["reason_code"] == "ALREADY_TRIED":
+        # 이미 한 탐색: 그때의 결과를 함께 보인다(조건은 도구 인자 모양으로도)
+        previous = dict(steps[-1]["tool_result"] or {})
+        if previous.get("conditions"):
+            previous["conditions_as_args"] = condition_args(pack, previous["conditions"])
+        last_guard = {**last_guard, "previous": previous}
     # 유효한 자원 조회 결과 + 아직 시도하지 않은 대체 자원. resources_hash는 모델에 보이지 않는다.
     listings = []
     for tid, r in sorted(valid_listings(steps, facts).items()):

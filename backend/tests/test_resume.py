@@ -557,7 +557,8 @@ def test_accept_does_not_reopen_tried_levels(seeded):
         "TRY_ALTERNATIVE_RESOURCE",
         "RETURN_RESULT",
     ]
-    assert s_l0["guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
+    assert s_l0["guard"]["reason_code"] == "ALREADY_TRIED"  # 앞 Run의 결과를 돌려준다
+    assert s_l0["tool_result"]["first"]["this_run"] is False
     assert s_end["action"]["name"] == "RETURN_RESULT"
     assert recalled.solver_calls_used == 0  # 계산은 앞 Run의 L0·L1뿐이다
 

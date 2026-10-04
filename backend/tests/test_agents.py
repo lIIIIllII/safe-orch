@@ -69,7 +69,7 @@ def test_l0_infeasible_then_l1_candidate_waits(with_a):
     assert s2["decision_summary"] == "L0 불가, 범위를 넓힌다"
     assert (s2["model_id"], s2["prompt_version"], s2["llm_attempts"]) == (
         "scripted",
-        "replanning-p19",
+        "replanning-p20",
         1,
     )
     assert (s2["observed_context_version"], s2["observed_plan_revision"]) == (1, 0)
@@ -113,7 +113,13 @@ def test_same_effective_spec_is_not_retried_within_case(with_a):
         "LIST_ASSIGNABLE_RESOURCES",
         "RETURN_RESULT",
     ]
-    assert _guards(steps)[0] == ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE")
+    # 앞 Run이 한 같은 계산이다: Solver를 부르지 않고 그때의 결과를 돌려준다
+    assert _guards(steps)[0] == ("COMPLETED", "REJECTED", "ALREADY_TRIED")
+    previous = steps[0]["tool_result"]
+    assert previous["first"] == {"run_id": "run_1", "step_no": 2, "this_run": False}
+    assert (previous["scope_level"], previous["stage1"]["status"]) == ("L1", "OPTIMAL")
+    assert previous["candidate_id"] is not None
+    assert steps[1]["observation"]["last_guard"]["previous"] == previous
     assert run.status == "BLOCKED" and run.solver_calls_used == 0
     # 다른 Case의 Run: 같은 탐색을 다시 계산할 수 있다
     run, steps, model = _run(with_a, [solve("L0"), escalate()], run_id="run_3")
@@ -122,13 +128,29 @@ def test_same_effective_spec_is_not_retried_within_case(with_a):
     assert run.solver_calls_used == 1
 
 
-def test_action_not_available_then_escalate(with_a):
+def test_repeated_scope_returns_previous_result_then_escalate(with_a):
+    """이미 한 범위를 다시 부르면 Solver도 Solver Budget도 쓰지 않고 그때의 결과를 돌려준다 (CV-13)."""
     run, steps, _ = _run(with_a, [solve("L0"), solve("L0"), escalate("해가 없다")])
     assert _guards(steps) == [
         ("COMPLETED", "CONTINUE", None),
-        ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE"),
+        ("COMPLETED", "REJECTED", "ALREADY_TRIED"),
         ("COMPLETED", "DONE", None),
     ]
+    assert steps[1]["tool_result"] == {
+        "already_tried": True,
+        "first": {"run_id": "run_1", "step_no": 1, "this_run": True},
+        "scope_level": "L0",
+        "conditions": {},
+        "objective": "CHANGE_FIRST",
+        "job_status": "REGISTERED",
+        "stage1": {"status": "INFEASIBLE", "changed": None},
+        "stage2": None,
+        "candidate_id": None,
+        "same_as_candidate_id": None,
+    }
+    # 다음 관찰에 그 결과가 보이고, 되풀이한 호출은 계산·Snapshot·탐색 기록을 남기지 않는다
+    assert steps[2]["observation"]["last_guard"]["previous"] == steps[1]["tool_result"]
+    assert (_count("solver_job"), _count("search_spec"), _count("snapshot")) == (1, 1, 1)
     assert (run.status, run.end_reason, run.solver_calls_used) == (
         "BLOCKED",
         "RETURN_BLOCKED",
@@ -168,7 +190,7 @@ def test_action_not_available_then_escalate(with_a):
     assert steps[2]["observation"]["openers"] == [
         {k: v for k, v in n.items() if k != "need_id"} for n in steps[2]["tool_result"]["openers"]
     ]
-    assert steps[2]["observation"]["last_guard"]["reason_code"] == "ACTION_NOT_AVAILABLE"
+    assert steps[2]["observation"]["last_guard"]["reason_code"] == "ALREADY_TRIED"
 
 
 # ── T48 MALFORMED ──────────────────────────────────────────────
@@ -208,13 +230,13 @@ def test_malformed_twice_escalates(with_a, bad):
 
 
 def test_malformed_count_restarts_after_other_result(with_a):
-    """바로 앞 COMPLETED step만 본다. 사이에 ACTION_NOT_AVAILABLE이 있으면 다시 센다."""
+    """바로 앞 COMPLETED step만 본다. 사이에 다른 거절(이미 한 탐색)이 있으면 다시 센다."""
     bad = AIMessage(content="L1로 하겠습니다")
     run, steps, _ = _run(with_a, [solve("L0"), bad, solve("L0"), bad, escalate()])
     assert _guards(steps) == [
         ("COMPLETED", "CONTINUE", None),
         ("COMPLETED", "REJECTED", "MALFORMED"),
-        ("COMPLETED", "REJECTED", "ACTION_NOT_AVAILABLE"),
+        ("COMPLETED", "REJECTED", "ALREADY_TRIED"),
         ("COMPLETED", "REJECTED", "MALFORMED"),
         ("COMPLETED", "DONE", None),
     ]
@@ -382,7 +404,7 @@ def test_registry_binds_replanning_spec_prompt_observer_executor():
         "llm_attempts": spec.MAX_LLM_ATTEMPTS,
         "solver_calls": spec.MAX_SOLVER_CALLS,
     }
-    assert binding.prompt.PROMPT_VERSION == "replanning-p19"
+    assert binding.prompt.PROMPT_VERSION == "replanning-p20"
     assert runtime.exec_contract_version("REPLANNING") == "replanning-c6"
     assert runtime.exec_contract_version("COORDINATION") == "coordination-c6"
     assert runtime.exec_contract_version("EVENT_RESPONSE") == "event-response-c6"

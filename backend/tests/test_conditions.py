@@ -190,6 +190,14 @@ def test_same_conditions_are_not_solved_twice_and_other_conditions_are(real_a):
         ("WAIT", None),  # C 시작 ≥ 10:00 → 후보
     ]
     assert run.solver_calls_used == 4  # 거절된 재시도는 Budget을 쓰지 않는다
+    # 같은 조건의 재시도는 그때의 결과를 돌려준다(어느 step이었는지, Solver 상태, 건 조건)
+    again = steps[2]["tool_result"]
+    assert again["first"] == {"run_id": run.run_id, "step_no": 2, "this_run": True}
+    assert (again["scope_level"], again["stage1"]["status"]) == ("L1", "INFEASIBLE")
+    assert sorted(again["conditions"]) == ["A", "C"]
+    seen = steps[3]["observation"]["last_guard"]
+    assert seen["reason_code"] == "ALREADY_TRIED"
+    assert [c["task_id"] for c in seen["previous"]["conditions_as_args"]] == ["A", "C"]
     # 모두 지정한 배치였으면 그 배치가 어긴 규칙을 돌려준다
     s2 = steps[1]["tool_result"]
     assert s2["stage1"]["status"] == "INFEASIBLE"
