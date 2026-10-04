@@ -202,8 +202,7 @@ def test_gate_path_via_api(client, seeded, main_on):
     state, alpha = _alpha_ready(client, seeded)
     assert alpha["display_status"] == "OPEN" and alpha["validation"]["status"] == "PASS"
     assert {i["task_id"]: i["item_status"] for i in alpha["consultation"]["items"]} == {
-        "A": "COVERED",
-        "C": "PENDING",
+        "C": "PENDING"
     }
     assert alpha["solver"]["scope_level"] == "L1" and alpha["run_id"]
     assert state["runs"][0]["status"] == "WAITING_HUMAN"

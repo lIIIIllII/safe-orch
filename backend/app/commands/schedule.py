@@ -43,7 +43,7 @@ from app.store.repos.pins import list_active_pins, preferred_windows
 from app.store.repos.plans import get_current_plan
 from app.store.repos.resources import list_resources
 from app.store.repos.runs import list_active_runs
-from app.store.repos.schedules import insert_schedule, insert_task_base, list_task_bases
+from app.store.repos.schedules import insert_schedule, list_task_bases
 from app.store.repos.site import bump_context_version, get_site
 from app.store.repos.snapshots import build_snapshot_content
 from app.store.repos.tasks import list_current_tasks
@@ -405,8 +405,9 @@ def _import(tx: sqlite3.Connection, ctx: CommandContext, body: ImportRequest) ->
             context_version,
             hope=(*item.hope, "STATED"),
             hope_made_by="OWNER",
+            base=item.base,
+            schedule_id=schedule_id,
         )
-        insert_task_base(tx, site_id, item.base, schedule_id)
     for item in changed:
         if item.changes:
             revise_task(

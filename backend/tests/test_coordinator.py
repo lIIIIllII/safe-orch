@@ -162,7 +162,7 @@ def test_gate_path_with_worker(seeded, main_on):
     [v] = _validations(pack, alpha.candidate_id)
     assert v.status == "PASS"
     view = _view(pack, alpha.candidate_id)
-    assert {i.task_id: i.base_status for i in view.items} == {"A": "COVERED", "C": "PENDING"}
+    assert {i.task_id: i.base_status for i in view.items} == {"C": "PENDING"}
     assert _queue(pack) == [alpha.candidate_id]
     assert {(j["kind"], j["status"]) for j in _jobs(pack) if j["kind"] != "CONTINUE_RUN"} == {
         ("RECHECK", "DONE"),

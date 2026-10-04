@@ -54,24 +54,38 @@ def get_schedule(conn: sqlite3.Connection, site_id: str, schedule_id: str) -> di
 
 
 def insert_task_base(
-    tx: sqlite3.Connection, site_id: str, base: TaskBase, schedule_id: str
+    tx: sqlite3.Connection, site_id: str, base: TaskBase, schedule_id: str | None = None
 ) -> None:
-    """일정으로 들어온 새 작업의 기준 배정(문서의 배정)과 어느 넣기에서 왔는지 (ST-24)."""
+    """새 작업의 기준 위치 (CV-29). 일정으로 들어온 작업이면 어느 넣기에서 왔는지도 적는다 (ST-24)."""
     tx.execute(
-        "INSERT INTO task_base (site_id, task_id, start_min, resource_id, schedule_id)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (site_id, base.task_id, base.start, base.resource_id, schedule_id),
+        "INSERT INTO task_base (site_id, task_id, start_min, start_max, resource_id, origin,"
+        " schedule_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            site_id,
+            base.task_id,
+            base.start,
+            base.upper,
+            base.resource_id,
+            base.origin,
+            schedule_id,
+        ),
     )
 
 
 def list_task_bases(conn: sqlite3.Connection, site_id: str) -> list[TaskBase]:
-    """기준 배정 전부 (작업 ID순)."""
+    """기준 위치 전부 (작업 ID순)."""
     return [
-        TaskBase(task_id=r["task_id"], start=r["start_min"], resource_id=r["resource_id"])
+        TaskBase(
+            task_id=r["task_id"],
+            start=r["start_min"],
+            start_max=r["start_max"],
+            resource_id=r["resource_id"],
+            origin=r["origin"],
+        )
         for r in rows(
             conn,
-            "SELECT task_id, start_min, resource_id FROM task_base WHERE site_id = ?"
-            " ORDER BY task_id",
+            "SELECT task_id, start_min, start_max, resource_id, origin FROM task_base"
+            " WHERE site_id = ? ORDER BY task_id",
             (site_id,),
         )
     ]
@@ -82,6 +96,9 @@ def schedule_of_tasks(conn: sqlite3.Connection, site_id: str) -> dict[str, str]:
     return {
         r["task_id"]: r["schedule_id"]
         for r in rows(
-            conn, "SELECT task_id, schedule_id FROM task_base WHERE site_id = ?", (site_id,)
+            conn,
+            "SELECT task_id, schedule_id FROM task_base WHERE site_id = ?"
+            " AND schedule_id IS NOT NULL",
+            (site_id,),
         )
     }

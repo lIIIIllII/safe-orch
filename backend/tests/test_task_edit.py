@@ -8,9 +8,9 @@ Work Intake가 정한 값은 작업 기록에 남는다. 요청자(담당자)가
 from fastapi.testclient import TestClient
 from scripted import Router, blocked, solve
 from test_intake import (
+    _base,
     _complete,
     _consents,
-    _hope,
     _intake,
     _key,
     _run_intake,
@@ -83,7 +83,7 @@ def test_owner_edits_and_confirms_decided_values_on_card(seeded):
     assert a.fields["window"].value["latest_end"] == 105
     assert _site(pack).context_version == ctx + 1
     # 요청 자원은 정한 값이 남아 있고 시작 범위는 고치지 않아 Consent가 없다. 희망은 아직 정한 희망이다
-    assert _consents("A") == [] and _hope("A")["origin"] == "DECIDED"
+    assert _consents("A") == [] and _base("A")["origin"] == "DECIDED"
     # A는 아직 계획 밖 요청이라 사건이 남는다(자동 시작이 꺼져 있어 메인은 뜨지 않는다)
     with db.read() as conn:
         [event] = [e for e in list_case_events(conn, pack.site_id) if e["kind"] == "TASK_EDITED"]
@@ -91,17 +91,8 @@ def test_owner_edits_and_confirms_decided_values_on_card(seeded):
 
     out = _edit(pack, "planner_a", confirm=True)
     assert out.status == "APPLIED" and out.result_refs["confirmed"] is True
-    assert out.result_refs["preferred_window_confirmed"] is True
     a = _task(pack, "A")
     assert (a.revision, a.decided_values) == (3, ())
-    # 같은 구간의 말한 희망이 된다(만든 주체는 그대로 Intake)
-    assert _hope("A") == {
-        "start_min": 0,
-        "end_min": 90,
-        "origin": "STATED",
-        "made_by": "INTAKE",
-        "set_by": "planner_a",
-    }
     assert all(f.origins == {} for f in a.fields.values())
     confirm = f"card:{out.result_refs['edit_id']}"
     with db.read() as conn:
@@ -112,22 +103,6 @@ def test_owner_edits_and_confirms_decided_values_on_card(seeded):
     # 시작 범위 Consent는 만들지 않는다: 그 작업의 동의 범위는 희망 영역이다
     assert [(c[0], c[2]) for c in current] == [("RESOURCE", confirm)]
     # 더 확인할 것이 없다
-    assert _edit(pack, "planner_a", confirm=True).reason_codes == ("NO_CHANGE",)
-
-
-def test_confirming_only_a_decided_hope_keeps_the_revision(seeded):
-    """정한 값이 희망 영역뿐이면 [확인]은 새 revision을 만들지 않는다. 현장 버전은 오르고 사건이 남는다."""
-    pack = seeded
-    _run_intake(pack, [_complete(decided=("latest_start",))])
-    ctx = _site(pack).context_version
-    assert (_task(pack, "A").decided_values, _hope("A")["origin"]) == ((), "DECIDED")
-    out = _edit(pack, "planner_a", confirm=True)
-    assert out.status == "APPLIED" and out.result_refs["preferred_window_confirmed"] is True
-    assert (_task(pack, "A").revision, out.result_refs["revision"]) == (1, 1)
-    assert (_hope("A")["origin"], _site(pack).context_version) == ("STATED", ctx + 1)
-    with db.read() as conn:
-        [event] = [e for e in list_case_events(conn, pack.site_id) if e["kind"] == "TASK_EDITED"]
-    assert (event["ref"]["confirmed"], event["ref"]["changed"]) == (True, [])
     assert _edit(pack, "planner_a", confirm=True).reason_codes == ("NO_CHANGE",)
 
 
@@ -236,8 +211,7 @@ def test_replanning_sees_decided_values_and_cannot_change_them(seeded, main_on):
     acting = {t["task_id"]: t for t in step["observation"]["tasks"]}
     assert acting["A"]["decided_values"] == ["duration"]
     assert acting["C"]["decided_values"] == []
-    # 정한 시각은 정한 희망으로 보인다. Hard가 아니라 해를 막지 않으므로 열 수 있는 것에 오르지 않는다
-    assert acting["A"]["preferred_window"]["origin"] == "DECIDED"
+    # 정한 시각은 기준 위치의 범위다. Hard가 아니라 해를 막지 않으므로 열 수 있는 것에 오르지 않는다
     decided = [o for o in step["observation"]["openers"] if o.get("decided")]
     assert decided == [
         {"kind": "FACT_CHANGE", "field": "DURATION", "task_id": "A", "decided": True},

@@ -309,12 +309,29 @@ class PreferredWindow(Frozen):
 
 
 class TaskBase(Frozen):
-    """일정으로 들어온 작업의 기준 배정(문서의 배정: 시작·자원). 계획에 들어가기 전까지 그 작업의 기준
-    위치다. 희망 영역과 따로 둔다 (ST-24)."""
+    """새 작업의 기준 위치: 요청한 시작 범위 [start, start_max]와 기준 자원. 계획에 들어가기 전까지 그
+    작업의 기준이다 (CV-29).
+
+    일정으로 들어온 작업은 문서의 배정(한 점, 자원은 문서 배정의 자원)이다 (ST-24). 자연어 요청은 문장에서
+    말한 시작 범위이고 자원을 비운다(기준 자원은 요청 자원이다). start_max가 없으면 한 점이다.
+    origin은 사람이 말한 범위인지 접수 Agent가 정한 범위인지다. 계산에서는 똑같이 쓴다."""
 
     task_id: str
     start: int
+    start_max: int | None = None
     resource_id: str | None = None
+    origin: Origin = "STATED"
+
+    @property
+    def upper(self) -> int:
+        """범위 위쪽 끝."""
+        return self.start if self.start_max is None else self.start_max
+
+    @model_validator(mode="after")
+    def _range(self) -> "TaskBase":
+        if self.upper < self.start:
+            raise ValueError("start_max must be >= start")
+        return self
 
 
 class HoldRef(Frozen):
@@ -411,7 +428,7 @@ class SnapshotContent(Frozen):
     pins: tuple[Pin, ...] = ()
     consents: tuple[Consent, ...] = ()
     preferred_windows: tuple[PreferredWindow, ...] = ()  # READY 작업의 희망 영역 (ST-22)
-    task_bases: tuple[TaskBase, ...] = ()  # 일정으로 들어온 READY 작업의 기준 배정 (ST-24)
+    task_bases: tuple[TaskBase, ...] = ()  # READY 새 작업의 기준 위치 (CV-29)
 
     def task_map(self) -> dict[str, Task]:
         return {t.task_id: t for t in self.tasks}
@@ -435,38 +452,72 @@ class SnapshotContent(Frozen):
         return None
 
     def base_assignments(self) -> dict[str, Assignment]:
-        """READY 작업의 기준 배정. Plan에 있으면 Plan 값, 없으면 (기준 시작, 기준 자원).
+        """READY 작업의 기준 배정. Plan에 있으면 Plan 값(승인된 자리), 없으면 (기준 시작, 기준 자원).
 
-        Plan에 없는 작업: 일정으로 들어온 작업은 문서의 배정(시작·자원)이 기준이다(ST-24). 그 밖에는 요청
-        자원에, 희망 영역이 있으면 희망 시작, 없으면 earliest_start다. 시작은 시간창 안으로 맞춘다."""
+        Plan에 없는 작업: 기준 위치가 있으면 그 범위의 가장 이른 시작이고, 없으면(폼 요청) earliest_start다.
+        기준 자원은 일정으로 들어온 작업은 문서 배정의 자원, 그 밖에는 요청 자원이다. 시작은 시간창
+        안으로 맞춘다."""
         in_plan = {a.task_id: a for a in self.plan.assignments}
-        wanted = self.preferred_map()
         given = {b.task_id: b for b in self.task_bases}
         out = {}
         for t in sorted(self.tasks, key=lambda t: t.task_id):
             start, resource = t.earliest_start, t.requested_resource_id
             if t.task_id in given:
-                start, resource = given[t.task_id].start, given[t.task_id].resource_id
-            elif t.task_id in wanted:
-                start = wanted[t.task_id].start
+                start = given[t.task_id].start
+                resource = given[t.task_id].resource_id or resource
             start = min(max(start, t.earliest_start), t.latest_start)
             out[t.task_id] = in_plan.get(t.task_id) or Assignment(
                 task_id=t.task_id, start=start, end=start + t.duration, resource_id=resource
             )
         return out
 
-    def deviation(self, task_id: str, start: int) -> int:
-        """그 작업을 start에 놓았을 때의 지연(분). 세 경우다 (CV-29).
+    def base_range(self, task_id: str) -> tuple[int, int] | None:
+        """그 작업의 기준 시작 범위 [lo, hi] (CV-29). 변경과 지연을 이 범위에서 잰다.
 
-        희망 영역이 있으면 희망 시작 범위 밖으로 벗어난 거리(앞뒤 모두, 안이면 0). 희망 영역이 없고
-        계획에 있으면 계획의 시작에서 옮긴 거리(앞뒤 모두). 희망 영역도 없고 계획에도 없으면 0이다:
-        아직 자기 자리가 없으므로 재지 않는다."""
-        task = self.task_map()[task_id]
-        wanted = self.preferred_map().get(task_id)
-        if wanted is not None:
-            return wanted.deviation(start, task.duration)
+        계획 작업은 승인된 시작 한 점이다. 새 작업은 기준 위치의 시작 범위(시간창 안으로 맞춘다)이고,
+        기준 위치가 없으면(폼 요청) None이다: 아직 자기 자리가 없다."""
         placed = next((a for a in self.plan.assignments if a.task_id == task_id), None)
-        return 0 if placed is None else abs(start - placed.start)
+        if placed is not None:
+            return placed.start, placed.start
+        given = next((b for b in self.task_bases if b.task_id == task_id), None)
+        if given is None:
+            return None
+        task = self.task_map()[task_id]
+        lo = min(max(given.start, task.earliest_start), task.latest_start)
+        return lo, max(lo, min(given.upper, task.latest_start))
+
+    def deviation(self, task_id: str, start: int) -> int:
+        """그 작업을 start에 놓았을 때의 지연(분): 기준 시작 범위 밖으로 벗어난 거리 (CV-29).
+
+        앞뒤 모두 세고 범위 안이면 0이다. 기준이 없는 새 작업은 시간창 안 어디든 0이다."""
+        found = self.base_range(task_id)
+        return 0 if found is None else max(0, found[0] - start, start - found[1])
+
+    def base_info(self, task_id: str) -> dict[str, Any]:
+        """기준 위치의 출처와 시작 범위. source: PLAN 승인된 자리, REQUEST 요청한 자리·범위(origin은
+        사람이 말한 범위인지 접수 Agent가 정한 범위인지), NONE 기준 없음(폼 요청)."""
+        found = self.base_range(task_id)
+        if found is None:
+            return {"source": "NONE", "start": None, "start_max": None, "origin": None}
+        given = next((b for b in self.task_bases if b.task_id == task_id), None)
+        planned = any(a.task_id == task_id for a in self.plan.assignments)
+        return {
+            "source": "PLAN" if planned else "REQUEST",
+            "start": found[0],
+            "start_max": found[1],
+            "origin": None if planned or given is None else given.origin,
+        }
+
+    def is_changed(self, after: Assignment) -> bool:
+        """그 배정이 기준에서 바뀐 것인가 (CV-29). Solver의 변경 수, 협의 항목, 조회가 같이 쓴다.
+
+        시작이 기준 시작 범위 밖이거나 자원이 기준 자원이 아니면 변경이다."""
+        base = self.base_assignments().get(after.task_id)
+        if base is None:
+            return False
+        return (
+            self.deviation(after.task_id, after.start) > 0 or after.resource_id != base.resource_id
+        )
 
     def check_assignments(self) -> tuple[Assignment, ...]:
         """검사 대상 배정 = 현재 Plan 배정 + Plan에 없는 READY 작업의 기준 배정."""

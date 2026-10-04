@@ -24,14 +24,13 @@ from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.domain.consultation import build_items
 from app.domain.hashes import candidate_hash
 from app.domain.ids import new_id
-from app.domain.models import Assignment, Candidate, Consent
+from app.domain.models import Assignment, Candidate
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
 from app.solver.candidate import build_candidate
 from app.solver.search_spec import build_search_spec
 from app.store import db
 from app.store.repos.commands import get_command_result
-from app.store.repos.consents import insert_consent
 from app.store.repos.consultations import consultation_view, list_review_queue
 from app.store.repos.dispatch import list_jobs
 from app.store.repos.plans import get_current_plan
@@ -156,7 +155,7 @@ def _release(pack, hold_id, resolution="NO_CHANGE", expected=None):
 
 @pytest.fixture
 def alpha(seeded):
-    """폼 A → L1 Alpha 등록 → PASS → Consultation(A COVERED, C PENDING)."""
+    """폼 A → L1 Alpha 등록 → PASS → Consultation(C PENDING. 폼 작업 A는 항목이 아니다)."""
     _submit_a(seeded)
     snap = take_snapshot(seeded)
     spec, _, cand = _solve(seeded, snap, "L1")
@@ -194,7 +193,7 @@ def test_gate_path(seeded):
     assert ("VALIDATE", f"VALIDATE:{alpha.candidate_id}") in _jobs(pack)
     v, items = _validate_and_consult(pack, snap, spec, alpha)
     assert v.status == "PASS"
-    assert {i.task_id: i.base_status for i in items} == {"A": "COVERED", "C": "PENDING"}
+    assert {i.task_id: i.base_status for i in items} == {"C": "PENDING"}
     assert _view(pack, alpha).status == "OPEN"
     assert _queue(pack) == [alpha.candidate_id]  # OPEN도 검토 대기
 
@@ -202,7 +201,7 @@ def test_gate_path(seeded):
     assert (blocked.status, blocked.reason_codes) == ("REJECTED", ("CONSULTATION_INCOMPLETE",))
 
     assert _waive(pack, alpha).status == "APPLIED"
-    assert _view(pack, alpha).item_status == {"A": "COVERED", "C": "WAIVED"}
+    assert _view(pack, alpha).item_status == {"C": "WAIVED"}
 
     ok = _approve(pack, alpha, v)
     assert ok.status == "APPLIED" and ok.plan_revision == 1
@@ -518,7 +517,8 @@ def test_t21_pending_item_blocks_approval(alpha):
 def test_t22_waive_rules(alpha):
     pack, _, _, cand, v = alpha
     assert _waive(pack, cand, comment="  ").reason_codes == ("COMMENT_REQUIRED",)
-    assert _waive(pack, cand, ("A",)).reason_codes == ("ITEM_NOT_WAIVABLE",)  # COVERED
+    # 폼의 새 작업 A는 기준에서 바뀐 것이 아니라 협의 항목이 아니다
+    assert _waive(pack, cand, ("A",)).reason_codes == ("ITEM_NOT_FOUND",)
     assert _waive(pack, cand, ("E",)).reason_codes == ("ITEM_NOT_FOUND",)
     assert _waive(pack, cand, actor="planner_a").reason_codes == ("NOT_AUTHORIZED",)
     assert _waive(pack, cand).status == "APPLIED"
@@ -526,23 +526,10 @@ def test_t22_waive_rules(alpha):
     assert _approve(pack, cand, v).status == "APPLIED"
 
 
-def test_t23_movability_consent_does_not_extend(seeded):
+def test_t23_form_task_is_asked_only_when_its_resource_changes(seeded):
+    """폼의 새 작업은 기준 위치가 없다: 시간창 안 어디든 협의 항목이 아니고, 요청 자원이 아닌 자원에
+    놓일 때만 항목이 된다 (AG-33)."""
     _submit_a(seeded)
-    with db.write() as tx:
-        insert_consent(
-            tx,
-            seeded.site_id,
-            Consent(
-                consent_id=new_id("cns"),
-                task_id="A",
-                task_revision=1,
-                owner_actor_id="planner_a",
-                axis="RESOURCE",
-                scope={"resource_ids": ["SITE-CR-01"]},
-                source_ref="proposal:test",
-            ),
-            1,
-        )
     facts = take_snapshot(seeded).facts()
     base = facts.base_assignments()
 
@@ -564,9 +551,9 @@ def test_t23_movability_consent_does_not_extend(seeded):
         return {i.task_id: i.base_status for i in build_items(facts, cand)}.get("A")
 
     assert status(0, "A-CR-01") is None  # 변경 없음
-    assert status(60, "SITE-CR-01") == "COVERED"
-    assert status(60, "B-CR-01") == "PENDING"  # 다른 자원
-    assert status(61, "SITE-CR-01") == "PENDING"  # 범위 밖 시간
+    assert status(60, "A-CR-01") is None  # 시간창 안의 다른 시각
+    assert status(60, "SITE-CR-01") == "PENDING"  # 요청 자원이 아니다
+    assert status(0, "B-CR-01") == "PENDING"
 
 
 # ── T35 ────────────────────────────────────────────────────────

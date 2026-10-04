@@ -15,6 +15,7 @@ from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.consultation import build_items
 from app.domain.groups import conflict_groups
+from app.domain.models import TaskBase
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
 from app.solver.candidate import build_candidate
@@ -102,9 +103,14 @@ def test_one_search_moves_tasks_of_two_units(seeded_real):
     assert {units[t] for t in _moved(snap, result)} == {"UA", "UB"}
     candidate = build_candidate(snap, l1, result)
     assert validate(snap, candidate, l1, pack).status == "PASS"
-    # 바뀐 작업마다 그 작업의 담당자에게 협의 항목이 생긴다
+    # 기준에서 바뀐 작업은 그 담당자의 협의 항목이 된다. 계획 작업 K는 옮겨졌으므로 UB 담당자에게 가고,
+    # 폼의 새 작업 Z는 기준이 없어 시간창 안에서 비켜도 항목이 아니다 (AG-33)
     owners = {i.task_id: (i.owner_actor_id, i.base_status) for i in build_items(facts, candidate)}
-    assert owners == {"K": ("planner_b", "PENDING"), "Z": ("planner_a", "PENDING")}
+    assert owners == {"K": ("planner_b", "PENDING")}
+    # Z가 요청한 자리(11:00)가 있었다면 Z의 요청자에게도 간다
+    based = with_facts(snap, task_bases=(TaskBase(task_id="Z", start=1560),))
+    owners = {i.task_id: i.owner_actor_id for i in build_items(based.facts(), candidate)}
+    assert owners == {"K": "planner_b", "Z": "planner_a"}
 
 
 def test_one_search_resolves_two_conflict_groups(seeded_real):

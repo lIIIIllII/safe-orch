@@ -12,13 +12,7 @@ from fastapi.testclient import TestClient
 from scripted import Router, escalate, solve
 
 from app.commands.approval import ApproveRequest, WaiveRequest, approve_and_commit, waive
-from app.commands.pins import (
-    PreferredWindow,
-    TaskRef,
-    pin_task,
-    set_preferred_window,
-    unpin_task,
-)
+from app.commands.pins import TaskRef, pin_task, unpin_task
 from app.commands.task_request import (
     TaskRequestForm,
     TaskWithdraw,
@@ -33,7 +27,7 @@ from app.domain.calendar import (
     work_delay,
     work_minutes,
 )
-from app.domain.models import Assignment
+from app.domain.models import Assignment, TaskBase
 from app.main import app
 from app.rules.engine import detect_conflicts
 from app.solver import cpsat
@@ -42,6 +36,7 @@ from app.store import db
 from app.store.repos.consultations import list_review_queue
 from app.store.repos.records import list_validations
 from app.store.repos.runs import get_run
+from app.store.repos.schedules import insert_task_base
 from app.store.repos.site import get_site
 from app.store.repos.tasks import list_current_tasks
 
@@ -268,15 +263,15 @@ def test_sequence_alpha_then_n1_to_n4(seeded):
 # ── 근무 분 지연: state의 changes와 Solver 요약 ────────────────
 
 
-def _hope_n4(pack):
-    """N4를 요청하고 담당자가 희망 영역(10/13 14:00–16:00)을 그린다: 지연은 이 희망에서 벗어난 정도다."""
+def _base_n4(pack):
+    """N4를 요청하고 요청한 자리(10/13 14:00 시작)를 기준 위치로 둔다: 지연은 이 자리에서 옮긴 거리다."""
     _submit(pack, "N4")
-    window = PreferredWindow(task_id="N4", start=1740, end=1860)
-    assert set_preferred_window(pack, "planner_a", _key(), window).status == "APPLIED"
+    with db.write() as tx:
+        insert_task_base(tx, pack.site_id, TaskBase(task_id="N4", start=1740))
 
 
 def test_state_reports_calendar_and_work_delay(seeded):
-    _hope_n4(seeded)
+    _base_n4(seeded)
     run_until_idle(seeded, model_factory=_factory(solve("L0")))
     with TestClient(app) as client:
         res = client.get(f"/api/sites/{SITE}/state", headers={"X-Actor": "supervisor"})
@@ -654,7 +649,7 @@ def test_demo_rejection_target_must_exist(pack_copy):
 
 def test_steps_api_reports_work_delay_without_storing(client, seeded):
     """GET /runs/{rid}/steps의 SOLVE step에 근무 분 지연을 조회 시 붙인다. AgentStep에는 없다."""
-    _hope_n4(seeded)
+    _base_n4(seeded)
     run_until_idle(seeded, model_factory=_factory(solve("L0")))
     [run] = _runs()
     res = client.get(f"/api/runs/{run.run_id}/steps", headers={"X-Actor": "supervisor"})

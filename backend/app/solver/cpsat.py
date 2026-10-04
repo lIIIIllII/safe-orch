@@ -2,10 +2,10 @@
 
 트랜잭션 밖에서 돈다. 모든 READY 작업을 넣고 SearchSpec이 허용하지 않은 작업·축은 기준값 상수다.
 1단계 min Σ changed_t, 1단계가 OPTIMAL이면 그 값을 고정하고 2단계 min Σ delay_t.
-delay_t는 세 경우다 (CV-29): 희망 영역이 있는 작업은 희망 시작 범위 밖으로 벗어난 거리(앞뒤 모두,
-안이면 0), 희망 영역이 없고 Plan에 있는 작업은 Plan의 시작에서 옮긴 거리 |s_t − base_t|, 희망 영역도 없고
-Plan에도 없는 작업은 0이다. Plan에 없는 작업의 시작은 희망 시작 범위 안이면(희망 영역이 없으면 시간창 안
-어디든) 변경으로 세지 않는다.
+변경과 지연은 작업의 기준 시작 범위에서 잰다 (CV-29): Plan에 있는 작업은 승인된 시작 한 점, 기준 위치가
+있는 새 작업은 요청한 시작 범위, 기준 위치가 없는 새 작업(폼 요청)은 범위가 없다. 범위 안이면 변경으로
+세지 않고 delay_t는 0이며, 밖이면 변경 하나이고 delay_t는 범위 끝에서 벗어난 거리(앞뒤 모두)다. 범위가
+없으면 시간창 안 어디든 변경도 지연도 아니다. 자원이 기준 자원이 아니면 변경이다.
 목적 순서가 지연 먼저(DELAY_FIRST)면 두 단계의 목적을 바꾼다: 1단계 지연, 2단계 변경 작업 수 (CV-27).
 마지막 단계: 두 값이 모두 OPTIMAL이면 둘을 고정하고 자원을 바꾸는 작업 수를 줄인다 (CV-12). 변경 수는
 작업당 하나라 시각을 바꾼 작업의 자원을 더 바꿔도 앞의 두 값이 같기 때문이다. 이 단계의 해는 2단계의
@@ -46,8 +46,6 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
     facts = snapshot.facts()
     horizon = facts.horizon_minutes
     base = facts.base_assignments()
-    wanted = facts.preferred_map()
-    in_plan = {a.task_id for a in facts.plan.assignments}
     resources = facts.resource_map()
     tasks = sorted(facts.tasks, key=lambda t: t.task_id)
     m = cp_model.CpModel()
@@ -95,17 +93,14 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
         if t.required_resource_type is not None:
             m.add_exactly_one([lit for _, lit in lits])  # 대안이 없으면 불가능
 
-        hope = wanted[tid].start_range(d) if tid in wanted else None
+        # 기준 시작 범위: 이 안이면 변경이 아니고 지연도 0이다. 범위가 없는 새 작업은 아직 자기
+        # 자리가 없으므로 시간창 안 어디든 변경이 아니다 (CV-29)
+        within = facts.base_range(tid)
         if ax.time or ax.resource:
             ch = m.new_bool_var(f"changed_{tid}")
-            if ax.time and tid not in in_plan:
-                # Plan에 없는 작업: 희망 시작 범위 안이면 어디든 변경이 아니다. 희망 영역이 없으면
-                # 아직 자기 자리가 없으므로 시간창 안 어디든 변경이 아니다 (CV-29)
-                if hope is not None:
-                    m.add(s >= hope[0]).only_enforce_if(~ch)
-                    m.add(s <= hope[1]).only_enforce_if(~ch)
-            elif ax.time:
-                m.add(s == ref.start).only_enforce_if(~ch)
+            if ax.time and within is not None:
+                m.add(s >= within[0]).only_enforce_if(~ch)
+                m.add(s <= within[1]).only_enforce_if(~ch)
             base_lit = next((lit for rid, lit in lits if rid == ref.resource_id), None)
             if base_lit is not None:
                 m.add_implication(~ch, base_lit)
@@ -118,14 +113,10 @@ def _build(snapshot: Snapshot, spec: SearchSpec, pack: LoadedPack) -> _Built:
                 b.swaps.append(swap)
         if ax.time:
             dl = m.new_int_var(0, horizon, f"delay_{tid}")
-            if hope is not None:
-                m.add(dl >= hope[0] - s)
-                m.add(dl >= s - hope[1])
-            elif tid in in_plan:
-                # 희망 영역이 없는 계획 작업: 계획의 시작에서 옮긴 거리(앞뒤 모두)
-                m.add(dl >= s - ref.start)
-                m.add(dl >= ref.start - s)
-            # 희망 영역도 없고 Plan에도 없는 작업은 재지 않는다(0)
+            if within is not None:
+                # 범위 끝에서 벗어난 거리(앞뒤 모두). 범위가 없는 작업은 재지 않는다(0)
+                m.add(dl >= within[0] - s)
+                m.add(dl >= s - within[1])
             b.delays.append(dl)
 
     # 자원별 NoOverlap (고정 작업 포함) + 가용 구간 밖은 막힌 구간으로 넣는다

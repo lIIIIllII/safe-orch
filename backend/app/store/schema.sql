@@ -140,15 +140,21 @@ CREATE TABLE schedule (
     FOREIGN KEY (site_id, actor_id) REFERENCES actor (site_id, actor_id)
 );
 
--- 일정으로 들어온 작업의 기준 배정(문서의 배정: 시작·자원)과 어느 넣기에서 왔는지. 작업당 하나이고 불변이다.
--- 계획에 들어가기 전까지 그 작업의 기준 위치다 (ST-24).
+-- 새 작업의 기준 위치: 요청한 시작 범위 [start_min, start_max]와 기준 자원. 작업당 하나이고 불변이다.
+-- 계획에 들어가기 전까지 그 작업의 기준이다 (CV-29). 일정으로 들어온 작업은 문서의 배정(한 점, 자원은
+-- 문서 배정의 자원)이고 schedule_id가 어느 넣기인지다. 자연어 요청은 문장에서 말한 시작 범위이고
+-- schedule_id와 resource_id를 비운다(기준 자원은 요청 자원이다). 폼 요청은 기록이 없다(기준 없음).
+-- origin: 사람이 말한 범위 STATED, 접수 Agent가 정한 범위 DECIDED. 계산에서는 똑같이 쓴다.
 CREATE TABLE task_base (
     site_id     TEXT NOT NULL REFERENCES site (site_id),
     task_id     TEXT NOT NULL,
     start_min   INTEGER NOT NULL CHECK (start_min >= 0),
+    start_max   INTEGER NOT NULL,
     resource_id TEXT,
-    schedule_id TEXT NOT NULL REFERENCES schedule (schedule_id),
+    origin      TEXT NOT NULL CHECK (origin IN ('STATED', 'DECIDED')),
+    schedule_id TEXT REFERENCES schedule (schedule_id),
     PRIMARY KEY (site_id, task_id),
+    CHECK (start_min <= start_max),
     FOREIGN KEY (site_id, resource_id) REFERENCES resource (site_id, resource_id)
 );
 

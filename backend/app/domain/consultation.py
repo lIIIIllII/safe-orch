@@ -1,6 +1,6 @@
 """Consultation 계산. DB를 읽지 않는 순수 함수다.
 
-item은 후보 snapshot의 사실과 Consent로 만들고, 상태는 저장하지 않고 조회할 때 계산한다.
+item은 후보 snapshot의 사실로 만들고, 상태는 저장하지 않고 조회할 때 계산한다.
 """
 
 from collections.abc import Iterable, Mapping
@@ -11,7 +11,6 @@ from app.domain.models import (
     Assignment,
     Candidate,
     ConsultationItem,
-    PreferredWindow,
     SnapshotContent,
 )
 
@@ -34,40 +33,20 @@ def change_hash(task_id: str, task_revision: int, before: Assignment, after: Ass
 
 
 def build_items(facts: SnapshotContent, candidate: Candidate) -> tuple[ConsultationItem, ...]:
-    """기준(snapshot.base_assignments()) 대비 시작이나 자원이 바뀐 작업마다 item 1개.
+    """기준에서 바뀐 작업마다 item 1개 (AG-33). Solver의 변경 수와 같은 기준이다 (CV-29).
 
-    바뀐 축마다 그 작업 현재 revision의 같은 축 Consent가 새 값을 덮어야 COVERED다.
-    희망 영역이 있는 작업의 시각은 Consent 대신 희망 영역을 본다: 사람이 말한(그리거나 확인한) 희망의
-    시작 범위 안이면 덮인 것이고, Work Intake가 정한 희망은 확인 전까지 덮지 않는다 (ST-22, AG-33).
+    계획 작업은 승인된 자리에서 시작이나 자원이 바뀌면, 새 작업은 기준 시작 범위 밖으로 놓였거나 기준
+    자원이 아닐 때만 항목이 된다. 기준 위치가 없는 새 작업(폼 요청)은 자원이 바뀔 때만이다. 묻지 않는
+    범위는 따로 없다: 항목은 모두 담당자 확인을 기다린다.
     """
     base = facts.base_assignments()
     tasks = facts.task_map()
-    wanted = facts.preferred_map()
     items = []
     for after in sorted(candidate.assignments, key=lambda a: a.task_id):
         task = tasks.get(after.task_id)
         before = base.get(after.task_id)
-        if task is None or before is None:
+        if task is None or before is None or not facts.is_changed(after):
             continue
-        needed = []
-        if after.start != before.start:
-            needed.append(("TIME", after.start))
-        if after.resource_id != before.resource_id:
-            needed.append(("RESOURCE", after.resource_id))
-        if not needed:
-            continue
-        consents = [
-            c
-            for c in facts.consents
-            if c.task_id == task.task_id and c.task_revision == task.revision
-        ]
-        hope = wanted.get(task.task_id)
-        covered = all(
-            _hope_covers(hope, task.duration, value)
-            if axis == "TIME" and hope is not None
-            else any(c.axis == axis and c.covers(value) for c in consents)
-            for axis, value in needed
-        )
         items.append(
             ConsultationItem(
                 task_id=task.task_id,
@@ -76,15 +55,10 @@ def build_items(facts: SnapshotContent, candidate: Candidate) -> tuple[Consultat
                 before=before,
                 after=after,
                 change_hash=change_hash(task.task_id, task.revision, before, after),
-                base_status="COVERED" if covered else "PENDING",
+                base_status="PENDING",
             )
         )
     return tuple(items)
-
-
-def _hope_covers(hope: PreferredWindow, duration: int, start: int | str | None) -> bool:
-    lo, hi = hope.start_range(duration)
-    return hope.origin == "STATED" and isinstance(start, int) and lo <= start <= hi
 
 
 def item_statuses(

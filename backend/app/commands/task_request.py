@@ -23,6 +23,7 @@ from app.domain.models import (
     Requirement,
     Site,
     Task,
+    TaskBase,
     pool_for,
 )
 from app.packs.loader import LoadedPack, confirmed_fields
@@ -38,6 +39,7 @@ from app.store.repos.pins import insert_preferred_window, list_active_pins
 from app.store.repos.plans import get_current_plan
 from app.store.repos.resources import list_pools, list_resources
 from app.store.repos.runs import has_open_case, list_active_runs
+from app.store.repos.schedules import insert_task_base
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
@@ -224,6 +226,8 @@ def insert_requested_task(
     origins: dict[str, str] | None = None,
     hope: tuple[int, int, str] | None = None,
     hope_made_by: str = "INTAKE",
+    base: TaskBase | None = None,
+    schedule_id: str | None = None,
 ) -> dict[str, Any]:
     """검증을 통과한 요청으로 작업 하나를 만든다. 폼·Work Intake·일정 넣기가 같이 쓴다.
 
@@ -233,6 +237,8 @@ def insert_requested_task(
     범위·요청 자원에만 만든다. 정한 값의 동의는 요청자가 작업 카드에서 확인할 때 생긴다 (AG-33).
     hope((시작, 끝, 출처)): 희망 영역 기록을 만들고 시작 범위 Consent는 만들지 않는다. 그 작업의 동의
     범위는 희망 영역이다 (ST-22). 만든 주체(hope_made_by)는 Work Intake 또는 담당자다.
+    base: 새 작업의 기준 위치(요청한 시작 범위, 일정은 문서의 배정과 schedule_id). 없으면 기준이 없다:
+    폼 요청은 시간창 안 어디든 변경도 지연도 아니다 (CV-29).
     """
     site_id = pack.site_id
     wt = pack.work_types[form.work_type]
@@ -249,7 +255,7 @@ def insert_requested_task(
         lifecycle="QUEUED" if queued else "READY",
     )
     insert_task_revision(tx, site_id, task)
-    consents = stated_consents(task, source_ref, time=hope is None)
+    consents = stated_consents(task, source_ref, time=hope is None and base is None)
     for c in consents:
         insert_consent(tx, site_id, c, context_version)
     if hope is not None:
@@ -266,6 +272,8 @@ def insert_requested_task(
             origin,
             hope_made_by,
         )
+    if base is not None:
+        insert_task_base(tx, site_id, base, schedule_id)
     return {
         "task_id": task.task_id,
         "revision": 1,
@@ -283,15 +291,15 @@ def create_requested_task(
     source_ref: str,
     cause_kind: str = "FORM",
     origins: dict[str, str] | None = None,
-    hope: tuple[int, int, str] | None = None,
+    base: TaskBase | None = None,
 ) -> dict[str, Any]:
     """작업 하나의 접수(폼·Work Intake): 작업을 만들고, 대기열이 아니면 Context +1, RECHECK,
-    작업 준비됨 사건. source_ref만 다르면 같은 작업이 된다."""
+    작업 준비됨 사건. source_ref만 다르면 같은 작업이 된다. base는 Work Intake가 낸 기준 위치다."""
     site_id = site.site_id
     queued = waits_in_queue(tx, site_id)
     context_version = site.context_version if queued else bump_context_version(tx, site_id)
     refs = insert_requested_task(
-        tx, pack, actor, form, source_ref, queued, context_version, origins, hope
+        tx, pack, actor, form, source_ref, queued, context_version, origins, base=base
     )
     if not queued:
         cause = {"kind": cause_kind, "task_id": form.task_id, "actor_id": actor.actor_id}

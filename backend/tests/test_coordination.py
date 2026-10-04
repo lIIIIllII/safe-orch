@@ -194,7 +194,7 @@ def test_plan_a_full_e2e(seeded, main_on):
         "재계획 후보가 C(인양) 작업을 바꿉니다: 시작 10/12 10:00 → 10/12 10:30."
     )
     view = _view(pack, alpha)
-    assert view.item_status == {"A": "COVERED", "C": "PENDING"}
+    assert view.item_status == {"C": "PENDING"}
     assert cr["change_hash"] == next(i.change_hash for i in view.items if i.task_id == "C")
 
     _objected(pack)
@@ -446,7 +446,7 @@ def test_accept_carries_to_same_change_in_new_candidate(seeded, main_on):
     beta = _replan_after_release(pack)
     assert beta != rp.wait_ref
     view = _view(pack, beta)
-    assert (view.item_status, view.status) == ({"A": "COVERED", "C": "ACCEPTED"}, "COMPLETE")
+    assert (view.item_status, view.status) == ({"C": "ACCEPTED"}, "COMPLETE")
     assert len(_messages("CHANGE_REQUEST")) == 1 and len(_runs("COORDINATION")) == 1
     with db.read() as conn:
         shown = candidate_view(conn, pack.site_id, beta)
@@ -459,7 +459,7 @@ def test_accept_carries_to_same_change_in_new_candidate(seeded, main_on):
         "foreman_a2",
         True,
     )
-    assert src["at"] and sources["A"] is None
+    assert src["at"] and sorted(sources) == ["C"]
     assert (obs_c["prior_answer"], obs_c["requests"]) == (True, [])
     assert _approve(pack, beta).status == "APPLIED"
 
