@@ -737,6 +737,22 @@ textarea {
   pointer-events: none;
 }
 
+/* 요청 시작 범위(기준 위치): 막대 위 가는 점선 괄호. 가능 범위 괄호(막대 아래 실선)와 구분한다 */
+.tl-base-range {
+  position: absolute;
+  z-index: 2;
+  height: 6px;
+  border: 1.5px dashed #2563eb;
+  border-bottom: none;
+  pointer-events: none;
+}
+
+.lg-base-range::before {
+  background: transparent;
+  border: 1.5px dashed #2563eb;
+  border-bottom: none;
+}
+
 .tl-window-clip-l {
   border-left-style: dotted;
 }

@@ -231,7 +231,8 @@ export interface CandidateView {
   }[]
   /** 안 번호: 이 Case의 재계획 후보 전체(무효·거절 포함)에 만들어진 순서로 매긴 번호. 바뀌지 않으므로
    *  살아 있는 안만 보면 건너뛸 수 있다. 재계획 후보가 아니면 null */
-  plan_no: number | null
+  /** 안 번호(서버 계산): 재계획 호출 순서의 숫자, 한 호출의 여러 안은 가·나, 같은 배치는 번호를 합친다("1가·2") */
+  plan_label: string | null
   /** Supervisor가 고른 안. 고른 안만 협의한다 */
   chosen: boolean
   context_version: number

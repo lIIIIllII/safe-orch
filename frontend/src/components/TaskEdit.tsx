@@ -1,7 +1,8 @@
 // 작업 카드의 "Agent가 정한 값"과 값 고치기(AG-33). 담당자(요청자)만 한다.
 // Work Intake가 정한 값(문장에 없거나 해석·추정이 들어간 값)을 따로 보여 주고, 담당자가 고친다. 고친 값은 사람이
 // 말한 값이 된다(그대로 확인하는 버튼은 없다). 검증은 서버가 폼과 같은 규칙으로 한다(화면은 판정하지 않는다).
-// 카드에서 고치는 시각은 가능 범위(Hard)다. 기준 위치(요청한 시작 범위)는 카드 위쪽에 글로 보이고 고치지 않는다.
+// 카드에서 고치는 시각은 가능 범위(Hard)다. 계획에 아직 없고 요청 시작 범위(기준 위치)가 있는 작업은 그 범위도
+// 고친다(고친 범위는 말한 범위가 된다). 폼 작업은 그 칸이 없고, 계획에 있는 작업의 기준은 승인된 자리다.
 // 자원 바꾸기: 서버가 그 자원으로 바꿀 수 있는지 확인해 주고, [확정]하면 계획에 있는 작업은 지금 시각 그대로
 // 자원만 바뀐 계획이 바로 확정된다(직접 이동과 같은 판정). 계획 밖 요청은 요청 자원만 고친다.
 
@@ -14,6 +15,8 @@ import type { Run } from './ReviewPanel'
 
 type TimeKey = 'earliest_start' | 'latest_start' | 'latest_end'
 const TIME_KEYS: TimeKey[] = ['earliest_start', 'latest_start', 'latest_end']
+type BaseKey = 'base_start' | 'base_start_max'
+const BASE_KEYS: BaseKey[] = ['base_start', 'base_start_max']
 
 interface Props {
   task: Task
@@ -32,7 +35,14 @@ export function TaskEdit({ task, state, owner, actorId, planned, busy, run }: Pr
   const decided = decidedValues(task)
   const [open, setOpen] = useState(false)
   const at = (m: number) => ({ day: clock.dateKey(m), time: clock.hm(m) })
+  // 요청 시작 범위: 계획에 아직 없고 기준 위치가 있는 작업만 고친다(서버가 준 출처로만 가린다)
+  const base =
+    task.base?.source === 'REQUEST' && task.base.start !== null && task.base.start_max !== null
+      ? { base_start: task.base.start, base_start_max: task.base.start_max }
+      : null
   const initial = () => ({
+    base_start: at(base?.base_start ?? 0),
+    base_start_max: at(base?.base_start_max ?? 0),
     zone_id: task.zone_id,
     duration: String(task.duration),
     earliest_start: at(task.earliest_start),
@@ -96,11 +106,19 @@ export function TaskEdit({ task, state, owner, actorId, planned, busy, run }: Pr
       const m = clock.toMinute(f[key].day, f[key].time)
       if (m !== null && m !== task[key]) body[key] = m
     }
+    if (base) {
+      for (const key of BASE_KEYS) {
+        const m = clock.toMinute(f[key].day, f[key].time)
+        if (m !== null && m !== base[key]) body[key] = m
+      }
+    }
     if (Object.keys(body).length === 0) return
     setOpen(false)
     void run('작업 값 고치기', `/tasks/${task.task_id}/edit`, body)
   }
-  const badTime = TIME_KEYS.some((key) => clock.toMinute(f[key].day, f[key].time) === null)
+  const badTime = [...TIME_KEYS, ...(base ? BASE_KEYS : [])].some(
+    (key) => clock.toMinute(f[key].day, f[key].time) === null,
+  )
 
   return (
     <div className="tl-edit">
@@ -149,7 +167,7 @@ export function TaskEdit({ task, state, owner, actorId, planned, busy, run }: Pr
               onChange={(e) => setF({ ...f, duration: e.target.value })}
             />
           </label>
-          {TIME_KEYS.map((key) => (
+          {[...(base ? BASE_KEYS : []), ...TIME_KEYS].map((key) => (
             <label key={key}>
               {VALUE_NAME[key]}
               <span className="row tight">
@@ -171,7 +189,10 @@ export function TaskEdit({ task, state, owner, actorId, planned, busy, run }: Pr
           ))}
           {badTime && <p className="small bad tl-card-note">시각은 HH:MM 형식으로 적습니다.</p>}
           <p className="small muted tl-card-note">
-            시각 셋은 가능 범위(반드시 지켜야 하는 범위)입니다. 기준 위치는 고치지 않습니다.
+            가능 범위 셋은 반드시 지켜야 하는 범위입니다.
+            {base
+              ? ' 요청 시작 범위는 지연과 변경을 재는 기준입니다(강제하지 않음). 고치면 말한 범위가 됩니다.'
+              : ' 요청 시작 범위는 계획에 아직 없고 요청한 자리가 있는 작업만 고칩니다.'}
             고친 값은 사람이 말한 값이 됩니다. 검증은 요청 폼과 같고, 검토 중인 안은 무효가 됩니다. 지금 배치와 어긋나면 Agent가 다시 풉니다.
           </p>
           <div className="tl-card-actions">

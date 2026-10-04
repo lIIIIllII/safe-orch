@@ -143,10 +143,10 @@ const movedOf = (c: CandidateView, taskId: string) => {
   return x ? movedText(x) : ''
 }
 
-/** 안 번호: 서버가 이 Case의 재계획 후보 전체에 만들어진 순서로 매긴 번호다(고정). 안 비교에는 살아 있는 안만
- *  나오므로 번호가 건너뛸 수 있다. */
+/** 안 번호: 서버가 매긴다(고정). 재계획 호출마다 번호 하나, 한 호출의 여러 안은 가·나, 다른 호출이 같은
+ *  배치를 냈으면 번호를 합친다("1가·2안"). 안 비교에는 살아 있는 안만 나오므로 번호가 건너뛸 수 있다. */
 function planLabel(c: CandidateView): string {
-  return c.plan_no === null ? short(c.candidate_id) : `${c.plan_no}안`
+  return c.plan_label === null ? short(c.candidate_id) : `${c.plan_label}안`
 }
 
 /** 그 후보의 배치에 도달한 접근 이름(겹치지 않게). 둘 이상이면 다른 접근이 같은 배치를 낸 것이다. */
@@ -207,6 +207,8 @@ function PlanChange({ x }: { x: PlanChangeView }) {
 function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, busy, run }: Props) {
   // 이유를 펼친 안
   const [opened, setOpened] = useState<string[]>([])
+  // [모두 거절]의 사유
+  const [allReason, setAllReason] = useState('')
   const queue = state.candidates.filter((c) => state.review_queue.includes(c.candidate_id))
   const caseId = candidate?.case_id ?? queue[0]?.case_id ?? null
   const plans = queue.filter((c) => c.case_id === caseId)
@@ -228,6 +230,26 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
       </h3>
       {/* 같은 Case의 안은 같은 사실 위에 있다: 사실 변경은 한 번만 보인다 */}
       <FactChanges changes={plans[0].fact_changes} base={plans[0].base_plan_revision} state={state} />
+      {/* 모두 거절: 버튼은 역할만 보고 켠다. 사유가 비었거나 거절할 안이 없으면 서버가 거절한다(UI-01) */}
+      <div className="row">
+        <input
+          className="grow"
+          placeholder="모두 거절하는 사유(한 번만 적습니다)"
+          value={allReason}
+          onChange={(e) => setAllReason(e.target.value)}
+        />
+        <button
+          className="btn-warn"
+          disabled={!isSupervisor || busy !== null || caseId === null}
+          title={denied ?? '이 Case의 살아 있는 안을 한 번에 거절합니다. 사유는 재계획에 한 번만 전해집니다'}
+          onClick={async () => {
+            const res = await run('모두 거절', `/cases/${caseId}/reject-all`, { comment: allReason })
+            if (res?.status === 'APPLIED') setAllReason('')
+          }}
+        >
+          모두 거절
+        </button>
+      </div>
       <div className="plans-scroll">
       <table className="tbl small plans-table">
         <thead>
@@ -404,7 +426,7 @@ function CandidateDetail({
           후보: {CANDIDATE_STATUS[c.display_status] ?? c.display_status}
         </span>
         {v ? <ValidationBadge status={v.display_status} /> : <span className="badge">검증 대기</span>}
-        {c.plan_no !== null && <span className="badge">{planLabel(c)}</span>}
+        {c.plan_label !== null && <span className="badge">{planLabel(c)}</span>}
         {c.chosen && <span className="badge">고른 안</span>}
         {missing && <span className="badge badge-stale">목록에서 제외됨(갱신 중단)</span>}
       </div>

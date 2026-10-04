@@ -3,9 +3,11 @@
 // 막대를 누르면 작업이 선택되고 카드가 고정되어 열린다: 고정·고정 해제(AG-27).
 // 고정은 자물쇠와 굵은 테두리, 가능 범위(시간창)는 막대 아래 가는 괄호다. 괄호는 눌러 선택한 작업에만
 // 보인다(좁힌 작업도 늘 보이지 않는다). 괄호가 지금 보이는 구간 밖으로 이어지면 화면 가장자리에 끝 시각을 적는다.
-// 후보 겹쳐 보기는 서버가 계산한 "이 안이 바꾸는 것"을 그린다: 계획 작업은 승인된 자리를 "변경 전" 윤곽으로,
-// 새 작업은 기준 위치(요청한 자리·시작 범위)를 같은 모양의 윤곽으로 남기고 후보의 자리를 굵은 막대로 그린다.
-// 기준 위치가 없는 새 작업(폼 요청)은 윤곽 없이 "새 배치"로만 그린다. 선택하면 가능 범위도 같이 보인다.
+// 후보 겹쳐 보기는 서버가 계산한 "이 안이 바꾸는 것"을 그린다: 기준이 한 점인 작업(계획 작업의 승인된 자리,
+// 일정으로 들어온 새 작업의 문서 배정)은 그 자리를 "변경 전" 윤곽으로 남기고 후보의 자리를 굵은 막대로 그린다.
+// 기준이 범위인 새 작업은 윤곽을 그리지 않고(범위 + 작업 시간은 작업이 길어 보인다) 새 배치 막대의 라벨에
+// "기준 범위 안" 또는 "범위 밖 N분 앞당김·늦음"을 붙인다. 기준이 없는 새 작업(폼 요청)은 "새 배치"로만 그린다.
+// 작업을 눌러 선택하면 가능 범위 괄호(막대 아래)와 요청 시작 범위 괄호(막대 위, 점선)가 같이 보인다.
 // 후보가 자원을 바꾼 작업은 후보 막대에 "자원 → 새 자원"을 달고, 원래 자원 행의 자리는 흐린 점선 윤곽으로 남긴다.
 // 담당자는 자기 작업의 Plan 막대를 끌어 시각을 옮긴다(AG-31): 놓을 수 있는 구간은 서버가 계산해 주고 화면은 칠하기만
 // 한다. 놓으면 미리보기와 [확정]/[취소]가 뜬다. 조금만 움직이면 선택이다.
@@ -231,14 +233,14 @@ export function Timeline(props: Props) {
     if (inPlan.has(t.task_id) || t.lifecycle !== 'READY') continue
     const c = changed.get(t.task_id)
     if (c) {
-      // 겹쳐 보기의 새 작업: 기준 위치(요청한 자리·시작 범위)를 "변경 전"과 같은 윤곽으로 남긴다.
-      // 기준 위치가 없으면(폼 요청) 윤곽을 그리지 않는다
-      if (c.base) {
+      // 겹쳐 보기의 새 작업: 기준이 한 점이면(일정의 문서 배정) "변경 전"과 같은 윤곽으로 남긴다.
+      // 기준이 범위이거나 없으면(폼 요청) 윤곽을 그리지 않는다
+      if (c.base && c.base.start === c.base.start_max) {
         bars.push({
           key: `r:${t.task_id}`,
           taskId: t.task_id,
           start: c.base.start,
-          end: c.base.start_max + t.duration,
+          end: c.base.start + t.duration,
           resourceId: c.base.resource_id,
           zoneId: t.zone_id,
           kind: 'before',
@@ -312,8 +314,19 @@ export function Timeline(props: Props) {
     const ch = changed.get(b.taskId)
     const swapped = !!ch && ch.resource_changed
     const moved = b.kind === 'after' && swapped ? ` · 자원 → ${ch.after.resource_id ?? '없음'}` : ''
-    // 새 작업: 후보의 자리는 "새 배치", 기준 위치의 윤곽은 "기준"으로 적는다
-    const fresh = ch?.kind === 'NEW' ? (b.kind === 'after' ? ' · 새 배치' : ' · 기준') : ''
+    // 새 작업: 기준 위치의 윤곽은 "기준", 후보의 자리는 "새 배치"로 적는다. 기준이 범위면 범위 안인지,
+    // 밖이면 범위 끝에서 몇 분 어느 쪽인지를 붙인다(서버 계산)
+    const ranged = !!ch?.base && ch.base.start < ch.base.start_max
+    const fresh =
+      ch?.kind !== 'NEW'
+        ? ''
+        : b.kind !== 'after'
+          ? ' · 기준'
+          : !ranged
+            ? ' · 새 배치'
+            : ch.direction === null
+              ? ' · 기준 범위 안'
+              : ` · 범위 밖 ${ch.delay}분 ${ch.direction === 'EARLY' ? '앞당김' : '늦음'}`
     const line1 = `${b.kind === 'after' ? '→ ' : ''}${mark}${b.taskId} ${wt}${b.kind === 'request' ? ' · 요청' : ''}${fresh}${moved}`
     const line2 = `${clock.hm(b.start)}–${clock.hm(b.end)}`
     // Gate(시작 가능 아님)는 막대 안에 글자가 들어갈 때만 배지로, 아니면 모서리 표시로 둔다(사유는 카드)
@@ -709,6 +722,12 @@ export function Timeline(props: Props) {
           <span className="lg lg-window" title="가능 범위(반드시 지켜야 하는 시간창). 눌러 선택한 작업만 보인다">
             가능 범위(선택한 작업만)
           </span>
+          <span
+            className="lg lg-base-range"
+            title="요청 시작 범위(가장 이른 시작 ~ 가장 늦은 시작). 강제하지 않지만 지연과 변경을 재는 기준이다. 눌러 선택한 작업만 보인다"
+          >
+            요청 시작 범위(선택한 작업만)
+          </span>
           <span className="lg lg-conflict">충돌</span>
           <span className="lg lg-off">비근무</span>
           <span className="lg lg-gate" title="재확정 필요·보류. 사유는 막대에 마우스를 올리면 보인다">Gate</span>
@@ -800,6 +819,22 @@ export function Timeline(props: Props) {
                           </span>
                         )}
                       </div>
+                    )
+                  })}
+                  {rangeBars.map((d) => {
+                    // 요청 시작 범위(가장 이른 시작 ~ 가장 늦은 시작)도 눌러 선택한 작업에만 그린다
+                    const base = d.t?.base
+                    if (!base || selected?.taskId !== d.b.taskId || base.source !== 'REQUEST') return null
+                    if (base.start === null || base.start_max === null || base.start === base.start_max) return null
+                    const box = scale.box(base.start, base.start_max)
+                    if (!box) return null
+                    return (
+                      <div
+                        key={`base:${d.b.key}`}
+                        className="tl-base-range"
+                        style={{ left: box.left, width: box.width, top: laneTop(d.b.key) - 3 }}
+                        title={`${d.b.taskId} 요청 시작 범위 ${clock.format(base.start)} ~ ${clock.format(base.start_max)}`}
+                      />
                     )
                   })}
                   {move &&
@@ -1144,14 +1179,12 @@ function BarCard({
               {!t?.base
                 ? '—'
                 : t.base.source === 'PLAN'
-                  ? `승인된 계획의 자리 · ${clock.format(t.base.start ?? b.start)}`
+                  ? `승인된 계획의 자리 ${clock.format(t.base.start ?? b.start)}`
                   : t.base.source === 'NONE' || t.base.start === null || t.base.start_max === null
                     ? '없음(가능 범위 안 어디든 변경이 아님)'
-                    : t.base.start === t.base.start_max
-                      ? `요청한 자리 · ${clock.format(t.base.start)} 시작`
-                      : `요청한 시작 범위 · ${clock.format(t.base.start)} ~ ${clock.format(t.base.start_max)}`}
-              {t?.base?.origin === 'STATED' && <span className="muted"> · 말함</span>}
-              {t?.base?.origin === 'DECIDED' && <span className="tag tag-warn"> 정함(Agent)</span>}
+                    : `요청 시작 ${clock.format(t.base.start)}${t.base.start === t.base.start_max ? '' : `~${clock.dateKey(t.base.start) === clock.dateKey(t.base.start_max) ? clock.hm(t.base.start_max) : clock.format(t.base.start_max)}`}`}
+              {t?.base?.origin === 'STATED' && '(말함)'}
+              {t?.base?.origin === 'DECIDED' && <span className="tag tag-warn">(정함)</span>}
             </td>
           </tr>
           {t && decidedValues(t).length > 0 && (
