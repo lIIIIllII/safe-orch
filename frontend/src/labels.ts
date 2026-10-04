@@ -310,7 +310,7 @@ export const CONSULTATION_STATUS: Record<string, string> = {
 export const ITEM_STATUS: Record<string, string> = {
   PENDING: '담당자 확인 필요',
   WAIVED: 'Supervisor 수용',
-  ACCEPTED: '담당자 수용',
+  ACCEPTED: '담당자 수락',
   OBJECTED: '담당자 이견',
   CANCELLED: '협의 취소',
 }

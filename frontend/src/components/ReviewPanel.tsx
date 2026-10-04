@@ -522,6 +522,8 @@ function CandidateDetail({
   // 수용할 항목. 기본값은 없음이다: Supervisor가 담당자 줄이나 항목에서 직접 고른다
   const [waiveIds, setWaiveIds] = useState<string[]>([])
   const [waiveComment, setWaiveComment] = useState('')
+  // 수용은 고른 안의 확인 대기 항목에만 된다(서버: CANDIDATE_NOT_CHOSEN·ITEM_NOT_WAIVABLE)
+  const canWaive = c.chosen && items.some((i) => i.item_status === 'PENDING')
   // 펼친 담당자 줄
   const [openOwners, setOpenOwners] = useState<string[]>([])
   // 협의 현황은 담당자별로 묶어 보인다(한 통 = 담당자 하나)
@@ -775,7 +777,7 @@ function CandidateDetail({
                       onClick={() => setOpenOwners(toggle(openOwners, o.id))}
                     >
                       <td>
-                        {c.chosen && (
+                        {canWaive && (
                           <input
                             type="checkbox"
                             checked={all}
@@ -803,7 +805,7 @@ function CandidateDetail({
                       o.items.map((it) => (
                         <tr key={it.task_id} className={`owner-item item-${it.item_status.toLowerCase()}`}>
                           <td>
-                            {c.chosen && (
+                            {canWaive && it.item_status === 'PENDING' && (
                               <input
                                 type="checkbox"
                                 checked={waiveIds.includes(it.task_id)}
@@ -839,7 +841,7 @@ function CandidateDetail({
           </table>
           {items.length === 0 && <p className="muted">협의 항목 없음</p>}
           {/* 수용은 고른 안에서만 한다(서버도 CANDIDATE_NOT_CHOSEN으로 막는다, AG-29) */}
-          {c.chosen ? (
+          {canWaive && (
             <div className="row">
               <input
                 className="grow"
@@ -848,8 +850,15 @@ function CandidateDetail({
                 onChange={(e) => setWaiveComment(e.target.value)}
               />
               <button
-                disabled={!isSupervisor || busy !== null}
-                title={needSup}
+                disabled={!isSupervisor || busy !== null || waiveIds.length === 0 || !waiveComment.trim()}
+                title={
+                  needSup ??
+                  (waiveIds.length === 0
+                    ? '수용할 항목을 고르세요'
+                    : !waiveComment.trim()
+                      ? '수용 사유를 적어야 합니다'
+                      : undefined)
+                }
                 onClick={async () => {
                   const r = await run('협의 항목 수용(WAIVE)', `/consultations/${c.candidate_id}/waive`, {
                     task_ids: waiveIds,
@@ -862,9 +871,8 @@ function CandidateDetail({
                 선택 항목 수용 ({waiveIds.length})
               </button>
             </div>
-          ) : (
-            items.length > 0 && <p className="muted small">협의와 수용은 고른 안에서만 합니다.</p>
           )}
+          {!c.chosen && items.length > 0 && <p className="muted small">협의와 수용은 고른 안에서만 합니다.</p>}
         </>
       ) : (
         <p className="muted">협의 정보 없음</p>
