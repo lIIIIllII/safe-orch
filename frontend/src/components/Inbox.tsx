@@ -12,7 +12,7 @@ import {
   MESSAGE_TYPE,
   PROPOSAL_STATUS,
 } from '../labels'
-import { useEnv, workTypeName } from '../context'
+import { useEnv } from '../context'
 import { ANSWERABLE } from '../inbox'
 import type { Run } from './ReviewPanel'
 
@@ -35,18 +35,16 @@ export function Inbox({ state, busy, run }: Props) {
 
 function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: Run }) {
   const [comment, setComment] = useState('')
-  const { clock, meta } = useEnv()
+  const { clock } = useEnv()
   const answerable = ANSWERABLE.includes(m.type)
   // 확인 메시지는 제안 유형으로 나눈다: 사실 수정
-  // 제안 없는 질문은 자유 텍스트 답, 제안 없는 확인은 작업 요청 값 확인이다
+  // 제안 없는 질문은 자유 텍스트 답이다(신고자 확인 질문)
   const kind =
     m.proposal_type === 'FACT_UPDATE'
       ? 'FACT_UPDATE'
       : m.type === 'QUESTION' && !m.proposal_id
         ? 'FREE_QUESTION'
-        : m.type === 'CONFIRMATION' && !m.proposal_id
-          ? 'TASKSPEC'
-          : m.type
+        : m.type
   const free = kind === 'FREE_QUESTION'
   const open = m.status === 'OPEN' && answerable
   const done = m.status === 'LATE' || m.status === 'CANCELLED'
@@ -101,31 +99,6 @@ function InboxCard({ m, busy, run }: { m: InboxItem; busy: string | null; run: R
                 <code>{m.candidate_id ?? '—'}</code>
               </td>
             </tr>
-          )}
-          {kind === 'TASKSPEC' && m.values && (
-            <>
-              <tr>
-                <th>작업</th>
-                <td>
-                  {workTypeName(meta, m.values.work_type)} · {m.values.zone_id} 구역 · {m.values.duration}분
-                </td>
-              </tr>
-              <tr>
-                <th>시작 범위</th>
-                <td>
-                  {clock.format(m.values.earliest_start)} – {clock.format(m.values.latest_start)} · 종료 한도{' '}
-                  {clock.format(m.values.latest_end)}
-                </td>
-              </tr>
-              <tr>
-                <th>자원</th>
-                <td>
-                  {m.values.requested_resource_id
-                    ? `${m.values.required_resource_type} ${m.values.requested_resource_id}`
-                    : '없음'}
-                </td>
-              </tr>
-            </>
           )}
           {kind === 'FACT_UPDATE' && m.fact && (
             <tr>

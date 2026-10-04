@@ -9,8 +9,6 @@ import {
   AGENT_TYPE,
   AXIS,
   EXCLUDE_REASON,
-  FIELD_STATUS,
-  INTAKE_FIELD,
   RESULT_KIND,
   RUN_STATUS,
   SCOPE_LEVEL,
@@ -260,34 +258,6 @@ function ListResult({ tr }: { tr: Record<string, unknown> }) {
   )
 }
 
-type Judged = { status: string; value?: unknown }
-
-/** 작업 접수 질문의 필드별 판단. 물은 필드는 서버가 판단에서 도출한 것이다(모호·빠짐 전부). */
-function FieldsResult({ tr }: { tr: Record<string, unknown> }) {
-  const fields = (tr.fields ?? {}) as Record<string, Judged>
-  const asked = (tr.field_ids as string[]) ?? []
-  const regressed = (tr.regressed_field_ids as string[]) ?? []
-  return (
-    <table className="tbl small">
-      <tbody>
-        {Object.entries(fields).map(([id, j]) => (
-          <tr key={id}>
-            <th>{INTAKE_FIELD[id] ?? id}</th>
-            <td>
-              <span className={j.status === 'RECEIVED' ? 'tag' : 'tag tag-warn'}>
-                {FIELD_STATUS[j.status] ?? j.status}
-              </span>{' '}
-              {j.value === null || j.value === undefined ? '—' : <code>{JSON.stringify(j.value)}</code>}
-              {asked.includes(id) && ' · 물음'}
-              {regressed.includes(id) && ' · 앞 질문에서는 받음'}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
-}
-
 /** 담당자 확인 요청: 메시지와 서버 문구. 모델의 question은 모델 블록으로 따로 둔다. */
 function AskResult({ tr, args }: { tr: Record<string, unknown>; args: Record<string, unknown> }) {
   // 사전 확인(ASK_OWNER)은 need 하나를 묻는다. 옛 기록(ASK_TASK_OWNER)은 작업·축·허용 값을 인자로 가졌다
@@ -352,10 +322,6 @@ function StepCard({ s }: { s: AgentStep }) {
           'to_actor_id',
           'body',
           'try_resources',
-          // 작업 접수 질문의 필드별 판단은 전용 블록으로 보여 준다
-          'fields',
-          'field_ids',
-          'regressed_field_ids',
           'assignable_in_other_types',
         ].includes(k),
     ),
@@ -410,7 +376,6 @@ function StepCard({ s }: { s: AgentStep }) {
           {(name === 'LIST_ASSIGNABLE_RESOURCES' || name === 'LOOKUP_RESOURCE') && 'assignable' in tr && (
             <ListResult tr={tr} />
           )}
-          {name === 'ASK_CLARIFICATION' && isRecord(tr.fields) && <FieldsResult tr={tr} />}
           {(name === 'ASK_OWNER' || name === 'ASK_TASK_OWNER') && 'message_id' in tr && (
             <AskResult tr={tr} args={args} />
           )}

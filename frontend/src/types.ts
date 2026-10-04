@@ -110,6 +110,8 @@ export interface Task {
   pin: { pin_id: string; pinned_by: string; by_role: 'OWNER' | 'SUPERVISOR'; pinned_at: string } | null
   /** 담당자가 그린 희망 영역 [start, end) (분). 서버는 강제하지 않는다 */
   preferred_window: { start: number; end: number; set_by: string; set_at: string } | null
+  /** critical field별 확인 기록. origins는 값 이름 → 출처이고 Agent가 정한 값(DECIDED)만 적힌다 */
+  fields: Record<string, { value: unknown; status: string; source_ref: string; origins: Record<string, string> }>
   lifecycle: string
   gate: 'ALLOW' | 'HOLD' | 'STALE'
   reasons: string[]
@@ -347,19 +349,6 @@ export interface InboxItem {
   candidate_id: string | null
   /** 사실 수정안 (CONFIRMATION + FACT_UPDATE). 값은 Horizon 원점 기준 분 */
   fact: { field: string; old_value: number; new_value: number } | null
-  /** 작업 요청 값 확인 (제안 없는 CONFIRMATION, Work Intake). 시간은 분 */
-  values: IntakeValues | null
-}
-
-export interface IntakeValues {
-  work_type: string
-  zone_id: string
-  duration: number
-  earliest_start: number
-  latest_start: number
-  latest_end: number
-  required_resource_type: string | null
-  requested_resource_id: string | null
 }
 
 export interface AgentStep {

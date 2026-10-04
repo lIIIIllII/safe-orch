@@ -32,6 +32,7 @@ export const REASON: Record<string, string> = {
   // 고정·희망 영역
   ALREADY_PINNED: '이미 고정된 작업',
   MOVE_NOT_VALID: '그 자리로 옮길 수 없음',
+  EDIT_BREAKS_PLAN: '계획에 있는 작업의 지금 배치가 깨짐(먼저 옮기거나 없애기)',
   REMOVE_NOT_VALID: '이 작업을 없앨 수 없음',
   REMOVE_NOT_OWNER: '없앤 사람이 담당자가 아님',
   REMOVE_NOT_SINGLE_TASK: '없애기는 작업 하나만 뺌',
@@ -423,7 +424,6 @@ export const MESSAGE_TYPE: Record<string, string> = {
   CHANGE_REQUEST: '변경 요청',
   FACT_UPDATE: '사실 수정 확인',
   FREE_QUESTION: '확인 질문(답 입력)',
-  TASKSPEC: '작업 요청 값 확인',
   NOTICE: '확정 통지',
 }
 
@@ -431,22 +431,18 @@ export const MESSAGE_TYPE: Record<string, string> = {
 export const DECISION_BY_TYPE: Record<string, Record<string, string>> = {
   CHANGE_REQUEST: { ACCEPT: '수락', DECLINE: '이견' },
   FACT_UPDATE: { ACCEPT: '확정', DECLINE: '폐기' },
-  TASKSPEC: { ACCEPT: '확인', DECLINE: '거절' },
 }
 
-/** 작업 접수 질문의 필드별 판단: 필드 이름과 상태 */
-export const INTAKE_FIELD: Record<string, string> = {
+/** 작업 값 이름 (Agent가 정한 값 표시, 카드에서 고치기) */
+export const VALUE_NAME: Record<string, string> = {
   work_type: '작업 유형',
   zone_id: '구역',
   duration: '작업 시간',
-  window: '시작 범위·종료 한도',
-  resource: '자원',
-}
-
-export const FIELD_STATUS: Record<string, string> = {
-  RECEIVED: '받음',
-  AMBIGUOUS: '모호',
-  MISSING: '빠짐',
+  earliest_start: '가장 이른 시작',
+  latest_start: '가장 늦은 시작',
+  latest_end: '종료 한도',
+  required_resource_type: '자원 유형',
+  requested_resource_id: '요청 자원',
 }
 
 /** 사실 수정 필드 */

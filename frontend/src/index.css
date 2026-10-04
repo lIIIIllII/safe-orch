@@ -869,6 +869,35 @@ textarea {
   line-height: 1.2;
 }
 
+/* 작업 카드의 Agent가 정한 값과 값 고치기 (AG-33) */
+.tl-card-fixed {
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+
+.tl-edit {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.tl-decided {
+  margin-bottom: 4px;
+}
+
+.tl-edit-form {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.tl-edit-form label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .tl-card-actions {
   display: flex;
   flex-wrap: wrap;

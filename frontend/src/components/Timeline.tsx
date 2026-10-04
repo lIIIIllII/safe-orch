@@ -11,8 +11,8 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { fetchMoveCheck, fetchMoveRange, fetchRemoveCheck } from '../api'
 import type { CandidateView, Conflict, MoveCheck, MoveOptions, RemoveCheck, SiteState, Task } from '../types'
-import { CANDIDATE_KIND, CANDIDATE_STATUS, GATE, REASON, gateReason } from '../labels'
-import { poolExcessText, ruleName, useEnv, workTypeName } from '../context'
+import { CANDIDATE_KIND, CANDIDATE_STATUS, GATE, REASON, VALUE_NAME, gateReason } from '../labels'
+import { decidedValues, poolExcessText, ruleName, useEnv, workTypeName } from '../context'
 import {
   ALL_ZOOM_DEFAULT,
   DAY_ZOOMS,
@@ -24,6 +24,7 @@ import {
   ticks,
 } from '../scale'
 import type { Run } from './ReviewPanel'
+import { TaskEdit } from './TaskEdit'
 
 type BarKind = 'plan' | 'request' | 'before' | 'after'
 
@@ -622,6 +623,7 @@ export function Timeline(props: Props) {
         {hopeDenied && <p className="small muted tl-card-note">{hopeDenied}</p>}
         <p className="small muted tl-card-note">{moveNote}</p>
         {removeDenied && <p className="small muted tl-card-note">없애기: {removeDenied}</p>}
+        <TaskEdit key={`${t.task_id}:${t.revision}`} task={t} state={state} owner={owner} busy={busy} run={run} />
       </>
     )
   }
@@ -1074,7 +1076,7 @@ function BarCard({
   const { b, t } = d
   const CARD_W = 340
   const left = x + 14 + CARD_W > window.innerWidth ? x - 14 - CARD_W : x + 14
-  const top = Math.max(8, Math.min(y + 14, window.innerHeight - (onClose ? 360 : 260)))
+  const top = Math.max(8, Math.min(y + 14, window.innerHeight - (onClose ? 520 : 280)))
   // 고정한 시각(서버 시각, UTC)은 현장 시각으로 바꿔 보여 준다
   const pinnedAt = t?.pin ? clock.format(Math.round((Date.parse(t.pin.pinned_at) - clock.originMs) / 60_000)) : ''
   return (
@@ -1129,6 +1131,16 @@ function BarCard({
             <th>희망 영역</th>
             <td>{t?.preferred_window ? clock.span(t.preferred_window.start, t.preferred_window.end) : '없음'}</td>
           </tr>
+          {t && decidedValues(t).length > 0 && (
+            <tr>
+              <th>Agent가 정한 값</th>
+              <td>
+                {decidedValues(t)
+                  .map((name) => VALUE_NAME[name] ?? name)
+                  .join(', ')}
+              </td>
+            </tr>
+          )}
           <tr>
             <th>Gate</th>
             <td>

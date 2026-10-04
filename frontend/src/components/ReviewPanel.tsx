@@ -17,9 +17,10 @@ import {
   SCOPE_LEVEL,
   SOLVER_STATUS,
   VALIDATION_BADGE,
+  VALUE_NAME,
 } from '../labels'
 import { delayText } from '../time'
-import { useEnv } from '../context'
+import { decidedValues, useEnv } from '../context'
 import { Code, OutcomeBox, ValidationBadge } from './common'
 
 /** 명령 실행. 응답(실패 시 null)을 돌려준다. 결과 영역 표시는 App이 한다. */
@@ -106,6 +107,14 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
   const actorName = new Map(state.actors.map((a) => [a.actor_id, a.name]))
   if (plans.length === 0) return null
   const denied = isSupervisor ? undefined : 'Supervisor만 안을 고를 수 있습니다'
+  // 그 안이 담은(바꾸거나 새로 넣은) 작업 가운데 Agent가 정한 값이 남은 것
+  const taskMap = new Map(state.tasks.map((t) => [t.task_id, t]))
+  const decided = (c: CandidateView): [string, string[]][] =>
+    c.changes.flatMap((x): [string, string[]][] => {
+      const t = taskMap.get(x.task_id)
+      const names = t ? decidedValues(t).map((n) => VALUE_NAME[n] ?? n) : []
+      return names.length > 0 ? [[x.task_id, names]] : []
+    })
   return (
     <div className="plans">
       <h3>
@@ -179,7 +188,14 @@ function PlanCompare({ state, candidate, selectedId, onSelect, isSupervisor, bus
                       {x.task_id} {CONTESTED_BY[x.by] ?? x.by}
                     </span>
                   ))}
-                  {c.conditions.length === 0 && c.contested.length === 0 && <span className="muted">—</span>}
+                  {decided(c).map(([taskId, names]) => (
+                    <div key={`d:${taskId}`} title="요청 문장에 없거나 해석·추정이 들어가 Agent가 정한 값입니다">
+                      <span className="tag tag-warn">정함</span> {taskId}: {names.join(', ')}
+                    </div>
+                  ))}
+                  {c.conditions.length === 0 && c.contested.length === 0 && decided(c).length === 0 && (
+                    <span className="muted">—</span>
+                  )}
                 </td>
                 <td>
                   <button
