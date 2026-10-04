@@ -75,7 +75,6 @@ def test_skills_open_on_facts_only():
     assert skills.open_skills(event_response.SKILLS, {"has_change": True, "has_hold": True}) == [
         "ASSESS",
         "IMPACT",
-        "ASK_REPORTER",
         "FACT_UPDATE",
         "WRAP_UP",
     ]

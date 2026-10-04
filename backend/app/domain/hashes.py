@@ -30,7 +30,7 @@ def search_spec_hash(
 
 
 def _condition_input(conditions: Mapping[str, Condition]) -> dict[str, list]:
-    """조건 가운데 Solver 입력인 것만(시작 범위·자원). 희망 영역에서 왔다는 표시는 입력이 아니다."""
+    """조건의 Solver 입력(시작 범위·자원)."""
     return {tid: [c.start_min, c.start_max, c.resource_id] for tid, c in sorted(conditions.items())}
 
 
@@ -45,7 +45,7 @@ def search_key(
     """실효 탐색 키: "같은 실효 SearchSpec 미시도" 판정용. Solver 입력만 넣는다.
 
     무결성 hash(search_spec_hash)와 다르다. snapshot_hash 대신 Solver가 읽는 사실만 넣으므로
-    context_version·plan_revision 번호, Consent, fields, revision 번호, Hold가 바뀌어도 같다.
+    context_version·plan_revision 번호, fields, revision 번호, Hold가 바뀌어도 같다.
     - 작업(READY): 구역, duration, 시간창, 필요 자원 유형, 자원 요구 조건, 기준 배정, 선후행, hazard_tags
     - 기준 시작 범위: 지연과 변경 수의 기준이다 (CV-29). 범위가 없는 작업(폼 요청)은 넣지 않는다.
       출처(말함·정함)는 Solver 입력이 아니므로 넣지 않는다

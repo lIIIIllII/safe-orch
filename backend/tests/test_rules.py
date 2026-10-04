@@ -87,8 +87,7 @@ def test_snapshot_content(with_a):
     assert set(content) == {
         "site_id", "pack_hash", "horizon_minutes", "work_intervals", "context_version",
         "plan_revision", "tasks", "resources", "pools", "zones", "zone_relations", "plan",
-        "holds", "pins", "consents", "preferred_windows",
-        "task_bases",
+        "holds", "pins", "task_bases",
     }  # fmt: skip
     assert (content["site_id"], content["context_version"], content["plan_revision"]) == (
         "YARD-01",
@@ -109,7 +108,7 @@ def test_snapshot_content(with_a):
         ("G2", "G"),
     ]
     assert content["plan"]["plan_revision"] == 0
-    assert (content["holds"], content["consents"]) == ([], [])
+    assert (content["holds"], content["task_bases"]) == ([], [])
     assert sorted(p["task_id"] for p in content["pins"]) == sorted(LEGACY_PINNED)
     with db.read() as conn:
         stored = conn.execute(

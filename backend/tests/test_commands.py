@@ -193,7 +193,7 @@ def test_gate_path(seeded):
     assert ("VALIDATE", f"VALIDATE:{alpha.candidate_id}") in _jobs(pack)
     v, items = _validate_and_consult(pack, snap, spec, alpha)
     assert v.status == "PASS"
-    assert {i.task_id: i.base_status for i in items} == {"C": "PENDING"}
+    assert [i.task_id for i in items] == ["C"]
     assert _view(pack, alpha).status == "OPEN"
     assert _queue(pack) == [alpha.candidate_id]  # OPEN도 검토 대기
 
@@ -264,10 +264,10 @@ def test_t01_form_missing_critical_field_rejected(seeded):
         assert "A" not in {t.task_id for t in list_current_tasks(conn, seeded.site_id, seeded)}
         assert get_command_result(conn, "k-t01")["status"] == "REJECTED"
     assert _site(seeded).context_version == 0
-    assert _count("consent") == 0 and _count("audit") == audit and _jobs(seeded) == []
+    assert _count("audit") == audit and _jobs(seeded) == []
 
 
-def test_form_records_confirmed_fields_and_consents(seeded):
+def test_form_records_confirmed_fields_and_has_no_base(seeded):
     out = _submit_a(seeded, hazard_tags=("NONE",))
     source_ref = f"form:{out.result_refs['form_id']}"
     snap = take_snapshot(seeded)
@@ -276,11 +276,8 @@ def test_form_records_confirmed_fields_and_consents(seeded):
     assert a.hazard_tags == ("LIFTING",)  # 입력 태그는 버리고 도출
     assert set(a.fields) == {"zone_id", "duration", "window", "resource"}
     assert {(f.status, f.source_ref) for f in a.fields.values()} == {("CONFIRMED", source_ref)}
-    consents = {c.axis: c.scope for c in snap.facts().consents}
-    assert consents == {
-        "TIME": {"start_min": 0, "start_max": 60},
-        "RESOURCE": {"resource_ids": ["A-CR-01"]},
-    }
+    # 폼 요청에는 기준 위치가 없다: 시간창 안 어디든 변경도 지연도 아니다 (CV-29)
+    assert snap.facts().task_bases == () and snap.facts().base_range("A") is None
     with db.read() as conn:
         row = conn.execute("SELECT command, actor_id FROM audit ORDER BY audit_id DESC").fetchone()
     assert row == ("SUBMIT_TASK_REQUEST", "planner_a")
@@ -329,7 +326,7 @@ def test_form_records_confirmed_fields_and_consents(seeded):
 def test_form_rejections(seeded, actor, changes, reason):
     out = submit_task_request(seeded, actor, _key(), _form_a(seeded, **changes))
     assert out.status == "REJECTED" and reason in out.reason_codes
-    assert _site(seeded).context_version == 0 and _count("consent") == 0
+    assert _site(seeded).context_version == 0
 
 
 # ── T11–T13 ────────────────────────────────────────────────────
@@ -548,12 +545,12 @@ def test_t23_form_task_is_asked_only_when_its_resource_changes(seeded):
             candidate_hash="",
             kind="RECONFIRM",
         )
-        return {i.task_id: i.base_status for i in build_items(facts, cand)}.get("A")
+        return "A" in {i.task_id for i in build_items(facts, cand)}
 
-    assert status(0, "A-CR-01") is None  # 변경 없음
-    assert status(60, "A-CR-01") is None  # 시간창 안의 다른 시각
-    assert status(60, "SITE-CR-01") == "PENDING"  # 요청 자원이 아니다
-    assert status(0, "B-CR-01") == "PENDING"
+    assert not status(0, "A-CR-01")  # 변경 없음
+    assert not status(60, "A-CR-01")  # 시간창 안의 다른 시각
+    assert status(60, "SITE-CR-01")  # 요청 자원이 아니다
+    assert status(0, "B-CR-01")
 
 
 # ── T35 ────────────────────────────────────────────────────────
@@ -617,7 +614,6 @@ NEW_IMMUTABLE = (
     "command_result",
     "decision",
     "event",
-    "consent",
     "consultation",
 )
 

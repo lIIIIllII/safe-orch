@@ -1,14 +1,15 @@
 """일정 꺼내기와 넣기.
 
-꺼내기: 지금 확정 계획의 작업과 배정, 희망 영역과 출처, 고정(표시용)을 일정 문서로 만들어 기록에 남긴다.
-취소·철회·대기열 작업, 계획 밖 요청, 동의·Hold는 담지 않는다. 현장 사실은 바꾸지 않지만 기록을 남기므로
-명령이다 (ST-23). 문서는 GET /schedules/{id}로 받는다.
+꺼내기: 지금 확정 계획의 작업과 배정, 고정(표시용)을 일정 문서로 만들어 기록에 남긴다. 취소·철회·대기열
+작업, 계획 밖 요청, Hold는 담지 않는다. 현장 사실은 바꾸지 않지만 기록을 남기므로 명령이다 (ST-23). 문서는
+GET /schedules/{id}로 받는다.
 
 넣기 (ST-24): 넣는 사람은 자기 Unit의 작업만 넣고, 넣은 값은 담당자가 말한 값이다. 문서의 시각은 Soft다:
-새 작업의 시간창은 Horizon 전체이고 문서의 희망 영역(없으면 배정 구간)이 희망 영역이 된다 (AG-35). 새 작업의
-기준 배정은 문서의 배정이다. 이미 있는 자기 작업은 값이 다르면 작업 카드에서 고친 것과, 배정이 다르면 희망
-영역을 그린 것과 같은 처리다. 넣을 수 없는 작업이 하나라도 있으면 전체를 거절하고, 사람이 빼기로 고른 작업만
-뺀다. 넣기 하나는 사건 하나다. 열린 메인이 있으면 새 작업은 대기열에 선다 (AG-07).
+새 작업의 시간창은 Horizon 전체이고 (AG-35), 문서의 배정(시작·자원)이 그 작업의 기준 위치다(한 점, CV-29).
+이미 있는 자기 작업은 값이 다르면 작업 카드에서 고친 것과 같은 처리이고, 배정이 지금 계획과 달라도 쓰지
+않는다(미리보기에 보이기만 한다). 옛 문서의 희망 영역 칸은 받으면 버린다. 넣을 수 없는 작업이 하나라도
+있으면 전체를 거절하고, 사람이 빼기로 고른 작업만 뺀다. 넣기 하나는 사건 하나다. 열린 메인이 있으면 새
+작업은 대기열에 선다 (AG-07).
 """
 
 import sqlite3
@@ -16,7 +17,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from app.commands.pins import replace_preferred_window
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
 from app.commands.task_edit import needs_agent, revise_task
 from app.commands.task_request import (
@@ -29,21 +29,14 @@ from app.commands.task_request import (
 from app.domain.eligibility import ResourceNeed, exclusion_reasons
 from app.domain.ids import new_id
 from app.domain.models import Actor, SnapshotContent, TaskBase
-from app.domain.schedule import (
-    Hope,
-    Schedule,
-    ScheduleError,
-    ScheduleTask,
-    read_document,
-    to_document,
-)
+from app.domain.schedule import Schedule, ScheduleError, ScheduleTask, read_document, to_document
 from app.packs.loader import LoadedPack
 from app.store.repos.cases import deliver_event, deliver_to_open_main, register_recheck, wake_run
-from app.store.repos.pins import list_active_pins, preferred_windows
+from app.store.repos.pins import list_active_pins
 from app.store.repos.plans import get_current_plan
 from app.store.repos.resources import list_resources
 from app.store.repos.runs import list_active_runs
-from app.store.repos.schedules import insert_schedule, list_task_bases
+from app.store.repos.schedules import insert_schedule
 from app.store.repos.site import bump_context_version, get_site
 from app.store.repos.snapshots import build_snapshot_content
 from app.store.repos.tasks import list_current_tasks
@@ -86,16 +79,12 @@ def current_schedule(
         key=lambda a: a.task_id,
     )
     pinned = {p.task_id for p in list_active_pins(conn, site_id)}
-    hopes = preferred_windows(conn, site_id)
     tasks = []
     for a in placed:
-        task, hope = ready[a.task_id], hopes.get(a.task_id)
+        task = ready[a.task_id]
         tasks.append(
             ScheduleTask(
                 **{k: getattr(task, k) for k in TASK_VALUES},
-                preferred_window=None
-                if hope is None
-                else Hope(start=hope["start"], end=hope["end"], origin=hope["origin"]),
                 pinned=task.task_id in pinned,
                 origins={
                     name: origin
@@ -163,8 +152,11 @@ class ImportRequest(Body):
 
 @dataclass
 class Item:
-    """문서의 작업 하나에 대한 판정. verdict: NEW 새 작업, UNCHANGED 바뀌는 것 없음, HOPE_CHANGED 희망이
-    바뀜, VALUE_CHANGED 값이 바뀜(희망도 바뀔 수 있다), REJECTED 넣을 수 없음."""
+    """문서의 작업 하나에 대한 판정. verdict: NEW 새 작업, UNCHANGED 바뀌는 것 없음, VALUE_CHANGED 값이
+    바뀜, REJECTED 넣을 수 없음.
+
+    hope_dropped: 옛 문서의 희망 영역 칸을 받아서 버렸다. assignment_differs: 이미 있는 자기 작업의 배정이
+    지금 계획(계획 밖이면 기준 위치)과 다르다. 쓰지 않고 보이기만 한다."""
 
     task_id: str
     verdict: str
@@ -172,7 +164,8 @@ class Item:
     reasons: list[str] = field(default_factory=list)
     details: list[str] = field(default_factory=list)
     changes: dict[str, Any] = field(default_factory=dict)  # 바뀌는 값 (VALUE_CHANGED)
-    hope: tuple[int, int] | None = None  # 새로 서는 희망 영역 [start, end)
+    hope_dropped: bool = False
+    assignment_differs: bool = False
     form: TaskRequestForm | None = None  # 새 작업의 검증한 값
     base: TaskBase | None = None  # 새 작업의 기준 배정
 
@@ -194,7 +187,7 @@ class Judgement:
 
 
 def _horizon_form(task: ScheduleTask, horizon: int) -> TaskRequestForm:
-    """새 작업의 폼 값. 시간창은 Horizon 전체다: 문서의 시각은 희망 영역이 된다 (AG-35)."""
+    """새 작업의 폼 값. 시간창은 Horizon 전체다: 문서의 시각은 기준 위치가 된다 (AG-35)."""
     return TaskRequestForm(
         **{
             k: getattr(task, k)
@@ -235,17 +228,19 @@ def judge(
 
     tasks = {t.task_id: t for t in list_current_tasks(conn, site_id, pack)}
     resources = {r.resource_id: r for r in list_resources(conn, site_id)}
-    hopes = preferred_windows(conn, site_id)
-    # 지금 자리: 계획에 있으면 계획의 배정, 없으면 기준 배정
+    # 지금 계획의 배정
     facts = SnapshotContent.model_validate(build_snapshot_content(conn, site_id, pack))
-    positions = {tid: a.start for tid, a in facts.base_assignments().items()}
-    for b in list_task_bases(conn, site_id):
-        positions.setdefault(b.task_id, b.start)
+    positions = {a.task_id: a for a in facts.plan.assignments}
     excluded = set(exclude)
     batch = frozenset(e.task_id for e in parsed.entries if e.task_id not in excluded)
 
     for entry in parsed.entries:
-        item = Item(task_id=entry.task_id, verdict="REJECTED", excluded=entry.task_id in excluded)
+        item = Item(
+            task_id=entry.task_id,
+            verdict="REJECTED",
+            excluded=entry.task_id in excluded,
+            hope_dropped=entry.hope_dropped,
+        )
         out.items.append(item)
         task, placed = entry.task, entry.assignment
         if task is None or placed is None:
@@ -254,9 +249,6 @@ def judge(
         if task.unit_id != actor.unit_id:
             item.reasons.append("OTHER_UNIT_TASK")  # 자기 Unit의 작업만 넣는다
             continue
-        span = (placed.start, placed.end)
-        wanted = task.preferred_window
-        target = (wanted.start, wanted.end) if wanted is not None else None
         existing = tasks.get(task.task_id)
         if existing is None:
             form = _horizon_form(task, horizon)
@@ -286,7 +278,7 @@ def judge(
             if codes:
                 item.reasons = list(dict.fromkeys(codes))
                 continue
-            item.verdict, item.form, item.hope = "NEW", form, target or span
+            item.verdict, item.form = "NEW", form
             item.base = TaskBase(
                 task_id=task.task_id, start=placed.start, resource_id=placed.resource_id
             )
@@ -313,17 +305,13 @@ def judge(
                 item.reasons = codes
                 continue
             item.changes = changes
-        # 희망: 문서에 희망 영역이 있으면 그것, 없으면 배정이 지금 자리와 다를 때 그 배정 구간
+        # 배정이 지금 계획과 달라도 쓰지 않는다: 보이기만 한다. 계획 밖 작업은 견줄 자리가 없다
         position = positions.get(task.task_id)
-        if target is None and position is not None and placed.start != position:
-            target = span
-        current = hopes.get(task.task_id)
-        if target is not None and (current is None or (current["start"], current["end"]) != target):
-            item.hope = target
-        if changes:
-            item.verdict = "VALUE_CHANGED"
-        else:
-            item.verdict = "HOPE_CHANGED" if item.hope is not None else "UNCHANGED"
+        item.assignment_differs = position is not None and (placed.start, placed.resource_id) != (
+            position.start,
+            position.resource_id,
+        )
+        item.verdict = "VALUE_CHANGED" if changes else "UNCHANGED"
     return out
 
 
@@ -351,7 +339,9 @@ def preview_import(
                 "reasons": i.reasons,
                 "details": i.details,
                 "changed": sorted(i.changes),
-                "hope_changed": i.hope is not None and i.verdict != "NEW",
+                # 쓰지 않는 것: 옛 문서의 희망 영역 칸, 지금 계획과 다른 배정
+                "hope_dropped": i.hope_dropped,
+                "assignment_differs": i.assignment_differs,
             }
             for i in judged.items
         ],
@@ -384,17 +374,17 @@ def _import(tx: sqlite3.Connection, ctx: CommandContext, body: ImportRequest) ->
     )
     included = [i for i in judged.items if not i.excluded]
     new = [i for i in included if i.verdict == "NEW"]
-    changed = [i for i in included if i.verdict in ("HOPE_CHANGED", "VALUE_CHANGED")]
+    changed = [i for i in included if i.verdict == "VALUE_CHANGED"]
     tasks = {t.task_id: t for t in list_current_tasks(tx, site_id, ctx.pack)}
     queued = waits_in_queue(tx, site_id)
-    # 대기 중인(QUEUED) 작업은 아직 사실이 아니다: 새 revision·희망만 남기고 현장 버전은 올리지 않는다
+    # 대기 중인(QUEUED) 작업은 아직 사실이 아니다: 새 revision만 남기고 현장 버전은 올리지 않는다
     live = [i for i in changed if tasks[i.task_id].lifecycle == "READY"]
     applied = bool(live) or (bool(new) and not queued)
     context_version = bump_context_version(tx, site_id) if applied else ctx.site.context_version
     source = f"schedule:{schedule_id}"
 
     for item in new:
-        assert item.form is not None and item.hope is not None and item.base is not None
+        assert item.form is not None and item.base is not None
         insert_requested_task(
             tx,
             ctx.pack,
@@ -403,18 +393,11 @@ def _import(tx: sqlite3.Connection, ctx: CommandContext, body: ImportRequest) ->
             source,
             queued,
             context_version,
-            hope=(*item.hope, "STATED"),
-            hope_made_by="OWNER",
             base=item.base,
             schedule_id=schedule_id,
         )
     for item in changed:
-        if item.changes:
-            revise_task(
-                tx, site_id, tasks[item.task_id], item.changes, False, source, context_version
-            )
-        if item.hope is not None:
-            replace_preferred_window(tx, ctx, item.task_id, *item.hope)
+        revise_task(tx, site_id, tasks[item.task_id], item.changes, source)
 
     r.refs = {
         "schedule_id": schedule_id,

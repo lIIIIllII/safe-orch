@@ -118,7 +118,7 @@ def test_delay_first_swaps_stages_and_is_a_different_search(seeded_real):
     assert spec.search_key != plain.search_key and spec.hash != plain.hash
 
     result = cpsat.solve(snap, spec, pack)
-    # 1단계가 총 지연, 2단계가 그 지연 안에서 변경 작업 수다. 계획 밖이고 희망 영역이 없는 A는 어느
+    # 1단계가 총 지연, 2단계가 그 지연 안에서 변경 작업 수다. 계획 밖이고 기준 위치가 없는 A는 어느
     # 쪽에도 세지 않는다: 계획에 있던 C(10:00→10:30)만 변경 하나에 지연 30분이다 (CV-29)
     assert (result.stage1["status"], result.stage1["delay"]) == ("OPTIMAL", 30)
     assert (result.stage2["delay"], result.stage2["changed"]) == (30, 1)
@@ -181,7 +181,7 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
     pin_tasks(pack, ["C"])
     _submit_a(pack)
     # 호출 키는 접근뿐이다: 재계획은 현장의 충돌 전체를 푼다 (AG-24)
-    assert call_key("REPLANNING", {"approach": "PREFER_WINDOW"}) == "REPLANNING:PREFER_WINDOW"
+    assert call_key("REPLANNING", {"approach": "MIN_DELAY"}) == "REPLANNING:MIN_DELAY"
 
     def replan(approach=None, note=None):
         if approach is None:  # 접근 없이
@@ -195,8 +195,8 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
         main=[
             replan("MIN_CHANGE"),
             replan("MIN_CHANGE"),
-            replan("PREFER_WINDOW", "늦어지는 작업이 없게"),
-            replan("MIN_DELAY"),  # 접근은 둘뿐이다 (AG-28)
+            replan("MIN_DELAY", "늦어지는 작업이 없게"),
+            replan("MIN_COST"),  # 접근은 둘뿐이다 (AG-28)
             replan(),
             consult_unchosen,
             main_wait(),
@@ -230,12 +230,12 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
     first, second = _runs("REPLANNING")
     assert [r.input_ref["call_key"].rsplit(":", 1)[1] for r in (first, second)] == [
         "MIN_CHANGE",
-        "PREFER_WINDOW",
+        "MIN_DELAY",
     ]
     [cid] = _candidate_ids()  # 두 접근이 같은 배치를 냈다
     s1 = _steps(second.run_id)[0]
     obs = s1["observation"]
-    assert obs["approach"] == {"approach": "PREFER_WINDOW", "quoted_note": "늦어지는 작업이 없게"}
+    assert obs["approach"] == {"approach": "MIN_DELAY", "quoted_note": "늦어지는 작업이 없게"}
     assert obs["approach_candidates"] == [
         {"no": 1, "approach": "MIN_CHANGE", "candidate_id": cid, "same": False}
     ]
@@ -244,14 +244,14 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
     # 메인 관찰과 화면 상태: 그 후보에 접근 둘, 고르지 않음, 협의 호출 없음
     waiting = _steps(main.run_id)[-1]["observation"]
     [seen] = waiting["candidates"]
-    assert (seen["approaches"], seen["chosen"]) == (["MIN_CHANGE", "PREFER_WINDOW"], False)
+    assert (seen["approaches"], seen["chosen"]) == (["MIN_CHANGE", "MIN_DELAY"], False)
     assert not [c for c in waiting["calls"] if c["agent"] == "COORDINATION"]
     with db.read() as conn:
         state = build_state(conn, pack, "supervisor")
     view = next(c for c in state["candidates"] if c["candidate_id"] == cid)
     assert [(a["no"], a["approach"], a["same"]) for a in view["approaches"]] == [
         (1, "MIN_CHANGE", False),
-        (2, "PREFER_WINDOW", True),
+        (2, "MIN_DELAY", True),
     ]
     assert view["approaches"][1]["quoted_reason"] == "이유: 지연을 먼저 줄인다/다음: 검증"
     assert (view["chosen"], view["case_id"], view["solver"]["objective"]) == (

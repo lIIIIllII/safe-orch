@@ -68,11 +68,11 @@ class CallAgent(Action):
     agent: Literal["REPLANNING", "COORDINATION", "EVENT_RESPONSE"] = Field(
         description="부를 전문 Agent"
     )
-    approach: Literal["MIN_CHANGE", "PREFER_WINDOW"] | None = Field(
+    approach: Literal["MIN_CHANGE", "MIN_DELAY"] | None = Field(
         default=None,
         description=(
-            "재계획이 우선할 것 (REPLANNING). MIN_CHANGE 변경 작업 수를 줄인다, PREFER_WINDOW "
-            "담당자의 희망에서 가장 덜 벗어나게 한다"
+            "재계획이 우선할 것 (REPLANNING). MIN_CHANGE 변경 작업 수를 줄인다, MIN_DELAY 덜 옮긴다: "
+            "기준에서 옮긴 거리를 줄인다"
         ),
     )
     approach_note: str | None = Field(

@@ -1,7 +1,8 @@
 """Work Intake AgentSpec. 순수 데이터: Goal, Action 스키마, Budget.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
-완료가 내는 시각은 요청자의 희망이다: 서버가 희망 영역으로 기록하고 시간창은 Horizon 전체로 둔다 (ST-22).
+완료가 내는 시각은 요청한 시작이다: 서버가 기준 위치(요청한 시작 범위)로 기록하고 시간창은 Horizon 전체로
+둔다 (AG-35).
 Action: LOOKUP_RESOURCE, COMPLETE_TASKSPEC, RETURN_RESULT(막힘: 접수 미완으로 끝나고 요청자에게
 알린다, AG-06). 요청자에게 묻는 도구는 없다: 문장에서 읽은 값과 스스로 정한 값으로 바로 완료하고, 값마다
 출처(말함·정함)를 적는다. 서버는 출처를 검사하지 않는다 (AG-32). 위험 태그는 받지 않는다.
@@ -25,7 +26,7 @@ MAX_STEPS = 12
 MAX_LLM_ATTEMPTS = 24  # step × 2 (Replanning과 같은 규칙)
 RECURSION_LIMIT = MAX_STEPS * 5 + 10
 SUMMARY_MAX = 200
-# 현장 날짜·시각 문자열 (AG-21). 희망 시작 범위의 처음·끝과 희망 종료 한도다 (ST-22)
+# 현장 날짜·시각 문자열 (AG-21). 요청한 시작 범위의 처음·끝과 종료 한도다 (CV-29)
 TIME_FIELDS = ("earliest_start", "latest_start", "latest_end")
 
 
@@ -67,7 +68,8 @@ class DemandValue(BaseModel):
 
 class TaskValues(BaseModel):
     """작업 요청 값. 시각은 현장 날짜·시각 문자열 "YYYY-MM-DD HH:MM"로 쓴다(서버가 분으로 바꾼다).
-    시각 셋은 요청자의 희망이다: 서버가 희망 영역으로 기록하고 가능 범위(시간창)로 강제하지 않는다.
+    시각 셋은 요청한 시작이다: 서버가 기준 위치(요청한 시작 범위)로 기록하고 가능 범위(시간창)로
+    강제하지 않는다. 한 시각으로 말했으면 범위의 양 끝을 같게, 범위로 말했으면 그대로 적는다.
     위험 태그 칸은 없다."""
 
     model_config = ConfigDict(extra="forbid")
@@ -76,12 +78,12 @@ class TaskValues(BaseModel):
     zone_id: str = Field(description="구역 ID")
     duration: int = Field(gt=0, description="작업 시간(분)")
     earliest_start: str = Field(
-        description='희망하는 가장 이른 시작. 현장 날짜·시각 "YYYY-MM-DD HH:MM"'
+        description='요청한 가장 이른 시작. 현장 날짜·시각 "YYYY-MM-DD HH:MM"'
     )
     latest_start: str = Field(
-        description='희망하는 가장 늦은 시작. 현장 날짜·시각 "YYYY-MM-DD HH:MM"'
+        description='요청한 가장 늦은 시작. 현장 날짜·시각 "YYYY-MM-DD HH:MM"'
     )
-    latest_end: str = Field(description='희망하는 종료 한도. 현장 날짜·시각 "YYYY-MM-DD HH:MM"')
+    latest_end: str = Field(description='요청한 종료 한도. 현장 날짜·시각 "YYYY-MM-DD HH:MM"')
     required_resource_type: str | None = Field(default=None, description="필요 자원 유형")
     requested_resource_id: str | None = Field(default=None, description="요청 자원 ID")
     resource_requirements: list[RequirementValue] = Field(
@@ -119,7 +121,7 @@ ORIGIN_TEXT = (
 
 
 class ValueOrigins(BaseModel):
-    """값마다의 출처. 요청자가 작업 카드에서 스스로 정한 값(DECIDED)을 따로 보고 고치거나 확인한다."""
+    """값마다의 출처. 요청자가 작업 카드에서 스스로 정한 값(DECIDED)을 따로 보고 고친다."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -138,7 +140,7 @@ class ValueOrigins(BaseModel):
 
 
 class CompleteTaskspec(Action):
-    """작업 요청을 완료한다. 요청자에게 묻지 않고, 문장에서 읽은 값과 스스로 정한 값을 함께 내며 값마다 출처를 적는다. 서버가 폼과 같은 검증을 하고, 통과하면 작업이 만들어진다. 낸 시각은 희망 영역이 된다."""
+    """작업 요청을 완료한다. 요청자에게 묻지 않고, 문장에서 읽은 값과 스스로 정한 값을 함께 내며 값마다 출처를 적는다. 서버가 폼과 같은 검증을 하고, 통과하면 작업이 만들어진다. 낸 시각은 기준 위치(요청한 시작 범위)가 된다."""
 
     OPENS = "언제나 열려 있다"
 

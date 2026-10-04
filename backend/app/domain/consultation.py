@@ -14,10 +14,10 @@ from app.domain.models import (
     SnapshotContent,
 )
 
-ItemStatus = Literal["COVERED", "PENDING", "ACCEPTED", "OBJECTED", "WAIVED"]
+ItemStatus = Literal["PENDING", "ACCEPTED", "OBJECTED", "WAIVED"]
 ConsultationStatus = Literal["COMPLETE", "BLOCKED", "OPEN", "CANCELLED"]
 
-DONE = {"COVERED", "ACCEPTED", "WAIVED"}
+DONE = {"ACCEPTED", "WAIVED"}
 BLOCKING = {"OBJECTED"}
 
 
@@ -55,7 +55,6 @@ def build_items(facts: SnapshotContent, candidate: Candidate) -> tuple[Consultat
                 before=before,
                 after=after,
                 change_hash=change_hash(task.task_id, task.revision, before, after),
-                base_status="PENDING",
             )
         )
     return tuple(items)
@@ -66,14 +65,14 @@ def item_statuses(
     waived_task_ids: Iterable[str],
     answers: Mapping[str, ItemStatus] | None = None,
 ) -> dict[str, ItemStatus]:
-    """item의 실효 상태. WAIVE decision이 덮으면 WAIVED, 그다음 담당자 답, 아니면 base_status.
+    """item의 실효 상태. WAIVE decision이 덮으면 WAIVED, 그다음 담당자 답, 아니면 확인 대기(PENDING).
 
     answers: change_hash → ACCEPTED·OBJECTED (변경 요청의 답).
     """
     waived = set(waived_task_ids)
     answered = answers or {}
     return {
-        i.task_id: "WAIVED" if i.task_id in waived else answered.get(i.change_hash, i.base_status)
+        i.task_id: "WAIVED" if i.task_id in waived else answered.get(i.change_hash, "PENDING")
         for i in items
     }
 

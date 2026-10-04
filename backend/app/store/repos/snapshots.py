@@ -8,9 +8,8 @@ from app.domain.ids import new_id
 from app.domain.models import Snapshot, SnapshotContent
 from app.packs.loader import LoadedPack
 from app.store.repos._rows import rows
-from app.store.repos.consents import list_current_consents
 from app.store.repos.events import list_active_holds
-from app.store.repos.pins import list_active_pins, list_preferred_windows
+from app.store.repos.pins import list_active_pins
 from app.store.repos.plans import get_current_plan, get_plan
 from app.store.repos.records import get_candidate, get_snapshot, insert_snapshot
 from app.store.repos.resources import list_pools, list_resources
@@ -49,12 +48,7 @@ def build_snapshot_content(
         plan={"plan_revision": plan.plan_revision, "assignments": plan.assignments},
         holds=tuple(list_active_holds(conn, site_id)),
         pins=tuple(list_active_pins(conn, site_id)),
-        consents=tuple(list_current_consents(conn, site_id)),
-        # 희망 영역은 계산에 들어가는 사실이다 (ST-22). READY 작업의 것만 넣는다
-        preferred_windows=tuple(
-            w for w in list_preferred_windows(conn, site_id) if w.task_id in ready
-        ),
-        # 일정으로 들어온 작업의 기준 배정 (ST-24). READY 작업의 것만 넣는다
+        # 새 작업의 기준 위치 (CV-29). READY 작업의 것만 넣는다
         task_bases=tuple(b for b in list_task_bases(conn, site_id) if b.task_id in ready),
     )
     return content.model_dump(mode="json")

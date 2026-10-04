@@ -110,7 +110,7 @@ def _approve(pack, cand_id):
 def _request_c():
     return call(
         "SEND_CHANGE_REQUEST",
-        "이유: C가 동의 대기다/다음: 답을 기다린다",
+        "이유: C가 확인 대기다/다음: 답을 기다린다",
         task_id="C",
         message="A 인양을 위해 C를 30분 늦추는 안입니다.",
     )
@@ -246,7 +246,7 @@ def test_plan_a_full_e2e(seeded, main_on):
             for a in get_candidate(conn, pack.site_id, beta).assignments
         }
     assert (placed["A"], placed["C"]) == ((60, "SITE-CR-01"), (60, "A-CR-01"))
-    # 요청 자원(A-CR-01)은 동의다: 다른 자원으로 바뀐 안은 고른 안의 협의에서 A 담당자에게 간다
+    # 요청 자원(A-CR-01)은 기준 자원이다: 다른 자원으로 바뀐 안은 고른 안의 협의에서 A 담당자에게 간다
     assert _view(pack, beta).item_status == {"A": "PENDING"}
     choose(pack, beta)
     run_until_idle(pack, model_factory=Router().factory())
@@ -566,7 +566,6 @@ def _item(task_id, h):
         before=a,
         after=a,
         change_hash=h,
-        base_status="PENDING",
     )
 
 

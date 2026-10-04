@@ -56,7 +56,7 @@ FORM_FIELDS = (
     "requested_resource_id",
 )
 
-# 시연 요청 표: 충돌과 Solver 상태. 요청 작업은 계획 밖이고 희망 영역이 없어 시간창 안 어디에 놓여도
+# 시연 요청 표: 충돌과 Solver 상태. 요청 작업은 계획 밖이고 기준 위치가 없어 시간창 안 어디에 놓여도
 # 변경도 지연도 아니다 (CV-29). 상대 작업은 기준 상태에서 모두 고정이다.
 EXPECTED = {
     "N1": ([("CAP-RESOURCE", ("K", "N1"))], "OPTIMAL"),
@@ -136,7 +136,7 @@ def test_extended_r0_has_no_conflict(seeded):
 
 def test_section15_values_on_extended_fixture(with_a):
     """L0 INFEASIBLE, Alpha 변경 1·지연 30, Beta 변경 1·지연 0 (test_solver와 같은 값, 확장 fixture).
-    계획 밖이고 희망 영역이 없는 A의 시각은 변경도 지연도 아니다 (CV-29)."""
+    계획 밖이고 기준 위치가 없는 A의 시각은 변경도 지연도 아니다 (CV-29)."""
     snap = take_snapshot(with_a)
     conflict = detect_conflicts(snap, snap.facts().check_assignments(), with_a)[0]
     l0 = cpsat.solve(snap, build_search_spec(snap, [conflict], "L0"), with_a)
@@ -245,7 +245,7 @@ def _approve_pending(pack, waive_tasks=()):
 
 
 def test_sequence_alpha_then_n1_to_n4(seeded):
-    """앞 요청을 확정한 상태에서도 시연 요청 표 값이 같다. 이동이 Consent 범위 안이라 WAIVE 없이 승인된다."""
+    """앞 요청을 확정한 상태에서도 시연 요청 표 값이 같다. 폼의 새 작업만 놓이는 안이라 협의 항목이 없어 WAIVE 없이 승인된다."""
     pack = seeded
     a = pack.new_task.model_dump(exclude={"requested", "unit_id", "owner_actor_id", "movable"})
     submit_task_request(pack, "planner_a", _key(), TaskRequestForm(**a))

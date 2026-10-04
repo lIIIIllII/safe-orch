@@ -334,9 +334,8 @@ def _resolve_conditions(
 ) -> dict[str, Condition] | str:
     """도구가 받은 조건을 분 단위 Condition으로 바꾼다. 바꿀 수 없으면 거절 사유 (AG-21).
 
-    여기서는 모양만 본다: 작업마다 하나, 시작 지정은 범위와 같이 쓰지 않음, 시각 형식, 희망 영역이 있음.
-    시간창·고정·범위·자원 적격성은 SearchSpec이 본다. 희망 영역은 시작 범위 [start, end − duration]로
-    바꾸고 시간창과 겹치는 부분만 쓴다(좁히기).
+    여기서는 모양만 본다: 작업마다 하나, 시작 지정은 범위와 같이 쓰지 않음, 시각 형식.
+    시간창·고정·범위·자원 적격성은 SearchSpec이 본다.
     """
     tasks = {t["task_id"]: t for t in obs.data["tasks"]}
     out: dict[str, Condition] = {}
@@ -345,10 +344,7 @@ def _resolve_conditions(
         if task is None:
             return "CONDITION_TASK_NOT_IN_SCOPE"
         ranged = c.start_from is not None or c.start_until is not None
-        timed = ranged or c.start_at is not None
         if c.task_id in out or (c.start_at is not None and ranged):
-            return "CONDITION_INVALID"
-        if c.use_preferred_window and timed:
             return "CONDITION_INVALID"
         try:
             lo, hi, at = (
@@ -363,16 +359,7 @@ def _resolve_conditions(
             return "TIME_INVALID"
         if at is not None:
             lo = hi = at
-        if c.use_preferred_window:
-            wanted = task["preferred_window"]
-            if wanted is None:
-                return "NO_PREFERRED_WINDOW"
-            window = task["window"]
-            lo = max(wanted["start"], window["earliest_start"])
-            hi = min(wanted["end"] - task["duration"], window["latest_start"])
-        out[c.task_id] = Condition(
-            start_min=lo, start_max=hi, resource_id=c.resource_id, preferred=c.use_preferred_window
-        )
+        out[c.task_id] = Condition(start_min=lo, start_max=hi, resource_id=c.resource_id)
     return out
 
 

@@ -30,7 +30,7 @@ from app.store.repos.consultations import (
 )
 from app.store.repos.decisions import is_chosen, list_decisions
 from app.store.repos.messages import list_change_requests, list_fact_updates, list_inbox
-from app.store.repos.pins import active_pin_views, preferred_windows
+from app.store.repos.pins import active_pin_views
 from app.store.repos.plans import get_current_plan
 from app.store.repos.records import (
     get_candidate,
@@ -447,7 +447,6 @@ def build_state(
     )
     tasks = list_current_tasks(conn, site_id, pack)
     pins = active_pin_views(conn, site_id)
-    windows = preferred_windows(conn, site_id)
     content = build_snapshot_content(conn, site_id, pack)
     snapshot = Snapshot(snapshot_id="state", snapshot_hash=canonical_hash(content), content=content)
     conflicts = detect_conflicts(snapshot, snapshot.facts().check_assignments(), pack)
@@ -502,9 +501,8 @@ def build_state(
             {
                 **t.model_dump(mode="json"),
                 **gate(t, plan, site.context_version, holds),
-                # 사람이 건 고정(누가·언제)과 희망 영역(구간·출처·만든 주체) (AG-27, ST-22)
+                # 사람이 건 고정(누가·언제) (AG-27)
                 "pin": pins.get(t.task_id),
-                "preferred_window": windows.get(t.task_id),
                 # 기준 시작: 계획에 있으면 지금 배치, 없으면 요청한 시작(없으면 가장 이른 시작). READY만
                 "base_start": base[t.task_id].start if t.task_id in base else None,
                 # 기준 위치: 출처(계획·요청한 자리·없음)와 시작 범위, 말함·정함 (CV-29). READY만

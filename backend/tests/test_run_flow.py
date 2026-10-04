@@ -126,7 +126,7 @@ def test_gate_path_automated(seeded):
         view = consultation_view(conn, pack.site_id, alpha)
         assert list_review_queue(conn, pack.site_id) == [alpha]
     assert v.status == "PASS"
-    assert {i.task_id: i.base_status for i in view.items} == {"C": "PENDING"}
+    assert [i.task_id for i in view.items] == ["C"]
 
     # Supervisor가 수용하면 답을 기다리던 협의 Run이 깨어나 끝나고, 메인은 승인을 기다린다
     body = WaiveRequest(candidate_id=alpha, task_ids=("C",), comment="작업발판 일정 확인됨")

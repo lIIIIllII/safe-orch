@@ -1,7 +1,8 @@
 """Event Response AgentSpec. 순수 데이터: Goal, Action 스키마, Budget.
 
 store·commands·solver를 import하지 않는다. 사용 조건은 관찰 데이터만 보고 계산한다.
-Action: LOOKUP_TASKS, ANALYZE_IMPACT, PROPOSE_FACT_UPDATE, ASK_REPORTER, RETURN_RESULT.
+Action: LOOKUP_TASKS, ANALYZE_IMPACT, PROPOSE_FACT_UPDATE, RETURN_RESULT.
+신고자에게 묻는 도구는 없다: 신고 해석은 Agent가 하고, 낸 사실 수정안을 사람이 확인한다.
 Hold 해제·사실 직접 적용은 할 수 없다. 사실 수정은 Supervisor가 확인해야 효력이 생긴다.
 """
 
@@ -15,13 +16,12 @@ from app.domain.needs import ResultFields
 
 AGENT_TYPE = "EVENT_RESPONSE"
 GOAL = (
-    "지연 신고의 대상 작업과 새 시작 가능 시각을 파악해, Supervisor가 확인할 사실 수정안을 만든다. "
-    "Hold를 해제하거나 사실을 직접 바꾸지 않는다."
+    "지연 신고의 대상 작업과 새 시작 가능 시각을 신고자에게 되묻지 않고 파악해, Supervisor가 확인할 "
+    "사실 수정안을 만든다. Hold를 해제하거나 사실을 직접 바꾸지 않는다."
 )
 
 MAX_STEPS = 10
 MAX_LLM_ATTEMPTS = 20  # step × 2 (Replanning과 같은 규칙)
-MAX_HUMAN_ROUNDS = 2  # ASK_REPORTER용
 RECURSION_LIMIT = MAX_STEPS * 5 + 10
 SUMMARY_MAX = 200
 TEXT_MAX = 300
@@ -79,38 +79,28 @@ class ProposeFactUpdate(Action):
     )
 
 
-class AskReporter(Action):
-    """신고 내용이 모호할 때(대상·새 시작 가능 시각 등) 신고자에게 되묻는다. 답은 자유 텍스트로 온다."""
-
-    OPENS = "사람 확인 라운드가 남았고 답을 기다리는 질문이나 확인을 기다리는 사실 수정안이 없을 때"
-
-    question: str = Field(min_length=1, max_length=TEXT_MAX, description="신고자에게 보이는 질문")
-
-
 class ReturnResult(Action, ResultFields):
-    """조회·분석·신고자 확인으로 열 수 있는 대안이 남아 있지 않거나 신고가 시작 지연이 아닐 때만 막힌 결과를 돌려주고 Run을 끝낸다. 한 것과 막힌 이유를 요약에 적고, 필요한 것을 알면 길에 적는다."""
+    """조회·분석으로 열 수 있는 대안이 남아 있지 않거나 신고가 시작 지연이 아닐 때만 막힌 결과를 돌려주고 Run을 끝낸다. 한 것과 막힌 이유(해석할 수 없었던 것 포함)를 요약에 적고, 필요한 것을 알면 길에 적는다."""
 
     # Replanning과 같은 조건 문구
-    OPENS = "언제나 열려 있다. 단 조회·확인으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
+    OPENS = "언제나 열려 있다. 단 조회·분석으로 열 수 있는 대안이 남아 있지 않거나 Budget이 부족할 때만 쓴다"
 
 
 ACTIONS: dict[str, type[Action]] = {
     "LOOKUP_TASKS": LookupTasks,
     "ANALYZE_IMPACT": AnalyzeImpact,
     "PROPOSE_FACT_UPDATE": ProposeFactUpdate,
-    "ASK_REPORTER": AskReporter,
     "RETURN_RESULT": ReturnResult,
 }
 FLOW = {
     "LOOKUP_TASKS": "CONTINUE",
     "ANALYZE_IMPACT": "CONTINUE",
     "PROPOSE_FACT_UPDATE": "WAIT",
-    "ASK_REPORTER": "WAIT",
     "RETURN_RESULT": "DONE",
 }
 
 
-SKILLS = ("ASSESS", "IMPACT", "ASK_REPORTER", "FACT_UPDATE", "WRAP_UP")
+SKILLS = ("ASSESS", "IMPACT", "FACT_UPDATE", "WRAP_UP")
 
 
 def skill_facts(obs: dict[str, Any]) -> dict[str, bool]:
@@ -135,8 +125,6 @@ def choices(obs: dict[str, Any], hidden: dict[str, Any] | None = None) -> dict[s
     """
     pending = any(p["status"] == "PENDING" for p in obs["proposals"])
     ready = sorted((hidden or {}).get("ready", []))
-    asking = any(q["status"] == "OPEN" for q in obs["reporter_replies"])
-    rounds = obs["budget_remaining"].get("human_rounds", 0) > 0
     return {
         "LOOKUP": not pending,
         "ANALYZE": [] if pending else ready,
@@ -144,8 +132,6 @@ def choices(obs: dict[str, Any], hidden: dict[str, Any] | None = None) -> dict[s
         "DISCARDED": {
             (p["task_id"], p["new_value"]) for p in obs["proposals"] if p["status"] == "DISCARDED"
         },
-        # 신고자 되묻기: 답을 기다리는 질문·확인 대기 수정안이 없고 사람 라운드가 남을 때
-        "ASK": rounds and not pending and not asking,
     }
 
 
@@ -161,8 +147,6 @@ def valid_actions(
         out["ANALYZE_IMPACT"] = {"task_id": c["ANALYZE"]}
     if c["PROPOSE"]:
         out["PROPOSE_FACT_UPDATE"] = {"task_id": c["PROPOSE"]}
-    if c["ASK"]:
-        out["ASK_REPORTER"] = {}
     # 수정안은 Supervisor 확인으로 끝나므로(AG-14) 스스로 끝내는 결과는 막힘뿐이다
     out["RETURN_RESULT"] = {"status": ["BLOCKED"]}
     return out
@@ -200,11 +184,7 @@ def tool_schemas(available: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
 SPEC = AgentSpec(
     agent_type=AGENT_TYPE,
     goal=GOAL,
-    budget={
-        "steps": MAX_STEPS,
-        "llm_attempts": MAX_LLM_ATTEMPTS,
-        "human_rounds": MAX_HUMAN_ROUNDS,
-    },
+    budget={"steps": MAX_STEPS, "llm_attempts": MAX_LLM_ATTEMPTS},
     recursion_limit=RECURSION_LIMIT,
     summary_max=SUMMARY_MAX,
     actions=ACTIONS,

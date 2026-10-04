@@ -14,7 +14,7 @@ from typing import Any, Literal
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
 from app.domain.models import FieldRecord
 from app.packs.loader import LoadedPack
-from app.store.repos.cases import copy_consents, end_case_run, wake_run
+from app.store.repos.cases import end_case_run, wake_run
 from app.store.repos.events import get_hold
 from app.store.repos.messages import (
     decide_proposal,
@@ -26,8 +26,8 @@ from app.store.repos.messages import (
 from app.store.repos.site import bump_context_version
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
-# ANSWER: 자유 텍스트 답. API 본문(api/commands.ReplyBody)도 이 정의를 쓴다
-Decision = Literal["ACCEPT", "DECLINE", "ANSWER"]
+# API 본문(api/commands.ReplyBody)도 이 정의를 쓴다
+Decision = Literal["ACCEPT", "DECLINE"]
 
 
 class ReplyRequest(Body):
@@ -60,14 +60,6 @@ def _answer(
 ) -> Result:
     """③–⑤ 검사와 효과. ①·②는 호출한 쪽이 한다."""
     r = Result()
-    # 자유 텍스트 질문(제안 없는 QUESTION)에는 ANSWER만, 다른 메시지에는 ANSWER 불가
-    free_text = message["type"] == "QUESTION" and proposal is None
-    if free_text != (decision == "ANSWER"):
-        r.reject("INVALID_DECISION")
-        return r
-    if decision == "ANSWER" and not comment.strip():
-        r.reject("COMMENT_REQUIRED")
-        return r
     site_id = ctx.site_id
     refs: dict[str, Any] = {
         "message_id": message["message_id"],
@@ -172,7 +164,6 @@ def _confirm_fact_update(
 ) -> dict[str, Any]:
     """사실 수정 확정. 새 task revision(earliest_start = 새 값) → Context +1.
 
-    시간창이 바뀌었으므로 TIME Consent는 복사하지 않고 RESOURCE만 복사한다.
     critical field window의 확인 값도 새 값으로 바꾼다(출처 proposal:<id>, Supervisor 확인. 바꾸지 않으면
     Validator C11이 CONFIRMED_VALUE_MISMATCH로 막는다).
     """
@@ -192,14 +183,7 @@ def _confirm_fact_update(
         ),
     )
     context_version = bump_context_version(tx, ctx.site_id)
-    consent_ids = copy_consents(
-        tx, ctx.site_id, task.task_id, task.revision, revision, context_version, ("RESOURCE",)
-    )
-    return {
-        "task_revision": revision,
-        "consent_ids": consent_ids,
-        "context_version": context_version,
-    }
+    return {"task_revision": revision, "context_version": context_version}
 
 
 # ── reply ──────────────────────────────────────────────────────

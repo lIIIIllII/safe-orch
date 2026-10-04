@@ -82,10 +82,9 @@ demo_requests:
     requested_resource_id: null
 
 # 지연 신고 시연 문구 (Scene 4). 대상 없음 → SITE Hold.
-# answer는 Event Response가 시각을 되물으면(ASK_REPORTER) 신고자가 답하는 문장이다.
 demo_events:
   - { label: 도장 지연 신고, event_type: DELAY, text: "도장 준비 15분 늦어져 10시부터", target_task_id: null }
-  - { label: 도장 추가 지연, event_type: DELAY, text: "도장 또 늦어진대요", target_task_id: null, answer: "도장 준비가 10시 15분부터 됩니다" }
+  - { label: 도장 추가 지연, event_type: DELAY, text: "도장 또 늦어진대요", target_task_id: null }
 
 # 구조화 거절 시연값. 화면의 거절 "시연값 채우기"가 쓴다. 작업을 그대로 두려면 거절이 아니라
 # 타임라인에서 그 작업을 고정한다.

@@ -266,7 +266,7 @@ def test_er_minimal_path_to_r2(seeded, main_on):
     placed = {a.task_id: a.start for a in cand.assignments}
     assert placed["E"] == 60  # E 10:00–10:30, 변경 1·지연 15
     assert _steps(gamma_run.run_id)[0]["tool_result"]["stage2"]["delay"] == 15
-    assert view.item_status == {"E": "PENDING"}  # plan_r0 작업이라 Consent가 없다
+    assert view.item_status == {"E": "PENDING"}  # 계획 작업을 옮겼으므로 담당자 확인을 기다린다
     body = WaiveRequest(candidate_id=gamma, task_ids=("E",), comment="Scene 4 수용")
     assert waive(pack, "supervisor", _key(), body).status == "APPLIED"
     assert _approve(pack, gamma).status == "APPLIED"
@@ -460,10 +460,7 @@ def test_only_recipient_or_confirmer_can_confirm_and_it_applies_once(seeded, mai
     assert first.status == "APPLIED" and first.result_refs["task_revision"] == revision + 1
     again = _reply(pack, "supervisor", confirm["message_id"])  # 다른 키, 같은 결정
     assert again.status == "REPLAYED"
-    assert (again.result_refs["task_revision"], again.result_refs["consent_ids"]) == (
-        first.result_refs["task_revision"],
-        first.result_refs["consent_ids"],
-    )
+    assert again.result_refs["task_revision"] == first.result_refs["task_revision"]
     assert discard_proposal(pack, "supervisor", _key(), body).reason_codes == ("ALREADY_ANSWERED",)
     assert _task(pack, "E").revision == revision + 1
 
@@ -550,78 +547,45 @@ def test_withdraw_of_other_request_does_not_wake_event_response(seeded, main_on)
     assert not [j for j in jobs if j["kind"] == "RESUME_RUN" and j["run_id"] == er.run_id]
 
 
-def test_ambiguous_report_asks_reporter_then_proposes(seeded, main_on):
-    """시각이 없는 신고 → ASK_REPORTER → 신고자 자유 텍스트 답(ANSWER) → 분석 → 수정안."""
+def test_ambiguous_report_is_interpreted_without_asking_the_reporter(seeded, main_on):
+    """시각이 없는 신고: 신고자에게 묻는 도구가 없다. Agent가 스스로 해석해 사실 수정안을 내고, 그
+    수정안은 Supervisor가 확인한다(사람 권한)."""
     pack = seeded
     vague = pack.demo_events[1]
     _r1(pack)
     refs = _report(pack, vague.text)
-    ask = call(
-        "ASK_REPORTER", "이유: 시각이 없다/다음: 답을 본다", question="몇 시부터 가능한가요?"
-    )
-    run_until_idle(pack, model_factory=Router(event_response=[_lookup(), ask]).factory())
-    [er] = _runs("EVENT_RESPONSE")
-    assert (er.status, er.wait_kind, er.human_rounds_used) == ("WAITING_HUMAN", "MESSAGE", 1)
-    [question] = _messages("QUESTION")[-1:]
-    assert (question["to_actor_id"], question["proposal_id"]) == ("reporter", None)
-    assert vague.text in question["body"]
-    # 자유 텍스트 질문에는 ANSWER만
-    assert _reply(pack, "reporter", question["message_id"], "ACCEPT").reason_codes == (
-        "INVALID_DECISION",
-    )
-    out = _reply(pack, "reporter", question["message_id"], "ANSWER", vague.answer)
-    assert out.status == "APPLIED"
     run_until_idle(
-        pack, model_factory=Router(event_response=[_analyze(75), _propose(75)]).factory()
+        pack,
+        model_factory=Router(event_response=[_lookup(), _analyze(75), _propose(75)]).factory(),
     )
+    [er] = _runs("EVENT_RESPONSE")
+    assert (er.status, er.wait_kind) == ("WAITING_HUMAN", "MESSAGE")
     steps = _steps(er.run_id)
-    obs = steps[2]["observation"]
-    assert obs["reporter_replies"] == [
-        {"message_id": question["message_id"], "status": "ANSWERED", "quoted_answer": vague.answer}
-    ]
     assert [s["action"]["name"] for s in steps] == [
         "LOOKUP_TASKS",
-        "ASK_REPORTER",
         "ANALYZE_IMPACT",
         "PROPOSE_FACT_UPDATE",
     ]
-    assert steps[2]["tool_result"]["new_clock"] == "2026-10-12(월) 10:15"
+    for step in steps:
+        assert "ASK_REPORTER" not in _tool_names(step)
+        assert "reporter_replies" not in step["observation"]
+        assert "ASK_REPORTER" not in step["observation"]["open_skills"]
+    # 신고자에게 간 메시지는 없고, 확인 요청은 Supervisor에게 간다
+    with db.read() as conn:
+        to = [r[0] for r in conn.execute("SELECT to_actor_id FROM message ORDER BY rowid")]
+    assert "reporter" not in to
+    [confirm] = _messages("CONFIRMATION")
+    assert confirm["to_actor_id"] == "supervisor"
     [fu] = _proposals("FACT_UPDATE")
     assert (fu["target_task_id"], fu["status"]) == ("E", "PENDING")
     assert _hold(pack, refs["hold_id"])["status"] == "ACTIVE"
 
 
-def test_ask_reporter_closed_while_question_open_or_proposal_pending(seeded, main_on):
-    """답을 기다리는 동안·수정안 확인 대기 중에는 ASK_REPORTER가 열리지 않는다."""
-    _, er = _to_proposal(seeded)  # 수정안 확인 대기
-    obs = _steps(er.run_id)[-1]["observation"]
-    pending = {**obs, "proposals": [{"task_id": "E", "new_value": 60, "status": "PENDING"}]}
-    assert "ASK_REPORTER" not in spec.available_actions(pending)
-    asking = {
-        **obs,
-        "proposals": [],
-        "reporter_replies": [{"message_id": "m", "status": "OPEN", "quoted_answer": None}],
-    }
-    assert "ASK_REPORTER" not in spec.available_actions(asking)
-    free = {**obs, "proposals": [], "reporter_replies": []}
-    assert "ASK_REPORTER" in spec.available_actions(free)
-
-
-def test_server_does_not_order_lookup_before_ask_reporter(seeded, main_on):
-    """순서 규칙은 스킬 지침에 있다 (AG-01). 조회 전에도 서버는 ASK_REPORTER를 막지 않는다."""
-    pack = seeded
-    _r1(pack)
-    _report(pack, pack.demo_events[1].text)
-    ask = call(
-        "ASK_REPORTER", "이유: 대상·시각이 없다/다음: 답을 본다", question="어느 작업인가요?"
-    )
-    run_until_idle(pack, model_factory=Router(event_response=[ask]).factory())
-    [er] = _runs("EVENT_RESPONSE")
-    [step] = _steps(er.run_id)
-    assert step["observation"]["lookups"] == []
-    assert "ASK_REPORTER" in _tool_names(step)
-    assert (step["guard"]["verdict"], step["result_kind"]) == ("ACCEPTED", "WAIT")
-    assert (er.status, er.human_rounds_used) == ("WAITING_HUMAN", 1)
+def test_asking_the_reporter_is_not_a_tool():
+    """신고자에게 묻는 도구·스킬·사람 라운드 Budget이 없다."""
+    assert "ASK_REPORTER" not in spec.ACTIONS and "ASK_REPORTER" not in spec.SKILLS
+    assert "human_rounds" not in spec.SPEC.budget
+    assert "reporter_replies" not in prompt.OBSERVATION_KEYS
 
 
 def test_propose_is_reanalyzed_without_lookup_or_analysis(seeded, main_on):

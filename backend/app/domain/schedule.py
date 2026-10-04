@@ -14,6 +14,9 @@ from app.domain.calendar import parse_site_time, site_time
 from app.domain.canonical import canonical_hash
 from app.domain.models import Assignment, Demand, Frozen, Origin, Predecessor, Requirement
 
+# 옛 문서의 칸. 받으면 버린다: 위험 태그는 서버가 도출하고(CV-11) 희망 영역은 쓰지 않는다
+DROPPED = ("hazard_tags", "preferred_window")
+
 
 class ScheduleError(ValueError):
     """일정 문서를 읽을 수 없다. reasons는 "위치: 사유" 문장이다."""
@@ -21,14 +24,6 @@ class ScheduleError(ValueError):
     def __init__(self, reasons: list[str]):
         self.reasons = reasons
         super().__init__("; ".join(reasons))
-
-
-class Hope(Frozen):
-    """희망 영역 [start, end)와 출처."""
-
-    start: int
-    end: int
-    origin: Origin = "STATED"
 
 
 class ScheduleTask(Frozen):
@@ -43,7 +38,6 @@ class ScheduleTask(Frozen):
     resource_requirements: tuple[Requirement, ...] = ()  # 작업 값 (CV-11)
     pool_demands: tuple[Demand, ...] = ()  # 작업 값 (CV-11)
     predecessors: tuple[Predecessor, ...] = ()
-    preferred_window: Hope | None = None
     pinned: bool = False  # 표시용. 넣을 때 고정으로 살리지 않는다 (AG-27)
     # Agent가 정한 값만 적는다 (AG-32)
     origins: dict[str, Origin] = Field(default_factory=dict)
@@ -65,15 +59,8 @@ class Schedule(Frozen):
 # ── 문서 모양 (시각은 문자열) ──────────────────────────────────
 
 
-class _DocHope(Frozen):
-    start: str
-    end: str
-    origin: Origin = "STATED"
-
-
 class _DocTask(ScheduleTask):
     duration: int | None = Field(default=None, gt=0)  # 없으면 배정의 끝 − 시작으로 채운다
-    preferred_window: _DocHope | None = None  # type: ignore[assignment]
 
 
 class _DocAssignment(Frozen):
@@ -98,10 +85,6 @@ def to_document(schedule: Schedule, horizon_start_utc: str, timezone: str) -> di
         return site_time(horizon_start_utc, timezone, minute)
 
     document = schedule.model_dump(mode="json")
-    for task in document["tasks"]:
-        hope = task["preferred_window"]
-        if hope is not None:
-            hope["start"], hope["end"] = at(hope["start"]), at(hope["end"])
     for a in document["assignments"]:
         a["start"], a["end"] = at(a["start"]), at(a["end"])
     return document
@@ -110,13 +93,15 @@ def to_document(schedule: Schedule, horizon_start_utc: str, timezone: str) -> di
 class Entry(Frozen):
     """문서의 작업 하나를 읽은 결과. 읽지 못했으면 task·assignment가 비고 사유가 남는다.
 
-    codes는 사유 코드(화면·판정용), details는 "위치: 사유" 문장이다."""
+    codes는 사유 코드(화면·판정용), details는 "위치: 사유" 문장이다. hope_dropped는 옛 문서의 희망 영역
+    칸을 받아서 버렸다는 표시다."""
 
     task_id: str
     task: ScheduleTask | None = None
     assignment: Assignment | None = None
     codes: tuple[str, ...] = ()
     details: tuple[str, ...] = ()
+    hope_dropped: bool = False
 
 
 class Parsed(Frozen):
@@ -157,6 +142,7 @@ def read_document(
 
     작업 하나의 모양·시각·정합성 오류는 그 작업의 사유로 남긴다(넣기 미리보기가 작업별로 판정한다).
     빠진 값은 채우지 않는다. 작업 시간만 배정의 끝 − 시작으로 채운다. 위험 태그는 받으면 버린다 (CV-11).
+    옛 문서의 희망 영역 칸도 받으면 버리고, 버렸다는 표시를 남긴다.
     """
     if not isinstance(document, dict):
         raise ScheduleError(["schedule: must be an object"])
@@ -221,11 +207,19 @@ def read_document(
         ):
             raise ScheduleError([f"{where}: task_id missing"])
         tid = raw["task_id"]
+        hope_dropped = raw.get("preferred_window") is not None
         try:
-            t = _DocTask.model_validate({k: v for k, v in raw.items() if k != "hazard_tags"})
+            t = _DocTask.model_validate({k: v for k, v in raw.items() if k not in DROPPED})
         except ValidationError as e:
             codes, details = _field_errors(where, e)
-            entries.append(Entry(task_id=tid, codes=tuple(codes), details=tuple(details)))
+            entries.append(
+                Entry(
+                    task_id=tid,
+                    codes=tuple(codes),
+                    details=tuple(details),
+                    hope_dropped=hope_dropped,
+                )
+            )
             continue
         if raw_ids.count(tid) > 1:
             codes.append("DUPLICATE_TASK_ID")
@@ -260,19 +254,9 @@ def read_document(
             if p.min_lag < 0:
                 codes.append("PREDECESSOR_INVALID")
                 details.append(f"{where}: predecessor {p.task_id!r} min_lag {p.min_lag} < 0")
-        hope = None
-        if t.preferred_window is not None:
-            w = t.preferred_window
-            span = interval(f"{where}.preferred_window", w.start, w.end, codes, details)
-            if span is not None:
-                hope = Hope(start=span[0], end=span[1], origin=w.origin)
         task = None
         if not codes and duration is not None:
-            task = ScheduleTask(
-                **t.model_dump(exclude={"duration", "preferred_window"}),
-                duration=duration,
-                preferred_window=hope,
-            )
+            task = ScheduleTask(**t.model_dump(exclude={"duration"}), duration=duration)
         entries.append(
             Entry(
                 task_id=tid,
@@ -280,6 +264,7 @@ def read_document(
                 assignment=assignment if task is not None else None,
                 codes=tuple(dict.fromkeys(codes)),
                 details=tuple(details),
+                hope_dropped=hope_dropped,
             )
         )
     return Parsed(**head.model_dump(exclude=set(BODY)), entries=tuple(entries))

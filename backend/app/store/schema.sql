@@ -1,4 +1,4 @@
--- SAFE-ORCH schema. schema_version 12.
+-- SAFE-ORCH schema. schema_version 21.
 -- 테이블은 기능 구현 단계에서 추가하고, 추가할 때마다 schema_version을 올린 뒤 reset한다.
 -- 적용은 db.init_db()가 빈 DB에서 한 트랜잭션으로 한다.
 -- 복합 필드는 JSON TEXT + CHECK(json_valid). 시간은 Horizon 원점 기준 정수 분.
@@ -166,7 +166,7 @@ CREATE TABLE search_spec (
     scope_level           TEXT NOT NULL CHECK (scope_level IN ('L0', 'L1', 'L2')),
     axes                  TEXT NOT NULL CHECK (json_valid(axes)),
     resource_alternatives TEXT NOT NULL CHECK (json_valid(resource_alternatives)),
-    -- Agent가 건 조건: 작업 → {start_min, start_max, resource_id, preferred}. 없으면 {}
+    -- Agent가 건 조건: 작업 → {start_min, start_max, resource_id}. 없으면 {}
     conditions            TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(conditions)),
     -- 목적 순서: 변경 먼저(기본) / 지연 먼저. Agent가 고르는 입력이다 (CV-27)
     objective             TEXT NOT NULL DEFAULT 'CHANGE_FIRST'
@@ -305,32 +305,6 @@ CREATE TABLE task_pin (
 -- 작업당 ACTIVE 고정 하나
 CREATE UNIQUE INDEX task_pin_one_active ON task_pin (site_id, task_id) WHERE status = 'ACTIVE';
 
--- 희망 영역(작업당 시각 구간 하나, [start_min, end_min)). 계산에 들어가는 사실이다: 지연의 기준이고 동의
--- 범위다. 서버는 강제하지 않는다(Hard가 아니다). 바뀌면 현장 버전을 올린다 (ST-22).
--- origin: 사람이 말한(그리거나 확인한) 희망 STATED, Work Intake가 정한 희망 DECIDED.
--- made_by: 담당자가 그렸거나 확인함 OWNER, Work Intake가 요청 문장에서 만듦 INTAKE.
--- 다시 그리거나 확인하거나 지우면 앞의 것이 CLEARED가 된다. 삭제 금지.
-CREATE TABLE preferred_window (
-    window_id  TEXT PRIMARY KEY,
-    site_id    TEXT NOT NULL REFERENCES site (site_id),
-    task_id    TEXT NOT NULL,
-    start_min  INTEGER NOT NULL CHECK (start_min >= 0),
-    end_min    INTEGER NOT NULL,
-    status     TEXT NOT NULL CHECK (status IN ('ACTIVE', 'CLEARED')),
-    origin     TEXT NOT NULL CHECK (origin IN ('STATED', 'DECIDED')),
-    made_by    TEXT NOT NULL CHECK (made_by IN ('OWNER', 'INTAKE')),
-    set_by     TEXT NOT NULL,
-    set_at     TEXT NOT NULL,
-    cleared_by TEXT,
-    cleared_at TEXT,
-    CHECK (start_min < end_min),
-    CHECK ((status = 'CLEARED') = (cleared_by IS NOT NULL AND cleared_at IS NOT NULL)),
-    FOREIGN KEY (site_id, set_by) REFERENCES actor (site_id, actor_id)
-);
-
-CREATE UNIQUE INDEX preferred_window_one_active ON preferred_window (site_id, task_id)
-    WHERE status = 'ACTIVE';
-
 CREATE TABLE event (
     event_id          TEXT PRIMARY KEY,
     site_id           TEXT NOT NULL REFERENCES site (site_id),
@@ -375,8 +349,6 @@ CREATE TABLE case_event (
                                                           'TASK_PINNED', 'TASK_UNPINNED',
                                                           'CANDIDATE_CHOSEN', 'TASK_MOVED',
                                                           'TASK_REMOVED', 'TASK_EDITED',
-                                                          'PREFERRED_WINDOW_SET',
-                                                          'PREFERRED_WINDOW_CLEARED',
                                                           'SCHEDULE_IMPORTED')),
     ref                     TEXT NOT NULL CHECK (json_valid(ref)),
     case_id                 TEXT NOT NULL,
@@ -385,22 +357,7 @@ CREATE TABLE case_event (
     UNIQUE (site_id, dedupe_key)
 );
 
--- scope: TIME {start_min, start_max} / RESOURCE {resource_ids}
-CREATE TABLE consent (
-    consent_id              TEXT PRIMARY KEY,
-    site_id                 TEXT NOT NULL REFERENCES site (site_id),
-    task_id                 TEXT NOT NULL,
-    task_revision           INTEGER NOT NULL,
-    owner_actor_id          TEXT NOT NULL,
-    axis                    TEXT NOT NULL CHECK (axis IN ('TIME', 'RESOURCE')),
-    scope                   TEXT NOT NULL CHECK (json_valid(scope)),
-    source_ref              TEXT NOT NULL,
-    created_context_version INTEGER NOT NULL CHECK (created_context_version >= 0),
-    FOREIGN KEY (site_id, task_id, task_revision) REFERENCES task (site_id, task_id, revision),
-    FOREIGN KEY (site_id, owner_actor_id) REFERENCES actor (site_id, actor_id)
-);
-
--- 후보당 1개. item의 base_status만 저장하고 상태는 조회 시 계산한다.
+-- 후보당 1개. item만 저장하고 상태는 조회 시 계산한다.
 CREATE TABLE consultation (
     candidate_id TEXT PRIMARY KEY REFERENCES candidate (candidate_id),
     site_id      TEXT NOT NULL REFERENCES site (site_id),
@@ -551,8 +508,8 @@ CREATE TABLE message (
     run_id                    TEXT REFERENCES agent_run (run_id),
     step_no                   INTEGER CHECK (step_no >= 1),
     to_actor_id               TEXT NOT NULL,
-    type                      TEXT NOT NULL CHECK (type IN ('QUESTION', 'CONFIRMATION',
-                                                            'CHANGE_REQUEST', 'NOTICE', 'REMINDER')),
+    type                      TEXT NOT NULL CHECK (type IN ('CONFIRMATION', 'CHANGE_REQUEST',
+                                                            'NOTICE', 'REMINDER')),
     proposal_id               TEXT REFERENCES proposal (proposal_id),
     candidate_id              TEXT,
     change_hash               TEXT,
@@ -625,7 +582,7 @@ BEGIN SELECT RAISE(ABORT, 'hold: only ACTIVE -> RELEASED'); END;
 CREATE TRIGGER hold_no_delete BEFORE DELETE ON hold
 BEGIN SELECT RAISE(ABORT, 'hold: no delete'); END;
 
--- ── 고정·희망 영역 전이 트리거 ────────────────
+-- ── 고정 전이 트리거 ────────────────
 
 CREATE TRIGGER task_pin_release_only BEFORE UPDATE ON task_pin
 WHEN OLD.status <> 'ACTIVE' OR NEW.status <> 'RELEASED'
@@ -636,16 +593,6 @@ WHEN OLD.status <> 'ACTIVE' OR NEW.status <> 'RELEASED'
 BEGIN SELECT RAISE(ABORT, 'task_pin: only ACTIVE -> RELEASED'); END;
 CREATE TRIGGER task_pin_no_delete BEFORE DELETE ON task_pin
 BEGIN SELECT RAISE(ABORT, 'task_pin: no delete'); END;
-
-CREATE TRIGGER preferred_window_clear_only BEFORE UPDATE ON preferred_window
-WHEN OLD.status <> 'ACTIVE' OR NEW.status <> 'CLEARED'
-     OR NEW.window_id <> OLD.window_id OR NEW.site_id <> OLD.site_id OR NEW.task_id <> OLD.task_id
-     OR NEW.start_min <> OLD.start_min OR NEW.end_min <> OLD.end_min
-     OR NEW.origin <> OLD.origin OR NEW.made_by <> OLD.made_by
-     OR NEW.set_by <> OLD.set_by OR NEW.set_at <> OLD.set_at
-BEGIN SELECT RAISE(ABORT, 'preferred_window: only ACTIVE -> CLEARED'); END;
-CREATE TRIGGER preferred_window_no_delete BEFORE DELETE ON preferred_window
-BEGIN SELECT RAISE(ABORT, 'preferred_window: no delete'); END;
 
 -- ── 불변 트리거 ─────────────────────────────────────────
 
@@ -708,11 +655,6 @@ CREATE TRIGGER case_event_no_update BEFORE UPDATE ON case_event
 BEGIN SELECT RAISE(ABORT, 'immutable: case_event'); END;
 CREATE TRIGGER case_event_no_delete BEFORE DELETE ON case_event
 BEGIN SELECT RAISE(ABORT, 'immutable: case_event'); END;
-
-CREATE TRIGGER consent_no_update BEFORE UPDATE ON consent
-BEGIN SELECT RAISE(ABORT, 'immutable: consent'); END;
-CREATE TRIGGER consent_no_delete BEFORE DELETE ON consent
-BEGIN SELECT RAISE(ABORT, 'immutable: consent'); END;
 
 CREATE TRIGGER consultation_no_update BEFORE UPDATE ON consultation
 BEGIN SELECT RAISE(ABORT, 'immutable: consultation'); END;

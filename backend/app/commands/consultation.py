@@ -1,6 +1,6 @@
 """Consultation 생성. 2단계 BUILD_CONSULTATION 핸들러가 호출한다.
 
-사람 명령이 아니므로 CommandResult·Audit를 남기지 않는다. 후보 snapshot의 사실과 Consent로만
+사람 명령이 아니므로 CommandResult·Audit를 남기지 않는다. 후보 snapshot의 사실로만
 계산하므로 같은 후보에서 언제 불러도 같은 item이 나온다. 이미 있으면 기존 item을 돌려준다.
 """
 

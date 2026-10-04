@@ -105,8 +105,8 @@ def test_one_search_moves_tasks_of_two_units(seeded_real):
     assert validate(snap, candidate, l1, pack).status == "PASS"
     # 기준에서 바뀐 작업은 그 담당자의 협의 항목이 된다. 계획 작업 K는 옮겨졌으므로 UB 담당자에게 가고,
     # 폼의 새 작업 Z는 기준이 없어 시간창 안에서 비켜도 항목이 아니다 (AG-33)
-    owners = {i.task_id: (i.owner_actor_id, i.base_status) for i in build_items(facts, candidate)}
-    assert owners == {"K": ("planner_b", "PENDING")}
+    owners = {i.task_id: i.owner_actor_id for i in build_items(facts, candidate)}
+    assert owners == {"K": "planner_b"}
     # Z가 요청한 자리(11:00)가 있었다면 Z의 요청자에게도 간다
     based = with_facts(snap, task_bases=(TaskBase(task_id="Z", start=1560),))
     owners = {i.task_id: i.owner_actor_id for i in build_items(based.facts(), candidate)}
@@ -155,7 +155,7 @@ def test_one_search_resolves_two_conflict_groups(seeded_real):
     spec = build_search_spec(snap, conflicts, "L0")
     assert list(spec.axes) == ["K", "Q", "X", "Y"]
     result = cpsat.solve(snap, spec, pack)
-    # 계획 밖이고 희망 영역이 없는 X·Y가 시간창 안의 빈 자리로 간다. 계획 작업은 그대로라 변경이 0이다
+    # 계획 밖이고 기준 위치가 없는 X·Y가 시간창 안의 빈 자리로 간다. 계획 작업은 그대로라 변경이 0이다
     assert (result.stage1["status"], result.stage1["changed"]) == ("OPTIMAL", 0)
     placed = {a["task_id"]: a["start"] for a in result.solution}
     assert (placed["K"], placed["Q"]) == (1440, 2910)

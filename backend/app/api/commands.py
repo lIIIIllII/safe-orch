@@ -42,14 +42,7 @@ from app.commands.moves import (
     move_task,
     remove_task,
 )
-from app.commands.pins import (
-    PreferredWindow,
-    TaskRef,
-    clear_preferred_window_command,
-    pin_task,
-    set_preferred_window,
-    unpin_task,
-)
+from app.commands.pins import TaskRef, pin_task, unpin_task
 from app.commands.runs import CancelRun, cancel_run
 from app.commands.schedule import ImportRequest, export_schedule, import_schedule
 from app.commands.service import Body
@@ -99,11 +92,6 @@ class CommentBody(Body):
     comment: str = ""
 
 
-class WindowBody(Body):
-    start: int
-    end: int
-
-
 class MoveBody(Body):
     start: int
 
@@ -113,7 +101,7 @@ class ResourceBody(Body):
 
 
 class EditBody(Body):
-    """작업 카드에서 고친 값(준 것만 바뀐다)과 정한 값 확인."""
+    """작업 카드에서 고친 값(준 것만 바뀐다)."""
 
     zone_id: str | None = None
     duration: int | None = Field(default=None, gt=0)
@@ -122,7 +110,6 @@ class EditBody(Body):
     latest_end: int | None = None
     required_resource_type: str | None = None
     requested_resource_id: str | None = None
-    confirm: bool = False
 
 
 class ReleaseBody(Body):
@@ -182,23 +169,6 @@ def post_pin(task_id: str, pack: PackDep, actor: ActorDep, key: KeyDep) -> JSONR
 @router.post("/tasks/{task_id}/unpin")
 def post_unpin(task_id: str, pack: PackDep, actor: ActorDep, key: KeyDep) -> JSONResponse:
     return respond(unpin_task(pack, actor.actor_id, key, TaskRef(task_id=task_id)))
-
-
-@router.post("/tasks/{task_id}/preferred-window")
-def post_preferred_window(
-    task_id: str, body: WindowBody, pack: PackDep, actor: ActorDep, key: KeyDep
-) -> JSONResponse:
-    """희망 영역(작업당 시각 구간 하나). 담당자만. 서버는 강제하지 않는다."""
-    req = PreferredWindow(task_id=task_id, **body.model_dump())
-    return respond(set_preferred_window(pack, actor.actor_id, key, req))
-
-
-@router.post("/tasks/{task_id}/preferred-window/clear")
-def post_clear_preferred_window(
-    task_id: str, pack: PackDep, actor: ActorDep, key: KeyDep
-) -> JSONResponse:
-    req = TaskRef(task_id=task_id)
-    return respond(clear_preferred_window_command(pack, actor.actor_id, key, req))
 
 
 @router.post("/tasks/{task_id}/move")
@@ -292,7 +262,7 @@ def post_cancel(run_id: str, pack: PackDep, actor: ActorDep, key: KeyDep) -> JSO
 def post_reply(
     message_id: str, body: ReplyBody, pack: PackDep, actor: ActorDep, key: KeyDep
 ) -> JSONResponse:
-    """받은 질문에 답한다. 제안이 붙은 메시지면 ACCEPT = 확인, DECLINE = 폐기."""
+    """받은 요청에 답한다. 제안이 붙은 메시지면 ACCEPT = 확인, DECLINE = 폐기."""
     req = ReplyRequest(message_id=message_id, **body.model_dump())
     return respond(reply_message(pack, actor.actor_id, key, req))
 

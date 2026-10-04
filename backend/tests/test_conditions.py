@@ -25,7 +25,7 @@ from app.agents import casefacts, runtime
 from app.agents.observers import replanning as replanning_observer
 from app.api.state import build_state
 from app.commands.approval import RejectRequest, reject_candidate
-from app.commands.pins import PreferredWindow, TaskRef, pin_task, set_preferred_window
+from app.commands.pins import TaskRef, pin_task
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.models import Condition
@@ -162,7 +162,6 @@ def test_tool_rejects_invalid_conditions_without_solver_budget(real_a):
         solve_with("L1", cond("C", start_from="내일 10시")),
         solve_with("L1", cond("C", start_at=60, start_from=60)),
         solve_with("L1", cond("C", start_from=60), cond("C", start_until=120)),
-        solve_with("L1", cond("C", use_preferred_window=True)),
         solve_with("L1", cond("X9", start_from=60)),
         solve_with("L0", cond("C", start_from=60)),
         solve_with("L1", cond("A", start_from=120)),
@@ -173,7 +172,6 @@ def test_tool_rejects_invalid_conditions_without_solver_budget(real_a):
         "TIME_INVALID",
         "CONDITION_INVALID",
         "CONDITION_INVALID",
-        "NO_PREFERRED_WINDOW",
         "CONDITION_TASK_NOT_IN_SCOPE",
         "CONDITION_TASK_NOT_IN_SCOPE",
         "CONDITION_OUTSIDE_WINDOW",
@@ -216,7 +214,6 @@ def test_same_conditions_are_not_solved_twice_and_other_conditions_are(real_a):
         "start_min": 60,
         "start_max": 60,
         "resource_id": None,
-        "preferred": False,
     }
     assert "violations" not in steps[4]["tool_result"]
     # 관찰의 이전 계산에 건 조건이 보인다
@@ -226,26 +223,6 @@ def test_same_conditions_are_not_solved_twice_and_other_conditions_are(real_a):
         cand = get_candidate(conn, real_a.site_id, steps[4]["tool_result"]["candidate_id"])
     placed = {a.task_id: a.start for a in cand.assignments}
     assert (placed["A"], placed["C"]) == (60, 90)
-
-
-def test_preferred_window_becomes_start_range(real_a):
-    """희망 영역은 Agent가 조건으로 넣을 때만 Solver 입력이 된다. 서버는 강제하지 않는다."""
-    pack = real_a
-    body = PreferredWindow(task_id="C", start=120, end=180)  # 11:00–12:00
-    assert set_preferred_window(pack, "foreman_a2", _key(), body).status == "APPLIED"
-    _, steps = _run(pack, [solve_with("L1", cond("C", use_preferred_window=True))])
-    result = steps[0]["tool_result"]
-    assert result["conditions"]["C"] == {
-        "start_min": 120,
-        "start_max": 150,  # 끝 − duration
-        "resource_id": None,
-        "preferred": True,
-    }
-    with db.read() as conn:
-        cand = get_candidate(conn, pack.site_id, result["candidate_id"])
-    assert {a.task_id: a.start for a in cand.assignments}["C"] == 120
-    acting = {t["task_id"]: t for t in steps[0]["observation"]["tasks"]}
-    assert acting["C"]["clock"]["base_start"] == "2026-10-12(월) 10:00"
 
 
 # ── 같은 배치는 하나로 묶는다 ─────────────────────────────────
@@ -387,7 +364,6 @@ def test_rejected_change_marks_other_live_candidate_and_conditions_solve_again(
             "start_min": 2940,
             "start_max": 2940,
             "resource_id": None,
-            "preferred": False,
         }
     ]
 

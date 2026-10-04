@@ -28,7 +28,6 @@ from app.store.repos.consultations import (
 from app.store.repos.decisions import is_chosen, list_case_rejections, list_decisions
 from app.store.repos.events import get_event
 from app.store.repos.messages import list_fact_updates
-from app.store.repos.pins import preferred_windows
 from app.store.repos.plans import get_plan, get_plan_by_candidate
 from app.store.repos.records import find_reconfirm_candidate, get_candidate, list_validations
 from app.store.repos.runs import approach_attempts, get_run, list_steps, tried_search_keys
@@ -46,8 +45,6 @@ HUMAN_EVENTS = (
     "TASK_MOVED",
     "TASK_REMOVED",
     "TASK_EDITED",
-    "PREFERRED_WINDOW_SET",
-    "PREFERRED_WINDOW_CLEARED",
 )
 
 
@@ -241,8 +238,7 @@ def human_work(conn: sqlite3.Connection, site_id: str, case_id: str) -> int:
     """이 Case에서 사람이 새 일을 만든 횟수 (AG-30). 저장하지 않고 사건·기록에서 센다.
 
     사람에게 막힌 안(Supervisor 거절이나 담당자 이견) 하나, 작업 고정·고정 해제·직접 이동·없애기·카드에서 값
-    고치기(확인)·희망 영역 그리기·지우기 한 번,
-    Supervisor가 고른 안을 다른 안으로 바꾼 것 한 번이 각각 1이다. 막힌 안을 떠나 새로 고른 것은 그 안에서 이미
+    고치기 한 번, Supervisor가 고른 안을 다른 안으로 바꾼 것 한 번이 각각 1이다. 막힌 안을 떠나 새로 고른 것은 그 안에서 이미
     셌으므로 세지 않는다. Agent의 행동(재호출, 가드 거절, 재계획 결과)은 여기 들어오지 않는다.
     """
     turned_down = {r["candidate_id"] for r in list_case_rejections(conn, case_id)}
@@ -254,7 +250,7 @@ def human_work(conn: sqlite3.Connection, site_id: str, case_id: str) -> int:
         if e["kind"] in HUMAN_EVENTS:
             count += 1
         elif e["kind"] == "SCHEDULE_IMPORTED" and e["ref"].get("changed_task_ids"):
-            # 일정 넣기로 기존 작업의 희망·값을 바꾼 것은 카드 고치기·희망 그리기와 같은 사람의 일이다
+            # 일정 넣기로 기존 작업의 값을 바꾼 것은 카드 고치기와 같은 사람의 일이다
             count += 1
         elif e["kind"] == "CANDIDATE_CHOSEN":
             if chosen not in (None, e["ref"]["candidate_id"]) and chosen not in turned_down:
@@ -434,7 +430,6 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
     hold_active = bool(holds)
     held_tasks = {h["task_id"] for h in holds if h["task_id"]}
 
-    wanted = preferred_windows(conn, site_id)
     calls: list[dict[str, Any]] = []
     # 엮인 충돌: 설명이다. 재계획은 그룹이 아니라 현장의 충돌 전체를 한 번에 푼다 (AG-24)
     group_views = [
@@ -472,8 +467,6 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
         # 충돌에 걸린 작업 가운데 고정되지 않아 움직일 수 있는 것. 재계획은 고정되지 않은 작업만 옮긴다
         "movable_task_ids": movable,
         "request_task_ids": [t for t in involved if t not in in_plan],
-        # 희망 영역이 있는 작업 (지연의 기준이다. 희망 우선 접근이 먼저 줄이는 것, ST-22)
-        "preferred_task_ids": [t for t in involved if t in wanted],
         "untried_levels": untried_levels(snapshot, conflicts, tried),
         "last_result": last_view,
     }

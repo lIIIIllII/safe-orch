@@ -6,7 +6,7 @@
 - wake_run: 영향받는 Run의 wake_seq += 1, 대기 중이면 RESUME_RUN 등록(Run당 PENDING 1개).
 - claim_resume: `WAITING_HUMAN ∧ wait_generation 일치` 조건부 claim.
 - end_case_run: Run 종료 + 보낸 요청 정리(메시지 CANCELLED·제안 STALE) + 열린 Case가 없어지면 대기열 전부 승격.
-- promote_queued: 대기 중인 QUEUED 작업을 전부 새 revision READY로(Consent 복사), context +1 한 번,
+- promote_queued: 대기 중인 QUEUED 작업을 전부 새 revision READY로, context +1 한 번,
   RECHECK 등록 한 번. 열린 Case 중 접수는 QUEUED로 저장된다 (AG-07).
 모든 함수는 호출한 쪽의 tx 안에서 돈다(트랜잭션 중첩 없음).
 """
@@ -16,12 +16,11 @@ from typing import Any
 
 from app.config import get_settings
 from app.domain.ids import new_id
-from app.domain.models import AgentRun, Consent
+from app.domain.models import AgentRun
 from app.packs.loader import LoadedPack
-from app.store.repos._rows import loads, rows
+from app.store.repos._rows import rows
 from app.store.repos.calls import fingerprint
 from app.store.repos.case_events import case_of, record_case_event
-from app.store.repos.consents import insert_consent
 from app.store.repos.dispatch import register_job
 from app.store.repos.messages import insert_message
 from app.store.repos.runs import (
@@ -379,39 +378,6 @@ def queued_task_ids(conn: sqlite3.Connection, site_id: str) -> list[str]:
     ]
 
 
-def copy_consents(
-    tx: sqlite3.Connection,
-    site_id: str,
-    task_id: str,
-    from_revision: int,
-    to_revision: int,
-    context_version: int,
-    axes: tuple[str, ...] = ("TIME", "RESOURCE"),
-) -> list[str]:
-    """값이 바뀌지 않은 축의 Consent를 새 revision으로 복사한다(같은 source_ref)."""
-    out = []
-    for r in rows(
-        tx,
-        "SELECT * FROM consent WHERE site_id = ? AND task_id = ? AND task_revision = ?"
-        " ORDER BY rowid",
-        (site_id, task_id, from_revision),
-    ):
-        if r["axis"] not in axes:
-            continue
-        consent = Consent(
-            consent_id=new_id("cns"),
-            task_id=task_id,
-            task_revision=to_revision,
-            owner_actor_id=r["owner_actor_id"],
-            axis=r["axis"],
-            scope=loads(r["scope"]),
-            source_ref=r["source_ref"],
-        )
-        insert_consent(tx, site_id, consent, context_version)
-        out.append(consent.consent_id)
-    return out
-
-
 def promote_queued(tx: sqlite3.Connection, pack: LoadedPack) -> list[str]:
     """대기 중인 접수(QUEUED 작업)를 전부 한 번에 READY로 올린다: context +1 한 번, RECHECK 한 번 (AG-07).
 
@@ -422,7 +388,7 @@ def promote_queued(tx: sqlite3.Connection, pack: LoadedPack) -> list[str]:
     ids = queued_task_ids(tx, site_id)
     if not ids:
         return []
-    context_version = bump_context_version(tx, site_id)
+    bump_context_version(tx, site_id)
     tasks = {t.task_id: t for t in list_current_tasks(tx, site_id, pack)}
     revisions = {}
     for tid in ids:
@@ -431,7 +397,6 @@ def promote_queued(tx: sqlite3.Connection, pack: LoadedPack) -> list[str]:
         insert_task_revision(
             tx, site_id, task.model_copy(update={"revision": revisions[tid], "lifecycle": "READY"})
         )
-        copy_consents(tx, site_id, tid, task.revision, revisions[tid], context_version)
     register_recheck(tx, site_id, {"kind": "QUEUE", "task_ids": ids})
     sources = schedule_of_tasks(tx, site_id)
     delivered: set[str] = set()

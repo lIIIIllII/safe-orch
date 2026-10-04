@@ -284,7 +284,6 @@ def _moved(snapshot, task_id, start, resource_id=None):
 def _asked(snapshot, task_id, start, resource_id=None):
     """그 후보의 협의 항목이 가는 사람 (작업 → 담당자)."""
     items = build_items(snapshot.facts(), _moved(snapshot, task_id, start, resource_id))
-    assert all(i.base_status == "PENDING" for i in items)  # 묻지 않는 범위는 따로 없다
     return {i.task_id: i.owner_actor_id for i in items}
 
 

@@ -1,8 +1,7 @@
-"""작업 고정·고정 해제와 희망 영역 (AG-27).
+"""작업 고정·고정 해제 (AG-27).
 
 고정은 사람만 한다(담당자는 자기 작업, Supervisor는 모든 작업). 고정된 작업은 Solver가 움직이지 않고
-Validator가 검사한다. 고정·해제는 현장 버전을 올리고 열린 메인에 사건으로 간다. 희망 영역은 담당자가
-그리고 지우며, 계산에 들어가는 사실이다: 고정과 같은 방식으로 현장 버전을 올리고 사건이 된다 (ST-22).
+Validator가 검사한다. 고정·해제는 현장 버전을 올리고 열린 메인에 사건으로 간다 (ST-22).
 """
 
 import uuid
@@ -12,15 +11,10 @@ from conftest import LEGACY_PINNED, add_run, take_snapshot
 from fastapi.testclient import TestClient
 from scripted import Router, solve
 
-from app.agents import casefacts
 from app.agents.observers import replanning as replanning_observer
-from app.api.state import build_state
 from app.commands.pins import (
-    PreferredWindow,
     TaskRef,
-    clear_preferred_window_command,
     pin_task,
-    set_preferred_window,
     unpin_task,
 )
 from app.commands.task_request import TaskRequestForm, submit_task_request
@@ -33,7 +27,6 @@ from app.solver.candidate import build_candidate
 from app.solver.search_spec import build_search_spec
 from app.store import db
 from app.store.repos.consultations import candidate_state
-from app.store.repos.dispatch import list_jobs
 from app.store.repos.records import get_candidate
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
@@ -63,11 +56,6 @@ def _pin(pack, actor, task_id):
 
 def _unpin(pack, actor, task_id):
     return unpin_task(pack, actor, _key(), TaskRef(task_id=task_id))
-
-
-def _window(pack, actor, task_id, start, end):
-    body = PreferredWindow(task_id=task_id, start=start, end=end)
-    return set_preferred_window(pack, actor, _key(), body)
 
 
 def _context(pack):
@@ -249,101 +237,6 @@ def test_pin_wakes_open_main_and_stales_review_candidate(seeded, main_on):
     assert len(_events("TASK_UNPINNED")) == (1 if _runs("MAIN")[0].status == "WAITING_HUMAN" else 0)
 
 
-# ── 희망 영역 ──────────────────────────────────────────────────
-
-
-def test_preferred_window_is_owner_only_and_is_a_fact(with_a):
-    """희망 영역은 담당자만 그리고 지운다. 계산에 들어가는 사실이다: 그리거나 지우면 현장 버전이 오르고
-    Snapshot에 들어가며 재확인이 등록된다. 열린 메인이 없으면 사건은 만들지 않는다 (ST-22)."""
-    pack = with_a
-    ctx = _context(pack)
-    before = take_snapshot(pack)
-    assert _window(pack, "supervisor", "C", 90, 150).reason_codes == ("NOT_AUTHORIZED",)
-    assert _window(pack, "planner_a", "C", 90, 150).reason_codes == ("NOT_AUTHORIZED",)
-    assert _window(pack, "foreman_a2", "C", 150, 90).reason_codes == ("INVALID_WINDOW",)
-    assert _window(pack, "foreman_a2", "C", 0, pack.horizon_minutes + 1).reason_codes == (
-        "INVALID_WINDOW",
-    )
-    assert _context(pack) == ctx  # 거절은 사실을 바꾸지 않는다
-    assert _window(pack, "foreman_a2", "C", 90, 150).status == "APPLIED"
-    assert _window(pack, "foreman_a2", "C", 120, 180).status == "APPLIED"  # 다시 그리면 바뀐다
-    assert _window(pack, "foreman_a2", "C", 120, 180).reason_codes == ("NO_CHANGE",)
-    assert [
-        (r["start_min"], r["end_min"], r["status"], r["origin"], r["made_by"])
-        for r in _rows("SELECT * FROM preferred_window ORDER BY rowid")
-    ] == [(90, 150, "CLEARED", "STATED", "OWNER"), (120, 180, "ACTIVE", "STATED", "OWNER")]
-    after = take_snapshot(pack)
-    assert _context(pack) == ctx + 2 and after.snapshot_hash != before.snapshot_hash
-    hope = after.facts().preferred_map()["C"]
-    assert (hope.start, hope.end, hope.origin, hope.made_by) == (120, 180, "STATED", "OWNER")
-    assert before.facts().preferred_windows == ()
-    # 열린 메인이 없으면 사건은 없고, 재확인은 등록된다
-    with db.read() as conn:
-        rechecks = [j for j in list_jobs(conn, pack.site_id) if j["kind"] == "RECHECK"]
-    assert _events() == [] and len(rechecks) == 2
-
-    # Replanning 관찰과 화면 상태에 구간·시작 범위·출처가 보인다
-    add_run(pack)
-    with db.read() as conn:
-        obs = replanning_observer.build_observation(conn, pack, "run_test").data
-        state = build_state(conn, pack, "foreman_a2")
-    acting = {t["task_id"]: t for t in obs["tasks"]}
-    duration = acting["C"]["duration"]
-    assert acting["C"]["preferred_window"] == {
-        "start": 120,
-        "end": 180,
-        "start_range": [120, 180 - duration],
-        "origin": "STATED",
-    }
-    assert (acting["A"]["preferred_window"], acting["C"]["pinned"]) == (None, None)
-    c = next(t for t in state["tasks"] if t["task_id"] == "C")
-    assert (c["preferred_window"]["start"], c["preferred_window"]["set_by"]) == (120, "foreman_a2")
-    assert (c["preferred_window"]["origin"], c["preferred_window"]["made_by"]) == (
-        "STATED",
-        "OWNER",
-    )
-
-    clear = TaskRef(task_id="C")
-    assert clear_preferred_window_command(pack, "planner_a", _key(), clear).reason_codes == (
-        "NOT_AUTHORIZED",
-    )
-    assert clear_preferred_window_command(pack, "foreman_a2", _key(), clear).status == "APPLIED"
-    assert clear_preferred_window_command(pack, "foreman_a2", _key(), clear).reason_codes == (
-        "PREFERRED_WINDOW_NOT_FOUND",
-    )
-    assert _context(pack) == ctx + 3
-    assert take_snapshot(pack).facts().preferred_windows == ()
-
-
-def test_preferred_window_wakes_open_main_and_counts_as_human_work(seeded, main_on):
-    """검토 대기 중에 희망 영역을 그리거나 지우면 후보는 무효가 되고, 사건이 열린 메인의 Case에 들어가
-    메인이 깨어나며 사람이 만든 일로 센다 (AG-30)."""
-    pack = seeded
-    assert _submit(pack, "N1").status == "APPLIED"
-    run_until_idle(pack, model_factory=Router(replanning=[solve("L0")]).factory())
-    [main] = _runs("MAIN")
-    assert (main.status, main.wait_kind) == ("WAITING_HUMAN", "HUMAN_DECISION")
-    [rp] = _runs("REPLANNING")
-    with db.read() as conn:
-        steps = list_steps(conn, rp.run_id)
-        assert casefacts.human_work(conn, pack.site_id, main.case_id) == 0
-    cand_id = next(s["tool_result"]["candidate_id"] for s in steps if s["tool_result"])
-
-    assert _window(pack, "planner_a", "N1", 1500, 1620).status == "APPLIED"
-    with db.read() as conn:
-        assert candidate_state(conn, pack.site_id, get_candidate(conn, pack.site_id, cand_id)).stale
-        assert casefacts.human_work(conn, pack.site_id, main.case_id) == 1
-    [event] = _events("PREFERRED_WINDOW_SET")
-    assert event["case_id"] == main.case_id and '"task_id":"N1"' in event["ref"].replace(" ", "")
-    assert _runs("MAIN")[0].wake_seq == main.wake_seq + 1
-
-    clear = TaskRef(task_id="N1")
-    assert clear_preferred_window_command(pack, "planner_a", _key(), clear).status == "APPLIED"
-    assert len(_events("PREFERRED_WINDOW_CLEARED")) == 1
-    with db.read() as conn:
-        assert casefacts.human_work(conn, pack.site_id, main.case_id) == 2
-
-
 def test_replanning_observation_shows_who_pinned(with_a):
     pack = with_a
     add_run(pack)
@@ -356,6 +249,15 @@ def test_replanning_observation_shows_who_pinned(with_a):
     assert {acting["A"]["unit_id"], acting["B"]["unit_id"]} == {"UA", "UB"}
     assert acting["Q"]["pinned"] == {"pinned_by": "foreman_a2", "by_role": "OWNER"}
     assert set(LEGACY_PINNED) >= {"M", "Q"}
+    # 희망 영역과 동의 범위는 없다. 기준 배정에 출처가 붙는다: 계획 작업은 승인된 자리, 폼 요청은 없음
+    assert "consents" not in obs and "preferred_window" not in acting["A"]
+    assert (acting["C"]["base"]["source"], acting["A"]["base"]["source"]) == ("PLAN", "NONE")
+    c = acting["C"]["base"]
+    assert (c["start_range"], c["decided"]) == ([c["start"], c["start"]], False)
+    assert (acting["A"]["base"]["start_range"], acting["A"]["clock"]["base_start_max"]) == (
+        None,
+        None,
+    )
 
 
 # ── API ────────────────────────────────────────────────────────
@@ -372,18 +274,16 @@ def _post(client, url, actor, body=None):
     return client.post(f"/api/{url}", json=body, headers=headers)
 
 
-def test_pin_and_preferred_window_api(client, seeded):
+def test_pin_api(client, seeded):
     assert _post(client, "tasks/C/pin", "planner_b").status_code == 403
     res = _post(client, "tasks/C/pin", "foreman_a2")
-    assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
-    res = _post(client, "tasks/C/preferred-window", "foreman_a2", {"start": 90, "end": 150})
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
     state = client.get(f"/api/sites/{seeded.site_id}/state", headers={"X-Actor": "foreman_a2"})
     c = next(t for t in state.json()["tasks"] if t["task_id"] == "C")
     assert (c["pin"]["pinned_by"], c["pin"]["by_role"]) == ("foreman_a2", "OWNER")
-    assert (c["preferred_window"]["start"], c["preferred_window"]["end"]) == (90, 150)
-    assert "movable" not in c
-    assert _post(client, "tasks/C/preferred-window/clear", "foreman_a2").status_code == 200
+    assert "movable" not in c and "preferred_window" not in c
+    # 희망 영역을 그리고 지우는 길은 없다
+    assert _post(client, "tasks/C/preferred-window", "foreman_a2", {}).status_code == 404
     assert _post(client, "tasks/C/unpin", "planner_a").status_code == 403
     assert _post(client, "tasks/C/unpin", "foreman_a2").status_code == 200
     assert _post(client, "tasks/C/unpin", "foreman_a2").status_code == 404  # PIN_NOT_FOUND

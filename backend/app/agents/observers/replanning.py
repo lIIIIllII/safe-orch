@@ -131,7 +131,7 @@ def openers(
     사실(FACT_CHANGE)뿐이고, 대상은 충돌에 걸린 작업 전체다: 풀 초과 충돌의 풀(QUANTITY), 충돌 작업의
     자원 제외 사유(권한 없음 → PERMISSION, 가용 없음 → AVAILABILITY), 모든 범위가 INFEASIBLE인 요청
     작업의 시간창(WINDOW), 접수 Agent가 정한 작업 시간(decided 표시: 요청자가 작업 카드에서 고치면 열림,
-    AG-32). 정한 희망 영역은 Hard가 아니라 해를 막지 않으므로 넣지 않는다 (ST-22).
+    AG-32). 정한 기준 위치는 Hard가 아니라 해를 막지 않으므로 넣지 않는다 (AG-35).
     """
     tasks = facts.task_map()
     pinned = facts.pinned_task_ids()
@@ -178,9 +178,7 @@ def condition_args(pack: LoadedPack, conditions: dict[str, Any]) -> list[dict[st
     for tid, c in sorted(conditions.items()):
         arg: dict[str, Any] = {"task_id": tid}
         lo, hi = c.get("start_min"), c.get("start_max")
-        if c.get("preferred"):
-            arg["use_preferred_window"] = True
-        elif lo is not None and lo == hi:
+        if lo is not None and lo == hi:
             arg["start_at"] = clock(lo)
         else:
             if lo is not None:
@@ -231,7 +229,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         return site_time(pack.horizon_start_utc, pack.timezone, minute)
 
     pins = {p.task_id: p for p in facts.pins}
-    windows = facts.preferred_map()
+    info = {t.task_id: facts.base_info(t.task_id) for t in facts.tasks}
     involved = {tid for c in conflicts for tid in c.task_ids}
     tasks = [
         {
@@ -248,7 +246,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
             },
             "required_resource_type": t.required_resource_type,
             "demands": t.demands,
-            # 접수 Agent가 정한 값(요청자가 아직 확인하거나 고치지 않았다, AG-32)
+            # 접수 Agent가 정한 값(요청자가 아직 고치지 않았다, AG-32)
             "decided_values": list(t.decided_values),
             # 사람이 건 고정(누가). 고정된 작업은 시각·자원 모두 움직이지 않는다 (AG-27)
             "pinned": None
@@ -257,21 +255,24 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
                 "pinned_by": pins[t.task_id].pinned_by,
                 "by_role": pins[t.task_id].by_role,
             },
-            # 희망 영역 [start, end)와 그 시작 범위·출처. 강제하지 않지만 지연의 기준이다 (ST-22)
-            "preferred_window": None
-            if t.task_id not in windows
-            else {
-                "start": windows[t.task_id].start,
-                "end": windows[t.task_id].end,
-                "start_range": list(windows[t.task_id].start_range(t.duration)),
-                "origin": windows[t.task_id].origin,
+            # 기준 배정과 그 출처(계획 / 요청한 자리·범위 / 없음), 기준 시작 범위, 정함 여부. 변경과
+            # 지연을 이 범위에서 잰다. 기준에서 바뀐 작업은 고른 안의 협의에서 담당자에게 간다 (CV-29)
+            "base": {
+                **base[t.task_id].model_dump(),
+                "source": info[t.task_id]["source"],
+                "start_range": None
+                if info[t.task_id]["source"] == "NONE"
+                else [info[t.task_id]["start"], info[t.task_id]["start_max"]],
+                "decided": info[t.task_id]["origin"] == "DECIDED",
             },
-            "base": base[t.task_id].model_dump(),
             # 같은 값의 현장 날짜·시각. 조건 도구의 시각 인자가 이 형식이다 (AG-21)
             "clock": {
                 "earliest_start": clock(t.earliest_start),
                 "latest_start": clock(t.latest_start),
                 "base_start": clock(base[t.task_id].start),
+                "base_start_max": None
+                if info[t.task_id]["source"] == "NONE"
+                else clock(info[t.task_id]["start_max"]),
             },
         }
         for t in sorted(facts.tasks, key=lambda t: t.task_id)
@@ -363,7 +364,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         ],
         # 작업 전체(Unit을 가리지 않는다). 고정되지 않은 작업은 범위에 들어가면 움직인다
         "tasks": tasks,
-        "consents": [c.model_dump(mode="json") for c in facts.consents],
         "untried_levels": untried,
         # search_key는 내부 계산(시도 여부)에만 쓰고 모델에는 보이지 않는다
         "attempts": [

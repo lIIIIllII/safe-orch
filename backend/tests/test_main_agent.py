@@ -23,10 +23,8 @@ from app.commands.approval import RejectRequest, reject_candidate
 from app.commands.events import EventReport, receive_event
 from app.commands.messages import ReplyRequest, reply_message
 from app.commands.pins import (
-    PreferredWindow,
     TaskRef,
     pin_task,
-    set_preferred_window,
     unpin_task,
 )
 from app.commands.runs import CancelRun, cancel_run
@@ -109,7 +107,7 @@ def test_call_agent_starts_child_and_result_wakes_main(with_a):
     # 같은 접근의 재계획은 받지 않고 다른 접근은 부를 수 있다 (AG-24)
     assert replanning["last_result"]["paths"] == []
     assert {n["kind"] for n in replanning["last_result"]["openers"]} <= {"FACT_CHANGE"}
-    assert last["observation"]["calls"] == [{"agent": "REPLANNING", "approach": "PREFER_WINDOW"}]
+    assert last["observation"]["calls"] == [{"agent": "REPLANNING", "approach": "MIN_DELAY"}]
     with db.read() as conn:
         [notice] = conn.execute(
             "SELECT to_actor_id, type, agent_text FROM message WHERE run_id = 'main'"
@@ -444,22 +442,6 @@ def test_exhausted_replanning_result_has_its_live_candidates(seeded, main_on, mo
     assert _reject(pack, candidate_id).status == "APPLIED"
     with db.read() as conn:
         assert casefacts.run_result(conn, child)["candidate_ids"] == []
-
-
-def test_main_sees_tasks_with_a_preferred_window(with_a):
-    """메인 관찰: 충돌에 걸린 작업 가운데 담당자가 희망 영역을 그려 둔 작업이 보인다(서버 규칙은 없다)."""
-    pack = with_a
-    _main(pack, [main_escalate()])
-    assert _steps("main")[0]["observation"]["replanning"]["preferred_task_ids"] == []
-
-    window = PreferredWindow(task_id="A", start=60, end=120)
-    assert set_preferred_window(pack, "planner_a", _key(), window).status == "APPLIED"
-    _main(pack, [main_escalate()], run_id="main2")
-    step = _steps("main2")[0]
-    assert step["observation"]["replanning"]["preferred_task_ids"] == ["A"]
-    # 희망 영역이 없어도 희망 영역 우선 접근은 그대로 고를 수 있다
-    calls = [c for c in step["observation"]["calls"] if c["agent"] == "REPLANNING"]
-    assert "PREFER_WINDOW" in {c["approach"] for c in calls}
 
 
 def test_decision_for_closed_case_goes_to_a_new_main(seeded, main_on):

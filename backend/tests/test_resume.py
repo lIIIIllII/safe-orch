@@ -8,7 +8,7 @@
 (AG-09). 스크립트의 막힌 결과에는 길이 없으므로 메인의 기본 응답은 서버가 붙인 열 수 있는 것으로 부른다.
 
 1단계: T33·T36–T39·T41·T42, 대기열(QUEUED). 2단계: 기본안 B E2E, T02·T17·T23–T26·T38(답변)·T40,
-LIST·TRY 사용 조건과 사전 확인, Consent 복사, 거절한 값, state inbox.
+LIST·TRY 사용 조건과 사전 확인, 거절한 값, state inbox.
 """
 
 import threading
@@ -520,16 +520,6 @@ def test_form_during_open_case_is_queued_then_promoted_on_commit(seeded):
     n1 = _task(pack, "N1")
     assert (n1.lifecycle, n1.revision) == ("READY", 2)
     assert _site(pack).context_version == ctx + 1
-    with db.read() as conn:
-        consents = conn.execute(
-            "SELECT axis, task_revision FROM consent WHERE task_id = 'N1' ORDER BY rowid"
-        ).fetchall()
-    assert [tuple(c) for c in consents] == [
-        ("TIME", 1),
-        ("RESOURCE", 1),
-        ("TIME", 2),
-        ("RESOURCE", 2),
-    ]
     last = _jobs(pack, "RECHECK")[-1]
     assert last["dedupe_key"] == f"RECHECK:ctx{ctx + 1}:plan1"
     assert last["payload"]["cause"] == {"kind": "QUEUE", "task_ids": ["N1"]}

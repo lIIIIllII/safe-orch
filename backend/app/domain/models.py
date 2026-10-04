@@ -20,8 +20,7 @@ Origin = Literal["STATED", "DECIDED"]
 CandidateKind = Literal["REPLAN", "RECONFIRM", "MOVE", "REMOVE"]
 ValidationStatus = Literal["PASS", "FAIL", "INCOMPLETE"]
 ScopeLevel = Literal["L0", "L1", "L2"]
-Axis = Literal["TIME", "RESOURCE"]
-# 목적 순서: 변경 작업 수를 먼저 줄일지, 희망에서 벗어난 정도(지연)를 먼저 줄일지 (CV-27)
+# 목적 순서: 변경 작업 수를 먼저 줄일지, 기준에서 옮긴 거리(지연)를 먼저 줄일지 (CV-27)
 Objective = Literal["CHANGE_FIRST", "DELAY_FIRST"]
 AttributeType = Literal["NUMBER", "LIST"]
 RequirementOp = Literal["GTE", "LTE", "CONTAINS"]  # 코어가 아는 비교는 이 셋뿐이다 (CV-17)
@@ -216,7 +215,7 @@ class Task(Frozen):
 
     @property
     def decided_values(self) -> tuple[str, ...]:
-        """Agent가 정한 값의 이름 (요청자가 확인하거나 고치기 전, AG-32)."""
+        """Agent가 정한 값의 이름 (요청자가 고치기 전, AG-32)."""
         return tuple(
             sorted(
                 name
@@ -285,29 +284,6 @@ class Pin(Frozen):
     by_role: Literal["OWNER", "SUPERVISOR"]
 
 
-class PreferredWindow(Frozen):
-    """작업의 희망 영역 [start, end). 계산에 들어가는 사실이다: 지연의 기준이고 동의 범위다 (ST-22).
-
-    origin은 사람이 말한(그리거나 확인한) 희망인지 Work Intake가 정한 희망인지, made_by는 만든 주체다.
-    task revision에 묶지 않는다."""
-
-    task_id: str
-    start: int
-    end: int
-    origin: Origin = "STATED"
-    made_by: Literal["OWNER", "INTAKE"] = "OWNER"
-
-    def start_range(self, duration: int) -> tuple[int, int]:
-        """희망 시작 범위 [lo, hi]: 이 안에서 시작하면 희망 영역 안에서 끝난다. 영역이 작업 시간보다
-        짧으면 희망 시작 한 점이다."""
-        return self.start, max(self.start, self.end - duration)
-
-    def deviation(self, start: int, duration: int) -> int:
-        """희망에서 벗어난 정도(분): 희망 시작 범위 밖으로 벗어난 거리. 앞뒤 모두, 안이면 0."""
-        lo, hi = self.start_range(duration)
-        return max(0, lo - start, start - hi)
-
-
 class TaskBase(Frozen):
     """새 작업의 기준 위치: 요청한 시작 범위 [start, start_max]와 기준 자원. 계획에 들어가기 전까지 그
     작업의 기준이다 (CV-29).
@@ -342,29 +318,8 @@ class HoldRef(Frozen):
     task_id: str | None = None
 
 
-class Consent(Frozen):
-    """작업 담당자의 이동 동의. scope는 TIME {start_min, start_max},
-    RESOURCE {resource_ids}. 해당 task revision에만 적용한다."""
-
-    consent_id: str
-    task_id: str
-    task_revision: int = Field(ge=1)
-    owner_actor_id: str
-    axis: Axis
-    scope: dict[str, Any]
-    source_ref: str
-
-    def covers(self, value: int | str | None) -> bool:
-        if self.axis == "TIME":
-            return (
-                isinstance(value, int)
-                and self.scope["start_min"] <= value <= self.scope["start_max"]
-            )
-        return value in self.scope["resource_ids"]
-
-
 class ConsultationItem(Frozen):
-    """기준 대비 바뀐 작업 1개. base_status만 저장하고 WAIVED 등은 조회 시 붙인다."""
+    """기준에서 바뀐 작업 1개. 상태(확인 대기·수락·이견·수용)는 저장하지 않고 조회 시 붙인다."""
 
     task_id: str
     task_revision: int = Field(ge=1)
@@ -372,7 +327,6 @@ class ConsultationItem(Frozen):
     before: Assignment
     after: Assignment
     change_hash: str
-    base_status: Literal["COVERED", "PENDING"]
 
 
 class PoolExcess(Frozen):
@@ -426,15 +380,10 @@ class SnapshotContent(Frozen):
     plan: PlanRef
     holds: tuple[HoldRef, ...] = ()
     pins: tuple[Pin, ...] = ()
-    consents: tuple[Consent, ...] = ()
-    preferred_windows: tuple[PreferredWindow, ...] = ()  # READY 작업의 희망 영역 (ST-22)
     task_bases: tuple[TaskBase, ...] = ()  # READY 새 작업의 기준 위치 (CV-29)
 
     def task_map(self) -> dict[str, Task]:
         return {t.task_id: t for t in self.tasks}
-
-    def preferred_map(self) -> dict[str, PreferredWindow]:
-        return {w.task_id: w for w in self.preferred_windows}
 
     def pinned_task_ids(self) -> set[str]:
         return {p.task_id for p in self.pins}
@@ -537,12 +486,11 @@ class Snapshot(Frozen):
 
 class Condition(Frozen):
     """Agent가 한 작업에 건 탐색 조건 (CV-24). 좁히기만 한다: 시작 범위 [start_min, start_max](분),
-    자원 지정. preferred는 시작 범위가 희망 영역에서 왔다는 표시다(그 탐색에서는 희망을 반드시 지킨다)."""
+    자원 지정."""
 
     start_min: int | None = None
     start_max: int | None = None
     resource_id: str | None = None
-    preferred: bool = False
 
 
 class SearchSpec(Frozen):

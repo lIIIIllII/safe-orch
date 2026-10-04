@@ -64,5 +64,5 @@ class AgentBinding:
 
 
 # 메인이 재계획에 주는 접근(무엇을 우선할지). 방식은 재계획 Agent가 고른다 (AG-28)
-# 변경 최소 / 희망 우선(희망에서 벗어난 정도를 먼저 줄인다)
-APPROACHES = ("MIN_CHANGE", "PREFER_WINDOW")
+# 변경 최소 / 덜 옮기기(기준에서 옮긴 거리를 먼저 줄인다)
+APPROACHES = ("MIN_CHANGE", "MIN_DELAY")

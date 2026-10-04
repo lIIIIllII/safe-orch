@@ -40,7 +40,7 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=replanning_prompt,
         observer=replanning_observer,
         executor=ReplanningExecutor,
-        exec_contract_version="replanning-c8",  # 기록만. 주체 Unit 없이 충돌 전체를 푼다 (AG-24)
+        exec_contract_version="replanning-c9",  # 기록만. 조건의 희망 영역 삭제, 기준 위치 (CV-29)
     ),
     coordination_spec.AGENT_TYPE: AgentBinding(
         spec=coordination_spec.SPEC,
@@ -54,13 +54,13 @@ BINDINGS: dict[str, AgentBinding] = {
         prompt=event_response_prompt,
         observer=event_response_observer,
         executor=EventResponseExecutor,
-        exec_contract_version="event-response-c6",  # 기록만. 결과의 OTHER_UNIT에 충돌 그룹 참조 (AG-23)
+        exec_contract_version="event-response-c7",  # 기록만. 신고자 되묻기 삭제
     ),
     intake_spec.AGENT_TYPE: AgentBinding(
         spec=intake_spec.SPEC,
         prompt=intake_prompt,
         observer=intake_observer,
         executor=IntakeExecutor,
-        exec_contract_version="intake-c11",  # 기록만. 완료의 시각은 희망 영역이 된다 (ST-22)
+        exec_contract_version="intake-c12",  # 기록만. 완료의 시각은 기준 위치가 된다 (CV-29)
     ),
 }

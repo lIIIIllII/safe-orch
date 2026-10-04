@@ -1,7 +1,7 @@
 """일정 넣기 (ST-24).
 
-넣는 사람은 자기 Unit의 작업만 넣는다. 문서의 시각은 Soft다(희망 영역이 되고 시간창은 Horizon 전체).
-새 작업의 기준 배정은 문서의 배정이다. 넣을 수 없는 작업이 하나라도 있으면 전체를 거절하고, 사람이
+넣는 사람은 자기 Unit의 작업만 넣는다. 문서의 시각은 Soft다(시간창은 Horizon 전체).
+새 작업의 기준 위치는 문서의 배정 한 점이다. 옛 문서의 희망 영역 칸은 버린다. 넣을 수 없는 작업이 하나라도 있으면 전체를 거절하고, 사람이
 빼기로 고른 작업만 뺀다. 넣기 하나는 사건 하나다. Pack 그대로의 R0(고정 없음)에서 본다.
 """
 
@@ -32,7 +32,6 @@ from app.store import db
 from app.store.repos.case_events import list_case_events
 from app.store.repos.cases import end_case_run, queued_task_ids
 from app.store.repos.dispatch import list_jobs
-from app.store.repos.pins import preferred_windows
 from app.store.repos.plans import get_current_plan
 from app.store.repos.schedules import get_schedule, list_task_bases
 from app.store.repos.site import get_actor, get_site
@@ -204,7 +203,7 @@ def test_document_level_rejections(seeded_real):
 def test_new_task_time_is_soft_and_base_is_the_documents_assignment(seeded_real, main_on):
     pack = seeded_real
     doc = _add(pack, _exported(pack), "S1", 240, 300)  # 10/12 13:00–14:00
-    # S2는 배정(14:00–15:00)과 다른 희망 영역(15:00–17:00)을 문서에 적었다
+    # S2는 옛 문서다: 배정(14:00–15:00)과 다른 희망 영역 칸(15:00–17:00)이 적혀 있다
     doc = _add(
         pack,
         doc,
@@ -217,6 +216,10 @@ def test_new_task_time_is_soft_and_base_is_the_documents_assignment(seeded_real,
         pinned=True,
     )
     before = _site(pack)
+    # 옛 문서의 희망 영역 칸은 받으면 버리고, 미리보기에 쓰지 않는다고 보인다
+    _, shown = _preview(pack, doc)
+    assert (shown["S1"]["verdict"], shown["S1"]["hope_dropped"]) == ("NEW", False)
+    assert (shown["S2"]["verdict"], shown["S2"]["hope_dropped"]) == ("NEW", True)
     out = _import(pack, doc)
     assert out.status == "APPLIED" and out.result_refs["new_task_ids"] == ["S1", "S2"]
     horizon = pack.horizon_minutes
@@ -232,22 +235,20 @@ def test_new_task_time_is_soft_and_base_is_the_documents_assignment(seeded_real,
     # 넣은 값은 담당자가 말한 값이다(문서의 출처는 쓰지 않는다)
     assert s2.decided_values == () and s1.fields["zone_id"].source_ref.startswith("schedule:")
     with db.read() as conn:
-        hopes = preferred_windows(conn, pack.site_id)
         bases = {b.task_id: b for b in list_task_bases(conn, pack.site_id)}
         pins = conn.execute("SELECT COUNT(*) FROM task_pin").fetchone()[0]
-        consents = conn.execute("SELECT axis FROM consent WHERE task_id = 'S1'").fetchall()
-    # 희망 영역: 문서에 있으면 그것, 없으면 배정 구간. 말한 희망이고 만든 주체는 담당자다
-    assert (hopes["S1"]["start"], hopes["S1"]["end"]) == (240, 300)
-    assert (hopes["S2"]["start"], hopes["S2"]["end"]) == (360, 480)
-    assert {(h["origin"], h["made_by"]) for h in (hopes["S1"], hopes["S2"])} == {
-        ("STATED", "OWNER")
-    }
-    assert consents == []  # 시각의 동의 범위는 희망 영역이다(시작 범위 동의를 따로 만들지 않는다)
     assert pins == 0  # 문서의 고정은 살리지 않는다
-    # 기준 배정은 문서의 배정이다. 희망 영역이 따로 있어도 그렇다
-    assert (bases["S1"].start, bases["S2"].start) == (240, 300)
-    base = take_snapshot(pack).facts().base_assignments()
+    # 기준 위치는 문서의 배정 한 점이다. 버린 희망 영역 칸은 어디에도 쓰이지 않는다
+    assert [(b.start, b.upper, b.origin) for b in (bases["S1"], bases["S2"])] == [
+        (240, 240, "STATED"),
+        (300, 300, "STATED"),
+    ]
+    facts = take_snapshot(pack).facts()
+    base = facts.base_assignments()
     assert (base["S1"].start, base["S2"].start, base["S2"].end) == (240, 300, 360)
+    # 지연과 변경은 문서의 배정 한 점에서 잰다
+    assert (facts.base_range("S2"), facts.base_info("S2")["source"]) == ((300, 300), "REQUEST")
+    assert [facts.deviation("S2", s) for s in (300, 360, 240)] == [0, 60, 60]
 
     # 넣기 하나는 사건 하나, 현장 버전 한 번, 재확인 한 번이다
     assert _site(pack).context_version == before.context_version + 1
@@ -328,32 +329,22 @@ def test_missing_values_and_retired_ids_are_rejected(seeded_real):
 # ── 이미 있는 내 작업 ──────────────────────────────────────────
 
 
-def test_existing_task_with_another_assignment_gets_a_hope(seeded_real):
-    """배정이 지금 계획과 다르면 그 구간이 희망 영역이 된다(타임라인에서 희망을 그린 것과 같다).
-    계획은 그대로이고 현장 버전이 한 번 오른다."""
+def test_existing_task_with_another_assignment_changes_nothing(seeded_real):
+    """이미 있는 내 작업의 배정이 지금 계획과 달라도 아무 일도 없다. 미리보기에 배정이 계획과 다르다는
+    것만 보인다(쓰지 않는다)."""
     pack = seeded_real
     doc = _exported(pack)
     _move(pack, doc, "K", 1560, 1680)  # 10/13 09:00–11:00 → 11:00–13:00
     _, tasks = _preview(pack, doc)
-    assert (tasks["K"]["verdict"], tasks["K"]["hope_changed"]) == ("HOPE_CHANGED", True)
+    assert (tasks["K"]["verdict"], tasks["K"]["assignment_differs"]) == ("UNCHANGED", True)
+    assert (tasks["P"]["verdict"], tasks["P"]["assignment_differs"]) == ("UNCHANGED", False)
     before = _site(pack)
     out = _import(pack, doc)
-    assert out.result_refs["changed_task_ids"] == ["K"]
+    assert out.status == "APPLIED" and out.result_refs["changed_task_ids"] == []
     with db.read() as conn:
-        hope = preferred_windows(conn, pack.site_id)["K"]
         plan = {a.task_id: a.start for a in get_current_plan(conn, pack.site_id).assignments}
-    assert (hope["start"], hope["end"], hope["origin"], hope["made_by"]) == (
-        1560,
-        1680,
-        "STATED",
-        "OWNER",
-    )
     assert plan["K"] == 1440 and _task(pack, "K").revision == 1
-    assert _site(pack).context_version == before.context_version + 1
-    # 같은 문서를 다시 넣으면 더 바뀌는 것이 없다
-    again = _import(pack, doc)
-    assert again.result_refs["changed_task_ids"] == []
-    assert _site(pack).context_version == before.context_version + 1
+    assert _site(pack).context_version == before.context_version and _events(pack) == []
 
 
 def test_existing_task_with_other_values_is_edited_like_the_card(seeded_real):
@@ -387,15 +378,14 @@ def test_open_main_queues_new_tasks_applies_changes_and_promotes_all_at_once(see
     add_run(pack, "main", agent_type="MAIN", acting_unit_id="SITE", acting_actor_id=None)
     doc = _add(pack, _exported(pack), "S1", 240, 300)
     doc = _add(pack, doc, "S2", 300, 360)
-    _move(pack, doc, "K", 1560, 1680)
+    next(t for t in doc["tasks"] if t["task_id"] == "K")["zone_id"] = "H"
     before = _site(pack)
     out = _import(pack, doc)
     assert out.status == "APPLIED" and out.result_refs["queued"] is True
-    # 새 작업은 대기열에 선다(아직 사실이 아니다). 기존 작업의 희망은 바로 적용되고 열린 메인에 전해진다
+    # 새 작업은 대기열에 선다(아직 사실이 아니다). 기존 작업의 값은 바로 적용되고 열린 메인에 전해진다
     assert (_task(pack, "S1").lifecycle, _task(pack, "S2").lifecycle) == ("QUEUED", "QUEUED")
     assert "S1" not in take_snapshot(pack).facts().task_map()
-    with db.read() as conn:
-        assert preferred_windows(conn, pack.site_id)["K"]["start"] == 1560
+    assert (_task(pack, "K").zone_id, _task(pack, "K").revision) == ("H", 2)
     assert _site(pack).context_version == before.context_version + 1
     [event] = _events(pack)
     assert (event["case_id"], event["ref"]["task_ids"], event["ref"]["changed_task_ids"]) == (

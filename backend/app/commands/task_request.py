@@ -1,13 +1,12 @@
 """작업 요청 폼.
 
-critical field를 CONFIRMED(source_ref form:<form_id>)로 기록하고 Consent(시작 범위, 요청 자원)를
-만든다. Agent(Work Intake)를 대신하는 결정론 입력이며 값을 추정하지 않는다.
-폼의 시간창은 사람이 구조화된 입력으로 넣은 가능 범위(Hard)다. 자연어 요청(Work Intake)의 시간은 희망
-영역이 되고 시간창은 Horizon 전체로 채워진다 (ST-22).
+critical field를 CONFIRMED(source_ref form:<form_id>)로 기록한다. Agent(Work Intake)를 대신하는 결정론
+입력이며 값을 추정하지 않는다.
+폼의 시간창은 사람이 구조화된 입력으로 넣은 가능 범위(Hard)다. 자연어 요청(Work Intake)의 시간은 기준
+위치(요청한 시작 범위)가 되고 시간창은 Horizon 전체로 채워진다 (AG-35). 폼 요청에는 기준 위치가 없다.
 """
 
 import sqlite3
-from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import Field
@@ -18,7 +17,6 @@ from app.domain.eligibility import ResourceNeed, exclusion_reasons, requirement_
 from app.domain.ids import new_id
 from app.domain.models import (
     Actor,
-    Consent,
     Demand,
     Requirement,
     Site,
@@ -34,8 +32,7 @@ from app.store.repos.cases import (
     register_recheck,
     wake_run,
 )
-from app.store.repos.consents import insert_consent
-from app.store.repos.pins import insert_preferred_window, list_active_pins
+from app.store.repos.pins import list_active_pins
 from app.store.repos.plans import get_current_plan
 from app.store.repos.resources import list_pools, list_resources
 from app.store.repos.runs import has_open_case, list_active_runs
@@ -175,40 +172,6 @@ def validate_task_request(
     return r.reason_codes
 
 
-def stated_consents(task: Task, source_ref: str, time: bool = True) -> list[Consent]:
-    """사람이 말한 시작 범위·요청 자원의 Consent. Agent가 정한 값에는 만들지 않는다 (AG-33).
-
-    time이 False면 시작 범위 Consent를 만들지 않는다: 시간창을 사람이 넣지 않은 작업(자연어 요청)은
-    희망 영역이 동의 범위다 (ST-22)."""
-    decided = set(task.decided_values)
-    out = []
-    if time and not decided & {"earliest_start", "latest_start"}:
-        out.append(
-            Consent(
-                consent_id=new_id("cns"),
-                task_id=task.task_id,
-                task_revision=task.revision,
-                owner_actor_id=task.owner_actor_id,
-                axis="TIME",
-                scope={"start_min": task.earliest_start, "start_max": task.latest_start},
-                source_ref=source_ref,
-            )
-        )
-    if task.requested_resource_id is not None and "requested_resource_id" not in decided:
-        out.append(
-            Consent(
-                consent_id=new_id("cns"),
-                task_id=task.task_id,
-                task_revision=task.revision,
-                owner_actor_id=task.owner_actor_id,
-                axis="RESOURCE",
-                scope={"resource_ids": [task.requested_resource_id]},
-                source_ref=source_ref,
-            )
-        )
-    return out
-
-
 def waits_in_queue(tx: sqlite3.Connection, site_id: str) -> bool:
     """새 작업이 대기열(QUEUED)에 서는가: 열린 메인(Case)이 있거나 먼저 접수된 대기 요청이 있다.
     대기 중인 작업은 Snapshot·충돌 검사에 들어가지 않고, 메인이 끝날 때 READY가 된다 (AG-07)."""
@@ -224,19 +187,14 @@ def insert_requested_task(
     queued: bool,
     context_version: int,
     origins: dict[str, str] | None = None,
-    hope: tuple[int, int, str] | None = None,
-    hope_made_by: str = "INTAKE",
     base: TaskBase | None = None,
     schedule_id: str | None = None,
 ) -> dict[str, Any]:
     """검증을 통과한 요청으로 작업 하나를 만든다. 폼·Work Intake·일정 넣기가 같이 쓴다.
 
-    critical field CONFIRMED(source_ref), Consent(시작 범위, 요청 자원), 희망 영역. 현장 버전·재확인·
-    사건은 부르는 쪽이 한다(일정 넣기는 여러 작업에 한 번만 한다).
-    origins(값 이름 → 출처, Work Intake): Agent가 정한 값은 기록에 적고, Consent는 사람이 말한 시작
-    범위·요청 자원에만 만든다. 정한 값의 동의는 요청자가 작업 카드에서 확인할 때 생긴다 (AG-33).
-    hope((시작, 끝, 출처)): 희망 영역 기록을 만들고 시작 범위 Consent는 만들지 않는다. 그 작업의 동의
-    범위는 희망 영역이다 (ST-22). 만든 주체(hope_made_by)는 Work Intake 또는 담당자다.
+    critical field CONFIRMED(source_ref). 현장 버전·재확인·사건은 부르는 쪽이 한다(일정 넣기는 여러
+    작업에 한 번만 한다).
+    origins(값 이름 → 출처, Work Intake): Agent가 정한 값은 기록에 적는다 (AG-32).
     base: 새 작업의 기준 위치(요청한 시작 범위, 일정은 문서의 배정과 schedule_id). 없으면 기준이 없다:
     폼 요청은 시간창 안 어디든 변경도 지연도 아니다 (CV-29).
     """
@@ -255,30 +213,12 @@ def insert_requested_task(
         lifecycle="QUEUED" if queued else "READY",
     )
     insert_task_revision(tx, site_id, task)
-    consents = stated_consents(task, source_ref, time=hope is None and base is None)
-    for c in consents:
-        insert_consent(tx, site_id, c, context_version)
-    if hope is not None:
-        start, end, origin = hope
-        insert_preferred_window(
-            tx,
-            site_id,
-            new_id("pw"),
-            task.task_id,
-            start,
-            end,
-            actor.actor_id,
-            datetime.now(UTC).isoformat(timespec="seconds"),
-            origin,
-            hope_made_by,
-        )
     if base is not None:
         insert_task_base(tx, site_id, base, schedule_id)
     return {
         "task_id": task.task_id,
         "revision": 1,
         "queued": queued,
-        "consent_ids": [c.consent_id for c in consents],
     }
 
 
@@ -324,7 +264,6 @@ def _handle(tx: sqlite3.Connection, ctx: CommandContext, form: TaskRequestForm) 
         "revision": refs["revision"],
         "queued": refs["queued"],
         "form_id": form_id,
-        "consent_ids": refs["consent_ids"],
     }
     return r
 

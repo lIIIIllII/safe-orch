@@ -330,7 +330,7 @@ def test_pool_excess_becomes_conflict_and_replanning_resolves_it(seeded, main_on
     ]
     acting = {t["task_id"]: t["demands"] for t in obs["tasks"]}
     assert acting["X"] == {"WORKER": 5} and acting["Q"] == {"SIGNALER": 1, "WORKER": 4}
-    # Q가 끝난 10:30(2970)부터는 M 3 + X 5 = 8 ≤ 10. 계획 밖이고 희망 영역이 없는 X는 시간창 안
+    # Q가 끝난 10:30(2970)부터는 M 3 + X 5 = 8 ≤ 10. 계획 밖이고 기준 위치가 없는 X는 시간창 안
     # 어디에 놓여도 변경이 아니라서, 계획 작업은 그대로이고 변경 수는 0이다 (CV-29)
     placed = {a.task_id: a.start for a in cand.assignments}
     assert 2970 <= placed["X"] <= 3060 and placed["Q"] == 2910 and placed["M"] == 2910

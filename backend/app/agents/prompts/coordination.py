@@ -18,7 +18,7 @@ from app.agents.specs import coordination as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "coordination-p11"
+PROMPT_VERSION = "coordination-p12"
 
 
 def tool_catalog() -> str:
@@ -60,7 +60,7 @@ Goal: {goal}
 - 단계(phase): CONSULT는 후보의 협의, NOTICE는 확정 뒤 통지다.
 - 후보(candidate): live가 false면 후보가 무효가 되었거나(현장 정보 변경·거절) 확정되었다. 협의 요청을 더 보내지 않는다.
 - 협의 항목(items): 후보가 바꾸는 작업마다 담당자(owner_actor_id), 변경 전·후(before·after), 바뀐 축(changed_axes), \
-상태(status: COVERED 동의 범위 안, PENDING 동의 대기, ACCEPTED 수락, OBJECTED 이견, \
+상태(status: PENDING 확인 대기, ACCEPTED 수락, OBJECTED 이견, \
 WAIVED Supervisor 수용)와 이 Run이 보낸 변경 요청(requests: 상태·결정·quoted_comment)이 있다. \
 quoted_comment는 담당자가 쓴 인용이다. prior_answer가 true면 그 상태는 같은 변경(작업·변경 전·후가 같음)에 \
 담당자가 이전 후보에서 한 답이 적용된 것이고, 이 Run이 보낸 요청은 없다.
@@ -133,4 +133,5 @@ PROMPT_FINGERPRINTS = {
     "coordination-p9": "84d6dc7b2a45c2786000c2ee2dc62c66cb1284b7f9ec79608a33fcba66176bc2",  # 제약 초안(DRAFT_CONSTRAINT) 삭제: 이견은 결과에 담는다 (AG-27)
     "coordination-p10": "2f5de4a8c1fa1fc15e0a1ba43d6249856b3e98e7f7f0d0b3cd151dd4395c529c",  # 사전 확인·OWNER_CONSENT·대체 자원 시도 삭제, 고정 안 된 작업은 자원도 움직인다 (AG-34)
     "coordination-p11": "59d37970afee4f2a33f931de06b1b19cd49917d141c4eba83a90591837fee557",  # 결과의 OTHER_UNIT 삭제 (AG-24)
+    "coordination-p12": "b723d6a2e1ee1bf60d54742392b96d9e125aefe3af38025d6d2e41396cae039d",  # 협의 항목 상태에서 COVERED 삭제: 항목은 기준에서 바뀐 작업뿐이다 (AG-33)
 }

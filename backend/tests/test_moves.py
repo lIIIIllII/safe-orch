@@ -524,7 +524,7 @@ def _resource_check(pack, actor, task_id, resource_id):
 
 def test_owner_changes_resource_on_card_and_it_commits(seeded_real):
     """계획에 있는 작업의 자원을 카드에서 바꾸면, 지금 시각 그대로 자원만 바꾼 배치를 직접 이동과 같은
-    판정으로 보고 바로 확정한다. 요청 자원과 그 동의도 새 자원으로 바뀐다."""
+    판정으로 보고 바로 확정한다. 요청 자원도 새 자원으로 바뀐다."""
     pack = seeded_real
     plan, placed = _plan(pack)
     before = placed["C"]
@@ -554,16 +554,8 @@ def test_owner_changes_resource_on_card_and_it_commits(seeded_real):
     with db.read() as conn:
         candidate = get_candidate(conn, pack.site_id, new_plan.candidate_id)
         [validation] = list_validations(conn, pack.site_id, candidate.candidate_id)
-        consents = conn.execute(
-            "SELECT axis, scope, source_ref FROM consent WHERE task_id = 'C' AND task_revision = 2"
-            " ORDER BY rowid"
-        ).fetchall()
         assert list_review_queue(conn, pack.site_id) == []
     assert (candidate.kind, candidate.made_by, validation.status) == ("MOVE", "foreman_a2", "PASS")
-    by_axis = {c[0]: (c[1], c[2]) for c in consents}
-    assert "RESOURCE" in by_axis  # 다른 축의 동의가 있으면 그대로 따라온다
-    assert "SITE-CR-01" in by_axis["RESOURCE"][0] and "A-CR-01" not in by_axis["RESOURCE"][0]
-    assert by_axis["RESOURCE"][1].startswith("card:")
     assert _count("case_event") == 0  # 열린 메인이 없으면 사건을 만들지 않는다
 
 

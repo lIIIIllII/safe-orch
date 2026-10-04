@@ -74,7 +74,7 @@ def test_l1_alpha(with_a):
     spec, result = _run(with_a, snap, "L1")
     # C: 같은 기준 자원 A-CR-01. B는 고정되어 축이 닫혀 있다
     assert [t for t, ax in spec.axes.items() if ax.time] == ["A", "C"]
-    # 계획 밖이고 희망 영역이 없는 A는 시간창 안 어디든 변경도 지연도 아니다. 계획에 있던 C만
+    # 계획 밖이고 기준 위치가 없는 A는 시간창 안 어디든 변경도 지연도 아니다. 계획에 있던 C만
     # 변경 하나이고, 계획의 시작에서 옮긴 30분이 지연이다 (CV-29)
     assert (result.stage1["status"], result.stage1["changed"]) == ("OPTIMAL", 1)
     assert (result.stage2["status"], result.stage2["delay"]) == ("OPTIMAL", 30)
@@ -461,15 +461,14 @@ def _key(pack, snapshot, level="L0"):
     return spec.search_key, spec.hash
 
 
-def test_search_key_ignores_versions_consents_and_revisions(with_a):
-    """Consent·context_version·plan_revision·revision 번호만 다르면 Solver 입력이 같다 → 같은 키."""
+def test_search_key_ignores_versions_and_revisions(with_a):
+    """context_version·plan_revision·revision 번호만 다르면 Solver 입력이 같다 → 같은 키."""
     snapshot = take_snapshot(with_a)
     facts = snapshot.facts()
     bumped = with_facts(
         snapshot,
         context_version=facts.context_version + 5,
         plan_revision=facts.plan_revision + 1,
-        consents=(),
         tasks=tuple(t.model_copy(update={"revision": t.revision + 3}) for t in facts.tasks),
     )
     key, digest = _key(with_a, snapshot)

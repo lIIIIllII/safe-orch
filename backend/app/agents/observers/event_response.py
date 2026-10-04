@@ -16,8 +16,8 @@ from app.domain.calendar import has_work_slot, now_view, site_time
 from app.packs.loader import LoadedPack
 from app.rules.engine import separation_links
 from app.store.repos.events import get_event, get_hold
-from app.store.repos.messages import list_fact_updates, list_run_messages
-from app.store.repos.pins import list_active_pins, preferred_windows
+from app.store.repos.messages import list_fact_updates
+from app.store.repos.pins import list_active_pins
 from app.store.repos.plans import get_current_plan
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
@@ -55,7 +55,6 @@ def lookup_tasks(
     """LOOKUP_TASKS 결과: 현재 READY 작업을 작업 유형·구역으로 거른다."""
     placed = _placed(conn, pack)
     pins = {p.task_id: p.pinned_by for p in list_active_pins(conn, pack.site_id)}
-    windows = preferred_windows(conn, pack.site_id)
     tasks = [
         {
             "task_id": t.task_id,
@@ -73,16 +72,8 @@ def lookup_tasks(
             # 시작 가능 시각을 늦출 수 있는 최대 분. 0이면 늦추는 수정안은 분석을 통과하지 못한다
             "start_slack": t.latest_start - t.earliest_start,
             "assignment": _assignment(pack, placed.get(t.task_id)),
-            # 사람이 건 고정(누가)과 담당자가 그린 희망 영역 (AG-27)
+            # 사람이 건 고정(누가) (AG-27)
             "pinned_by": pins.get(t.task_id),
-            "preferred_window": None
-            if t.task_id not in windows
-            else {
-                "start": windows[t.task_id]["start"],
-                "end": windows[t.task_id]["end"],
-                "start_clock": clock(pack, windows[t.task_id]["start"]),
-                "end_clock": clock(pack, windows[t.task_id]["end"]),
-            },
         }
         for t in sorted(_ready(conn, pack), key=lambda t: t.task_id)
         if (work_type is None or t.work_type == work_type)
@@ -212,19 +203,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         "lookups": lookups,
         "analyses": analyses,
         "proposals": proposals,
-        # 신고자에게 되물은 질문과 답(quoted_answer, 인용). 서버는 답에서 값을 뽑지 않는다.
-        # 질문 문장은 넣지 않는다: 보이면 답이 안 온 항목을 같은 질문으로 다시 묻는다
-        "reporter_replies": [
-            {
-                "message_id": m["message_id"],
-                "status": m["status"],
-                "quoted_answer": (m["reply"] or {}).get("comment")
-                if (m["reply"] or {}).get("decision") == "ANSWER"
-                else None,
-            }
-            for m in list_run_messages(conn, run_id)
-            if m["type"] == "QUESTION"
-        ],
         # 현장의 지금. 상대 날짜·날짜 없는 시각을 푸는 근거로만 준다
         "site_now": now_view(
             site_now(), pack.horizon_start_utc, pack.timezone, pack.horizon_minutes

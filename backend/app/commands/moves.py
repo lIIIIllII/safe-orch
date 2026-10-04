@@ -8,7 +8,7 @@
   (_judge)로 판정한다. 없애기의 확인(remove_check)과 확정(remove_task)도 같은 함수(_remove_verdict)다.
   확인은 읽기 전용이다.
 - 자원 바꾸기(change_resource)는 지금 시각 그대로 자원만 바꾼 배치를 같은 함수로 판정한다. 확정하면
-  요청 자원과 그 동의도 새 자원으로 바뀌고 출처는 말함이 된다. Plan에 없는 요청은 값 고치기(EDIT_TASK)로 한다.
+  요청 자원도 새 자원으로 바뀌고 출처는 말함이 된다. Plan에 없는 요청은 값 고치기(EDIT_TASK)로 한다.
 - 없앤 작업은 지우지 않고 새 revision에 CANCELLED로 남긴다(Snapshot·충돌·관찰에서 빠진다). Plan에 없는
   요청 작업은 이 명령이 아니라 요청 철회(withdraw_task_request)로 없앤다.
 - 확정되면 Plan revision이 올라 살아 있는 후보는 기존 판정으로 무효가 된다. 열린 재계획·협의 Run은
@@ -24,7 +24,6 @@ from pydantic import Field
 
 from app.commands.service import Body, CommandContext, CommandOutcome, Result, run_command
 from app.commands.task_edit import edited_fields
-from app.commands.task_request import stated_consents
 from app.domain.calendar import local_clock
 from app.domain.canonical import canonical_hash
 from app.domain.hashes import candidate_hash
@@ -33,12 +32,10 @@ from app.domain.models import Assignment, Candidate, Plan, Snapshot, SnapshotCon
 from app.packs.loader import LoadedPack
 from app.rules.engine import separation_links
 from app.store.repos.cases import (
-    copy_consents,
     deliver_to_open_main,
     register_recheck,
     wake_run,
 )
-from app.store.repos.consents import insert_consent
 from app.store.repos.consultations import list_review_queue
 from app.store.repos.messages import insert_message
 from app.store.repos.plans import insert_plan
@@ -441,7 +438,7 @@ def _change_resource(tx: sqlite3.Connection, ctx: CommandContext, body: Resource
     if r.reason_codes or candidate is None or validation is None:
         return r
 
-    # 요청 자원과 그 동의도 새 자원으로 바꾼다. 담당자가 직접 고른 값이라 출처는 말함이다 (AG-33)
+    # 요청 자원도 새 자원으로 바꾼다. 담당자가 직접 고른 값이라 출처는 말함이다 (AG-33)
     task = facts.task_map()[body.task_id]
     revision = task.revision + 1
     data = {**task.model_dump(), "requested_resource_id": body.resource_id}
@@ -450,18 +447,11 @@ def _change_resource(tx: sqlite3.Connection, ctx: CommandContext, body: Resource
         update={
             "revision": revision,
             "requested_resource_id": body.resource_id,
-            "fields": edited_fields(task, data, {"requested_resource_id"}, False, source),
+            "fields": edited_fields(task, data, {"requested_resource_id"}, source),
         }
     )
     insert_task_revision(tx, site_id, updated)
     context_version = bump_context_version(tx, site_id)
-    consent_ids = copy_consents(
-        tx, site_id, task.task_id, task.revision, revision, context_version, ("TIME",)
-    )
-    for consent in stated_consents(updated, source):
-        if consent.axis == "RESOURCE":
-            insert_consent(tx, site_id, consent, context_version)
-            consent_ids.append(consent.consent_id)
     plan_revision = _commit(
         tx, ctx, candidate, validation, "TASK_MOVED", body.task_id, context_version
     )
@@ -482,7 +472,6 @@ def _change_resource(tx: sqlite3.Connection, ctx: CommandContext, body: Resource
         "plan_revision": plan_revision,
         "candidate_id": candidate.candidate_id,
         "validation_id": validation.validation_id,
-        "consent_ids": consent_ids,
         "notified": notified,
     }
     return r

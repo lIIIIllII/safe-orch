@@ -13,11 +13,9 @@ from conftest import LEGACY_PINNED, add_task, make_task
 from fastapi.testclient import TestClient
 
 from app.commands.schedule import export_schedule
-from app.domain.ids import new_id
 from app.domain.schedule import ScheduleError, content_hash, from_document, to_document
 from app.main import app
 from app.store import db
-from app.store.repos.pins import insert_preferred_window
 from app.store.repos.schedules import get_schedule
 
 SITE = "YARD-01"
@@ -89,23 +87,14 @@ def test_export_writes_current_plan_as_document(seeded):
     assert (outcome.context_version, outcome.plan_revision) == (0, 0)
 
 
-def test_export_leaves_out_requests_outside_the_plan_and_keeps_hope(seeded):
+def test_export_leaves_out_requests_outside_the_plan_and_has_no_hope_column(seeded):
     pack = seeded
     add_task(pack, make_task(pack))  # 계획 밖 요청 A
-    with db.write() as tx:
-        insert_preferred_window(
-            tx, pack.site_id, new_id("pw"), "C", 60, 150, "foreman_a2", "2026-10-12T00:00:00+00:00"
-        )
     _, stored = _export(pack)
     tasks = {t["task_id"]: t for t in stored["document"]["tasks"]}
 
     assert pack.new_task.task_id not in tasks
-    assert tasks["C"]["preferred_window"] == {
-        "start": "2026-10-12(월) 10:00",
-        "end": "2026-10-12(월) 11:30",
-        "origin": "STATED",
-    }
-    assert tasks["B"]["preferred_window"] is None
+    assert all("preferred_window" not in t for t in tasks.values())  # 희망 영역 칸은 없다
 
 
 def test_same_key_replays_and_same_plan_gives_same_hash(seeded):

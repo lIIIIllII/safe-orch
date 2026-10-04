@@ -1,7 +1,7 @@
 """Agent가 보낸 요청에 대한 사람 응답을 API 경로(TestClient)로 한 번씩 부른다.
 
-명령 함수 테스트는 API 본문 모델을 지나지 않는다. 그래서 API 본문이 명령 계층과 다르면(예: ReplyBody에
-ANSWER가 없음) 화면에서만 422가 났다. 여기서는 화면이 보내는 본문 그대로 HTTP로 부른다.
+명령 함수 테스트는 API 본문 모델을 지나지 않는다. 그래서 API 본문이 명령 계층과 다르면 화면에서만 422가
+났다. 여기서는 화면이 보내는 본문 그대로 HTTP로 부른다.
 시나리오 준비는 각 Agent 테스트의 도우미를 쓴다.
 """
 
@@ -9,9 +9,8 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from scripted import Router, call
 from test_coordination import _alpha_consulting
-from test_event_response import _lookup, _r1, _report, _to_proposal
+from test_event_response import _to_proposal
 
 from app.api.commands import (
     ApproveBody,
@@ -26,7 +25,6 @@ from app.commands.approval import ApproveRequest, RejectRequest, WaiveRequest
 from app.commands.events import HoldRelease
 from app.commands.messages import ProposalDecision, ReplyRequest
 from app.commands.task_request import TaskWithdraw
-from app.coordinator.dispatcher import run_until_idle
 from app.main import app
 from app.store import db
 
@@ -56,37 +54,8 @@ def _rows(table, type_):
         return [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
 
 
-def _open_question():
-    [q] = [m for m in _rows("message", "QUESTION") if m["status"] == "OPEN"]
-    return q
-
-
 def _reasons(res):
     return res.status_code, res.json()["reason_codes"]
-
-
-# ── 자유 텍스트 답 (ANSWER) ───────────────────────────────────
-
-
-def test_answer_reporter_question_via_api(seeded, client, main_on):
-    """신고자 확인 질문(ER ASK_REPORTER): ACCEPT → 409 INVALID_DECISION, 빈 답 → 409 COMMENT_REQUIRED,
-    ANSWER → 200 APPLIED."""
-    _r1(seeded)
-    _report(seeded, seeded.demo_events[1].text)
-    ask = call("ASK_REPORTER", "이유: 시각이 없다/다음: 답을 본다", question="몇 시부터인가요?")
-    run_until_idle(seeded, model_factory=Router(event_response=[_lookup(), ask]).factory())
-    q = _open_question()
-    assert q["to_actor_id"] == "reporter" and q["proposal_id"] is None
-    assert _reasons(_reply(client, "reporter", q["message_id"], "ACCEPT")) == (
-        409,
-        ["INVALID_DECISION"],
-    )
-    assert _reasons(_reply(client, "reporter", q["message_id"], "ANSWER", " ")) == (
-        409,
-        ["COMMENT_REQUIRED"],
-    )
-    res = _reply(client, "reporter", q["message_id"], "ANSWER", seeded.demo_events[1].answer)
-    assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
 
 
 # ── Coordination: 변경 요청 답 ─────
@@ -111,12 +80,12 @@ def test_change_request_objection_via_api(seeded, client, main_on):
     assert (res.status_code, res.json()["status"]) == (200, "APPLIED"), res.text
 
 
-def test_answer_on_change_request_is_rejected_via_api(seeded, client, main_on):
-    """자유 텍스트 질문이 아닌 메시지(변경 요청)에는 ANSWER를 쓸 수 없다 → 409 INVALID_DECISION."""
+def test_free_text_answer_is_not_a_decision_via_api(seeded, client, main_on):
+    """자유 텍스트 답(ANSWER)은 없다: 신고자 되묻기가 없어졌다. 본문 검증에서 걸린다 → 422."""
     _alpha_consulting(seeded)
     [cr] = _rows("message", "CHANGE_REQUEST")
     res = _reply(client, "foreman_a2", cr["message_id"], "ANSWER", "옮겨도 됩니다")
-    assert _reasons(res) == (409, ["INVALID_DECISION"])
+    assert res.status_code == 422
 
 
 def test_reply_api_route(seeded, client, main_on):
