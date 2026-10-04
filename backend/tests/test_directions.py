@@ -6,7 +6,17 @@ Pack 그대로의 R0에 화기 작업 둘(S1·S2)을 일정으로 넣은 장면�
 """
 
 from conftest import add_run, take_snapshot
-from scripted import Router, ScriptedChatModel, done, main_call, main_wait, solve, solve_with
+from scripted import (
+    Router,
+    ScriptedChatModel,
+    blocked,
+    done,
+    main_call,
+    main_escalate,
+    main_wait,
+    solve,
+    solve_with,
+)
 from test_schedule_review import _groups, _import_two_conflicts, _runs, _steps, _submit
 
 from app.agents import runtime
@@ -18,6 +28,11 @@ from app.solver import cpsat
 from app.solver.candidate import build_candidate
 from app.solver.search_spec import build_search_spec
 from app.store import db
+
+
+def _untried(observation):
+    """메인 관찰의 열린 일 가운데 아직 부르지 않은 방향."""
+    return [w["approach"] for w in observation["open_work"] if w["kind"] == "DIRECTION_UNTRIED"]
 
 
 def _solved(pack, objective, level="L2"):
@@ -118,6 +133,18 @@ def test_schedule_case_runs_three_directions_and_names_the_plans(seeded_real, ma
     ]
     seen = _steps(main.run_id)[1]["observation"]
     assert seen["replanning"]["approaches"] == list(DIRECTIONS)
+    # 아직 부르지 않은 방향은 열린 일이다: 부를 때마다 내려가고, 남아 있는 동안에는 끝낼 수 없다
+    untried = [_untried(s["observation"]) for s in _steps(main.run_id)]
+    assert untried[1:] == [
+        list(DIRECTIONS),
+        list(DIRECTIONS),
+        list(DIRECTIONS[1:]),
+        list(DIRECTIONS[2:]),
+        [],
+    ]
+    for s in _steps(main.run_id)[:5]:
+        names = [t["function"]["name"] for t in s["available_actions"]]
+        assert "CLOSE" not in names and "ESCALATE" in names
     assert [c["approach"] for c in seen["calls"] if c["agent"] == "REPLANNING"] == list(DIRECTIONS)
 
     first, second, third = _runs("REPLANNING")
@@ -170,6 +197,29 @@ def test_schedule_case_runs_three_directions_and_names_the_plans(seeded_real, ma
     for r in results:
         if r["candidate_id"] is not None:
             assert r["change_counts"] == views[r["candidate_id"]]["change_counts"]
+
+
+def test_untried_directions_are_dropped_when_one_direction_is_blocked(seeded_real, main_on):
+    """방향은 해의 유무를 바꾸지 않는다. 한 방향의 재계획이 막힌 결과를 돌려주면 나머지 방향은 열린 일에
+    오르지 않고, 메인은 이관할 수 있다."""
+    pack = seeded_real
+    _import_two_conflicts(pack)
+    router = Router(
+        main=[main_call("REPLANNING", approach="KEEP_EXISTING"), main_escalate()],
+        replanning=[blocked("해가 없다")],
+        auto_done=False,
+    )
+    run_until_idle(pack, model_factory=router.factory())
+    [main] = _runs("MAIN")
+    first, last = _steps(main.run_id)
+    assert _untried(first["observation"]) == list(DIRECTIONS)
+    assert _untried(last["observation"]) == []
+    # 부를 수 있는 호출에는 남아 있다: 서버가 순서를 막지 않는다. 부르지 않는 것은 지침이다
+    assert {c["approach"] for c in last["observation"]["calls"] if c["agent"] == "REPLANNING"} == {
+        "KEEP_ADDED",
+        "BALANCED",
+    }
+    assert (main.status, last["guard"]["verdict"]) == ("ESCALATED", "ACCEPTED")
 
 
 def test_first_stage_not_optimal_is_shown_as_unconfirmed(seeded_real, monkeypatch):

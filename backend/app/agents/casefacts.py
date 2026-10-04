@@ -416,6 +416,24 @@ def untried_levels(
     return out
 
 
+def untried_directions(conn: sqlite3.Connection, site_id: str, approaches: Any) -> list[str]:
+    """지금 사실에서 아직 부르지 않은 방향 (일정 Case). 부른 뒤 관련 사실이 바뀌었으면 다시 미시도다.
+
+    방향은 해의 유무를 바꾸지 않는다: 지금 사실에서 부른 방향이 하나라도 막혔으면(해 없음) 나머지 방향을
+    올리지 않는다(메인은 부르지 않고 이관한다, AG-28)."""
+    untried = []
+    for approach in approaches:
+        key = call_key("REPLANNING", {"approach": approach})
+        if not same_facts(conn, site_id, key):
+            untried.append(approach)
+            continue
+        last = last_result(conn, site_id, key)
+        run = None if last is None else get_run(conn, last["run_id"])
+        if run is not None and run_result(conn, run)["status"] != "DONE":
+            return []
+    return untried
+
+
 def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[str, Any]:
     """메인 관찰의 사실 부분과 유효성 판정에 쓰는 값."""
     site_id, case_id = pack.site_id, main.case_id
@@ -598,6 +616,13 @@ def build(conn: sqlite3.Connection, pack: LoadedPack, main: AgentRun) -> dict[st
     for h in holds:
         if h["event_id"] in case_events:
             open_work.append({"kind": "HOLD_ACTIVE", "hold_id": h["hold_id"]})
+    # 일정 Case에 충돌이 남아 있는 동안 아직 부르지 않은 방향은 열린 일이다: 사람의 결정만 남은 것이
+    # 아니다. 사실만 올리고 순서는 강제하지 않는다 (AG-01·AG-28)
+    if schedule_case and groups and movable:
+        open_work += [
+            {"kind": "DIRECTION_UNTRIED", "approach": a}
+            for a in untried_directions(conn, site_id, approaches)
+        ]
 
     return {
         "events": events,

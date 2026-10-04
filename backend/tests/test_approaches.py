@@ -300,6 +300,8 @@ def test_approach_is_in_call_key_and_same_placement_joins_candidate(seeded_real,
     [seen] = waiting["candidates"]
     assert (seen["approaches"], seen["chosen"]) == (["MIN_CHANGE", "MIN_DELAY"], False)
     assert not [c for c in waiting["calls"] if c["agent"] == "COORDINATION"]
+    # 방향은 일정 Case의 것이다: 그 밖의 Case에는 미시도 방향이 열린 일로 오르지 않는다
+    assert not [w for w in waiting["open_work"] if w["kind"] == "DIRECTION_UNTRIED"]
     with db.read() as conn:
         state = build_state(conn, pack, "supervisor")
     view = next(c for c in state["candidates"] if c["candidate_id"] == cid)

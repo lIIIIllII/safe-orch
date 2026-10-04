@@ -17,7 +17,7 @@ from app.agents.specs import main as spec
 from app.domain.canonical import canonical_hash
 from app.packs.loader import LoadedPack
 
-PROMPT_VERSION = "main-p14"
+PROMPT_VERSION = "main-p15"
 
 
 def tool_catalog() -> str:
@@ -93,7 +93,9 @@ quoted_summary는 인용이다.
 이관의 필요한 것에는 종류와 참조만 쓴다.
 - 이 Case의 열린 일(open_work): 검토 대기 후보, 통지하지 않은 확정, 계획에 들어가지 못한 작업(placed_by는 \
 그 작업을 배치한 검토 대기 후보다. 있으면 그 작업은 사람의 결정을 기다리는 중이다), 이 Case의 \
-작업이 걸린 충돌, 풀리지 않은 Hold다. 비어 있어야 끝낼 수 있다.
+작업이 걸린 충돌, 풀리지 않은 Hold, 일정 Case에서 아직 부르지 않은 방향(DIRECTION_UNTRIED의 approach. \
+지금 사실에서 그 방향의 재계획을 아직 부르지 않았다. 한 방향에서 해가 없었으면 나머지는 오르지 않는다)이다. \
+비어 있어야 끝낼 수 있다.
 - 기다릴 것(waiting_for): 사람이 고르거나 승인·거절하기를 기다리는 후보와 사람이 풀어야 하는 Hold다.
 - 남은 예산(budget_remaining): 남은 step·LLM 시도·전문 Agent 호출 수다. 직전 거절 사유(last_guard)는 \
 직전 행동이 받아들여지지 않은 이유다.
@@ -171,4 +173,5 @@ PROMPT_FINGERPRINTS: dict[str, str] = {
     "main-p12": "eb98aaa258b12af1f00547ec9bc22571ac904721105ac8e6cbd4a5294f8ca356",  # 희망 영역 작업(preferred_task_ids)·희망 사건 삭제, 접근 MIN_DELAY(덜 옮기기) (AG-28)
     "main-p13": "6eb90b73f621071cf16d64c1bbe2db1c2ce769cf720cbfc45ece3a95328403bf",  # 일정 검토 호출(SCHEDULE_REVIEW)과 묶음안 요약(schedule_review) (AG-36)
     "main-p14": "63d7b630b0dbad00f57a0cb8b2b9f3ddae089c67be1be10a0ab58470c25fbab4",  # 접근 목록은 Case 종류로: 일정 Case의 세 방향, 목적 순서는 접근이 정한다 (AG-28·CV-27)
+    "main-p15": "30c8416a34dde4f2d3e0e9afa0f29199a0894874a991a8295b5713bf2b83661e",  # 열린 일에 아직 부르지 않은 방향(DIRECTION_UNTRIED): 세 방향의 안이 모인 뒤에 기다린다 (AG-28)
 }
