@@ -1,6 +1,6 @@
 # SAFE-ORCH Agent·도구·스킬
 
-2026-10-06. 목록과 규칙만 적는다. 왜 이런 구조인지는 블루프린트 §5, 지침 원문은 코드(`backend/app/agents/`)에 있다. 도구 이름은 제안이다.
+2026-10-06. 목록과 규칙만 적는다. 왜 이런 구조인지는 블루프린트 §5, 지침 원문은 코드(`backend/app/agents/`)에 있다. 도구 이름은 코드의 이름이다.
 
 ## 1. 층과 공통 규칙
 
@@ -23,12 +23,12 @@
 | Agent | Goal | 끝나는 방식 | Budget |
 |---|---|---|---|
 | Main | 맡은 사건을 끝까지 처리한다 | 이 Case의 열린 일이 없으면 `CLOSE`. 풀 수 없으면 Supervisor에게 `ESCALATE` | 기본 step 14, 전문 Agent 호출 10 (설정값). 그 Case에서 사람이 새 일을 만들 때마다 step 8·호출 5씩, 네 번까지 늘어난다(AG-30). 사건을 합칠 때의 가산은 3단계 |
-| Intake | 묻지 않고 만든 작업 묶음(값마다 출처: 말함·정함) | `COMPLETE_TASK_BATCH`로 완료. 막히면 `RETURN_RESULT(BLOCKED)`: 접수 미완으로 끝나고 요청자에게 사유를 통지한다 | step 12 |
-| Replanning | 검증 가능한 후보 묶음과 서버 지표 기반 설명 | `RETURN_RESULT` | step 15, Solver 6, 알아보기 계산 (값 미정) |
+| Intake | 묻지 않고 만든 작업(값마다 출처: 말함·정함) | `COMPLETE_TASKSPEC`으로 완료. 막히면 `RETURN_RESULT(BLOCKED)`: 접수 미완으로 끝나고 요청자에게 사유를 통지한다 | step 12 |
+| Replanning | 검증 가능한 후보 | `RETURN_RESULT` | step 15, Solver 6 |
 | Coordination | 협의 항목 해소, 확정 뒤 통지 | `RETURN_RESULT` | step 12 |
 | Event Response | 신고의 대상·영향·사실 수정안(신고자에게 묻지 않는다) | `RETURN_RESULT` | step 10 |
 | Schedule Review | 일정 Case의 충돌을 정리한 묶음안과 검토 의견 | `SUBMIT_BUNDLES`로 끝난다. 묶음안을 낼 수 없으면 `RETURN_RESULT(BLOCKED)` | step 6 |
-| Site Assistant | 근거 있는 답 | `ANSWER` | 질문당 step 6 |
+| Site Assistant | 근거 있는 답(질의응답) | 지금 없음(미룸) | — |
 
 - LLM 시도 Budget은 모든 Agent가 step × 2다.
 - 전문 Agent는 다른 Agent를 부르지 않고 사람에게 이관하지도 않는다. 막히면 `RETURN_RESULT(BLOCKED)`에 요약과 풀 수 있는 길을 담아 메인에게 돌려준다. Supervisor 이관은 메인만 한다.
@@ -60,60 +60,53 @@
 |---|---|---|
 | `CALL_AGENT(agent, 참조)` | 전문 Agent Run을 요청하고 결과를 기다린다. Agent 종류와 참조만 넘긴다: 재계획은 접근만(목록 값 하나: 일정 Case는 기존 위주·추가 위주·적절하게, 그 밖은 변경 최소·덜 옮기기. 이 Case에서 열리지 않는 접근은 거절한다. 짧은 문장을 덧붙일 수 있고 인용으로만 전해진다. 충돌 그룹·주체 Unit 참조는 없다), 협의는 Supervisor가 고른 후보, 통지는 확정된 후보, 신고 대응은 신고, 일정 검토는 참조 없음. 하위 Run은 한 번에 하나다. 충돌에 걸린 작업이 모두 고정이면 재계획은 받지 않고, ACTIVE Hold 중의 재계획·협의, 관련 사실이 바뀌지 않은 재호출(재계획은 같은 접근일 때), 고르지 않은 후보의 협의, 일정 넣기 사건이 없는 Case나 충돌이 없을 때의 일정 검토는 거절한다 | W |
 | `WAIT()` | 사람의 결정(후보 승인·거절, Hold 해제)을 기다린다. 검토 대기 후보나 ACTIVE Hold가 있을 때만 유효하다 | W |
-| `MERGE_EVENT(event)` / `DEFER_EVENT(event)` | 새 사건을 지금 일에 합치거나 뒤로 미룬다 (3단계) | C |
-| `SEND_TO_REVIEW(group, candidate_set)` | 후보 묶음을 사람 검토 대기로 보낸다. 승인은 사람만 한다 (4단계. 지금은 검증을 통과한 후보를 서버가 검토 대기로 계산하고, Supervisor가 그 가운데 안을 고른다. 이 도구가 생기면 "어느 안을 보일지"만 메인으로 옮기고 고르기는 그대로 사람이 한다) | W |
 | `ESCALATE(summary, needs)` | Supervisor에게 이관한다(서버 문구 통지가 남는다). 열린 하위 Run이나 아직 보지 않은 사건이 있으면 거절한다 | D |
 | `CLOSE(summary)` | 맡은 일이 모두 닫혔을 때 끝낸다. 서버가 이 Case의 열린 일(검토 대기 후보, 통지 안 된 확정, 계획에 못 들어간 작업, 이 Case 작업의 충돌, 풀리지 않은 Hold)과 아직 보지 않은 사건이 없음을 확인한다 | D |
 
-**조회** (읽기)
+**조회** (읽기, 흐름 C)
 | 도구 | 하는 일 |
 |---|---|
-| `LOOKUP_TASKS(filter)` | 작업 찾기(유형·구역·자원·시간·문구) |
-| `LOOKUP_RESOURCES(task \| type, zone, work_type)` | 쓸 수 있는 자원과 제외된 자원(이유 포함). Intake는 구역·작업 유형을 주면 유형을 가리지 않고 판정 결과를 받는다(작업 유형 기본 요구 조건은 서버가 붙인다). 유형으로 좁혔는데 없으면 다른 유형에서 쓸 수 있는 자원 수도 받는다 |
-| `LOOKUP_ZONES(ref)` | 구역과 구역 관계 |
-| `GET_GROUPS(batch)` | 서버가 계산한 엮임 그룹. 메인에게는 도구가 아니라 관찰로 준다(지금은 충돌을 공유 작업으로 묶은 엮인 충돌이고, 호출 단위가 아니라 설명이다. 재계획에 쓰는 사실인 움직일 수 있는 작업·미시도 범위·이전 결과는 Case 단위로 준다. 묶음 등록용 엮임 계산은 3단계) |
-| `GET_STATE(scope)` | 상태 요약: 충돌·후보·검증·Hold·Run. 메인에게는 도구가 아니라 관찰로 준다 |
+| `LOOKUP_TASKS(work_type, zone_id)` | 계산 대상 작업을 작업 유형·구역으로 찾는다: 담당·시간창·현재 배정·고정 (Event Response) |
+| `LOOKUP_RESOURCE(resource_type, zone_id, work_type)` | 요청자 Unit이 쓸 수 있는 자원과 제외된 자원(이유 포함). 구역·작업 유형을 주면 유형을 가리지 않고 판정 결과를 받는다(작업 유형 기본 요구 조건은 서버가 붙인다). 유형으로 좁혔는데 없으면 다른 유형에서 쓸 수 있는 자원 수도 받는다 (Intake) |
+| `LIST_ASSIGNABLE_RESOURCES(task_id)` | 그 작업에 쓸 수 있는 자원과 제외된 자원(이유 포함), 현재 자원 (Replanning) |
 
-**알아보기** (계산, 후보를 등록하지 않음)
+엮인 충돌과 상태 요약(충돌·후보·검증·Hold·Run)은 도구가 아니라 메인 관찰로 준다.
+
+**영향 분석** (Event Response, 흐름 C)
 | 도구 | 하는 일 |
 |---|---|
-| `DIAGNOSE(conflict)` | 왜 안 풀리나: 막고 있는 조건·작업 |
-| `TEST_RELAXATION(conflict, conditions)` | 무엇을 풀면 풀리나: 물어볼 수 있는 조건(Soft 조건, 다른 작업 이동)을 하나씩 풀어 해가 생기는지 |
-| `PREVIEW(change)` | 가정한 변경을 등록 없이 검사 |
-| `ANALYZE_IMPACT(change)` | 변경이 닿는 작업·담당자·규칙. 신고 대응에서는 새 시작 가능 시각이 지금 계획된 시작(현재 배정)보다 몇 분 뒤인지와 계획이 그대로인지도 준다: 지연 신고의 분은 시간창의 시작이 아니라 계획된 시작에서 센다. 계획에 없는 작업은 기준 위치를 보인다 |
-| `COMPARE_CANDIDATES(ids)` | 후보 사이 지표 차이(변경 수·지연·비용·넘은 Soft 조건) |
+| `ANALYZE_IMPACT(task_id, new_earliest_start)` | 작업의 시작 가능 시각을 새 값으로 늦추면 무엇이 어긋나는지(시간창·근무시간·현재 배정·연결 작업). 새 값이 지금 계획된 시작(현재 배정)보다 몇 분 뒤인지와 계획이 그대로인지도 준다: 지연 신고의 분은 시간창의 시작이 아니라 계획된 시작에서 센다. 계획에 없는 작업은 기준 위치를 보인다 |
 
-알아보기 도구 모두 흐름은 C다.
-
-**후보** (Replanning)
+**후보** (Replanning. 현장의 지금 충돌 전체를 푼다. 목적 순서는 인자가 아니다: 메인이 준 접근에서 서버가 채운다, CV-27)
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `SOLVE(scope, conditions)` | Solver 하나. 현장의 지금 충돌 전체를 푼다. 목적 순서는 인자가 아니다: 메인이 준 접근에서 서버가 채운다(CV-27). 일정 방향 호출은 `scope`도 작업 전체 하나만 열린다(AG-28). 후보를 등록하고 Validator에 넘긴다. `conditions`는 작업별 조건(시작 이후·이전, 시작 지정, 자원 지정)이고 좁히기만 한다. 범위 안 작업을 모두 지정하면 그 배치 그대로를 검사하고, 해가 없으면 그 배치가 어긴 규칙을 돌려준다. 같은 범위·같은 조건은 다시 풀지 않는다. 살아 있는 후보와 전체 배정이 같으면 새 후보를 만들지 않고 그 후보를 돌려준다 | C |
-| `SUBMIT_CANDIDATES(ids, recommended, reasons)` | 후보 묶음과 추천 이유를 결과로 낸다. 이유는 서버 지표 ID를 가리켜야 한다 | D |
+| `SOLVE_WITH_SCOPE(level)` | 탐색 범위를 정해 푼다. 후보를 등록하고 Validator에 넘긴다. 일정 방향 호출은 범위가 작업 전체 하나만 열린다(AG-28). 같은 범위는 다시 풀지 않는다. 살아 있는 후보와 전체 배정이 같으면 새 후보를 만들지 않고 그 후보를 돌려준다 | W·C |
+| `SOLVE_WITH_CONDITIONS(level, conditions)` | 작업별 조건(시작 이후·이전, 시작 지정, 자원 지정)을 걸어 푼다. 조건은 좁히기만 하고, 조건 없이 부르면 범위 계산과 같아 거절한다. 범위 안 작업을 모두 지정하면 그 배치 그대로를 검사하고, 해가 없으면 그 배치가 어긴 규칙을 돌려준다. 같은 범위·같은 조건은 다시 풀지 않는다 | W·C |
 
 **묶음** (Schedule Review)
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
 | `SUBMIT_BUNDLES(bundles, opinion)` | 최소 묶음을 합친 묶음(묶음마다 최소 묶음 ID 목록과 메모)과 일정 전체의 검토 의견을 낸다. 서버는 모든 최소 묶음이 정확히 한 번 들어갔는지만 검사하고, 통과하면 묶음안으로 기록하고 Run이 끝난다(메인에게는 그 묶음안이 결과로 간다). 걸리면 거절되고 Run은 계속된다 | D |
 
-**사람** (수신자는 Agent별로 서버가 고정)
+**사람** (Coordination. 수신자는 서버가 정한 값 가운데서만 고른다)
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `ASK_OWNER(owner, message)` | 담당자 한 명에게 변경 확인을 한 통으로 묻는다. 항목은 서버가 채운다: 그 담당자의 확인 대기 항목 가운데 이 Run이 아직 묻지 않은 것 전부(시각순). Agent는 담당자와 설명 문장만 정하고 항목을 고르거나 빼지 못한다. 허용 값은 보낼 항목이 남은 담당자다(ST-26) | C |
+| `SEND_CHANGE_REQUEST(actor_id, message)` | 담당자 한 명에게 변경 확인을 한 통으로 묻는다. 항목은 서버가 채운다: 그 담당자의 확인 대기 항목 가운데 이 Run이 아직 묻지 않은 것 전부(시각순). Agent는 담당자와 설명 문장만 정하고 항목을 고르거나 빼지 못한다. 허용 값은 보낼 항목이 남은 담당자다(ST-26) | C |
 | `WAIT_FOR_REPLIES()` | 보낸 요청의 답을 기다린다. 담당자는 한 통의 항목 전부를 한 번에 답하고, 한 통의 답마다 한 번 깨어난다 | W |
-| `SEND_NOTICE(actor, tasks, message)` | 확정 뒤 통지(시간·구역·위험·조치) | C |
+| `SEND_NOTICE(actor_id, task_ids, message)` | 확정 뒤 통지(시간·구역·위험·조치) | C |
 
-**제안** (사람 확인이 있어야 효력)
+**제안**
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
-| `COMPLETE_TASK_BATCH(tasks)` | 값과 값마다의 출처(말함·정함)로 작업 묶음을 만든다. 서버가 폼과 같은 검증을 한다 | D |
-| `PROPOSE_FACT_UPDATE(task, old, new, evidence)` | 사실 수정안, Supervisor 확인 요청 | C |
+| `COMPLETE_TASKSPEC(values, origins)` | 값과 값마다의 출처(말함·정함)로 작업 하나를 만든다. 서버가 폼과 같은 검증을 한다 (Intake) | D |
+| `PROPOSE_FACT_UPDATE(task_id, new_earliest_start, evidence)` | 사실 수정안. Supervisor가 확인해야 효력이 생긴다 (Event Response) | W |
 
-**마무리·답변**
+**마무리**
 | 도구 | 하는 일 | 흐름 |
 |---|---|---|
 | `RETURN_RESULT(status, summary, paths)` | 전문 Agent가 결과를 돌려준다. status DONE / BLOCKED. 모델은 요약과 길만 쓰고, 결과물(후보·협의 상태·수정안 등)은 서버가 채운다 | D |
-| `ANSWER(text, evidence_refs)` | 근거 ID를 붙여 답한다. 근거가 없으면 모른다고 답한다 | D |
+
+원인 진단·완화 시험·미리보기·후보 비교 같은 알아보기 도구와 후보 묶음을 내는 도구는 만들지 않는다(블루프린트 §10). 질의응답 도구는 지금 없다(미룸).
 
 ### 결과의 길과 needs
 
@@ -136,40 +129,30 @@
 | 스킬 | 열리는 조건 | 도구 | 쓰는 Agent |
 |---|---|---|---|
 | 조율 | 맡은 사건이 있음 | `CALL_AGENT`, `WAIT`, `ESCALATE`, `CLOSE` | Main |
-| 상황 파악 | 항상 | 조회 도구 | 전부 |
-| 작업 접수 | 작성 중인 작업 묶음이 있음 | `COMPLETE_TASK_BATCH` | Intake |
-| 원인 찾기 | 풀리지 않은 충돌이 있음 | `DIAGNOSE`, `TEST_RELAXATION`, `PREVIEW` | Replanning |
-| 후보 구성 | 충돌이 있음 | `SOLVE`, `COMPARE_CANDIDATES`, `SUBMIT_CANDIDATES` | Replanning |
-| 거절 반영 | 이 Case 후보에 거절이나 담당자 이견이 있음 | `DIAGNOSE`, `SOLVE`, `COMPARE_CANDIDATES` | Replanning |
-| 영향 분석 | 분석할 변경(신고·후보·가정)이 있음 | `ANALYZE_IMPACT`, `PREVIEW` | Replanning, Event Response, Coordination (Main은 4단계) |
-| 협의 | 확인 대기 항목이나 이견이 있음 | `ASK_OWNER`, `WAIT_FOR_REPLIES` (이견은 결과에 담아 돌려준다) | Coordination |
+| 상황 파악 | 항상 | `LOOKUP_TASKS`, `LOOKUP_RESOURCE`, `LIST_ASSIGNABLE_RESOURCES` (그 Agent에 허용된 것만) | Replanning, Intake, Event Response |
+| 작업 접수 | 작성 중인 작업 요청이 있음 | `COMPLETE_TASKSPEC` | Intake |
+| 후보 구성 | 풀어야 할 충돌이 있음 | `SOLVE_WITH_SCOPE`, `SOLVE_WITH_CONDITIONS` | Replanning |
+| 거절 반영 | 이 Case 후보에 거절이나 담당자 이견이 있음 | `SOLVE_WITH_SCOPE`, `SOLVE_WITH_CONDITIONS` | Replanning |
+| 영향 분석 | 분석할 변경(신고)이 있음 | `ANALYZE_IMPACT` | Event Response |
+| 협의 | 확인 대기 항목이나 이견이 있음 | `SEND_CHANGE_REQUEST`, `WAIT_FOR_REPLIES` (이견은 결과에 담아 돌려준다) | Coordination |
 | 통지 | 확정됐는데 통지하지 않은 대상이 있음 | `SEND_NOTICE` | Coordination |
 | 사실 수정 | Hold가 걸린 신고가 있음 | `PROPOSE_FACT_UPDATE` (신고자에게 묻지 않고 스스로 해석해 낸다. 사람이 확인해야 효력) | Event Response |
 | 일정 검토 | 묶을 충돌이 있음 | `SUBMIT_BUNDLES` | Schedule Review |
-| 답변 | 질문이 있음 | `ANSWER`, `COMPARE_CANDIDATES` | Site Assistant |
 | 마무리 | 항상 | `RETURN_RESULT` | 전문 Agent 전부 |
 
 ## 5. Agent별 허용 도구
 
 | Agent | 허용 도구 |
 |---|---|
-| Main | `CALL_AGENT`, `WAIT`, `ESCALATE`, `CLOSE`. 조회·영향 분석·알아보기 도구는 4단계 |
-| Intake | 조회, `COMPLETE_TASK_BATCH`, `RETURN_RESULT`. 사람 도구 없음 |
-| Replanning | 조회, 알아보기 전부, `SOLVE`, `SUBMIT_CANDIDATES`, `RETURN_RESULT`. 사람 도구 없음 |
-| Coordination | 조회, `ANALYZE_IMPACT`, `ASK_OWNER`, `WAIT_FOR_REPLIES`, `SEND_NOTICE`, `RETURN_RESULT` |
-| Event Response | 조회, `ANALYZE_IMPACT`, `PREVIEW`, `PROPOSE_FACT_UPDATE`, `RETURN_RESULT`. 사람에게 묻는 도구 없음 |
+| Main | `CALL_AGENT`, `WAIT`, `ESCALATE`, `CLOSE`. 조회 도구 없음(필요한 사실은 관찰로 준다) |
+| Intake | `LOOKUP_RESOURCE`, `COMPLETE_TASKSPEC`, `RETURN_RESULT`. 사람 도구 없음 |
+| Replanning | `LIST_ASSIGNABLE_RESOURCES`, `SOLVE_WITH_SCOPE`, `SOLVE_WITH_CONDITIONS`, `RETURN_RESULT`. 사람 도구 없음 |
+| Coordination | `SEND_CHANGE_REQUEST`, `WAIT_FOR_REPLIES`, `SEND_NOTICE`, `RETURN_RESULT` |
+| Event Response | `LOOKUP_TASKS`, `ANALYZE_IMPACT`, `PROPOSE_FACT_UPDATE`, `RETURN_RESULT`. 사람에게 묻는 도구 없음 |
 | Schedule Review | `SUBMIT_BUNDLES`(끝내는 행동), `RETURN_RESULT`(BLOCKED만). 조회·계산·사람 도구 없음(필요한 사실은 관찰로 준다) |
-| Site Assistant | 조회, `COMPARE_CANDIDATES`, `ANSWER` |
 
-## 6. 현재 코드와의 대응 (옮긴 뒤 이 절은 지운다)
+## 6. 열린 값
 
-- Replanning `SOLVE_WITH_SCOPE`·`SOLVE_WITH_CONDITIONS`(조건. 조건 없이 부르면 범위 계산과 같아 거절한다) → `SOLVE`
-- Replanning `LIST_ASSIGNABLE_RESOURCES`, Intake `LOOKUP_RESOURCE` → `LOOKUP_RESOURCES`
-- Coordination `SEND_CHANGE_REQUEST(actor_id, message)`(후보의 변경 확인. 담당자 한 통이고 항목은 서버가 채운다, ST-26) → Coordination `ASK_OWNER`. 이름만 다르다.
-- Intake `COMPLETE_TASKSPEC(values, origins)` → `COMPLETE_TASK_BATCH`
-
-## 7. 열린 값
-
-- 사건을 합칠 때 메인 Budget에 더하는 양과 상한(3단계), 알아보기 계산 Budget
+- 사건을 합칠 때 메인 Budget에 더하는 양과 상한(3단계)
 - 비용·인력 같은 작업 피처와 그 기준(지금 접근은 변경 수·옮긴 거리·일정의 세 방향뿐이다. 가중합 프로필이 아니라 사전식 목적 순서로 더한다, CV-27)
 - 사람에게 물은 뒤 바로 기다릴지(지금 방식), 다른 일을 하다 `WAIT_FOR_REPLIES`로 기다릴지(위 도구 표)
