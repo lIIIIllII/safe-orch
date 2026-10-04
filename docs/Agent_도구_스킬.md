@@ -22,7 +22,7 @@
 
 | Agent | Goal | 끝나는 방식 | Budget |
 |---|---|---|---|
-| Main | 맡은 사건을 끝까지 처리한다 | 이 Case의 열린 일이 없으면 `CLOSE`. 풀 수 없으면 Supervisor에게 `ESCALATE` | step 14, 전문 Agent 호출 10 (설정값). 사건을 합칠 때의 가산은 3단계 |
+| Main | 맡은 사건을 끝까지 처리한다 | 이 Case의 열린 일이 없으면 `CLOSE`. 풀 수 없으면 Supervisor에게 `ESCALATE` | 기본 step 14, 전문 Agent 호출 10 (설정값). 그 Case에서 사람이 새 일을 만들 때마다 step 8·호출 5씩, 네 번까지 늘어난다(AG-30). 사건을 합칠 때의 가산은 3단계 |
 | Intake | 확인된 작업 묶음 | `COMPLETE_TASK_BATCH`로 완료. 막히면 `RETURN_RESULT(BLOCKED)`: 접수 미완으로 끝나고 요청자에게 사유를 통지한다 | step 12, 사람 라운드 3 |
 | Replanning | 검증 가능한 후보 묶음과 서버 지표 기반 설명 | `RETURN_RESULT` | step 15, Solver 6, 알아보기 계산 (값 미정) |
 | Coordination | 협의 항목 해소, 후보 없는 사전 확인, 확정 뒤 통지 | `RETURN_RESULT` | step 12 |

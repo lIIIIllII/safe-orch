@@ -25,7 +25,11 @@ GOAL = (
 MAX_STEPS = get_settings().main_max_steps
 MAX_LLM_ATTEMPTS = MAX_STEPS * 2  # step × 2 (다른 Agent와 같은 규칙)
 MAX_AGENT_CALLS = get_settings().main_max_agent_calls
-RECURSION_LIMIT = MAX_STEPS * 5 + 10
+# 사람이 이 Case에서 새 일을 만들 때마다 한도가 한 바퀴분씩 늘어난다 (AG-30)
+ROUND_STEPS = 8  # 재계획 3(접근별) + 고르기 기다림 + 협의 + 승인 기다림 + 통지 + 여유 1
+ROUND_AGENT_CALLS = 5  # 재계획 3 + 협의 + 통지
+MAX_EXTRA_ROUNDS = 4  # 늘어나는 바퀴 수의 상한
+RECURSION_LIMIT = (MAX_STEPS + MAX_EXTRA_ROUNDS * ROUND_STEPS) * 5 + 10
 SUMMARY_MAX_DECISION = 200
 
 CALL_ARGS = (
@@ -219,6 +223,17 @@ def tool_schemas(available: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return tools
+
+
+def budget_limits(human_work: int) -> dict[str, int]:
+    """사람이 만든 일의 횟수만큼 늘린 한도. Agent 자신의 행동으로는 늘지 않는다 (AG-30)."""
+    rounds = min(human_work, MAX_EXTRA_ROUNDS)
+    extra = {
+        "steps": rounds * ROUND_STEPS,
+        "llm_attempts": rounds * ROUND_STEPS * 2,
+        "agent_calls": rounds * ROUND_AGENT_CALLS,
+    }
+    return {name: limit + extra[name] for name, limit in SPEC.budget.items()}
 
 
 SPEC = AgentSpec(

@@ -16,10 +16,13 @@ from scripted import (
 )
 
 from app.agents import casefacts, runtime
+from app.agents.observers import main as main_observer
 from app.agents.specs import main as main_spec
+from app.api.state import run_summary
 from app.commands.approval import RejectRequest, reject_candidate
 from app.commands.events import EventReport, receive_event
 from app.commands.messages import ReplyRequest, reply_message
+from app.commands.pins import TaskRef, pin_task, unpin_task
 from app.commands.runs import CancelRun, cancel_run
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
@@ -470,6 +473,72 @@ def test_main_budget_exhaustion_notifies_supervisor_and_promotes_queue(
     assert task == "READY" and second.case_id != first.case_id
     ready = [e for e in _events(pack, second.case_id) if e["kind"] == "TASK_READY"]
     assert [e["ref"]["task_id"] for e in ready] == ["N1"]
+
+
+def _human_work(pack, case_id):
+    with db.read() as conn:
+        return casefacts.human_work(conn, pack.site_id, case_id)
+
+
+def test_main_budget_limits_grow_per_human_work_up_to_the_cap():
+    """한도 = 기본값 + 사람이 만든 일 × 한 바퀴분, 상한까지 (AG-30)."""
+    base = dict(main_spec.SPEC.budget)
+    assert main_spec.budget_limits(0) == base
+    one = main_spec.budget_limits(1)
+    assert {k: one[k] - base[k] for k in base} == {
+        "steps": main_spec.ROUND_STEPS,
+        "llm_attempts": main_spec.ROUND_STEPS * 2,
+        "agent_calls": main_spec.ROUND_AGENT_CALLS,
+    }
+    top = main_spec.budget_limits(main_spec.MAX_EXTRA_ROUNDS)
+    assert top["steps"] == base["steps"] + main_spec.MAX_EXTRA_ROUNDS * main_spec.ROUND_STEPS
+    assert main_spec.budget_limits(main_spec.MAX_EXTRA_ROUNDS + 5) == top
+    # 그래프 반복 한도가 상한까지 간 step 수를 덮는다
+    assert main_spec.RECURSION_LIMIT >= top["steps"] * 4
+
+
+def test_human_work_extends_main_budget_and_agent_actions_do_not(seeded, main_on, monkeypatch):
+    """Supervisor 거절·작업 고정·고정 해제마다 메인 한도가 한 바퀴분 늘고, 재계획 결과·가드 거절·
+    재호출로는 늘지 않는다. 남은 Budget은 늘어난 한도로 보인다 (AG-30)."""
+    pack = seeded
+    base = dict(main_spec.SPEC.budget)
+    assert _submit(pack, "N1").status == "APPLIED"
+    call = main_call("REPLANNING", group_id=_group(pack).group_id, acting_unit_id="UA")
+    router = Router(replanning=[solve("L0")], main=[call, call, main_wait()])
+    run_until_idle(pack, model_factory=router.factory())
+    [main] = _runs("MAIN")
+    # Agent의 행동(호출, 재계획이 낸 후보, 같은 호출의 가드 거절)은 사람이 만든 일이 아니다
+    assert _guards(main.run_id)[1] == ("CALL_AGENT", "SAME_FACTS")
+    assert _human_work(pack, main.case_id) == 0
+    waiting = _steps(main.run_id)[-1]
+    assert waiting["observation"]["budget_remaining"]["steps"] == base["steps"] - 2
+    assert waiting["budget_remaining"]["agent_calls"] == base["agent_calls"] - 1
+    # 기본 한도를 이미 쓴 만큼으로 줄이면 이 메인은 소진이다
+    monkeypatch.setitem(main_spec.SPEC.budget, "steps", 3)
+    with db.read() as conn:
+        assert main_observer.build_observation(conn, pack, main.run_id).budget_exhausted
+
+    assert _reject(pack, _review_candidate(pack)).status == "APPLIED"
+    assert _human_work(pack, main.case_id) == 1
+    assert pin_task(pack, "planner_a", _key(), TaskRef(task_id="N1")).status == "APPLIED"
+    assert unpin_task(pack, "planner_a", _key(), TaskRef(task_id="N1")).status == "APPLIED"
+    assert _human_work(pack, main.case_id) == 3
+
+    # 사람이 만든 일 셋만큼 늘어난 한도로 이어 간다
+    run_until_idle(pack, model_factory=Router(main=[main_escalate()]).factory())
+    [main] = _runs("MAIN")
+    assert (main.status, main.steps_used) == ("ESCALATED", 4)
+    last = _steps(main.run_id)[-1]
+    assert last["observation"]["budget_remaining"] == {
+        "steps": 3 + 3 * main_spec.ROUND_STEPS - 3,
+        "llm_attempts": base["llm_attempts"] + 3 * main_spec.ROUND_STEPS * 2 - 3,
+        "agent_calls": base["agent_calls"] + 3 * main_spec.ROUND_AGENT_CALLS - 1,
+    }
+    assert last["budget_remaining"]["steps"] == 3 + 3 * main_spec.ROUND_STEPS - 4
+    with db.read() as conn:
+        assert run_summary(conn, main.run_id)["budget_max"]["steps"] == (
+            3 + 3 * main_spec.ROUND_STEPS
+        )
 
 
 def test_decision_for_closed_case_goes_to_a_new_main(seeded, main_on):

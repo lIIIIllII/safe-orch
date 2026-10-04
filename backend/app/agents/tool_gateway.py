@@ -132,6 +132,8 @@ class ToolGateway:
         assert run is not None
         guard = {"verdict": verdict, "reason_code": reason}
         changes = state_changes or {}
+        # 한도가 spec과 다른 Agent는 observer가 계산한다 (메인, AG-30)
+        limits = getattr(self.binding.observer, "budget_limits", None)
         complete_step(
             tx,
             run_id,
@@ -142,7 +144,9 @@ class ToolGateway:
             guard=guard,
             state_changes=changes,
             result_kind=result_kind,
-            budget_remaining=budget_remaining(run, self.binding.spec),
+            budget_remaining=budget_remaining(
+                run, self.binding.spec, limits and limits(tx, self.pack, run)
+            ),
             model_id=meta.model_id,
             prompt_version=meta.prompt_version,
             llm_attempts=meta.llm_attempts,

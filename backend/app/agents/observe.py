@@ -3,6 +3,7 @@
 store를 import하지 않는다. agent_type별 관찰 계산은 observers/<agent_type>.py에 있다.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,6 +20,8 @@ class Observation:
     spec: AgentSpec
     # 서버만 아는 사실(모델에 보이지 않는다): 유효성 판정에 쓴다
     hidden: dict[str, Any] = field(default_factory=dict)
+    # 이 Run의 한도가 spec과 다를 때만 준다 (메인, AG-30)
+    limits: Mapping[str, int] | None = None
 
     @property
     def active(self) -> bool:
@@ -26,16 +29,21 @@ class Observation:
 
     @property
     def budget_exhausted(self) -> bool:
+        limits = self.limits or self.spec.budget
         return (
-            self.run.steps_used >= self.spec.budget["steps"]
-            or self.run.llm_attempts_used >= self.spec.budget["llm_attempts"]
+            self.run.steps_used >= limits["steps"]
+            or self.run.llm_attempts_used >= limits["llm_attempts"]
         )
 
 
-def budget_remaining(run: AgentRun, spec: AgentSpec) -> dict[str, float]:
-    """spec이 한도를 둔 카운터마다 남은 양 (Replanning: steps·llm_attempts·human_rounds·solver_calls)."""
+def budget_remaining(
+    run: AgentRun, spec: AgentSpec, limits: Mapping[str, int] | None = None
+) -> dict[str, float]:
+    """한도를 둔 카운터마다 남은 양 (Replanning: steps·llm_attempts·human_rounds·solver_calls).
+
+    limits를 주지 않으면 spec의 한도다."""
     used = run.budget_used
-    return {name: limit - used[name] for name, limit in spec.budget.items()}
+    return {name: limit - used[name] for name, limit in (limits or spec.budget).items()}
 
 
 def recent_steps(steps: list[dict[str, Any]], n: int = 5) -> list[dict[str, Any]]:

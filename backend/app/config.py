@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # 사건 → 메인 자동 시작. 열린 메인이 없을 때 사건이 생기면 메인 Agent를 띄운다.
     # 끄면 사건은 기록만 되고 메인이 뜨지 않는다(전문 Agent는 메인이 부를 때만 돈다).
     main_auto_start: bool = True
-    # 메인 Agent Budget: step 수와 전문 Agent 호출 수 (LLM 시도는 step × 2)
+    # 메인 Agent Budget의 기본값: step 수와 전문 Agent 호출 수 (LLM 시도는 step × 2). 사람이 만든 일만큼 늘어난다 (AG-30)
     main_max_steps: int = 14
     main_max_agent_calls: int = 10
     # 현장의 지금을 고정한다(ISO 8601, 오프셋 필수). 비면 실제 시계. 읽는 곳은 app.clock.site_now 하나다 (ST-17)

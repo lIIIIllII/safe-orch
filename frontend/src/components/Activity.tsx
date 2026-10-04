@@ -95,7 +95,7 @@ function RunRow({
   busy: string | null
   run: Run
 }) {
-  const max = BUDGET_MAX[r.agent_type] ?? {}
+  const max = r.budget_max ?? BUDGET_MAX[r.agent_type] ?? {}
   const active = ['RUNNING', 'WAITING_HUMAN', 'ERROR'].includes(r.status)
   return (
     <div className={`run-row ${on ? 'run-on' : ''} ${r.parent_run_id ? 'run-child' : ''}`} onClick={onClick}>

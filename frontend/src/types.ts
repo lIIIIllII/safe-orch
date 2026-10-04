@@ -297,6 +297,8 @@ export interface RunSummary {
   current_step_status: string | null
   end_reason: string | null
   budget_used: Record<string, number>
+  /** 이 Run의 한도. 메인만 온다(사람이 만든 일만큼 늘어난다) */
+  budget_max: Record<string, number> | null
 }
 
 export interface SiteState {

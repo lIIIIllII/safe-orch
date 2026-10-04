@@ -8,6 +8,7 @@ import sqlite3
 from typing import Any
 
 from app.agents.needs import ask_refusals
+from app.agents.specs import main as main_spec
 from app.agents.types import APPROACHES
 from app.domain.canonical import canonical_hash
 from app.domain.groups import ConflictGroup, conflict_groups, movable_task_ids
@@ -21,6 +22,7 @@ from app.store.repos.calls import call_key, fingerprint, last_result
 from app.store.repos.case_events import list_case_events
 from app.store.repos.consultations import (
     candidate_state,
+    case_objections,
     consultation_view,
     contested_changes,
 )
@@ -252,6 +254,33 @@ def rejection_facts(conn: sqlite3.Connection, case_id: str) -> dict[str, Any]:
         if last is None
         else {k: last[k] for k in ("candidate_id", "reason_code", "target_task_ids")},
     }
+
+
+def human_work(conn: sqlite3.Connection, site_id: str, case_id: str) -> int:
+    """이 Case에서 사람이 새 일을 만든 횟수 (AG-30). 저장하지 않고 사건·기록에서 센다.
+
+    사람에게 막힌 안(Supervisor 거절이나 담당자 이견) 하나, 작업 고정·고정 해제 한 번, Supervisor가
+    고른 안을 다른 안으로 바꾼 것 한 번이 각각 1이다. 막힌 안을 떠나 새로 고른 것은 그 안에서 이미
+    셌으므로 세지 않는다. Agent의 행동(재호출, 가드 거절, 재계획 결과)은 여기 들어오지 않는다.
+    """
+    turned_down = {r["candidate_id"] for r in list_case_rejections(conn, case_id)}
+    turned_down |= {o["candidate_id"] for o in case_objections(conn, site_id, case_id)}
+    count, chosen = len(turned_down), None
+    for e in list_case_events(conn, site_id):
+        if e["case_id"] != case_id:
+            continue
+        if e["kind"] in ("TASK_PINNED", "TASK_UNPINNED"):
+            count += 1
+        elif e["kind"] == "CANDIDATE_CHOSEN":
+            if chosen not in (None, e["ref"]["candidate_id"]) and chosen not in turned_down:
+                count += 1
+            chosen = e["ref"]["candidate_id"]
+    return count
+
+
+def budget_limits(conn: sqlite3.Connection, site_id: str, main: AgentRun) -> dict[str, int]:
+    """이 메인 Run의 한도: 기본값 + 사람이 만든 일 × 한 바퀴분 (AG-30)."""
+    return main_spec.budget_limits(human_work(conn, site_id, main.case_id))
 
 
 # ── 하위 Run 결과 ──────────────────────────────────────────────

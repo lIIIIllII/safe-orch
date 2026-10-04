@@ -21,6 +21,7 @@ from scripted import (
 from app.agents import casefacts, runtime
 from app.api.state import build_state
 from app.commands.approval import ChooseRequest, choose_candidate
+from app.commands.messages import ReplyRequest, reply_message
 from app.commands.task_request import TaskRequestForm, submit_task_request
 from app.coordinator.dispatcher import run_until_idle
 from app.domain.models import Condition
@@ -294,3 +295,37 @@ def test_choosing_another_plan_ends_the_open_consultation(seeded_real, main_on):
     again = _runs("COORDINATION")[-1]
     assert (again.input_ref["candidate_id"], again.status) == (second, "WAITING_HUMAN")
     assert _choose(pack, "supervisor", first).status == "APPLIED"  # 다시 바꿀 수 있다
+
+
+def test_choice_change_and_objection_count_as_human_work(seeded_real, main_on):
+    """처음 고르기는 흐름의 일부라 세지 않는다. 고른 안을 바꾸면 1, 그 안에 담당자 이견이 나면 1이고,
+    이견이 난 안을 떠나 다시 고르는 것은 그 이견에서 이미 셌다 (AG-30)."""
+    pack = seeded_real
+    _submit_a(pack)
+    replies = [solve("L1"), solve_with("L2", cond("M", start_at=2940)), done()]
+    run_until_idle(pack, model_factory=Router(replanning=replies, auto_done=False).factory())
+    first, second = _candidate_ids()
+    [main] = _runs("MAIN")
+
+    def count():
+        with db.read() as conn:
+            return casefacts.human_work(conn, pack.site_id, main.case_id)
+
+    choose(pack, first)
+    run_until_idle(pack, model_factory=Router().factory())
+    assert count() == 0
+    choose(pack, second)
+    run_until_idle(pack, model_factory=Router().factory())
+    assert count() == 1
+
+    with db.read() as conn:
+        message_id, owner = conn.execute(
+            "SELECT message_id, to_actor_id FROM message WHERE type = 'CHANGE_REQUEST'"
+            " AND status = 'OPEN' AND candidate_id = ?",
+            (second,),
+        ).fetchone()
+    body = ReplyRequest(message_id=message_id, decision="DECLINE", comment="그 시각은 안 됩니다")
+    assert reply_message(pack, owner, _key(), body).status == "APPLIED"
+    assert count() == 2
+    choose(pack, first)
+    assert count() == 2

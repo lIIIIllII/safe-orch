@@ -12,6 +12,7 @@ from app.agents import casefacts
 from app.agents import observe as common
 from app.agents.observe import budget_remaining, last_guard, recent_steps
 from app.agents.specs import main as spec
+from app.domain.models import AgentRun
 from app.packs.loader import LoadedPack
 from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
@@ -24,11 +25,17 @@ class Observation(common.Observation):
     seen_event_seq: int = 0
 
 
+def budget_limits(conn: sqlite3.Connection, pack: LoadedPack, run: AgentRun) -> dict[str, int]:
+    """이 Run의 한도. Gateway도 step 기록에 이 값을 쓴다 (AG-30)."""
+    return casefacts.budget_limits(conn, pack.site_id, run)
+
+
 def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -> Observation:
     run = get_run(conn, run_id)
     site = get_site(conn, pack.site_id)
     if run is None or site is None:
         raise LookupError(f"run {run_id} or site not found")
+    limits = budget_limits(conn, pack, run)
     steps = [s for s in list_steps(conn, run_id) if s["status"] == "COMPLETED"]
     facts = casefacts.build(conn, pack, run)
     # 서버만 아는 유효성 사실: 사전 확인으로 물을 수 있는 need와 물을 수 없는 사유
@@ -43,7 +50,7 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         **facts,
         "last_guard": last_guard(steps),
         "recent_steps": recent_steps(steps),
-        "budget_remaining": budget_remaining(run, spec.SPEC),
+        "budget_remaining": budget_remaining(run, spec.SPEC, limits),
     }
     data["open_skills"] = spec.open_skills(data)
     return Observation(
@@ -53,5 +60,6 @@ def build_observation(conn: sqlite3.Connection, pack: LoadedPack, run_id: str) -
         available=spec.available_actions(data),
         spec=spec.SPEC,
         hidden=hidden,
+        limits=limits,
         seen_event_seq=max((e["seq"] for e in data["events"]), default=0),
     )

@@ -9,10 +9,11 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from app.agents import casefacts
 from app.api.deps import ActorDep, ApiError, PackDep, check_site
 from app.domain.calendar import work_delay
 from app.domain.canonical import canonical_hash
-from app.domain.models import Assignment, Plan, Snapshot, SnapshotContent, Task
+from app.domain.models import AgentRun, Assignment, Plan, Snapshot, SnapshotContent, Task
 from app.packs.loader import LoadedPack
 from app.rules.engine import detect_conflicts
 from app.store import db
@@ -299,7 +300,16 @@ def run_summary(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
         "current_step_status": None if last is None else last[0],
         "end_reason": run.end_reason,
         "budget_used": run.budget_used,
+        # 메인의 한도는 사람이 만든 일만큼 늘어난다 (AG-30). 다른 Agent는 고정값이라 주지 않는다
+        "budget_max": _main_limits(conn, run) if run.agent_type == "MAIN" else None,
     }
+
+
+def _main_limits(conn: sqlite3.Connection, run: AgentRun) -> dict[str, int]:
+    site_id = conn.execute(
+        "SELECT site_id FROM agent_run WHERE run_id = ?", (run.run_id,)
+    ).fetchone()[0]
+    return casefacts.budget_limits(conn, site_id, run)
 
 
 # ── 상태 ───────────────────────────────────────────────────────
