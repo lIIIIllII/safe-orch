@@ -584,7 +584,7 @@ export interface Scenario {
     body: { reason_code: string; target_task_ids: string[]; comment: string }
   }[]
   /** 자연어 작업 요청 시연값 */
-  intake_requests?: { label: string; requester: string; body: { task_id: string; text: string }; answer: string }[]
+  intake_requests?: { label: string; requester: string; body: { task_id: string; text: string } }[]
 }
 
 /** 직접 이동: 서버가 계산한 놓을 수 있는 시작 구간(분, 양 끝 포함)과 맞춤 단위 */
