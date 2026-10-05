@@ -1,0 +1,301 @@
+{
+  "schedule_id": "sch_test_ua_mix_01",
+  "site_id": "YARD-01",
+  "pack_hash": "e6cf34d05e29edb8e239acaaa00bc8ba09ac3a947d7ecf273cc5a969b579c48f",
+  "plan_revision": 0,
+  "exported_by": "planner_a",
+  "exported_at": "2026-10-04T16:37:58+00:00",
+  "tasks": [
+    {
+      "task_id": "S01",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "LIFTING",
+      "zone_id": "B",
+      "duration": 30,
+      "required_resource_type": "CRANE",
+      "requested_resource_id": "A-CR-01",
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S02",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "HOT_WORK",
+      "zone_id": "D",
+      "duration": 30,
+      "required_resource_type": null,
+      "requested_resource_id": null,
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S03",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "WORK_BELOW",
+      "zone_id": "C",
+      "duration": 45,
+      "required_resource_type": null,
+      "requested_resource_id": null,
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S04",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "PAINTING",
+      "zone_id": "H",
+      "duration": 60,
+      "required_resource_type": null,
+      "requested_resource_id": null,
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S05",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "LIFTING",
+      "zone_id": "F",
+      "duration": 90,
+      "required_resource_type": "GANTRY",
+      "requested_resource_id": "SITE-GC-01",
+      "resource_requirements": [
+        {
+          "attribute": "max_load",
+          "op": "GTE",
+          "value": 100
+        },
+        {
+          "attribute": "usage",
+          "op": "CONTAINS",
+          "value": "블록"
+        }
+      ],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S06",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "WORK_BELOW",
+      "zone_id": "F",
+      "duration": 60,
+      "required_resource_type": null,
+      "requested_resource_id": null,
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S07",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "HOT_WORK",
+      "zone_id": "G",
+      "duration": 60,
+      "required_resource_type": null,
+      "requested_resource_id": null,
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S08",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "PAINTING",
+      "zone_id": "G",
+      "duration": 60,
+      "required_resource_type": null,
+      "requested_resource_id": null,
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S09",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "WORK_BELOW",
+      "zone_id": "H",
+      "duration": 120,
+      "required_resource_type": null,
+      "requested_resource_id": null,
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S10",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "LIFTING",
+      "zone_id": "H",
+      "duration": 60,
+      "required_resource_type": "GANTRY",
+      "requested_resource_id": "SITE-GC-01",
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S11",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "LIFTING",
+      "zone_id": "B",
+      "duration": 30,
+      "required_resource_type": "CRANE",
+      "requested_resource_id": "SITE-CR-01",
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S12",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "WORK_BELOW",
+      "zone_id": "C",
+      "duration": 120,
+      "required_resource_type": null,
+      "requested_resource_id": null,
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [
+        {
+          "task_id": "S10",
+          "min_lag": 0
+        }
+      ],
+      "pinned": false,
+      "origins": {}
+    },
+    {
+      "task_id": "S13",
+      "unit_id": "UA",
+      "owner_actor_id": "planner_a",
+      "work_type": "LIFTING",
+      "zone_id": "C",
+      "duration": 30,
+      "required_resource_type": "CRANE",
+      "requested_resource_id": "SITE-CR-01",
+      "resource_requirements": [],
+      "pool_demands": [],
+      "predecessors": [],
+      "pinned": false,
+      "origins": {}
+    }
+  ],
+  "assignments": [
+    {
+      "task_id": "S01",
+      "start": "2026-10-12(월) 09:30",
+      "end": "2026-10-12(월) 10:00",
+      "resource_id": "A-CR-01"
+    },
+    {
+      "task_id": "S02",
+      "start": "2026-10-12(월) 09:30",
+      "end": "2026-10-12(월) 10:00",
+      "resource_id": null
+    },
+    {
+      "task_id": "S03",
+      "start": "2026-10-12(월) 10:15",
+      "end": "2026-10-12(월) 11:00",
+      "resource_id": null
+    },
+    {
+      "task_id": "S04",
+      "start": "2026-10-12(월) 16:30",
+      "end": "2026-10-12(월) 17:30",
+      "resource_id": null
+    },
+    {
+      "task_id": "S05",
+      "start": "2026-10-13(화) 10:30",
+      "end": "2026-10-13(화) 12:00",
+      "resource_id": "SITE-GC-01"
+    },
+    {
+      "task_id": "S06",
+      "start": "2026-10-13(화) 11:30",
+      "end": "2026-10-13(화) 12:30",
+      "resource_id": null
+    },
+    {
+      "task_id": "S07",
+      "start": "2026-10-13(화) 13:30",
+      "end": "2026-10-13(화) 14:30",
+      "resource_id": null
+    },
+    {
+      "task_id": "S08",
+      "start": "2026-10-13(화) 15:00",
+      "end": "2026-10-13(화) 16:00",
+      "resource_id": null
+    },
+    {
+      "task_id": "S09",
+      "start": "2026-10-13(화) 13:00",
+      "end": "2026-10-13(화) 15:00",
+      "resource_id": null
+    },
+    {
+      "task_id": "S10",
+      "start": "2026-10-14(수) 10:00",
+      "end": "2026-10-14(수) 11:00",
+      "resource_id": "SITE-GC-01"
+    },
+    {
+      "task_id": "S11",
+      "start": "2026-10-14(수) 10:00",
+      "end": "2026-10-14(수) 10:30",
+      "resource_id": "SITE-CR-01"
+    },
+    {
+      "task_id": "S12",
+      "start": "2026-10-14(수) 13:00",
+      "end": "2026-10-14(수) 15:00",
+      "resource_id": null
+    },
+    {
+      "task_id": "S13",
+      "start": "2026-10-14(수) 13:00",
+      "end": "2026-10-14(수) 13:30",
+      "resource_id": "SITE-CR-01"
+    }
+  ]
+}
