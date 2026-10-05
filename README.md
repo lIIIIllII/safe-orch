@@ -87,3 +87,53 @@
 - **Agent의 글은 의견이다.** 일정 검토 의견과 재계획이 적은 이유는 서버 숫자와 구분해 따로 보인다.
   글은 고르기와 승인에 아무 효력이 없다.
 - **고르는 것은 사람이다.** Agent는 안을 숨기거나 빼지 않는다.
+
+## 실행
+
+필요한 것: Python 3.12와 [uv](https://docs.astral.sh/uv/), Node.js와 npm, OpenAI API 키.
+
+**설정.** 저장소 루트의 `.env.example`을 `.env`로 복사하고 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 채운다.
+시연에 쓴 값은 `OPENAI_MODEL=gpt-6-luna`, `OPENAI_REASONING_EFFORT=none`이다.
+현장의 지금은 `SITE_NOW`(`.env.example` 값 그대로 `2026-10-12T09:00+09:00`)로 고정돼 있다.
+
+**처음 한 번 DB 만들기.** 서버를 끈 상태에서 한다. 확인 문구로 `RESET safe_orch`를 입력한다.
+
+```
+cd backend
+uv run python -m scripts.reset_db
+```
+
+Pack(`domain_packs/shipyard`)이 바뀌면 서버가 뜨지 않으므로 다시 reset한다.
+
+**서버.**
+
+```
+cd backend
+uv run uvicorn app.main:app --port 8000
+```
+
+**화면.** 브라우저에서 http://localhost:5173 을 연다(`/api`는 8000으로 프록시된다).
+
+```
+cd frontend
+npm install
+npm run dev
+```
+
+**검증(API 키 없이).**
+
+```
+cd backend
+uv run pytest
+uv run ruff check
+
+cd frontend
+npm run lint
+npm run build
+```
+
+**시연해 보기.** 사용자는 화면 위의 Actor에서 바꾼다.
+
+- Planner A로 [일정 넣기] 탭에 `domain_packs/shipyard/schedules/schedule_YARD-01_UA_test.json`을 넣는다.
+- 그 Case가 승인된 뒤 Planner B로 `schedule_YARD-01_UB_test.json`을 넣는다.
+- 자연어 요청과 지연 신고는 각 탭의 [시연: …] 버튼으로 채워 넣는다. [이 안 고르기]와 [승인·확정]은 Supervisor로 한다.
