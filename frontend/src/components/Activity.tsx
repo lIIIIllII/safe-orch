@@ -44,8 +44,23 @@ function withChildren(runs: RunSummary[]): RunSummary[] {
   return top.flatMap((r) => [r, ...runs.filter((c) => c.parent_run_id === r.run_id)])
 }
 
+/** 끝나지 않은 Run. 취소 버튼이 보이는 상태와 같다. */
+const ACTIVE_RUN = ['RUNNING', 'WAITING_HUMAN', 'ERROR']
+
 export function Activity({ state, actorId, selectedRunId, onSelectRun, isSupervisor, busy, run, refreshKey }: Props) {
   const current = state.runs.find((r) => r.run_id === selectedRunId) ?? null
+  // 사람이 접거나 편 메인만 담는다. 없으면 끝나지 않은 메인은 펼치고 끝난 메인은 접는다.
+  const [picked, setPicked] = useState<Record<string, boolean>>({})
+  const byId = new Map(state.runs.map((r) => [r.run_id, r]))
+  const kids = new Map<string, number>()
+  for (const r of state.runs) {
+    if (r.parent_run_id) kids.set(r.parent_run_id, (kids.get(r.parent_run_id) ?? 0) + 1)
+  }
+  const isOpen = (r: RunSummary) => picked[r.run_id] ?? ACTIVE_RUN.includes(r.status)
+  const shown = withChildren(state.runs).filter((r) => {
+    const parent = r.parent_run_id ? byId.get(r.parent_run_id) : undefined
+    return !parent || isOpen(parent)
+  })
   return (
     <section className="panel activity">
       <div className="panel-head">
@@ -54,17 +69,26 @@ export function Activity({ state, actorId, selectedRunId, onSelectRun, isSupervi
       </div>
       <div className="runs">
         {state.runs.length === 0 && <p className="muted">아직 Run이 없습니다.</p>}
-        {withChildren(state.runs).map((r) => (
-          <RunRow
-            key={r.run_id}
-            r={r}
-            on={r.run_id === selectedRunId}
-            onClick={() => onSelectRun(r.run_id)}
-            canCancel={isSupervisor}
-            busy={busy}
-            run={run}
-          />
-        ))}
+        {shown.map((r) => {
+          const n = r.parent_run_id === null ? (kids.get(r.run_id) ?? 0) : 0
+          const open = isOpen(r)
+          return (
+            <RunRow
+              key={r.run_id}
+              r={r}
+              on={r.run_id === selectedRunId}
+              onClick={() => {
+                onSelectRun(r.run_id)
+                if (n > 0) setPicked((p) => ({ ...p, [r.run_id]: !open }))
+              }}
+              kids={n}
+              open={open}
+              canCancel={isSupervisor}
+              busy={busy}
+              run={run}
+            />
+          )
+        })}
       </div>
       <div className="steps">
         {current ? (
@@ -81,6 +105,8 @@ function RunRow({
   r,
   on,
   onClick,
+  kids,
+  open,
   canCancel,
   busy,
   run,
@@ -88,15 +114,18 @@ function RunRow({
   r: RunSummary
   on: boolean
   onClick: () => void
+  kids: number
+  open: boolean
   canCancel: boolean
   busy: string | null
   run: Run
 }) {
   const max = r.budget_max ?? BUDGET_MAX[r.agent_type] ?? {}
-  const active = ['RUNNING', 'WAITING_HUMAN', 'ERROR'].includes(r.status)
+  const active = ACTIVE_RUN.includes(r.status)
   return (
     <div className={`run-row ${on ? 'run-on' : ''} ${r.parent_run_id ? 'run-child' : ''}`} onClick={onClick}>
       <span className="strong">
+        {kids > 0 && `${open ? '▾' : '▸'} ${kids} `}
         {r.parent_run_id && '└ '}
         {AGENT_TYPE[r.agent_type] ?? r.agent_type}
       </span>
