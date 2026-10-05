@@ -58,7 +58,6 @@ router = APIRouter()
 
 RECENT_CANDIDATES = 5
 RECENT_EVENTS = 10
-RECENT_RUNS = 10
 
 
 # ── Gate ────────────────────────────────────────────────
@@ -501,8 +500,7 @@ def build_state(
         r["run_id"]
         for r in rows(
             conn,
-            f"SELECT run_id FROM agent_run WHERE site_id = ? ORDER BY rowid DESC"
-            f" LIMIT {RECENT_RUNS}",
+            "SELECT run_id FROM agent_run WHERE site_id = ? ORDER BY rowid DESC",
             (site_id,),
         )
     ]
