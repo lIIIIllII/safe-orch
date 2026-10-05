@@ -478,9 +478,8 @@ def test_horizon_start_must_be_iso_with_offset(pack_copy, value):
 
 
 def test_demo_intakes_loaded(pack):
-    clear, vague = pack.demo_intakes
-    assert (clear.requester, clear.task_id, clear.answer) == ("planner_a", "A", "")
-    assert vague.answer and vague.task_id == "A"
+    [intake] = pack.demo_intakes
+    assert (intake.requester, intake.task_id) == ("planner_a", "A")
 
 
 @pytest.mark.parametrize(

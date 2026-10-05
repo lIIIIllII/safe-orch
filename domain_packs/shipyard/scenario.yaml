@@ -3,7 +3,7 @@
 # 신규 작업 A: Planner A의 B구역 인양 요청.
 new_task:
   task_id: A
-  label: 크레인 인양 (Scene 1–3)
+  label: 크레인 인양
   unit_id: UA
   owner_actor_id: planner_a
   work_type: LIFTING
@@ -81,28 +81,19 @@ demo_requests:
     required_resource_type: null
     requested_resource_id: null
 
-# 지연 신고 시연 문구 (Scene 4). 대상 없음 → SITE Hold.
+# 지연 신고 시연 문구. 대상 없음 → SITE Hold.
 demo_events:
   - { label: 도장 지연 신고, event_type: DELAY, text: "도장 준비 15분 늦어져 10시부터", target_task_id: null }
-  - { label: 도장 추가 지연, event_type: DELAY, text: "도장 또 늦어진대요", target_task_id: null }
 
 # 구조화 거절 시연값. 화면의 거절 "시연값 채우기"가 쓴다. 작업을 그대로 두려면 거절이 아니라
 # 타임라인에서 그 작업을 고정한다.
 demo_rejections:
   - { label: C 이동 불가, reason_code: TIME_WINDOW_UNACCEPTABLE, target_task_ids: [C], comment: "작업발판 연계 공정 확정" }
 
-# 자연어 작업 요청 시연값 (Work Intake). 명확한 요청은 시각을 빼면 new_task A와 같은 값이다: 문장의 시각은
-# 가능 범위(시간창)가 아니라 희망 영역이 되고, 그 작업의 시간창은 Horizon 전체다. Intake는 요청자에게 묻지
-# 않는다. 모호한 요청은 문장에 없는 값(구역·자원)을 Intake가 스스로 정한다.
-# answer는 Intake가 요청자에게 되묻던 때의 답 문장이다. 지금은 쓰이지 않는다.
+# 자연어 작업 요청 시연값 (Work Intake). 시각을 빼면 new_task A와 같은 값이다. 문장의 시각은 시간창이 아니라
+# 기준 위치(요청한 시작 범위)가 되고, 그 작업의 시간창은 Horizon 전체다(CV-29). Intake는 요청자에게 묻지 않는다(AG-32).
 demo_intakes:
-  - label: 자연어 요청(명확)
+  - label: 자연어 요청
     requester: planner_a
     task_id: A
     text: "B구역 인양 30분, A-CR-01 크레인으로 해 주세요. 첫날 9시에서 10시 사이에 시작하고 10시 반까지 끝나야 합니다."
-    answer: ""
-  - label: 자연어 요청(모호)
-    requester: planner_a
-    task_id: A
-    text: "인양 작업 30분 잡아 주세요. 첫날 9시에서 10시 사이 시작, 10시 반까지는 끝나야 해요."
-    answer: "B구역이고, 우리 A-CR-01 크레인을 씁니다."

@@ -95,7 +95,6 @@ def scenario_view(pack: LoadedPack) -> dict[str, Any]:
             "label": x.label,
             "requester": x.requester,
             "body": {"task_id": x.task_id, "text": x.text},
-            "answer": x.answer,
         }
         for x in pack.demo_intakes
     ]

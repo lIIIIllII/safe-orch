@@ -556,9 +556,8 @@ def test_ambiguous_report_is_interpreted_without_asking_the_reporter(seeded, mai
     """시각이 없는 신고: 신고자에게 묻는 도구가 없다. Agent가 스스로 해석해 사실 수정안을 내고, 그
     수정안은 Supervisor가 확인한다(사람 권한)."""
     pack = seeded
-    vague = pack.demo_events[1]
     _r1(pack)
-    refs = _report(pack, vague.text)
+    refs = _report(pack, "도장 또 늦어진대요")
     run_until_idle(
         pack,
         model_factory=Router(event_response=[_lookup(), _analyze(75), _propose(75)]).factory(),

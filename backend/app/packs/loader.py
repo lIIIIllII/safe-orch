@@ -121,7 +121,6 @@ class DemoIntake(Frozen):
     requester: str
     task_id: str = Field(min_length=1)
     text: str = Field(min_length=1)
-    answer: str = ""  # Intake가 되묻던 때의 답 문장. 지금은 묻지 않아 쓰이지 않는다 (AG-32)
 
 
 class LoadedPack(Frozen):
