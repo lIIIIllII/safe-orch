@@ -45,7 +45,7 @@ from app.store.repos.runs import get_run, list_steps
 from app.store.repos.site import get_site
 from app.store.repos.tasks import insert_task_revision, list_current_tasks
 
-DELAY = "도장 준비 15분 늦어져 10시부터"  # scenario demo_events[0]과 같은 문장
+DELAY = "D2 구역 E도장 준비 15분 딜레이"  # scenario demo_events[0]과 같은 문장
 
 
 def _tool_names(step):

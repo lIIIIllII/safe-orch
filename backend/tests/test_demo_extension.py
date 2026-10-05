@@ -572,7 +572,7 @@ def test_dev_scenario_api(client, seeded):
     assert all(r["label"] for r in requests)
     assert body["event_reports"][0]["body"] == {
         "event_type": "DELAY",
-        "text": "도장 준비 15분 늦어져 10시부터",
+        "text": "D2 구역 E도장 준비 15분 딜레이",
         "target_task_id": None,
     }
     # 폼 본문 그대로 보낼 수 있다

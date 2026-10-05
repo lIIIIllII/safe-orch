@@ -83,7 +83,7 @@ demo_requests:
 
 # 지연 신고 시연 문구. 대상 없음 → SITE Hold.
 demo_events:
-  - { label: 도장 지연 신고, event_type: DELAY, text: "도장 준비 15분 늦어져 10시부터", target_task_id: null }
+  - { label: 도장 지연 신고, event_type: DELAY, text: "D2 구역 E도장 준비 15분 딜레이", target_task_id: null }
 
 # 구조화 거절 시연값. 화면의 거절 "시연값 채우기"가 쓴다. 작업을 그대로 두려면 거절이 아니라
 # 타임라인에서 그 작업을 고정한다.

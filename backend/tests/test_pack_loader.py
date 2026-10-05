@@ -322,7 +322,7 @@ def test_demo_requests_and_events_loaded(pack):
         ("N5", "planner_b"),
     ]
     assert pack.new_task.label and "label" not in pack.new_task.model_dump()
-    assert pack.demo_events[0].text == "도장 준비 15분 늦어져 10시부터"
+    assert pack.demo_events[0].text == "D2 구역 E도장 준비 15분 딜레이"
 
 
 @pytest.mark.parametrize(
