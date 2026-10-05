@@ -125,9 +125,10 @@ function RunRow({
   return (
     <div className={`run-row ${on ? 'run-on' : ''} ${r.parent_run_id ? 'run-child' : ''}`} onClick={onClick}>
       <span className="strong">
-        {kids > 0 && `${open ? '▾' : '▸'} ${kids} `}
+        {kids > 0 && `${open ? '▾' : '▸'} `}
         {r.parent_run_id && '└ '}
         {AGENT_TYPE[r.agent_type] ?? r.agent_type}
+        {kids > 0 && ` · 하위 ${kids}`}
       </span>
       <span className={`badge run-${r.status.toLowerCase()}`}>{RUN_STATUS[r.status] ?? r.status}</span>
       {r.resume_count > 0 && <span className="badge badge-resume">재개 {r.resume_count}회</span>}
